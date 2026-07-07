@@ -117,11 +117,11 @@ Files:
 - Modify: `docs/extraction-map.md`
 - Modify: `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-8-windows-activity-inspector.md`
 
-- [ ] **Step 1: Document platform registration boundary**
+- [x] **Step 1: Document platform registration boundary**
 
 The default server still uses fake services until a Windows-host mode is selected. Document how the Windows inspector is intended to replace `FakeSessionActivityInspector` in the Windows service composition.
 
-- [ ] **Step 2: Full validation**
+- [x] **Step 2: Full validation**
 
 Run:
 
@@ -136,7 +136,7 @@ pnpm --dir tests\Beacon.ClientLab.Playwright test
 & "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.14.1-bin\baw1sv0jfoi8rxs14qo3h49cs\gradle-8.14.1\bin\gradle.bat" --no-daemon -p src\Beacon.Android test assembleDebug
 ```
 
-- [ ] **Step 3: Boundary audit**
+- [x] **Step 3: Boundary audit**
 
 Run:
 
@@ -146,7 +146,7 @@ rg "Thread\.Sleep|Task\.Delay|timeout|Timeout|CancelAfter|CancellationTokenSourc
 
 Expected: no timeout-driven cancellation behavior.
 
-- [ ] **Step 4: Commit docs and validation**
+- [x] **Step 4: Commit docs and validation**
 
 ```powershell
 git add README.md docs/extraction-map.md docs/superpowers/plans/2026-07-08-beacon-stream-milestone-8-windows-activity-inspector.md
