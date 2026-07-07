@@ -10,6 +10,7 @@ public sealed class CockpitShellViewModel : ObservableObject
     private int clientCount;
     private int sessionCount;
     private int streamCount;
+    private int ownershipCount;
     private int gameCount;
     private string selectedClientId = string.Empty;
     private string statusMessage = "Ready.";
@@ -50,6 +51,12 @@ public sealed class CockpitShellViewModel : ObservableObject
         private set => SetProperty(ref streamCount, value);
     }
 
+    public int OwnershipCount
+    {
+        get => ownershipCount;
+        private set => SetProperty(ref ownershipCount, value);
+    }
+
     public string SelectedClientId
     {
         get => selectedClientId;
@@ -76,6 +83,8 @@ public sealed class CockpitShellViewModel : ObservableObject
 
     public ObservableCollection<string> Streams { get; } = [];
 
+    public ObservableCollection<string> Ownership { get; } = [];
+
     public ObservableCollection<string> Diagnostics { get; } = [];
 
     public ICommand RefreshCommand { get; }
@@ -101,11 +110,14 @@ public sealed class CockpitShellViewModel : ObservableObject
         Replace(Sessions, snapshot.Sessions.Select(session => session.AppId));
         Replace(Streams, snapshot.Streams.Select(stream =>
             $"{stream.ClientId} {stream.AppId} {stream.State} {stream.Codec} {stream.Fps}fps"));
+        Replace(Ownership, snapshot.Ownership.Select(ownership =>
+            $"{ownership.AppId} process={ownership.LaunchedProcessRunning} child={ownership.ChildProcessRunning} window={ownership.OwnedWindowRemaining}"));
         Replace(Diagnostics, snapshot.Games.Diagnostics);
 
         ClientCount = snapshot.Clients.Count;
         SessionCount = snapshot.Sessions.Count;
         StreamCount = snapshot.Streams.Count;
+        OwnershipCount = snapshot.Ownership.Count;
         GameCount = snapshot.Games.Total;
 
         if (string.IsNullOrWhiteSpace(SelectedClientId) && Clients.Count > 0)

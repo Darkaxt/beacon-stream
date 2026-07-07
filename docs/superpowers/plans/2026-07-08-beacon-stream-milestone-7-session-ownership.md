@@ -182,11 +182,11 @@ Files:
 - Modify: `README.md`
 - Modify: `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-7-session-ownership.md`
 
-- [ ] **Step 1: Expose ownership diagnostics**
+- [x] **Step 1: Expose ownership diagnostics**
 
 Admin snapshot and cockpit should show session ownership summaries: session id, app id, launched process id if known, process running, child process running, owned window remaining, and reasons.
 
-- [ ] **Step 2: Full validation**
+- [x] **Step 2: Full validation**
 
 Run:
 
@@ -201,7 +201,7 @@ pnpm --dir tests\Beacon.ClientLab.Playwright test
 & "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.14.1-bin\baw1sv0jfoi8rxs14qo3h49cs\gradle-8.14.1\bin\gradle.bat" --no-daemon -p src\Beacon.Android test assembleDebug
 ```
 
-- [ ] **Step 3: Boundary audit**
+- [x] **Step 3: Boundary audit**
 
 Run:
 
@@ -215,7 +215,7 @@ Expected:
 - No timeout-driven cancellation behavior.
 - Old owned-work fields may exist only for compatibility DTOs/tests, not as the server cleanup authority.
 
-- [ ] **Step 4: Commit docs and validation**
+- [x] **Step 4: Commit docs and validation**
 
 ```powershell
 git add README.md src tests docs/superpowers/plans/2026-07-08-beacon-stream-milestone-7-session-ownership.md

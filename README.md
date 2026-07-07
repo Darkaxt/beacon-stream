@@ -2,7 +2,7 @@
 
 Beacon Stream is a server-authoritative personal game-streaming orchestrator.
 
-Milestone 0/1 covers the control plane, fake backends, planner, profile ownership, phone-free testing, and source-boundary documentation. Milestone 2 adds the real Windows SudoVDA/DisplayConfig lifecycle backend and manual no-phone display probe. Milestone 3 adds the normalized game library model, Steam/Heroic/Hydra/manual providers, SteamGridDB/fallback artwork providers, server/client-lab game selection, and a read-only local game probe. Milestone 4 adds a WPF cockpit for local server administration. Milestone 5 adds the streaming backend boundary, fake no-phone stream lifecycle, and external-process adapter boundary for future Sunshine-compatible integration. Milestone 6 adds a thin Android control-plane APK shell. Real video decode and input forwarding come later.
+Milestone 0/1 covers the control plane, fake backends, planner, profile ownership, phone-free testing, and source-boundary documentation. Milestone 2 adds the real Windows SudoVDA/DisplayConfig lifecycle backend and manual no-phone display probe. Milestone 3 adds the normalized game library model, Steam/Heroic/Hydra/manual providers, SteamGridDB/fallback artwork providers, server/client-lab game selection, and a read-only local game probe. Milestone 4 adds a WPF cockpit for local server administration. Milestone 5 adds the streaming backend boundary, fake no-phone stream lifecycle, and external-process adapter boundary for future Sunshine-compatible integration. Milestone 6 adds a thin Android control-plane APK shell. Milestone 7 adds the server-owned game launch and session ownership cleanup boundary. Real video decode, native input forwarding, and full Windows window enumeration come later.
 
 ## Local Probes
 
@@ -41,6 +41,15 @@ dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter Client
 
 Milestone 5 uses `FakeStreamingBackend` for deterministic no-phone validation and `ExternalProcessStreamingBackend` as the Windows boundary for future Sunshine-compatible process integration. No Sunshine source is copied by this milestone.
 
+Session ownership checks:
+
+```powershell
+dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter SessionOwnershipTracker
+dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter ClientApiTests
+```
+
+Milestone 7 records game launch state and uses server-owned ownership snapshots when deciding whether quit can remove a virtual display. Client-supplied owned-process/window flags are accepted only for backward-compatible request shape and are not the cleanup authority.
+
 Android client checks:
 
 ```powershell
@@ -58,4 +67,5 @@ See:
 - `docs/superpowers/plans/2026-07-07-beacon-stream-milestone-4-wpf-cockpit.md`
 - `docs/superpowers/plans/2026-07-07-beacon-stream-milestone-5-streaming-backend.md`
 - `docs/superpowers/plans/2026-07-07-beacon-stream-milestone-6-android-client.md`
+- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-7-session-ownership.md`
 - `docs/windows-display-backend.md`
