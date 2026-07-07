@@ -6,7 +6,7 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend)
 {
     public async Task<DisplayLeaseResult> EnsureLeaseAsync(ClientProfile profile, CancellationToken cancellationToken)
     {
-        string displayId = $"client-{profile.ClientId.Value}";
+        string displayId = DisplayLease.CreateDisplayId(profile.ClientId);
         DisplayEnsureResult ensureResult = await displayBackend.EnsureVirtualDisplayAsync(
             displayId,
             profile.Display.PreferredWidth,

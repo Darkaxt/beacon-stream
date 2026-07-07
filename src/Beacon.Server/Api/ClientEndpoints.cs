@@ -151,7 +151,7 @@ public static class ClientEndpoints
 
         clients.MapPost("/{clientId}/disconnect", async (string clientId, DisplayLeaseManager leases, CancellationToken cancellationToken) =>
         {
-            await leases.DisconnectAsync($"client-{clientId}", cancellationToken);
+            await leases.DisconnectAsync(DisplayLease.CreateDisplayId(new ClientId(clientId)), cancellationToken);
             return Results.Ok(new { clientId, leaseRetained = true });
         });
 
@@ -183,7 +183,7 @@ public static class ClientEndpoints
             CancellationToken cancellationToken) =>
         {
             bool removed = await leases.CleanupIfAllowedAsync(
-                $"client-{clientId}",
+                DisplayLease.CreateDisplayId(new ClientId(clientId)),
                 request.ClientActive,
                 request.OwnedProcessRunning,
                 request.OwnedWindowRemaining,

@@ -23,7 +23,7 @@ public static class SessionPlanner
         string hdrReason = CreateHdrReason(profile.Display.HdrPreference, hdrEnabled, hdrBlocker);
 
         var display = new PlannedDisplay(
-            DisplayId: $"client-{profile.ClientId.Value}",
+            DisplayId: DisplayLease.CreateDisplayId(profile.ClientId),
             Width: profile.Display.PreferredWidth,
             Height: profile.Display.PreferredHeight,
             RefreshHz: profile.Display.PreferredRefreshHz,

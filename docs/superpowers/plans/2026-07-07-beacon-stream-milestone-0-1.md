@@ -1032,7 +1032,7 @@ Expected: branch is pushed to GitHub.
 **Files:**
 - Modify only files created by Tasks 1-9.
 
-- [ ] **Step 1: Refactor for implementation holes**
+- [x] **Step 1: Refactor for implementation holes**
 
 Inspect:
 
@@ -1050,7 +1050,7 @@ Refactor only these classes when evidence shows duplicated policy:
 - `DisplayLeaseManager`
 - fake backend result types
 
-- [ ] **Step 2: Re-run full validation**
+- [x] **Step 2: Re-run full validation**
 
 Run:
 
@@ -1066,7 +1066,7 @@ pnpm --dir tests/Beacon.ClientLab.Playwright test
 
 Expected: all commands exit 0.
 
-- [ ] **Step 3: Final sync**
+- [x] **Step 3: Final sync**
 
 Run:
 

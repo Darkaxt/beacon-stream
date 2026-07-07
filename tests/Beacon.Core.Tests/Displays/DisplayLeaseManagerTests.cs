@@ -6,6 +6,12 @@ namespace Beacon.Core.Tests.Displays;
 public sealed class DisplayLeaseManagerTests
 {
     [Fact]
+    public void DisplayIdIsClientScopedAndStable()
+    {
+        Assert.Equal("client-z-fold-7", DisplayLease.CreateDisplayId(new ClientId("z-fold-7")));
+    }
+
+    [Fact]
     public async Task PreflightCreatesClientScopedLeaseBeforeLaunch()
     {
         var backend = new FakeDisplayBackend();
