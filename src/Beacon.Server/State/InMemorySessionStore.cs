@@ -11,4 +11,7 @@ public sealed class InMemorySessionStore
 
     public SessionPlan? Get(string clientId) =>
         plans.GetValueOrDefault(clientId);
+
+    public IReadOnlyList<SessionPlan> GetAll() =>
+        plans.Values.OrderBy(plan => plan.ClientId.Value, StringComparer.OrdinalIgnoreCase).ToArray();
 }

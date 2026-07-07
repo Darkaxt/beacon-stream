@@ -1,0 +1,158 @@
+<Window x:Class="Beacon.Cockpit.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Beacon Cockpit"
+        Width="1040"
+        Height="680"
+        MinWidth="840"
+        MinHeight="520"
+        Background="{DynamicResource {x:Static SystemColors.ControlBrushKey}}">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="Padding" Value="12,4" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+        </Style>
+        <Style TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="LabelText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+        <Style x:Key="MetricText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="28" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,0,0,14" />
+        </Style>
+    </Window.Resources>
+
+    <DockPanel>
+        <Border DockPanel.Dock="Top"
+                BorderBrush="{DynamicResource {x:Static SystemColors.ActiveBorderBrushKey}}"
+                BorderThickness="0,0,0,1"
+                Padding="12,10">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="280" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Text="Server" Margin="0,0,8,0" />
+                <TextBox Grid.Column="1"
+                         Text="{Binding ServerUrl}"
+                         IsReadOnly="True"
+                         VerticalContentAlignment="Center"
+                         Margin="0,0,12,0" />
+                <Button Grid.Column="2"
+                        Content="Refresh"
+                        Command="{Binding RefreshCommand}" />
+                <TextBlock Grid.Column="3"
+                           Text="{Binding StatusMessage}"
+                           TextTrimming="CharacterEllipsis"
+                           HorizontalAlignment="Right" />
+            </Grid>
+        </Border>
+
+        <Grid Margin="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="230" />
+                <ColumnDefinition Width="12" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0"
+                    BorderBrush="{DynamicResource {x:Static SystemColors.ActiveBorderBrushKey}}"
+                    BorderThickness="0,0,1,0"
+                    Padding="0,0,12,0">
+                <StackPanel>
+                    <TextBlock Text="Clients" Style="{StaticResource LabelText}" />
+                    <TextBlock Text="{Binding ClientCount}" Style="{StaticResource MetricText}" />
+
+                    <TextBlock Text="Sessions" Style="{StaticResource LabelText}" />
+                    <TextBlock Text="{Binding SessionCount}" Style="{StaticResource MetricText}" />
+
+                    <TextBlock Text="Games" Style="{StaticResource LabelText}" />
+                    <TextBlock Text="{Binding GameCount}" Style="{StaticResource MetricText}" />
+
+                    <Separator Margin="0,8,0,14" />
+
+                    <TextBlock Text="Selected Client" Style="{StaticResource LabelText}" />
+                    <ComboBox ItemsSource="{Binding Clients}"
+                              SelectedItem="{Binding SelectedClientId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                              MinHeight="30"
+                              Margin="0,0,0,12" />
+
+                    <Button Content="Restore Physical Display"
+                            Command="{Binding RestorePhysicalCommand}"
+                            Margin="0,0,0,8" />
+                    <Button Content="Recover Client Display"
+                            Command="{Binding RecoverSelectedClientCommand}"
+                            Margin="0" />
+                </StackPanel>
+            </Border>
+
+            <TabControl Grid.Column="2">
+                <TabItem Header="Clients">
+                    <Grid Margin="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="12" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <GroupBox Header="Clients" Grid.Column="0">
+                            <ListBox ItemsSource="{Binding Clients}" />
+                        </GroupBox>
+                        <GroupBox Header="Sessions" Grid.Column="2">
+                            <ListBox ItemsSource="{Binding Sessions}" />
+                        </GroupBox>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Games">
+                    <Grid Margin="10">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Text="Catalog" Style="{StaticResource LabelText}" />
+                        <TextBlock Grid.Row="1" FontSize="36" FontWeight="SemiBold" Margin="0,0,0,16">
+                            <Run Text="{Binding GameCount}" />
+                            <Run Text=" games" />
+                        </TextBlock>
+                        <GroupBox Grid.Row="2" Header="Provider Diagnostics">
+                            <ListBox ItemsSource="{Binding Diagnostics}" />
+                        </GroupBox>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Recovery">
+                    <StackPanel Margin="10" MaxWidth="520" HorizontalAlignment="Left">
+                        <TextBlock Text="Client" Style="{StaticResource LabelText}" />
+                        <ComboBox ItemsSource="{Binding Clients}"
+                                  SelectedItem="{Binding SelectedClientId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                  MinWidth="280"
+                                  MinHeight="30"
+                                  Margin="0,0,0,14" />
+                        <Button Content="Restore Physical Display"
+                                Command="{Binding RestorePhysicalCommand}"
+                                Margin="0,0,0,8" />
+                        <Button Content="Recover Selected Client Display"
+                                Command="{Binding RecoverSelectedClientCommand}"
+                                Margin="0" />
+                    </StackPanel>
+                </TabItem>
+
+                <TabItem Header="Diagnostics">
+                    <Grid Margin="10">
+                        <ListBox ItemsSource="{Binding Diagnostics}" />
+                    </Grid>
+                </TabItem>
+            </TabControl>
+        </Grid>
+    </DockPanel>
+</Window>

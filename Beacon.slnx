@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Beacon.Core/Beacon.Core.csproj" />
+    <Project Path="src/Beacon.Cockpit/Beacon.Cockpit.csproj" />
     <Project Path="src/Beacon.DisplayProbe/Beacon.DisplayProbe.csproj" />
     <Project Path="src/Beacon.FakeEndpoint/Beacon.FakeEndpoint.csproj" />
     <Project Path="src/Beacon.GameProbe/Beacon.GameProbe.csproj" />
@@ -9,6 +10,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj" />
+    <Project Path="tests/Beacon.Cockpit.Tests/Beacon.Cockpit.Tests.csproj" />
     <Project Path="tests/Beacon.DisplayProbe.Tests/Beacon.DisplayProbe.Tests.csproj" />
     <Project Path="tests/Beacon.FakeEndpoint.Tests/Beacon.FakeEndpoint.Tests.csproj" />
     <Project Path="tests/Beacon.GameProbe.Tests/Beacon.GameProbe.Tests.csproj" />
