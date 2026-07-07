@@ -44,7 +44,7 @@ Create or modify these files:
 - `global.json` pins .NET SDK `10.0.301`.
 - `.editorconfig` defines C# formatting and nullable conventions.
 - `Directory.Build.props` enables nullable, implicit usings, deterministic builds, and warnings-as-errors for repo code.
-- `Beacon.sln` contains all .NET projects.
+- `Beacon.slnx` contains all .NET projects.
 - `src/Beacon.Core/Beacon.Core.csproj` contains server-authoritative domain and policy.
 - `src/Beacon.Core/Clients/*` contains client identity, profile, patch allowlist, capabilities, and telemetry.
 - `src/Beacon.Core/Sessions/*` contains session planning and session lifecycle models.
@@ -93,8 +93,8 @@ No substantial work may remain local-only across a context compaction.
 Static validation:
 
 ```powershell
-dotnet format Beacon.sln --verify-no-changes
-dotnet build Beacon.sln -warnaserror
+dotnet format Beacon.slnx --verify-no-changes
+dotnet build Beacon.slnx -warnaserror
 pnpm --dir src/Beacon.ClientLab lint
 pnpm --dir tests/Beacon.ClientLab.Playwright lint
 ```
@@ -102,7 +102,7 @@ pnpm --dir tests/Beacon.ClientLab.Playwright lint
 Dynamic validation:
 
 ```powershell
-dotnet test Beacon.sln
+dotnet test Beacon.slnx
 pnpm --dir src/Beacon.ClientLab test
 pnpm --dir tests/Beacon.ClientLab.Playwright test
 ```
@@ -118,7 +118,7 @@ Until Client Lab exists, skip only the pnpm commands and record that skip in the
 - Create: `global.json`
 - Create: `.editorconfig`
 - Create: `Directory.Build.props`
-- Create: `Beacon.sln`
+- Create: `Beacon.slnx`
 - Create: `src/Beacon.Core/Beacon.Core.csproj`
 - Create: `src/Beacon.Server/Beacon.Server.csproj`
 - Create: `src/Beacon.FakeEndpoint/Beacon.FakeEndpoint.csproj`
@@ -158,12 +158,12 @@ dotnet new console --framework net10.0 --name Beacon.FakeEndpoint --output src/B
 dotnet new xunit --framework net10.0 --name Beacon.Core.Tests --output tests/Beacon.Core.Tests
 dotnet new xunit --framework net10.0 --name Beacon.Server.Tests --output tests/Beacon.Server.Tests
 dotnet new xunit --framework net10.0 --name Beacon.FakeEndpoint.Tests --output tests/Beacon.FakeEndpoint.Tests
-dotnet sln Beacon.sln add src/Beacon.Core/Beacon.Core.csproj
-dotnet sln Beacon.sln add src/Beacon.Server/Beacon.Server.csproj
-dotnet sln Beacon.sln add src/Beacon.FakeEndpoint/Beacon.FakeEndpoint.csproj
-dotnet sln Beacon.sln add tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj
-dotnet sln Beacon.sln add tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj
-dotnet sln Beacon.sln add tests/Beacon.FakeEndpoint.Tests/Beacon.FakeEndpoint.Tests.csproj
+dotnet sln Beacon.slnx add src/Beacon.Core/Beacon.Core.csproj
+dotnet sln Beacon.slnx add src/Beacon.Server/Beacon.Server.csproj
+dotnet sln Beacon.slnx add src/Beacon.FakeEndpoint/Beacon.FakeEndpoint.csproj
+dotnet sln Beacon.slnx add tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj
+dotnet sln Beacon.slnx add tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj
+dotnet sln Beacon.slnx add tests/Beacon.FakeEndpoint.Tests/Beacon.FakeEndpoint.Tests.csproj
 dotnet add src/Beacon.Server/Beacon.Server.csproj reference src/Beacon.Core/Beacon.Core.csproj
 dotnet add src/Beacon.FakeEndpoint/Beacon.FakeEndpoint.csproj reference src/Beacon.Core/Beacon.Core.csproj
 dotnet add tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj reference src/Beacon.Core/Beacon.Core.csproj
@@ -245,9 +245,9 @@ See:
 Run:
 
 ```powershell
-dotnet restore Beacon.sln
-dotnet build Beacon.sln -warnaserror
-dotnet test Beacon.sln
+dotnet restore Beacon.slnx
+dotnet build Beacon.slnx -warnaserror
+dotnet test Beacon.slnx
 ```
 
 Expected: restore, build, and tests exit 0.
@@ -966,9 +966,9 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - run: dotnet restore Beacon.sln
-      - run: dotnet build Beacon.sln -warnaserror --no-restore
-      - run: dotnet test Beacon.sln --no-build
+      - run: dotnet restore Beacon.slnx
+      - run: dotnet build Beacon.slnx -warnaserror --no-restore
+      - run: dotnet test Beacon.slnx --no-build
 
   client-lab:
     runs-on: ubuntu-latest
@@ -993,8 +993,8 @@ jobs:
 Run:
 
 ```powershell
-dotnet format Beacon.sln --verify-no-changes
-dotnet build Beacon.sln -warnaserror
+dotnet format Beacon.slnx --verify-no-changes
+dotnet build Beacon.slnx -warnaserror
 pnpm --dir src/Beacon.ClientLab lint
 pnpm --dir tests/Beacon.ClientLab.Playwright lint
 ```
@@ -1006,7 +1006,7 @@ Expected: all commands exit 0.
 Run:
 
 ```powershell
-dotnet test Beacon.sln
+dotnet test Beacon.slnx
 pnpm --dir src/Beacon.ClientLab test
 pnpm --dir tests/Beacon.ClientLab.Playwright test
 ```
@@ -1037,7 +1037,7 @@ Inspect:
 
 ```powershell
 $badTerms = @('TO' + 'DO', 'TB' + 'D', 'may' + 'be', 'sh' + 'ould', 'throw new Not' + 'ImplementedException', 'return nu' + 'll')
-foreach ($term in $badTerms) { rg -n $term .; if ($LASTEXITCODE -eq 0) { exit 1 } }
+foreach ($term in $badTerms) { rg -n --glob '!LICENSE' $term .; if ($LASTEXITCODE -eq 0) { exit 1 } }
 ```
 
 Expected: no matches in source, tests, docs, or Client Lab.
@@ -1054,9 +1054,9 @@ Refactor only these classes when evidence shows duplicated policy:
 Run:
 
 ```powershell
-dotnet format Beacon.sln --verify-no-changes
-dotnet build Beacon.sln -warnaserror
-dotnet test Beacon.sln
+dotnet format Beacon.slnx --verify-no-changes
+dotnet build Beacon.slnx -warnaserror
+dotnet test Beacon.slnx
 pnpm --dir src/Beacon.ClientLab lint
 pnpm --dir src/Beacon.ClientLab test
 pnpm --dir tests/Beacon.ClientLab.Playwright lint

@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Beacon.Core/Beacon.Core.csproj" />
+    <Project Path="src/Beacon.FakeEndpoint/Beacon.FakeEndpoint.csproj" />
+    <Project Path="src/Beacon.Server/Beacon.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj" />
+    <Project Path="tests/Beacon.FakeEndpoint.Tests/Beacon.FakeEndpoint.Tests.csproj" />
+    <Project Path="tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj" />
+  </Folder>
+</Solution>
