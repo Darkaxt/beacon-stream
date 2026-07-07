@@ -41,7 +41,14 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend)
         bool ownedWindowRemaining,
         CancellationToken cancellationToken)
     {
-        if (clientActive || ownedProcessRunning || ownedWindowRemaining)
+        if (clientActive)
+        {
+            return false;
+        }
+
+        await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
+
+        if (ownedProcessRunning || ownedWindowRemaining)
         {
             return false;
         }
