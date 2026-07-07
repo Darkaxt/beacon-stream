@@ -29,7 +29,7 @@ Files:
 git switch -c codex/milestone-8-windows-activity-inspector
 ```
 
-- [ ] **Step 2: Commit plan**
+- [x] **Step 2: Commit plan**
 
 ```powershell
 git add docs/superpowers/plans/2026-07-08-beacon-stream-milestone-8-windows-activity-inspector.md
@@ -46,7 +46,7 @@ Files:
 - Add: `tests/Beacon.Platform.Windows.Tests/Sessions/FakeWindowsSessionActivityApi.cs`
 - Add: `tests/Beacon.Platform.Windows.Tests/Sessions/WindowsSessionActivityInspectorTests.cs`
 
-- [ ] **Step 1: Write fast fake-boundary tests**
+- [x] **Step 1: Write fast fake-boundary tests**
 
 Cover:
 
@@ -56,7 +56,7 @@ Cover:
 - unrelated window on virtual display does not block cleanup when it is not a child and started before session start.
 - new process window on virtual display after session start blocks cleanup.
 
-- [ ] **Step 2: Add API contract**
+- [x] **Step 2: Add API contract**
 
 The contract must expose:
 
@@ -65,7 +65,7 @@ The contract must expose:
 - process start time where available.
 - visible top-level windows with process id, title, and rectangle.
 
-- [ ] **Step 3: Implement Windows API**
+- [x] **Step 3: Implement Windows API**
 
 Use platform APIs directly:
 
@@ -82,15 +82,15 @@ Files:
 - Add: `src/Beacon.Platform.Windows/Sessions/WindowsSessionActivityInspector.cs`
 - Modify: `src/Beacon.Platform.Windows/Beacon.Platform.Windows.csproj` if needed.
 
-- [ ] **Step 1: Implement process activity**
+- [x] **Step 1: Implement process activity**
 
 `LaunchedProcessRunning` is true when the launch state has a process id and the API reports it running.
 
-- [ ] **Step 2: Implement child-process activity**
+- [x] **Step 2: Implement child-process activity**
 
 `ChildProcessRunning` is true when any child of the launched process is running.
 
-- [ ] **Step 3: Implement top-level window activity**
+- [x] **Step 3: Implement top-level window activity**
 
 `OwnedWindowRemaining` is true when a visible top-level window intersects the planned display rectangle and either:
 
@@ -100,7 +100,7 @@ Files:
 
 Unrelated old windows on the virtual display must not block cleanup.
 
-- [ ] **Step 4: Verify focused tests and commit**
+- [x] **Step 4: Verify focused tests and commit**
 
 ```powershell
 dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj --filter WindowsSessionActivityInspector
