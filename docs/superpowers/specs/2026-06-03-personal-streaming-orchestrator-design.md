@@ -567,7 +567,7 @@ Normalized game model:
     "command": "steam://rungameid/16180920483166814208"
   },
   "artwork": {
-    "cover": "C:/ProgramData/Orchestrator/artwork/dispatch.png",
+    "coverPath": "C:/ProgramData/Orchestrator/artwork/dispatch.png",
     "source": "steamgriddb"
   },
   "installed": true
@@ -575,6 +575,10 @@ Normalized game model:
 ```
 
 Version 1 game profiles must not include display policy. They may include launch identity, source, cover, installed state, and process tracking hints.
+
+Steam non-Steam shortcuts must use the stored 32-bit `appid` from `shortcuts.vdf`; the normalized launch URI is derived as `((uint)appid << 32) | 0x02000000` and emitted as `steam://rungameid/{value}`. The implementation must not rely on title/path CRC reconstruction because modern Steam shortcut ids can drift from that older calculation.
+
+`Beacon.GameProbe` is the no-phone validation path for this layer. It must scan local providers read-only, print a human table or JSON snapshot, and provide a `steam-shortcuts <path>` command for checking one `shortcuts.vdf` file directly.
 
 ## Recovery Model
 

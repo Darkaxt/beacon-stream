@@ -102,10 +102,10 @@ public sealed class HeroicGameLibraryProvider(string heroicRoot) : IGameLibraryP
                     Installed: !string.IsNullOrWhiteSpace(command),
                     ProcessHints: new GameProcessHints(Path.GetFileName(command), installPath)));
             }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-        {
-            diagnostics.Add($"Could not read Heroic sideload app '{file}': {ex.Message}");
-        }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+                diagnostics.Add($"Could not read Heroic sideload app '{file}': {ex.Message}");
+            }
         }
     }
 

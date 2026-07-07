@@ -914,7 +914,7 @@ git commit -m "Add read-only game library probe"
 - Modify: `docs/extraction-map.md`
 - Modify: `docs/superpowers/specs/2026-06-03-personal-streaming-orchestrator-design.md` only if needed for clarified provider behavior.
 
-- [ ] **Step 1: Update docs**
+- [x] **Step 1: Update docs**
 
 Document:
 
@@ -925,7 +925,7 @@ Document:
 - `Beacon.GameProbe` commands.
 - No per-game display policy in Milestone 3.
 
-- [ ] **Step 2: Run static validation**
+- [x] **Step 2: Run static validation**
 
 Run:
 
@@ -938,7 +938,7 @@ pnpm --dir tests/Beacon.ClientLab.Playwright lint
 
 Expected: exit code 0 for every command.
 
-- [ ] **Step 3: Run dynamic validation**
+- [x] **Step 3: Run dynamic validation**
 
 Run:
 
@@ -951,7 +951,7 @@ dotnet run --project src/Beacon.GameProbe -- scan --json
 
 Expected: tests pass and probe prints normalized Steam entries plus provider diagnostics for empty/missing providers.
 
-- [ ] **Step 4: Sync**
+- [x] **Step 4: Sync**
 
 ```bash
 git status --short
