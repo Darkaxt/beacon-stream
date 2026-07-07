@@ -625,7 +625,7 @@ git commit -m "Document WPF cockpit milestone"
 **Files:**
 - Same files touched above.
 
-- [ ] **Step 1: Boundary audit**
+- [x] **Step 1: Boundary audit**
 
 Run:
 
@@ -639,7 +639,7 @@ Expected:
 - First command has no matches. The cockpit must call server APIs, not lower-level display or provider implementations.
 - Second command has no cancellation timeout patterns introduced by Milestone 4.
 
-- [ ] **Step 2: Repeat validation**
+- [x] **Step 2: Repeat validation**
 
 Run:
 
