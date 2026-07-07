@@ -33,6 +33,8 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
     private const uint SdcAllowPathOrderChanges = 0x00002000;
     private const uint SdcVirtualModeAware = 0x00008000;
     private const uint DisplayConfigDeviceInfoGetSourceName = 1;
+    private const uint DisplayConfigDeviceInfoGetAdvancedColorInfo = 9;
+    private const uint DisplayConfigDeviceInfoGetAdvancedColorInfo2 = 15;
     private const uint DisplayConfigPathActive = 0x00000001;
     private const uint DisplayConfigPathModeIdxInvalid = 0xFFFFFFFF;
     private const uint DisplayConfigPathSourceModeIdxInvalid = 0xFFFF;
@@ -155,12 +157,22 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
         DisplayPathSnapshot? physicalDisplay = EnumerateActiveDisplayPaths(displayIdByDisplayName: null)
             .FirstOrDefault(path => path.Kind == DisplayPathKind.Physical);
 
-        if (physicalDisplay is null)
+        string displayName;
+        if (physicalDisplay is not null)
         {
-            return Task.FromResult(DisplayApiResult.Fail("No active physical display was found for restore."));
+            displayName = physicalDisplay.DisplayId;
+        }
+        else if (TrySelectPhysicalRestoreDisplayNameFromDisplayConfig(out string? fallbackDisplayName, out string restoreDiagnostic) &&
+            fallbackDisplayName is not null)
+        {
+            displayName = fallbackDisplayName;
+        }
+        else
+        {
+            return Task.FromResult(DisplayApiResult.Fail(restoreDiagnostic));
         }
 
-        return Task.FromResult(TrySetPrimaryDisplay(physicalDisplay.DisplayId, out string diagnostic)
+        return Task.FromResult(TrySetPrimaryDisplay(displayName, out string diagnostic)
             ? DisplayApiResult.Ok()
             : DisplayApiResult.Fail(diagnostic));
     }
@@ -189,10 +201,39 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
     public Task<DisplayHdrCapability> QueryHdrCapabilityAsync(string displayId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (!TryResolveDisplayName(displayId, out string? displayName) || displayName is null)
+        {
+            return Task.FromResult(new DisplayHdrCapability(
+                Supported: false,
+                Enabled: false,
+                Reason: $"Unable to resolve Windows display name for HDR query on {displayId}."));
+        }
+
+        if (!TryFindActiveDisplayConfigPath(displayName, out DisplayConfigPathInfo path, out string pathDiagnostic))
+        {
+            return Task.FromResult(new DisplayHdrCapability(
+                Supported: false,
+                Enabled: false,
+                Reason: pathDiagnostic));
+        }
+
+        if (TryQueryAdvancedColorInfo2(path.TargetInfo.AdapterId, path.TargetInfo.Id, out DisplayHdrCapability capability, out string info2Diagnostic))
+        {
+            return Task.FromResult(capability);
+        }
+
+        if (TryQueryLegacyAdvancedColorInfo(path.TargetInfo.AdapterId, path.TargetInfo.Id, out capability, out string legacyDiagnostic))
+        {
+            return Task.FromResult(capability with
+            {
+                Reason = $"{capability.Reason} AdvancedColorInfo2 unavailable: {info2Diagnostic}"
+            });
+        }
+
         return Task.FromResult(new DisplayHdrCapability(
             Supported: false,
             Enabled: false,
-            Reason: $"HDR capability query is not wired yet for {displayId}."));
+            Reason: $"Windows Advanced Color query failed for {displayName}. Info2={info2Diagnostic}; Legacy={legacyDiagnostic}."));
     }
 
     public static DisplayPathKind ClassifyDisplayKind(string deviceString, string deviceId)
@@ -426,10 +467,8 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
         for (int pathIndex = 0; pathIndex < paths.Length; pathIndex++)
         {
             DisplayConfigPathInfo path = paths[pathIndex];
-            var sourceName = DisplayConfigSourceDeviceName.Create(path.SourceInfo.AdapterId, path.SourceInfo.Id);
-            uint nameStatus = NativeMethods.DisplayConfigGetDeviceInfo(ref sourceName);
-            if (nameStatus != ErrorSuccess ||
-                !string.Equals(sourceName.ViewGdiDeviceName, displayName, StringComparison.OrdinalIgnoreCase))
+            if (!TryGetSourceDisplayName(path, out string? sourceDisplayName) ||
+                !string.Equals(sourceDisplayName, displayName, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -509,18 +548,151 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
                 continue;
             }
 
-            var sourceName = DisplayConfigSourceDeviceName.Create(path.SourceInfo.AdapterId, path.SourceInfo.Id);
-            uint nameStatus = NativeMethods.DisplayConfigGetDeviceInfo(ref sourceName);
-            if (nameStatus != ErrorSuccess || string.IsNullOrWhiteSpace(sourceName.ViewGdiDeviceName))
+            if (!TryGetSourceDisplayName(path, out string? sourceDisplayName))
             {
                 return false;
             }
 
-            displayName = sourceName.ViewGdiDeviceName;
+            displayName = sourceDisplayName;
             return true;
         }
 
         return false;
+    }
+
+    private static bool TryFindActiveDisplayConfigPath(
+        string displayName,
+        out DisplayConfigPathInfo displayPath,
+        out string diagnostic)
+    {
+        displayPath = default;
+        if (!TryQueryDisplayConfig(
+            QdcOnlyActivePaths | QdcVirtualModeAware,
+            out DisplayConfigPathInfo[] paths,
+            out _,
+            out diagnostic))
+        {
+            return false;
+        }
+
+        foreach (DisplayConfigPathInfo path in paths)
+        {
+            if (TryGetSourceDisplayName(path, out string? sourceDisplayName) &&
+                string.Equals(sourceDisplayName, displayName, StringComparison.OrdinalIgnoreCase))
+            {
+                displayPath = path;
+                diagnostic = $"DisplayConfig active path resolved for {displayName}.";
+                return true;
+            }
+        }
+
+        diagnostic = $"DisplayConfig did not expose active source {displayName} for HDR query.";
+        return false;
+    }
+
+    private static bool TryGetSourceDisplayName(DisplayConfigPathInfo path, out string? displayName)
+    {
+        var sourceName = DisplayConfigSourceDeviceName.Create(path.SourceInfo.AdapterId, path.SourceInfo.Id);
+        uint nameStatus = NativeMethods.DisplayConfigGetDeviceInfo(ref sourceName);
+        if (nameStatus != ErrorSuccess || string.IsNullOrWhiteSpace(sourceName.ViewGdiDeviceName))
+        {
+            displayName = null;
+            return false;
+        }
+
+        displayName = sourceName.ViewGdiDeviceName;
+        return true;
+    }
+
+    private static bool TryQueryAdvancedColorInfo2(
+        Luid adapterId,
+        uint targetId,
+        out DisplayHdrCapability capability,
+        out string diagnostic)
+    {
+        var colorInfo = DisplayConfigGetAdvancedColorInfo2.Create(adapterId, targetId);
+        uint status = NativeMethods.DisplayConfigGetAdvancedColorInfo2(ref colorInfo);
+        if (status != ErrorSuccess)
+        {
+            capability = new DisplayHdrCapability(false, false, string.Empty);
+            diagnostic = $"DisplayConfigGetDeviceInfo(GET_ADVANCED_COLOR_INFO_2) returned {status}.";
+            return false;
+        }
+
+        capability = WindowsDisplayDiagnostics.FromAdvancedColorInfo2(
+            colorInfo.Flags,
+            colorInfo.BitsPerColorChannel,
+            colorInfo.ActiveColorMode);
+        diagnostic = "Advanced Color Info 2 queried.";
+        return true;
+    }
+
+    private static bool TryQueryLegacyAdvancedColorInfo(
+        Luid adapterId,
+        uint targetId,
+        out DisplayHdrCapability capability,
+        out string diagnostic)
+    {
+        var colorInfo = DisplayConfigGetAdvancedColorInfo.Create(adapterId, targetId);
+        uint status = NativeMethods.DisplayConfigGetAdvancedColorInfo(ref colorInfo);
+        if (status != ErrorSuccess)
+        {
+            capability = new DisplayHdrCapability(false, false, string.Empty);
+            diagnostic = $"DisplayConfigGetDeviceInfo(GET_ADVANCED_COLOR_INFO) returned {status}.";
+            return false;
+        }
+
+        capability = WindowsDisplayDiagnostics.FromLegacyAdvancedColorInfo(
+            colorInfo.Flags,
+            colorInfo.BitsPerColorChannel);
+        diagnostic = "Legacy Advanced Color Info queried.";
+        return true;
+    }
+
+    private static bool TrySelectPhysicalRestoreDisplayNameFromDisplayConfig(
+        out string? displayName,
+        out string diagnostic)
+    {
+        displayName = null;
+        if (!TryQueryDisplayConfig(
+            QdcOnlyActivePaths | QdcVirtualModeAware,
+            out DisplayConfigPathInfo[] paths,
+            out DisplayConfigModeInfo[] modes,
+            out diagnostic))
+        {
+            return false;
+        }
+
+        var candidates = new List<DisplayRestoreCandidate>();
+        for (int pathIndex = 0; pathIndex < paths.Length; pathIndex++)
+        {
+            DisplayConfigPathInfo path = paths[pathIndex];
+            if (!TryGetSourceDisplayName(path, out string? sourceDisplayName) ||
+                sourceDisplayName is null)
+            {
+                continue;
+            }
+
+            uint sourceModeIndex = SourceModeInfoIndex(path);
+            if (!TryGetSourceMode(modes, sourceModeIndex, out DisplayConfigSourceMode sourceMode))
+            {
+                continue;
+            }
+
+            string candidateDisplayName = sourceDisplayName;
+            candidates.Add(new DisplayRestoreCandidate(
+                candidateDisplayName,
+                TryClassifyDisplayName(candidateDisplayName, out DisplayPathKind kind) ? kind : null,
+                IsPrimary: IsOrigin(sourceMode.Position),
+                X: sourceMode.Position.X,
+                Y: sourceMode.Position.Y));
+        }
+
+        displayName = WindowsDisplayDiagnostics.SelectPhysicalRestoreCandidate(candidates);
+        diagnostic = displayName is null
+            ? "No active physical display was found for restore."
+            : $"DisplayConfig selected {displayName} for physical primary restore.";
+        return displayName is not null;
     }
 
     private static bool TryQueryDisplayConfig(
@@ -598,6 +770,27 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
         return true;
     }
 
+    private static bool TryClassifyDisplayName(string displayName, out DisplayPathKind kind)
+    {
+        for (uint index = 0; ; index++)
+        {
+            DisplayDevice device = DisplayDevice.Create();
+            if (!NativeMethods.EnumDisplayDevices(null, index, ref device, 0))
+            {
+                kind = default;
+                return false;
+            }
+
+            if (!string.Equals(device.DeviceName, displayName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            kind = ClassifyDisplayKind(device.DeviceString, device.DeviceId);
+            return true;
+        }
+    }
+
     private static bool IsOrigin(PointL position) =>
         position.X == 0 && position.Y == 0;
 
@@ -651,10 +844,8 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
 
         foreach (DisplayConfigPathInfo path in paths)
         {
-            var sourceName = DisplayConfigSourceDeviceName.Create(path.SourceInfo.AdapterId, path.SourceInfo.Id);
-            uint nameStatus = NativeMethods.DisplayConfigGetDeviceInfo(ref sourceName);
-            if (nameStatus != ErrorSuccess ||
-                !string.Equals(sourceName.ViewGdiDeviceName, primaryDisplayName, StringComparison.OrdinalIgnoreCase))
+            if (!TryGetSourceDisplayName(path, out string? sourceDisplayName) ||
+                !string.Equals(sourceDisplayName, primaryDisplayName, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -975,6 +1166,12 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
         [DllImport("user32.dll")]
         public static extern uint DisplayConfigGetDeviceInfo(ref DisplayConfigSourceDeviceName requestPacket);
 
+        [DllImport("user32.dll", EntryPoint = "DisplayConfigGetDeviceInfo")]
+        public static extern uint DisplayConfigGetAdvancedColorInfo(ref DisplayConfigGetAdvancedColorInfo requestPacket);
+
+        [DllImport("user32.dll", EntryPoint = "DisplayConfigGetDeviceInfo")]
+        public static extern uint DisplayConfigGetAdvancedColorInfo2(ref DisplayConfigGetAdvancedColorInfo2 requestPacket);
+
         [DllImport("user32.dll")]
         public static extern uint SetDisplayConfig(
             uint numPathArrayElements,
@@ -1278,6 +1475,53 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
                     Id = sourceId
                 },
                 ViewGdiDeviceName = string.Empty
+            };
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DisplayConfigGetAdvancedColorInfo
+    {
+        public DisplayConfigDeviceInfoHeader Header;
+        public uint Flags;
+        public uint ColorEncoding;
+        public uint BitsPerColorChannel;
+
+        public static DisplayConfigGetAdvancedColorInfo Create(Luid adapterId, uint targetId)
+        {
+            return new DisplayConfigGetAdvancedColorInfo
+            {
+                Header = new DisplayConfigDeviceInfoHeader
+                {
+                    Type = DisplayConfigDeviceInfoGetAdvancedColorInfo,
+                    Size = checked((uint)Marshal.SizeOf<DisplayConfigGetAdvancedColorInfo>()),
+                    AdapterId = adapterId,
+                    Id = targetId
+                }
+            };
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DisplayConfigGetAdvancedColorInfo2
+    {
+        public DisplayConfigDeviceInfoHeader Header;
+        public uint Flags;
+        public uint ColorEncoding;
+        public uint BitsPerColorChannel;
+        public uint ActiveColorMode;
+
+        public static DisplayConfigGetAdvancedColorInfo2 Create(Luid adapterId, uint targetId)
+        {
+            return new DisplayConfigGetAdvancedColorInfo2
+            {
+                Header = new DisplayConfigDeviceInfoHeader
+                {
+                    Type = DisplayConfigDeviceInfoGetAdvancedColorInfo2,
+                    Size = checked((uint)Marshal.SizeOf<DisplayConfigGetAdvancedColorInfo2>()),
+                    AdapterId = adapterId,
+                    Id = targetId
+                }
             };
         }
     }
