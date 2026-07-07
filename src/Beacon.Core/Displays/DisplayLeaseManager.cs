@@ -12,6 +12,7 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend)
             profile.Display.PreferredWidth,
             profile.Display.PreferredHeight,
             profile.Display.PreferredRefreshHz,
+            profile.Display.HdrPreference,
             cancellationToken);
 
         if (!ensureResult.Success)

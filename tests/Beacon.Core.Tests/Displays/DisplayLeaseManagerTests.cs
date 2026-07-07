@@ -22,7 +22,7 @@ public sealed class DisplayLeaseManagerTests
         Assert.True(result.Success);
         DisplayLease lease = Assert.IsType<DisplayLease>(result.Lease);
         Assert.Equal("client-z-fold-7", lease.DisplayId);
-        Assert.Equal("client-z-fold-7:2560x1600@120", Assert.Single(backend.EnsureCalls));
+        Assert.Equal("client-z-fold-7:2560x1600@120:hdr=Prefer", Assert.Single(backend.EnsureCalls));
     }
 
     [Fact]

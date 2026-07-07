@@ -15,9 +15,10 @@ public sealed class FakeDisplayBackend : IDisplayBackend
         int width,
         int height,
         int refreshHz,
+        HdrPreference hdrPreference,
         CancellationToken cancellationToken)
     {
-        EnsureCalls.Add($"{displayId}:{width}x{height}@{refreshHz}");
+        EnsureCalls.Add($"{displayId}:{width}x{height}@{refreshHz}:hdr={hdrPreference}");
         return Task.FromResult(AllowEnsure
             ? DisplayEnsureResult.Ok()
             : DisplayEnsureResult.Fail("virtual display is unavailable"));

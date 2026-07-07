@@ -7,6 +7,7 @@ public interface IDisplayBackend
         int width,
         int height,
         int refreshHz,
+        HdrPreference hdrPreference,
         CancellationToken cancellationToken);
 
     Task RestorePhysicalPrimaryAsync(CancellationToken cancellationToken);
