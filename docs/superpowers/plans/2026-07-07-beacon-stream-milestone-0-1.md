@@ -610,7 +610,7 @@ Expected: PASS.
 - Create: `src/Beacon.Core/Displays/FakeDisplayBackend.cs`
 - Create: `tests/Beacon.Core.Tests/Displays/DisplayLeaseManagerTests.cs`
 
-- [ ] **Step 1: Write failing display lifecycle tests**
+- [x] **Step 1: Write failing display lifecycle tests**
 
 Create tests proving:
 
@@ -645,7 +645,7 @@ public async Task MissingVirtualDisplayFailsInsteadOfFallingBackToPhysicalDispla
 
 Expected: manager result fails and fake backend records no physical-display fallback.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -655,7 +655,7 @@ dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter DisplayLea
 
 Expected: FAIL because display lease types do not exist.
 
-- [ ] **Step 3: Implement minimal display lease policy**
+- [x] **Step 3: Implement minimal display lease policy**
 
 Implement interfaces:
 
@@ -683,7 +683,7 @@ public sealed List<string> RemoveCalls { get; } = [];
 public bool AllowEnsure { get; set; } = true;
 ```
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
