@@ -116,7 +116,7 @@ Files:
 - Modify: `tests/Beacon.Server.Tests/BeaconServiceRegistrationTests.cs`
 - Modify: `tests/Beacon.Server.Tests/AdminApiTests.cs`
 
-- [ ] **Step 1: Add streaming mode parser**
+- [x] **Step 1: Add streaming mode parser**
 
 Read streaming backend mode from configuration key `Beacon:Streaming:Backend` or environment variable `BEACON_STREAMING_BACKEND`.
 
@@ -125,19 +125,19 @@ Allowed values:
 - `fake`
 - `external-process`
 
-- [ ] **Step 2: Keep fake streaming default**
+- [x] **Step 2: Keep fake streaming default**
 
 Default registration must still use `FakeStreamingBackend`.
 
-- [ ] **Step 3: External mode registers explicit Windows backend**
+- [x] **Step 3: External mode registers explicit Windows backend**
 
 External mode must register `ExternalProcessStreamingBackend` and its process runner. It must never be implied by Windows host mode alone.
 
-- [ ] **Step 4: Expose mode in diagnostics**
+- [x] **Step 4: Expose mode in diagnostics**
 
 `/admin/snapshot` must continue exposing the selected streaming backend name.
 
-- [ ] **Step 5: Verify tests and commit**
+- [x] **Step 5: Verify tests and commit**
 
 ```powershell
 dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter "BeaconServiceRegistration|AdminApiTests|ClientApiTests"

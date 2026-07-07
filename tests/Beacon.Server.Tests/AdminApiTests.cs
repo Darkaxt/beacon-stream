@@ -28,7 +28,9 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.Equal("steam-shortcut:3767414131", root.GetProperty("ownership")[0].GetProperty("appId").GetString());
         Assert.False(root.GetProperty("ownership")[0].GetProperty("launchedProcessRunning").GetBoolean());
         Assert.Equal("fake", root.GetProperty("host").GetProperty("mode").GetString());
+        Assert.Equal("fake", root.GetProperty("host").GetProperty("streamingBackendMode").GetString());
         Assert.Equal("FakeDisplayBackend", root.GetProperty("host").GetProperty("displayBackend").GetString());
+        Assert.Equal("FakeStreamingBackend", root.GetProperty("host").GetProperty("streamingBackend").GetString());
     }
 
     [Fact]
