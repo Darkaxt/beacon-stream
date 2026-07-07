@@ -1130,7 +1130,7 @@ git commit -m "Document streaming backend milestone"
 git push
 ```
 
-- [ ] **Step 6: Open PR and wait for CI**
+- [x] **Step 6: Open PR and wait for CI**
 
 ```powershell
 gh pr create --draft --base main --head codex/milestone-5-streaming-backend --title "Implement streaming backend boundary" --body "Milestone 5 streaming backend boundary implementation."
