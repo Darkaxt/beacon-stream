@@ -20,11 +20,24 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
     private const uint FileShareWrite = 0x00000002;
     private const uint OpenExisting = 3;
     private const uint FileAttributeNormal = 0x00000080;
-    private const uint CdsUpdateRegistry = 0x00000001;
-    private const uint CdsSetPrimary = 0x00000010;
-    private const uint CdsNoReset = 0x10000000;
-    private const uint DmPosition = 0x00000020;
-    private const int DispChangeSuccessful = 0;
+    private const uint ErrorSuccess = 0;
+    private const uint ErrorGenFailure = 31;
+    private const uint QdcAllPaths = 0x00000001;
+    private const uint QdcOnlyActivePaths = 0x00000002;
+    private const uint QdcVirtualModeAware = 0x00000010;
+    private const uint SdcUseSuppliedDisplayConfig = 0x00000020;
+    private const uint SdcApply = 0x00000080;
+    private const uint SdcSaveToDatabase = 0x00000200;
+    private const uint SdcAllowChanges = 0x00000400;
+    private const uint SdcTopologySupplied = 0x00000010;
+    private const uint SdcAllowPathOrderChanges = 0x00002000;
+    private const uint SdcVirtualModeAware = 0x00008000;
+    private const uint DisplayConfigDeviceInfoGetSourceName = 1;
+    private const uint DisplayConfigPathActive = 0x00000001;
+    private const uint DisplayConfigPathModeIdxInvalid = 0xFFFFFFFF;
+    private const uint DisplayConfigPathSourceModeIdxInvalid = 0xFFFF;
+    private const uint DisplayConfigModeInfoTypeSource = 1;
+    private const uint DisplayConfigPixelFormat32Bpp = 4;
     private const uint IoctlAddVirtualDisplay = 0x800;
     private const uint IoctlRemoveVirtualDisplay = 0x801;
     private const uint IoctlGetProtocolVersion = 0x8FF;
@@ -62,7 +75,7 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        IReadOnlyList<string> beforeDisplayNames = EnumerateActiveDisplayNames();
+        IReadOnlyList<string> beforeDisplayNames = EnumerateDisplayNames(activeOnly: false);
 
         using SafeFileHandle? handle = OpenSudoVdaDevice(out string diagnostic);
         if (handle is null)
@@ -70,12 +83,13 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
             return Task.FromResult(DisplayApiResult.Fail(diagnostic));
         }
 
+        Guid monitorGuid = CreateDeterministicDisplayGuid(displayId);
         var parameters = new VirtualDisplayAddParams
         {
             Width = checked((uint)width),
             Height = checked((uint)height),
             RefreshRate = checked((uint)refreshHz),
-            MonitorGuid = CreateDeterministicDisplayGuid(displayId),
+            MonitorGuid = monitorGuid,
             DeviceName = "BeaconStream",
             SerialNumber = "beaconstream"
         };
@@ -85,18 +99,34 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
             BuildSudoVdaControlCode(IoctlAddVirtualDisplay),
             ref parameters,
             Marshal.SizeOf<VirtualDisplayAddParams>(),
-            out _,
+            out VirtualDisplayAddOut addOutput,
             Marshal.SizeOf<VirtualDisplayAddOut>(),
             out _,
             IntPtr.Zero);
 
         if (success)
         {
-            IReadOnlyList<string> afterDisplayNames = EnumerateActiveDisplayNames();
-            string? addedDisplayName = SelectAddedDisplayName(beforeDisplayNames, afterDisplayNames);
-            if (addedDisplayName is not null)
+            IReadOnlyList<DisplayPathSnapshot> afterDisplayPaths = EnumerateDisplayNamesWithState(activeOnly: false);
+            IReadOnlyList<string> afterDisplayNames = afterDisplayPaths.Select(path => path.DisplayId).ToArray();
+            string? displayName = TryGetDisplayNameForTarget(addOutput, out string? targetDisplayName)
+                ? targetDisplayName
+                : SelectAddedDisplayName(beforeDisplayNames, afterDisplayNames) ??
+                SelectSingleVirtualDisplayName(afterDisplayPaths);
+
+            if (displayName is null)
             {
-                RememberDisplayName(displayId, addedDisplayName);
+                RemoveVirtualDisplay(handle, monitorGuid);
+                return Task.FromResult(DisplayApiResult.Fail(
+                    $"SudoVDA create succeeded for {displayId}, but Windows did not expose a mappable virtual display name. Before=[{string.Join(", ", beforeDisplayNames)}] After=[{string.Join(", ", afterDisplayNames)}]."));
+            }
+
+            RememberDisplayName(displayId, displayName);
+            DisplayApiResult activationResult = ActivateDisplayMode(addOutput, displayName, width, height, refreshHz);
+            if (!activationResult.Success)
+            {
+                RemoveVirtualDisplay(handle, monitorGuid);
+                ForgetDisplayName(displayId);
+                return Task.FromResult(activationResult);
             }
         }
 
@@ -144,20 +174,7 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
             return Task.FromResult(DisplayApiResult.Fail(diagnostic));
         }
 
-        var parameters = new VirtualDisplayRemoveParams
-        {
-            MonitorGuid = CreateDeterministicDisplayGuid(displayId)
-        };
-
-        bool success = NativeMethods.DeviceIoControl(
-            handle,
-            BuildSudoVdaControlCode(IoctlRemoveVirtualDisplay),
-            ref parameters,
-            Marshal.SizeOf<VirtualDisplayRemoveParams>(),
-            IntPtr.Zero,
-            0,
-            out _,
-            IntPtr.Zero);
+        bool success = RemoveVirtualDisplay(handle, CreateDeterministicDisplayGuid(displayId));
 
         if (success)
         {
@@ -213,14 +230,25 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
         return added.Length == 1 ? added[0] : null;
     }
 
+    public static string? SelectSingleVirtualDisplayName(IReadOnlyList<DisplayPathSnapshot> paths)
+    {
+        string[] virtualDisplayNames = paths
+            .Where(path => path.Kind == DisplayPathKind.Virtual)
+            .Select(path => path.DisplayId)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return virtualDisplayNames.Length == 1 ? virtualDisplayNames[0] : null;
+    }
+
     private DisplayTopologySnapshot QueryActiveTopology()
     {
         Dictionary<string, string> displayIdByDisplayName = CreateDisplayIdByDisplayNameSnapshot();
         return DisplayTopologySnapshot.FromPaths(EnumerateActiveDisplayPaths(displayIdByDisplayName));
     }
 
-    private static IReadOnlyList<string> EnumerateActiveDisplayNames() =>
-        EnumerateActiveDisplayPaths(displayIdByDisplayName: null)
+    private static IReadOnlyList<string> EnumerateDisplayNames(bool activeOnly) =>
+        EnumerateDisplayNamesWithState(activeOnly)
             .Select(path => path.DisplayId)
             .ToArray();
 
@@ -267,6 +295,340 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
         return paths;
     }
 
+    private static IReadOnlyList<DisplayPathSnapshot> EnumerateDisplayNamesWithState(bool activeOnly)
+    {
+        var paths = new List<DisplayPathSnapshot>();
+
+        for (uint index = 0; ; index++)
+        {
+            DisplayDevice device = DisplayDevice.Create();
+            if (!NativeMethods.EnumDisplayDevices(null, index, ref device, 0))
+            {
+                break;
+            }
+
+            bool active = (device.StateFlags & DisplayDeviceActive) != 0;
+            if (activeOnly && !active)
+            {
+                continue;
+            }
+
+            paths.Add(new DisplayPathSnapshot(
+                device.DeviceName,
+                ClassifyDisplayKind(device.DeviceString, device.DeviceId),
+                Width: 0,
+                Height: 0,
+                RefreshHz: 0,
+                IsPrimary: (device.StateFlags & DisplayDevicePrimaryDevice) != 0,
+                X: 0,
+                Y: 0));
+        }
+
+        return paths;
+    }
+
+    private static DisplayApiResult ActivateDisplayMode(
+        VirtualDisplayAddOut addOutput,
+        string displayName,
+        int width,
+        int height,
+        int refreshHz)
+    {
+        DisplayApiResult activeResult = EnsureDisplayConfigTargetActive(addOutput, displayName);
+        if (!activeResult.Success)
+        {
+            return activeResult;
+        }
+
+        return ApplyDisplayConfigMode(displayName, width, height, refreshHz);
+    }
+
+    private static DisplayApiResult EnsureDisplayConfigTargetActive(
+        VirtualDisplayAddOut addOutput,
+        string displayName)
+    {
+        if (!TryQueryDisplayConfig(
+            QdcOnlyActivePaths | QdcVirtualModeAware,
+            out DisplayConfigPathInfo[] activePaths,
+            out _,
+            out string activeDiagnostic))
+        {
+            return DisplayApiResult.Fail(activeDiagnostic);
+        }
+
+        if (activePaths.Any(path => IsTargetPath(path, addOutput)))
+        {
+            return DisplayApiResult.Ok();
+        }
+
+        if (!TryQueryDisplayConfig(
+            QdcAllPaths | QdcVirtualModeAware,
+            out DisplayConfigPathInfo[] allPaths,
+            out _,
+            out string allDiagnostic))
+        {
+            return DisplayApiResult.Fail(allDiagnostic);
+        }
+
+        DisplayConfigPathInfo targetPath = allPaths.FirstOrDefault(path => IsTargetPath(path, addOutput));
+        if (!IsTargetPath(targetPath, addOutput))
+        {
+            return DisplayApiResult.Fail(
+                $"SudoVDA target for {displayName} was not present in DisplayConfig. Adapter={FormatLuid(addOutput.AdapterLuid)} Target={addOutput.TargetId}.");
+        }
+
+        var requestedPaths = new List<DisplayConfigPathInfo>();
+        uint groupId = 0;
+        foreach (DisplayConfigPathInfo activePath in activePaths.Where(path => !IsTargetPath(path, addOutput)))
+        {
+            DisplayConfigPathInfo selectedPath = allPaths.FirstOrDefault(path => IsSameDisplayPath(path, activePath));
+            requestedPaths.Add(PrepareTopologyPath(
+                IsSameDisplayPath(selectedPath, activePath) ? selectedPath : activePath,
+                groupId++));
+        }
+
+        requestedPaths.Add(PrepareTopologyPath(targetPath, groupId));
+
+        uint status = NativeMethods.SetDisplayConfigWithoutModes(
+            checked((uint)requestedPaths.Count),
+            requestedPaths.ToArray(),
+            0,
+            IntPtr.Zero,
+            SdcApply | SdcTopologySupplied | SdcAllowPathOrderChanges | SdcVirtualModeAware);
+
+        if (status == ErrorGenFailure)
+        {
+            status = NativeMethods.SetDisplayConfigWithoutModes(
+                checked((uint)requestedPaths.Count),
+                requestedPaths.ToArray(),
+                0,
+                IntPtr.Zero,
+                SdcApply | SdcUseSuppliedDisplayConfig | SdcAllowChanges | SdcVirtualModeAware | SdcSaveToDatabase);
+        }
+
+        return status == ErrorSuccess
+            ? DisplayApiResult.Ok()
+            : DisplayApiResult.Fail(
+                $"Unable to activate DisplayConfig target for {displayName}. Adapter={FormatLuid(addOutput.AdapterLuid)} Target={addOutput.TargetId} Result={status}.");
+    }
+
+    private static DisplayApiResult ApplyDisplayConfigMode(string displayName, int width, int height, int refreshHz)
+    {
+        if (!TryQueryDisplayConfig(
+            QdcOnlyActivePaths | QdcVirtualModeAware,
+            out DisplayConfigPathInfo[] paths,
+            out DisplayConfigModeInfo[] modes,
+            out string diagnostic))
+        {
+            return DisplayApiResult.Fail(diagnostic);
+        }
+
+        for (int pathIndex = 0; pathIndex < paths.Length; pathIndex++)
+        {
+            DisplayConfigPathInfo path = paths[pathIndex];
+            var sourceName = DisplayConfigSourceDeviceName.Create(path.SourceInfo.AdapterId, path.SourceInfo.Id);
+            uint nameStatus = NativeMethods.DisplayConfigGetDeviceInfo(ref sourceName);
+            if (nameStatus != ErrorSuccess ||
+                !string.Equals(sourceName.ViewGdiDeviceName, displayName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            uint sourceModeIndex = SourceModeInfoIndex(path);
+            if (sourceModeIndex == DisplayConfigPathSourceModeIdxInvalid ||
+                sourceModeIndex >= modes.Length ||
+                modes[sourceModeIndex].InfoType != DisplayConfigModeInfoTypeSource)
+            {
+                return DisplayApiResult.Fail($"Active DisplayConfig path for {displayName} did not expose a source mode.");
+            }
+
+            DisplayConfigSourceMode sourceMode = modes[sourceModeIndex].SourceMode;
+            sourceMode.Width = checked((uint)width);
+            sourceMode.Height = checked((uint)height);
+            if (sourceMode.PixelFormat == 0)
+            {
+                sourceMode.PixelFormat = DisplayConfigPixelFormat32Bpp;
+            }
+            modes[sourceModeIndex].SourceMode = sourceMode;
+
+            path.TargetInfo.RefreshRate = new DisplayConfigRational
+            {
+                Numerator = checked((uint)refreshHz),
+                Denominator = 1
+            };
+            path.TargetInfo.ModeInfoIdx = DisplayConfigPathModeIdxInvalid;
+            paths[pathIndex] = path;
+
+            uint status = NativeMethods.SetDisplayConfig(
+                checked((uint)paths.Length),
+                paths,
+                checked((uint)modes.Length),
+                modes,
+                SuppliedDisplayConfigApplyFlags());
+
+            return status == ErrorSuccess
+                ? DisplayApiResult.Ok()
+                : DisplayApiResult.Fail($"Unable to apply DisplayConfig mode for {displayName} at {width}x{height}@{refreshHz}. Result={status}.");
+        }
+
+        return DisplayApiResult.Fail($"DisplayConfig did not expose active source {displayName} after SudoVDA activation.");
+    }
+
+    private static bool TryGetDisplayNameForTarget(VirtualDisplayAddOut addOutput, out string? displayName)
+    {
+        displayName = null;
+        uint pathCount = 0;
+        uint modeCount = 0;
+        uint flags = QdcAllPaths | QdcVirtualModeAware;
+
+        uint sizeStatus = NativeMethods.GetDisplayConfigBufferSizes(flags, ref pathCount, ref modeCount);
+        if (sizeStatus != ErrorSuccess || pathCount == 0)
+        {
+            return false;
+        }
+
+        var paths = new DisplayConfigPathInfo[pathCount];
+        var modes = new DisplayConfigModeInfo[modeCount];
+        uint queryStatus = NativeMethods.QueryDisplayConfig(
+            flags,
+            ref pathCount,
+            paths,
+            ref modeCount,
+            modes,
+            IntPtr.Zero);
+        if (queryStatus != ErrorSuccess)
+        {
+            return false;
+        }
+
+        for (int index = 0; index < pathCount; index++)
+        {
+            DisplayConfigPathInfo path = paths[index];
+            if (!path.TargetInfo.AdapterId.Equals(addOutput.AdapterLuid) || path.TargetInfo.Id != addOutput.TargetId)
+            {
+                continue;
+            }
+
+            var sourceName = DisplayConfigSourceDeviceName.Create(path.SourceInfo.AdapterId, path.SourceInfo.Id);
+            uint nameStatus = NativeMethods.DisplayConfigGetDeviceInfo(ref sourceName);
+            if (nameStatus != ErrorSuccess || string.IsNullOrWhiteSpace(sourceName.ViewGdiDeviceName))
+            {
+                return false;
+            }
+
+            displayName = sourceName.ViewGdiDeviceName;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryQueryDisplayConfig(
+        uint flags,
+        out DisplayConfigPathInfo[] paths,
+        out DisplayConfigModeInfo[] modes,
+        out string diagnostic)
+    {
+        paths = [];
+        modes = [];
+
+        uint pathCount = 0;
+        uint modeCount = 0;
+        uint sizeStatus = NativeMethods.GetDisplayConfigBufferSizes(flags, ref pathCount, ref modeCount);
+        if (sizeStatus != ErrorSuccess)
+        {
+            diagnostic = $"GetDisplayConfigBufferSizes failed. Flags=0x{flags:X} Result={sizeStatus}.";
+            return false;
+        }
+
+        paths = new DisplayConfigPathInfo[pathCount];
+        modes = new DisplayConfigModeInfo[modeCount];
+        uint queryStatus = NativeMethods.QueryDisplayConfig(
+            flags,
+            ref pathCount,
+            paths,
+            ref modeCount,
+            modes,
+            IntPtr.Zero);
+        if (queryStatus != ErrorSuccess)
+        {
+            diagnostic = $"QueryDisplayConfig failed. Flags=0x{flags:X} Result={queryStatus}.";
+            return false;
+        }
+
+        Array.Resize(ref paths, checked((int)pathCount));
+        Array.Resize(ref modes, checked((int)modeCount));
+        diagnostic = "DisplayConfig queried.";
+        return true;
+    }
+
+    private static uint SuppliedDisplayConfigApplyFlags() =>
+        SdcApply |
+        SdcUseSuppliedDisplayConfig |
+        SdcSaveToDatabase |
+        SdcVirtualModeAware;
+
+    private static bool IsTargetPath(DisplayConfigPathInfo path, VirtualDisplayAddOut addOutput) =>
+        path.TargetInfo.Id == addOutput.TargetId &&
+        path.TargetInfo.AdapterId.Equals(addOutput.AdapterLuid);
+
+    private static bool IsSameDisplayPath(DisplayConfigPathInfo left, DisplayConfigPathInfo right) =>
+        left.SourceInfo.Id == right.SourceInfo.Id &&
+        left.TargetInfo.Id == right.TargetInfo.Id &&
+        left.SourceInfo.AdapterId.Equals(right.SourceInfo.AdapterId) &&
+        left.TargetInfo.AdapterId.Equals(right.TargetInfo.AdapterId);
+
+    private static uint SourceModeInfoIndex(DisplayConfigPathInfo path) =>
+        path.SourceInfo.ModeInfoIdx >> 16;
+
+    private static bool TryGetSourceMode(
+        DisplayConfigModeInfo[] modes,
+        uint sourceModeIndex,
+        out DisplayConfigSourceMode sourceMode)
+    {
+        sourceMode = default;
+        if (sourceModeIndex == DisplayConfigPathSourceModeIdxInvalid ||
+            sourceModeIndex >= modes.Length ||
+            modes[sourceModeIndex].InfoType != DisplayConfigModeInfoTypeSource)
+        {
+            return false;
+        }
+
+        sourceMode = modes[sourceModeIndex].SourceMode;
+        return true;
+    }
+
+    private static bool IsOrigin(PointL position) =>
+        position.X == 0 && position.Y == 0;
+
+    private static DisplayConfigPathInfo PrepareTopologyPath(DisplayConfigPathInfo path, uint groupId)
+    {
+        path.Flags |= DisplayConfigPathActive;
+        path.SourceInfo.ModeInfoIdx = (DisplayConfigPathSourceModeIdxInvalid << 16) | (groupId & 0xFFFF);
+        path.TargetInfo.ModeInfoIdx = DisplayConfigPathModeIdxInvalid;
+        return path;
+    }
+
+    private static string FormatLuid(Luid luid) => $"{luid.HighPart:X8}:{luid.LowPart:X8}";
+
+    private static bool RemoveVirtualDisplay(SafeFileHandle handle, Guid monitorGuid)
+    {
+        var parameters = new VirtualDisplayRemoveParams
+        {
+            MonitorGuid = monitorGuid
+        };
+
+        return NativeMethods.DeviceIoControl(
+            handle,
+            BuildSudoVdaControlCode(IoctlRemoveVirtualDisplay),
+            ref parameters,
+            Marshal.SizeOf<VirtualDisplayRemoveParams>(),
+            IntPtr.Zero,
+            0,
+            out _,
+            IntPtr.Zero);
+    }
+
     private bool TrySetPrimaryDisplay(string displayId, out string diagnostic)
     {
         if (!TryResolveDisplayName(displayId, out string? primaryDisplayName) || primaryDisplayName is null)
@@ -275,59 +637,83 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
             return false;
         }
 
-        if (!TryGetCurrentMode(primaryDisplayName, out DevMode primaryMode))
+        if (!TryQueryDisplayConfig(
+            QdcOnlyActivePaths | QdcVirtualModeAware,
+            out DisplayConfigPathInfo[] paths,
+            out DisplayConfigModeInfo[] modes,
+            out diagnostic))
         {
-            diagnostic = $"Unable to read display mode for {primaryDisplayName}.";
             return false;
         }
 
-        int offsetX = primaryMode.Position.X;
-        int offsetY = primaryMode.Position.Y;
+        uint? primarySourceModeIndex = null;
+        PointL origin = default;
 
-        foreach (DisplayPathSnapshot display in EnumerateActiveDisplayPaths(displayIdByDisplayName: null))
+        foreach (DisplayConfigPathInfo path in paths)
         {
-            if (!TryGetCurrentMode(display.DisplayId, out DevMode mode))
+            var sourceName = DisplayConfigSourceDeviceName.Create(path.SourceInfo.AdapterId, path.SourceInfo.Id);
+            uint nameStatus = NativeMethods.DisplayConfigGetDeviceInfo(ref sourceName);
+            if (nameStatus != ErrorSuccess ||
+                !string.Equals(sourceName.ViewGdiDeviceName, primaryDisplayName, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            mode.Position.X -= offsetX;
-            mode.Position.Y -= offsetY;
-            mode.Fields = DmPosition;
-
-            uint flags = CdsUpdateRegistry | CdsNoReset;
-            if (string.Equals(display.DisplayId, primaryDisplayName, StringComparison.OrdinalIgnoreCase))
+            uint sourceModeIndex = SourceModeInfoIndex(path);
+            if (!TryGetSourceMode(modes, sourceModeIndex, out DisplayConfigSourceMode sourceMode))
             {
-                mode.Position.X = 0;
-                mode.Position.Y = 0;
-                flags |= CdsSetPrimary;
-            }
-
-            int changeResult = NativeMethods.ChangeDisplaySettingsEx(
-                display.DisplayId,
-                ref mode,
-                IntPtr.Zero,
-                flags,
-                IntPtr.Zero);
-
-            if (changeResult != DispChangeSuccessful)
-            {
-                diagnostic = $"ChangeDisplaySettingsEx failed for {display.DisplayId}. Result={changeResult}.";
+                diagnostic = $"Active DisplayConfig path for {primaryDisplayName} did not expose a source mode.";
                 return false;
             }
+
+            if (IsOrigin(sourceMode.Position))
+            {
+                diagnostic = $"Display {primaryDisplayName} is already primary.";
+                return true;
+            }
+
+            primarySourceModeIndex = sourceModeIndex;
+            origin = sourceMode.Position;
+            break;
         }
 
-        int applyResult = NativeMethods.ChangeDisplaySettingsEx(
-            null,
-            IntPtr.Zero,
-            IntPtr.Zero,
-            0,
-            IntPtr.Zero);
+        if (primarySourceModeIndex is null)
+        {
+            diagnostic = $"DisplayConfig did not expose active source {primaryDisplayName}.";
+            return false;
+        }
 
-        diagnostic = applyResult == DispChangeSuccessful
+        var modifiedSourceModeIndexes = new HashSet<uint>();
+        for (int pathIndex = 0; pathIndex < paths.Length; pathIndex++)
+        {
+            uint sourceModeIndex = SourceModeInfoIndex(paths[pathIndex]);
+            if (!modifiedSourceModeIndexes.Add(sourceModeIndex))
+            {
+                continue;
+            }
+
+            if (!TryGetSourceMode(modes, sourceModeIndex, out DisplayConfigSourceMode sourceMode))
+            {
+                diagnostic = $"Active DisplayConfig path at index {pathIndex} did not expose a source mode.";
+                return false;
+            }
+
+            sourceMode.Position.X -= origin.X;
+            sourceMode.Position.Y -= origin.Y;
+            modes[sourceModeIndex].SourceMode = sourceMode;
+        }
+
+        uint status = NativeMethods.SetDisplayConfig(
+            checked((uint)paths.Length),
+            paths,
+            checked((uint)modes.Length),
+            modes,
+            SuppliedDisplayConfigApplyFlags());
+
+        diagnostic = status == ErrorSuccess
             ? $"Display {primaryDisplayName} set primary."
-            : $"Final display topology apply failed. Result={applyResult}.";
-        return applyResult == DispChangeSuccessful;
+            : $"DisplayConfig primary apply failed for {primaryDisplayName}. Result={status}.";
+        return status == ErrorSuccess;
     }
 
     private bool TryResolveDisplayName(string displayId, out string? displayName)
@@ -342,12 +728,6 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
         {
             return displayNameByDisplayId.TryGetValue(displayId, out displayName);
         }
-    }
-
-    private static bool TryGetCurrentMode(string displayName, out DevMode mode)
-    {
-        mode = DevMode.Create();
-        return NativeMethods.EnumDisplaySettings(displayName, EnumCurrentSettings, ref mode);
     }
 
     private static bool ContainsOrdinalIgnoreCase(string value, string fragment) =>
@@ -577,21 +957,39 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
             out uint bytesReturned,
             IntPtr overlapped);
 
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-        public static extern int ChangeDisplaySettingsEx(
-            string? deviceName,
-            ref DevMode devMode,
-            IntPtr hwnd,
+        [DllImport("user32.dll")]
+        public static extern uint GetDisplayConfigBufferSizes(
             uint flags,
-            IntPtr lParam);
+            ref uint numPathArrayElements,
+            ref uint numModeInfoArrayElements);
 
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-        public static extern int ChangeDisplaySettingsEx(
-            string? deviceName,
-            IntPtr devMode,
-            IntPtr hwnd,
+        [DllImport("user32.dll")]
+        public static extern uint QueryDisplayConfig(
             uint flags,
-            IntPtr lParam);
+            ref uint numPathArrayElements,
+            [Out] DisplayConfigPathInfo[] pathArray,
+            ref uint numModeInfoArrayElements,
+            [Out] DisplayConfigModeInfo[] modeInfoArray,
+            IntPtr currentTopologyId);
+
+        [DllImport("user32.dll")]
+        public static extern uint DisplayConfigGetDeviceInfo(ref DisplayConfigSourceDeviceName requestPacket);
+
+        [DllImport("user32.dll")]
+        public static extern uint SetDisplayConfig(
+            uint numPathArrayElements,
+            [In] DisplayConfigPathInfo[] pathArray,
+            uint numModeInfoArrayElements,
+            [In] DisplayConfigModeInfo[] modeInfoArray,
+            uint flags);
+
+        [DllImport("user32.dll", EntryPoint = "SetDisplayConfig")]
+        public static extern uint SetDisplayConfigWithoutModes(
+            uint numPathArrayElements,
+            [In] DisplayConfigPathInfo[] pathArray,
+            uint numModeInfoArrayElements,
+            IntPtr modeInfoArray,
+            uint flags);
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -728,6 +1126,160 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
     {
         public uint LowPart;
         public int HighPart;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DisplayConfigPathInfo
+    {
+        public DisplayConfigPathSourceInfo SourceInfo;
+        public DisplayConfigPathTargetInfo TargetInfo;
+        public uint Flags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DisplayConfigPathSourceInfo
+    {
+        public Luid AdapterId;
+        public uint Id;
+        public uint ModeInfoIdx;
+        public uint StatusFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DisplayConfigPathTargetInfo
+    {
+        public Luid AdapterId;
+        public uint Id;
+        public uint ModeInfoIdx;
+        public uint OutputTechnology;
+        public uint Rotation;
+        public uint Scaling;
+        public DisplayConfigRational RefreshRate;
+        public uint ScanLineOrdering;
+
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool TargetAvailable;
+
+        public uint StatusFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DisplayConfigRational
+    {
+        public uint Numerator;
+        public uint Denominator;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DisplayConfigModeInfo
+    {
+        public uint InfoType;
+        public uint Id;
+        public Luid AdapterId;
+        public DisplayConfigModeInfoUnion Union;
+
+        public DisplayConfigSourceMode SourceMode
+        {
+            readonly get => Union.SourceMode;
+            set => Union.SourceMode = value;
+        }
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct DisplayConfigModeInfoUnion
+    {
+        [FieldOffset(0)]
+        public DisplayConfigTargetMode TargetMode;
+
+        [FieldOffset(0)]
+        public DisplayConfigSourceMode SourceMode;
+
+        [FieldOffset(0)]
+        public DisplayConfigDesktopImageInfo DesktopImageInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DisplayConfigTargetMode
+    {
+        public DisplayConfigVideoSignalInfo TargetVideoSignalInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DisplayConfigVideoSignalInfo
+    {
+        public ulong PixelRate;
+        public DisplayConfigRational HSyncFreq;
+        public DisplayConfigRational VSyncFreq;
+        public DisplayConfig2DRegion ActiveSize;
+        public DisplayConfig2DRegion TotalSize;
+        public uint VideoStandard;
+        public uint ScanLineOrdering;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DisplayConfig2DRegion
+    {
+        public uint Cx;
+        public uint Cy;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DisplayConfigSourceMode
+    {
+        public uint Width;
+        public uint Height;
+        public uint PixelFormat;
+        public PointL Position;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DisplayConfigDesktopImageInfo
+    {
+        public PointL PathSourceSize;
+        public RectL DesktopImageRegion;
+        public RectL DesktopImageClip;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RectL
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DisplayConfigDeviceInfoHeader
+    {
+        public uint Type;
+        public uint Size;
+        public Luid AdapterId;
+        public uint Id;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct DisplayConfigSourceDeviceName
+    {
+        public DisplayConfigDeviceInfoHeader Header;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string ViewGdiDeviceName;
+
+        public static DisplayConfigSourceDeviceName Create(Luid adapterId, uint sourceId)
+        {
+            return new DisplayConfigSourceDeviceName
+            {
+                Header = new DisplayConfigDeviceInfoHeader
+                {
+                    Type = DisplayConfigDeviceInfoGetSourceName,
+                    Size = checked((uint)Marshal.SizeOf<DisplayConfigSourceDeviceName>()),
+                    AdapterId = adapterId,
+                    Id = sourceId
+                },
+                ViewGdiDeviceName = string.Empty
+            };
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]

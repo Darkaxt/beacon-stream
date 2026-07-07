@@ -71,4 +71,16 @@ public sealed class DisplayTopologySnapshotTests
 
         Assert.Equal(@"\\.\DISPLAY7", added);
     }
+
+    [Fact]
+    public void SelectSingleVirtualDisplayNameReturnsInactiveSudoVdaDisplayName()
+    {
+        string? selected = WindowsDisplayApi.SelectSingleVirtualDisplayName(
+            [
+                new DisplayPathSnapshot(@"\\.\DISPLAY5", DisplayPathKind.Physical, 0, 0, 0, IsPrimary: true),
+                new DisplayPathSnapshot(@"\\.\DISPLAY9", DisplayPathKind.Virtual, 0, 0, 0, IsPrimary: false)
+            ]);
+
+        Assert.Equal(@"\\.\DISPLAY9", selected);
+    }
 }
