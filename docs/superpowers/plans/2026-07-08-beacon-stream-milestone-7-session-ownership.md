@@ -92,7 +92,7 @@ Files:
 - Add: `src/Beacon.Core/Sessions/FakeSessionActivityInspector.cs`
 - Add: `tests/Beacon.Core.Tests/Sessions/SessionOwnershipTrackerTests.cs`
 
-- [ ] **Step 1: Write ownership tests**
+- [x] **Step 1: Write ownership tests**
 
 Cover:
 
@@ -102,7 +102,7 @@ Cover:
 - unrelated activity reported outside the session does not block cleanup.
 - empty owned snapshot allows cleanup.
 
-- [ ] **Step 2: Add ownership contracts**
+- [x] **Step 2: Add ownership contracts**
 
 Create:
 
@@ -111,11 +111,11 @@ Create:
 - `ISessionActivityInspector`
 - `ISessionOwnershipTracker`
 
-- [ ] **Step 3: Implement in-memory tracker**
+- [x] **Step 3: Implement in-memory tracker**
 
 The tracker records launch state by `sessionId`, asks the inspector for current owned activity, and returns a snapshot with explicit reasons.
 
-- [ ] **Step 4: Verify tests and commit**
+- [x] **Step 4: Verify tests and commit**
 
 ```powershell
 dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter SessionOwnershipTracker
