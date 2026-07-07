@@ -32,24 +32,36 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
         DisplayTopologySnapshot afterCreate = await api.QueryTopologyAsync(cancellationToken);
         if (afterCreate.IsMirrorMode)
         {
-            return DisplayEnsureResult.Fail($"Refusing mirror mode for virtual display {displayId}.");
+            return await FailAfterCreateAsync(
+                displayId,
+                $"Refusing mirror mode for virtual display {displayId}.",
+                cancellationToken);
         }
 
         if (!afterCreate.HasDisplayMode(displayId, width, height, refreshHz))
         {
-            return DisplayEnsureResult.Fail($"Virtual display {displayId} did not expose {width}x{height}@{refreshHz}.");
+            return await FailAfterCreateAsync(
+                displayId,
+                $"Virtual display {displayId} did not expose {width}x{height}@{refreshHz}.",
+                cancellationToken);
         }
 
         DisplayApiResult primaryResult = await api.SetVirtualPrimaryAsync(displayId, cancellationToken);
         if (!primaryResult.Success)
         {
-            return DisplayEnsureResult.Fail(primaryResult.Error ?? $"Unable to make virtual display {displayId} primary.");
+            return await FailAfterCreateAsync(
+                displayId,
+                primaryResult.Error ?? $"Unable to make virtual display {displayId} primary.",
+                cancellationToken);
         }
 
         DisplayTopologySnapshot afterPrimary = await api.QueryTopologyAsync(cancellationToken);
         if (!afterPrimary.IsPrimary(displayId))
         {
-            return DisplayEnsureResult.Fail($"Virtual display {displayId} was not primary after topology apply.");
+            return await FailAfterCreateAsync(
+                displayId,
+                $"Virtual display {displayId} was not primary after topology apply.",
+                cancellationToken);
         }
 
         DisplayHdrCapability hdrCapability = await api.QueryHdrCapabilityAsync(displayId, cancellationToken);
@@ -107,5 +119,19 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
         }
 
         return DisplayEnsureResult.Ok(hdrReason: capability.Reason);
+    }
+
+    private async Task<DisplayEnsureResult> FailAfterCreateAsync(
+        string displayId,
+        string error,
+        CancellationToken cancellationToken)
+    {
+        DisplayApiResult removeResult = await api.RemoveVirtualDisplayAsync(displayId, cancellationToken);
+        if (!removeResult.Success)
+        {
+            return DisplayEnsureResult.Fail($"{error} Cleanup failed: {removeResult.Error}");
+        }
+
+        return DisplayEnsureResult.Fail(error);
     }
 }

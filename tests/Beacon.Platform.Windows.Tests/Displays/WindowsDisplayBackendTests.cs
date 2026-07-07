@@ -77,6 +77,26 @@ public sealed class WindowsDisplayBackendTests
     }
 
     [Fact]
+    public async Task EnsureVirtualDisplayAsync_WhenPrimaryApplyFails_RemovesCreatedDisplay()
+    {
+        var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
+        api.PrimaryResult = DisplayApiResult.Fail("primary apply not available");
+        var backend = new WindowsDisplayBackend(api);
+
+        DisplayEnsureResult result = await backend.EnsureVirtualDisplayAsync(
+            "client-z-fold-7",
+            2560,
+            1600,
+            120,
+            HdrPreference.Prefer,
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("primary apply not available", result.Error ?? string.Empty);
+        Assert.Equal("client-z-fold-7", Assert.Single(api.RemovedDisplays));
+    }
+
+    [Fact]
     public async Task EnsureVirtualDisplayAsync_WhenHdrPreferredAndDriverReportsSdr_ReturnsSdrWithReason()
     {
         var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();

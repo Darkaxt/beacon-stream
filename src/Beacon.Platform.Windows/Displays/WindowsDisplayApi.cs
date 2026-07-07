@@ -20,6 +20,8 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
     private const uint FileShareWrite = 0x00000002;
     private const uint OpenExisting = 3;
     private const uint FileAttributeNormal = 0x00000080;
+    private const uint IoctlAddVirtualDisplay = 0x800;
+    private const uint IoctlRemoveVirtualDisplay = 0x801;
     private const uint IoctlGetProtocolVersion = 0x8FF;
     private const byte ExpectedProtocolMajor = 0;
     private const byte ExpectedProtocolMinor = 2;
@@ -53,8 +55,35 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(DisplayApiResult.Fail(
-            $"SudoVDA create is not wired yet for {displayId} {width}x{height}@{refreshHz}."));
+        using SafeFileHandle? handle = OpenSudoVdaDevice(out string diagnostic);
+        if (handle is null)
+        {
+            return Task.FromResult(DisplayApiResult.Fail(diagnostic));
+        }
+
+        var parameters = new VirtualDisplayAddParams
+        {
+            Width = checked((uint)width),
+            Height = checked((uint)height),
+            RefreshRate = checked((uint)refreshHz),
+            MonitorGuid = CreateDeterministicDisplayGuid(displayId),
+            DeviceName = "BeaconStream",
+            SerialNumber = "beaconstream"
+        };
+
+        bool success = NativeMethods.DeviceIoControl(
+            handle,
+            BuildSudoVdaControlCode(IoctlAddVirtualDisplay),
+            ref parameters,
+            Marshal.SizeOf<VirtualDisplayAddParams>(),
+            out _,
+            Marshal.SizeOf<VirtualDisplayAddOut>(),
+            out _,
+            IntPtr.Zero);
+
+        return Task.FromResult(success
+            ? DisplayApiResult.Ok()
+            : DisplayApiResult.Fail($"SudoVDA create failed for {displayId}. Win32={Marshal.GetLastWin32Error()}."));
     }
 
     public Task<DisplayTopologySnapshot> QueryTopologyAsync(CancellationToken cancellationToken)
@@ -80,8 +109,30 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
     public Task<DisplayApiResult> RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(DisplayApiResult.Fail(
-            $"SudoVDA remove is not wired yet for {displayId}."));
+        using SafeFileHandle? handle = OpenSudoVdaDevice(out string diagnostic);
+        if (handle is null)
+        {
+            return Task.FromResult(DisplayApiResult.Fail(diagnostic));
+        }
+
+        var parameters = new VirtualDisplayRemoveParams
+        {
+            MonitorGuid = CreateDeterministicDisplayGuid(displayId)
+        };
+
+        bool success = NativeMethods.DeviceIoControl(
+            handle,
+            BuildSudoVdaControlCode(IoctlRemoveVirtualDisplay),
+            ref parameters,
+            Marshal.SizeOf<VirtualDisplayRemoveParams>(),
+            IntPtr.Zero,
+            0,
+            out _,
+            IntPtr.Zero);
+
+        return Task.FromResult(success
+            ? DisplayApiResult.Ok()
+            : DisplayApiResult.Fail($"SudoVDA remove failed for {displayId}. Win32={Marshal.GetLastWin32Error()}."));
     }
 
     public Task<DisplayHdrCapability> QueryHdrCapabilityAsync(string displayId, CancellationToken cancellationToken)
@@ -329,6 +380,30 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
             int outBufferSize,
             out uint bytesReturned,
             IntPtr overlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool DeviceIoControl(
+            SafeFileHandle device,
+            uint ioControlCode,
+            ref VirtualDisplayAddParams inBuffer,
+            int inBufferSize,
+            out VirtualDisplayAddOut outBuffer,
+            int outBufferSize,
+            out uint bytesReturned,
+            IntPtr overlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool DeviceIoControl(
+            SafeFileHandle device,
+            uint ioControlCode,
+            ref VirtualDisplayRemoveParams inBuffer,
+            int inBufferSize,
+            IntPtr outBuffer,
+            int outBufferSize,
+            out uint bytesReturned,
+            IntPtr overlapped);
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -430,6 +505,41 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
     private struct SudoVdaProtocolVersionOut
     {
         public SudoVdaProtocolVersion Version;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    private struct VirtualDisplayAddParams
+    {
+        public uint Width;
+        public uint Height;
+        public uint RefreshRate;
+        public Guid MonitorGuid;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)]
+        public string DeviceName;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)]
+        public string SerialNumber;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct VirtualDisplayRemoveParams
+    {
+        public Guid MonitorGuid;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct VirtualDisplayAddOut
+    {
+        public Luid AdapterLuid;
+        public uint TargetId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Luid
+    {
+        public uint LowPart;
+        public int HighPart;
     }
 
     [StructLayout(LayoutKind.Sequential)]

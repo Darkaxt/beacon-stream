@@ -22,6 +22,8 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi
     public DisplayHdrCapability HdrCapability { get; set; } =
         new(Supported: false, Enabled: false, Reason: "Windows Advanced Color reports SDR only.");
 
+    public DisplayApiResult PrimaryResult { get; set; } = DisplayApiResult.Ok();
+
     public List<(string DisplayId, int Width, int Height, int RefreshHz)> CreatedDisplays { get; } = [];
 
     public List<string> PrimaryRequests { get; } = [];
@@ -75,12 +77,17 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi
     public Task<DisplayApiResult> SetVirtualPrimaryAsync(string displayId, CancellationToken cancellationToken)
     {
         PrimaryRequests.Add(displayId);
+        if (!PrimaryResult.Success)
+        {
+            return Task.FromResult(PrimaryResult);
+        }
+
         if (AfterPrimaryTopology is not null)
         {
             CurrentTopology = AfterPrimaryTopology;
         }
 
-        return Task.FromResult(DisplayApiResult.Ok());
+        return Task.FromResult(PrimaryResult);
     }
 
     public Task<DisplayApiResult> RestorePhysicalPrimaryAsync(CancellationToken cancellationToken)
