@@ -42,4 +42,23 @@ public sealed class DisplayTopologySnapshotTests
     {
         Assert.Equal(expectedKind, WindowsDisplayApi.ClassifyDisplayKind(deviceString, deviceId));
     }
+
+    [Fact]
+    public void BuildSudoVdaControlCodeMatchesDriverContract()
+    {
+        Assert.Equal(0x00222000u, WindowsDisplayApi.BuildSudoVdaControlCode(0x800));
+        Assert.Equal(0x00222004u, WindowsDisplayApi.BuildSudoVdaControlCode(0x801));
+        Assert.Equal(0x002223FCu, WindowsDisplayApi.BuildSudoVdaControlCode(0x8FF));
+    }
+
+    [Fact]
+    public void CreateDeterministicDisplayGuidIsStablePerDisplayId()
+    {
+        Guid first = WindowsDisplayApi.CreateDeterministicDisplayGuid("client-z-fold-7");
+        Guid second = WindowsDisplayApi.CreateDeterministicDisplayGuid("client-z-fold-7");
+        Guid other = WindowsDisplayApi.CreateDeterministicDisplayGuid("client-other");
+
+        Assert.Equal(first, second);
+        Assert.NotEqual(first, other);
+    }
 }
