@@ -77,7 +77,7 @@ Not included:
 - Create: `src/Beacon.Core/Streaming/FakeStreamingBackend.cs`
 - Test: `tests/Beacon.Core.Tests/Streaming/FakeStreamingBackendTests.cs`
 
-- [ ] **Step 1: Write failing fake backend tests**
+- [x] **Step 1: Write failing fake backend tests**
 
 Create `tests/Beacon.Core.Tests/Streaming/FakeStreamingBackendTests.cs`:
 
@@ -158,7 +158,7 @@ public sealed class FakeStreamingBackendTests
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -168,7 +168,7 @@ dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter FakeStream
 
 Expected: compile failure because `Beacon.Core.Streaming` does not exist.
 
-- [ ] **Step 3: Add streaming contracts**
+- [x] **Step 3: Add streaming contracts**
 
 Create `src/Beacon.Core/Streaming/StreamingSessionState.cs`:
 
@@ -221,7 +221,7 @@ public sealed record StreamingStopResult(bool Success, StreamingSessionState? Se
 }
 ```
 
-- [ ] **Step 4: Add fake backend**
+- [x] **Step 4: Add fake backend**
 
 Create `src/Beacon.Core/Streaming/FakeStreamingBackend.cs`:
 
@@ -292,7 +292,7 @@ public sealed class FakeStreamingBackend : IStreamingBackend
 }
 ```
 
-- [ ] **Step 5: Verify green**
+- [x] **Step 5: Verify green**
 
 Run:
 
@@ -302,7 +302,7 @@ dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter FakeStream
 
 Expected: all fake backend tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add src/Beacon.Core/Streaming tests/Beacon.Core.Tests/Streaming
