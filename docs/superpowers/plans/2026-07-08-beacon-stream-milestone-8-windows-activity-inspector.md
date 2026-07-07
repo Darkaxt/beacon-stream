@@ -154,7 +154,7 @@ git commit -m "Document Windows activity inspector milestone"
 git push
 ```
 
-- [ ] **Step 5: Open PR, wait for CI, mark ready, merge**
+- [x] **Step 5: Open PR, wait for CI, mark ready, merge**
 
 ```powershell
 gh pr create --draft --base main --head codex/milestone-8-windows-activity-inspector --title "Add Windows session activity inspector" --body "Milestone 8 Windows activity inspector implementation."
