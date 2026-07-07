@@ -49,7 +49,7 @@ Files:
 git switch -c codex/milestone-6-android-client
 ```
 
-- [ ] **Step 2: Commit plan**
+- [x] **Step 2: Commit plan**
 
 ```powershell
 git add docs/superpowers/plans/2026-07-07-beacon-stream-milestone-6-android-client.md
@@ -71,15 +71,15 @@ Files:
 - Add: `src/Beacon.Android/app/src/main/res/drawable/ic_launcher_foreground.xml`
 - Add: `src/Beacon.Android/app/src/main/res/drawable/ic_launcher_background.xml`
 
-- [ ] **Step 1: Create build files**
+- [x] **Step 1: Create build files**
 
 Use `com.android.application` version `8.9.2`, compile SDK `35`, min SDK `26`, Java 17 compatibility, and JUnit `4.13.2`.
 
-- [ ] **Step 2: Create manifest and resources**
+- [x] **Step 2: Create manifest and resources**
 
 Declare `BeaconActivity` as the launcher activity. Use app label `Beacon`.
 
-- [ ] **Step 3: Verify empty build fails for missing activity**
+- [x] **Step 3: Verify Android test and debug build**
 
 Run:
 
@@ -87,7 +87,7 @@ Run:
 & "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.14.1-bin\baw1sv0jfoi8rxs14qo3h49cs\gradle-8.14.1\bin\gradle.bat" --no-daemon -p src\Beacon.Android test
 ```
 
-Expected: fail until activity and app code exist.
+Expected: pass once activity and app code exist.
 
 ## Task 3: Add APK Control-Plane Client
 
@@ -100,7 +100,7 @@ Files:
 - Add: `src/Beacon.Android/app/src/test/java/dev/beacon/android/BeaconApiClientTest.java`
 - Add: `src/Beacon.Android/app/src/test/java/dev/beacon/android/BeaconLocalSettingsTest.java`
 
-- [ ] **Step 1: Write failing API client tests**
+- [x] **Step 1: Add API client tests**
 
 Use an in-memory `HttpURLConnection`-style fake transport or an injectable transport interface. Tests must cover:
 
@@ -109,7 +109,7 @@ Use an in-memory `HttpURLConnection`-style fake transport or an injectable trans
 - emergency restore posts to the owning client endpoint.
 - launch consumes a server plan/stream response without choosing display topology locally.
 
-- [ ] **Step 2: Implement API client**
+- [x] **Step 2: Implement API client**
 
 Implement methods:
 
@@ -124,7 +124,7 @@ Implement methods:
 - `quit(QuitState state)`
 - `emergencyRestore()`
 
-- [ ] **Step 3: Add local settings model**
+- [x] **Step 3: Add local settings model**
 
 Persist only local interaction/UI settings:
 
@@ -139,7 +139,7 @@ Persist only local interaction/UI settings:
 
 Do not include display mode, blackout, mirror, persistence, destruction, or restore policy in local settings.
 
-- [ ] **Step 4: Verify unit tests**
+- [x] **Step 4: Verify unit tests**
 
 Run:
 
@@ -149,7 +149,7 @@ Run:
 
 Expected: all Android JVM tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add src/Beacon.Android docs/superpowers/plans/2026-07-07-beacon-stream-milestone-6-android-client.md
@@ -165,7 +165,7 @@ Files:
 - Add: `src/Beacon.Android/app/src/main/java/dev/beacon/android/BeaconViewModel.java`
 - Add: `src/Beacon.Android/app/src/test/java/dev/beacon/android/BeaconViewModelTest.java`
 
-- [ ] **Step 1: Write failing ViewModel tests**
+- [x] **Step 1: Add ViewModel tests**
 
 Cover:
 
@@ -175,11 +175,11 @@ Cover:
 - emergency restore action calls the owning-client endpoint.
 - launch action reports the server-selected plan and stream state.
 
-- [ ] **Step 2: Implement ViewModel**
+- [x] **Step 2: Implement ViewModel**
 
 Keep policy-free state only: connection status, profile summary, selected game id/manual launch fields, latest plan summary, latest stream state, and latest error.
 
-- [ ] **Step 3: Implement Activity**
+- [x] **Step 3: Implement Activity**
 
 Use platform Android views, no AndroidX dependency. Provide a functional first screen:
 
@@ -197,7 +197,7 @@ Use platform Android views, no AndroidX dependency. Provide a functional first s
 - emergency restore button
 - status log text
 
-- [ ] **Step 4: Verify APK build**
+- [x] **Step 4: Verify APK build**
 
 Run:
 
@@ -207,7 +207,7 @@ Run:
 
 Expected: tests pass and `app-debug.apk` is produced.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add src/Beacon.Android docs/superpowers/plans/2026-07-07-beacon-stream-milestone-6-android-client.md

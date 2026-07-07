@@ -1,0 +1,7 @@
+<resources>
+    <style name="BeaconTheme" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">@color/beacon_background</item>
+        <item name="android:colorAccent">@color/beacon_accent</item>
+    </style>
+</resources>
