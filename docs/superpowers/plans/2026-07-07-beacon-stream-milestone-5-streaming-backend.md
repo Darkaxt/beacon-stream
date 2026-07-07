@@ -317,7 +317,7 @@ git push
 - Modify: `src/Beacon.Server/Api/ClientEndpoints.cs`
 - Test: `tests/Beacon.Server.Tests/ClientApiTests.cs`
 
-- [ ] **Step 1: Write failing launch tests**
+- [x] **Step 1: Write failing launch tests**
 
 Add these usings to `tests/Beacon.Server.Tests/ClientApiTests.cs`:
 
@@ -375,7 +375,7 @@ public async Task LaunchSurfacesStreamingStartFailureAndRestoresPhysicalPrimary(
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -385,7 +385,7 @@ dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter "Launc
 
 Expected: fail because the server does not register or call `IStreamingBackend`, and launch still returns `state = started`.
 
-- [ ] **Step 3: Register the streaming backend**
+- [x] **Step 3: Register the streaming backend**
 
 Modify `src/Beacon.Server/Program.cs`:
 
@@ -399,7 +399,7 @@ Add the service registration after `DisplayLeaseManager`:
 builder.Services.AddSingleton<IStreamingBackend, FakeStreamingBackend>();
 ```
 
-- [ ] **Step 4: Start stream in launch endpoint**
+- [x] **Step 4: Start stream in launch endpoint**
 
 Modify the `/{clientId}/launch` endpoint in `src/Beacon.Server/Api/ClientEndpoints.cs` to inject `IStreamingBackend streaming` and `IDisplayBackend displayBackend`, then replace the final success block with:
 
@@ -434,7 +434,7 @@ Add the required using:
 using Beacon.Core.Streaming;
 ```
 
-- [ ] **Step 5: Update old launch assertions**
+- [x] **Step 5: Update old launch assertions**
 
 Update existing launch tests in `ClientApiTests` from:
 
@@ -448,7 +448,7 @@ to:
 Assert.Equal("streaming", root.GetProperty("state").GetString());
 ```
 
-- [ ] **Step 6: Verify green**
+- [x] **Step 6: Verify green**
 
 Run:
 
@@ -458,7 +458,7 @@ dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter Client
 
 Expected: all client API tests pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add src/Beacon.Server tests/Beacon.Server.Tests

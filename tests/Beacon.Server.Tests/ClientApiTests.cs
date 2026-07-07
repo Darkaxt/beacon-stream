@@ -1,7 +1,11 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Beacon.Core.Streaming;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Beacon.Server.Tests;
 
@@ -166,7 +170,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         JsonElement root = document.RootElement;
 
         Assert.Equal("client-z-fold-7", root.GetProperty("displayId").GetString());
-        Assert.Equal("started", root.GetProperty("state").GetString());
+        Assert.Equal("streaming", root.GetProperty("state").GetString());
     }
 
     [Fact]
@@ -184,7 +188,58 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         JsonElement root = document.RootElement;
 
         Assert.Equal("client-z-fold-7", root.GetProperty("displayId").GetString());
-        Assert.Equal("started", root.GetProperty("state").GetString());
+        Assert.Equal("streaming", root.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task LaunchStartsStreamingBackendWithSessionPlan()
+    {
+        HttpClient client = factory.CreateClient();
+        await client.PostAsJsonAsync("/clients/z-fold-7/capabilities", new
+        {
+            av1 = true,
+            hevc = true,
+            h264 = true,
+            hdr10 = false,
+            virtualDisplayHdrSupported = false
+        });
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
+        {
+            gameId = "steam-shortcut:3767414131"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.Equal("streaming", root.GetProperty("state").GetString());
+        Assert.Equal("client-z-fold-7", root.GetProperty("displayId").GetString());
+        Assert.Equal("running", root.GetProperty("stream").GetProperty("state").GetString());
+        Assert.Equal("av1", root.GetProperty("stream").GetProperty("codec").GetString());
+        Assert.Equal(120, root.GetProperty("stream").GetProperty("fps").GetInt32());
+    }
+
+    [Fact]
+    public async Task LaunchSurfacesStreamingStartFailureAndRestoresPhysicalPrimary()
+    {
+        var backend = new FakeStreamingBackend { NextStartError = "encoder unavailable" };
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IStreamingBackend>(backend);
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
+        {
+            gameId = "steam-shortcut:3767414131"
+        });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        string body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("encoder unavailable", body, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

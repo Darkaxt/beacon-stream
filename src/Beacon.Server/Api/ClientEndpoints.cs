@@ -3,6 +3,7 @@ using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
 using Beacon.Core.Sessions;
+using Beacon.Core.Streaming;
 using Beacon.Server.State;
 
 namespace Beacon.Server.Api;
@@ -129,6 +130,8 @@ public static class ClientEndpoints
             InMemorySessionStore sessions,
             GameLibraryService games,
             DisplayLeaseManager leases,
+            IDisplayBackend displayBackend,
+            IStreamingBackend streaming,
             CancellationToken cancellationToken) =>
         {
             ClientProfile? profile = clients.GetProfile(clientId);
@@ -161,7 +164,27 @@ public static class ClientEndpoints
             }
 
             sessions.Save(planResult.Plan);
-            return Results.Ok(new { clientId, displayId = leaseResult.Lease.DisplayId, state = "started" });
+
+            StreamingStartResult streamResult = await streaming.StartAsync(planResult.Plan, cancellationToken);
+            if (!streamResult.Success || streamResult.Session is null)
+            {
+                DisplayRestoreResult restore = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
+                string restoreStatus = restore.Success
+                    ? "Physical primary restore requested after stream start failure."
+                    : $"Physical primary restore failed after stream start failure: {restore.Error}";
+
+                return Results.Problem(
+                    $"{streamResult.Error} {restoreStatus}",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            return Results.Ok(new
+            {
+                clientId,
+                displayId = leaseResult.Lease.DisplayId,
+                state = "streaming",
+                stream = streamResult.Session
+            });
         });
 
         clients.MapPost("/{clientId}/disconnect", async (string clientId, DisplayLeaseManager leases, CancellationToken cancellationToken) =>
