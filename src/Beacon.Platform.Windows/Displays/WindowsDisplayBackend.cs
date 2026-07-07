@@ -4,6 +4,10 @@ namespace Beacon.Platform.Windows.Displays;
 
 public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBackend
 {
+    private readonly List<DisplayOperationLogEntry> operationLog = [];
+
+    public IReadOnlyList<DisplayOperationLogEntry> OperationLog => operationLog;
+
     public async Task<DisplayEnsureResult> EnsureVirtualDisplayAsync(
         string displayId,
         int width,
@@ -15,9 +19,12 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
         DisplayDriverStatus driverStatus = api.GetDriverStatus();
         if (!driverStatus.Ready)
         {
-            return DisplayEnsureResult.Fail(driverStatus.Diagnostic);
+            DisplayEnsureResult fail = DisplayEnsureResult.Fail(driverStatus.Diagnostic);
+            LogEnsure(displayId, width, height, refreshHz, before: null, after: null, fail, "driver-not-ready");
+            return fail;
         }
 
+        DisplayTopologySnapshot before = await api.QueryTopologyAsync(cancellationToken);
         DisplayApiResult createResult = await api.CreateVirtualDisplayAsync(
             displayId,
             width,
@@ -26,69 +33,88 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
             cancellationToken);
         if (!createResult.Success)
         {
-            return DisplayEnsureResult.Fail(createResult.Error ?? $"Unable to create virtual display {displayId}.");
+            DisplayEnsureResult fail = DisplayEnsureResult.Fail(createResult.Error ?? $"Unable to create virtual display {displayId}.");
+            LogEnsure(displayId, width, height, refreshHz, before, after: null, fail, "create-failed");
+            return fail;
         }
 
         DisplayTopologySnapshot afterCreate = await api.QueryTopologyAsync(cancellationToken);
         if (afterCreate.IsMirrorMode)
         {
-            return await FailAfterCreateAsync(
+            DisplayEnsureResult fail = await FailAfterCreateAsync(
                 displayId,
                 $"Refusing mirror mode for virtual display {displayId}.",
                 cancellationToken);
+            LogEnsure(displayId, width, height, refreshHz, before, afterCreate, fail, "mirror-mode-rejected");
+            return fail;
         }
 
         if (!afterCreate.HasDisplayMode(displayId, width, height, refreshHz))
         {
-            return await FailAfterCreateAsync(
+            DisplayEnsureResult fail = await FailAfterCreateAsync(
                 displayId,
                 $"Virtual display {displayId} did not expose {width}x{height}@{refreshHz}.",
                 cancellationToken);
+            LogEnsure(displayId, width, height, refreshHz, before, afterCreate, fail, "mode-verification-failed");
+            return fail;
         }
 
         DisplayApiResult primaryResult = await api.SetVirtualPrimaryAsync(displayId, cancellationToken);
         if (!primaryResult.Success)
         {
-            return await FailAfterCreateAsync(
+            DisplayEnsureResult fail = await FailAfterCreateAsync(
                 displayId,
                 primaryResult.Error ?? $"Unable to make virtual display {displayId} primary.",
                 cancellationToken);
+            LogEnsure(displayId, width, height, refreshHz, before, afterCreate, fail, "primary-apply-failed");
+            return fail;
         }
 
         DisplayTopologySnapshot afterPrimary = await api.QueryTopologyAsync(cancellationToken);
         if (!afterPrimary.IsPrimary(displayId))
         {
-            return await FailAfterCreateAsync(
+            DisplayEnsureResult fail = await FailAfterCreateAsync(
                 displayId,
                 $"Virtual display {displayId} was not primary after topology apply.",
                 cancellationToken);
+            LogEnsure(displayId, width, height, refreshHz, before, afterPrimary, fail, "primary-verification-failed");
+            return fail;
         }
 
         DisplayHdrCapability hdrCapability = await api.QueryHdrCapabilityAsync(displayId, cancellationToken);
-        return NegotiateHdr(hdrPreference, hdrCapability);
+        DisplayEnsureResult result = NegotiateHdr(hdrPreference, hdrCapability);
+        LogEnsure(displayId, width, height, refreshHz, before, afterPrimary, result, "virtual-primary topology verified");
+        return result;
     }
 
     public async Task<DisplayRestoreResult> RestorePhysicalPrimaryAsync(CancellationToken cancellationToken)
     {
         var seenUnverifiedTopologies = new HashSet<string>(StringComparer.Ordinal);
+        DisplayTopologySnapshot before = await api.QueryTopologyAsync(cancellationToken);
 
         while (true)
         {
             DisplayApiResult restoreResult = await api.RestorePhysicalPrimaryAsync(cancellationToken);
             if (!restoreResult.Success)
             {
-                return DisplayRestoreResult.Fail(restoreResult.Error ?? "Physical primary restore failed.");
+                DisplayRestoreResult fail = DisplayRestoreResult.Fail(restoreResult.Error ?? "Physical primary restore failed.");
+                LogRestore(before, after: null, fail, "restore-apply-failed");
+                return fail;
             }
 
             DisplayTopologySnapshot topology = await api.QueryTopologyAsync(cancellationToken);
             if (topology.PhysicalPrimaryVerified)
             {
-                return DisplayRestoreResult.Ok();
+                DisplayRestoreResult result = DisplayRestoreResult.Ok();
+                LogRestore(before, topology, result, "physical primary verified");
+                return result;
             }
 
             if (!seenUnverifiedTopologies.Add(topology.Fingerprint))
             {
-                return DisplayRestoreResult.Fail("Physical primary restore was not verified after topology reconciliation.");
+                DisplayRestoreResult fail = DisplayRestoreResult.Fail("Physical primary restore was not verified after topology reconciliation.");
+                LogRestore(before, topology, fail, "restore-verification-failed");
+                return fail;
             }
         }
     }
@@ -133,5 +159,47 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
         }
 
         return DisplayEnsureResult.Fail(error);
+    }
+
+    private void LogEnsure(
+        string displayId,
+        int width,
+        int height,
+        int refreshHz,
+        DisplayTopologySnapshot? before,
+        DisplayTopologySnapshot? after,
+        DisplayEnsureResult result,
+        string reason)
+    {
+        operationLog.Add(new DisplayOperationLogEntry(
+            Operation: "ensure-virtual-display",
+            DisplayId: displayId,
+            Width: width,
+            Height: height,
+            RefreshHz: refreshHz,
+            Primary: after?.IsPrimary(displayId),
+            HdrEnabled: result.HdrEnabled,
+            Reason: result.Success ? reason : $"{reason}: {result.Error}",
+            Before: before,
+            After: after));
+    }
+
+    private void LogRestore(
+        DisplayTopologySnapshot? before,
+        DisplayTopologySnapshot? after,
+        DisplayRestoreResult result,
+        string reason)
+    {
+        operationLog.Add(new DisplayOperationLogEntry(
+            Operation: "restore-physical-primary",
+            DisplayId: "physical",
+            Width: null,
+            Height: null,
+            RefreshHz: null,
+            Primary: after?.PhysicalPrimaryVerified,
+            HdrEnabled: null,
+            Reason: result.Success ? reason : $"{reason}: {result.Error}",
+            Before: before,
+            After: after));
     }
 }

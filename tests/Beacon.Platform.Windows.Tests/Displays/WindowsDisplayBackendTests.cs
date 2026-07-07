@@ -77,6 +77,34 @@ public sealed class WindowsDisplayBackendTests
     }
 
     [Fact]
+    public async Task EnsureVirtualDisplayAsync_WritesTopologyDecisionLog()
+    {
+        var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
+        var backend = new WindowsDisplayBackend(api);
+
+        DisplayEnsureResult result = await backend.EnsureVirtualDisplayAsync(
+            "client-z-fold-7",
+            2560,
+            1600,
+            120,
+            HdrPreference.Prefer,
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        DisplayOperationLogEntry entry = Assert.Single(backend.OperationLog);
+        Assert.Equal("ensure-virtual-display", entry.Operation);
+        Assert.Equal("client-z-fold-7", entry.DisplayId);
+        Assert.Equal(2560, entry.Width);
+        Assert.Equal(1600, entry.Height);
+        Assert.Equal(120, entry.RefreshHz);
+        Assert.False(entry.HdrEnabled);
+        Assert.Contains("virtual-primary", entry.Reason);
+        Assert.NotNull(entry.Before);
+        Assert.NotNull(entry.After);
+        Assert.True(entry.After.IsPrimary("client-z-fold-7"));
+    }
+
+    [Fact]
     public async Task EnsureVirtualDisplayAsync_WhenPrimaryApplyFails_RemovesCreatedDisplay()
     {
         var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
@@ -164,5 +192,28 @@ public sealed class WindowsDisplayBackendTests
 
         Assert.True(result.Success, result.Error);
         Assert.Equal(2, api.RestoreRequests.Count);
+    }
+
+    [Fact]
+    public async Task RestorePhysicalPrimaryAsync_WritesTopologyDecisionLog()
+    {
+        var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
+        api.RestoreTopologies.Enqueue(DisplayTopologySnapshot.PhysicalOnly(
+            physicalDisplayId: "physical-laptop-panel",
+            width: 2560,
+            height: 1600,
+            refreshHz: 120));
+        var backend = new WindowsDisplayBackend(api);
+
+        DisplayRestoreResult result = await backend.RestorePhysicalPrimaryAsync(CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        DisplayOperationLogEntry entry = Assert.Single(backend.OperationLog);
+        Assert.Equal("restore-physical-primary", entry.Operation);
+        Assert.Equal("physical", entry.DisplayId);
+        Assert.True(entry.Primary);
+        Assert.Contains("verified", entry.Reason);
+        Assert.NotNull(entry.After);
+        Assert.True(entry.After.PhysicalPrimaryVerified);
     }
 }
