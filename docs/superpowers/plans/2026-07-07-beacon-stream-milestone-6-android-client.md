@@ -223,15 +223,15 @@ Files:
 - Modify: `docs/extraction-map.md`
 - Modify: `docs/superpowers/plans/2026-07-07-beacon-stream-milestone-6-android-client.md`
 
-- [ ] **Step 1: Update README**
+- [x] **Step 1: Update README**
 
 Add Android build and validation commands. Note that the APK is a thin control-plane client and does not include real decode yet.
 
-- [ ] **Step 2: Update extraction map**
+- [x] **Step 2: Update extraction map**
 
 Add that Android client code is original and does not copy Artemis/Moonlight code.
 
-- [ ] **Step 3: Full validation**
+- [x] **Step 3: Full validation**
 
 Run:
 
@@ -248,7 +248,7 @@ pnpm --dir tests\Beacon.ClientLab.Playwright test
 
 Expected: all checks pass.
 
-- [ ] **Step 4: Boundary audit**
+- [x] **Step 4: Boundary audit**
 
 Run:
 
@@ -262,7 +262,7 @@ Expected:
 - No copied-source references.
 - No timeout/cancellation patterns in APK code.
 
-- [ ] **Step 5: Commit docs and validation**
+- [x] **Step 5: Commit docs and validation**
 
 ```powershell
 git add README.md docs/extraction-map.md docs/superpowers/plans/2026-07-07-beacon-stream-milestone-6-android-client.md
