@@ -13,6 +13,15 @@ public sealed record DisplayTopologySnapshot(IReadOnlyList<DisplayPathSnapshot> 
     public bool PhysicalPrimaryVerified =>
         Paths.Any(path => path.Kind == DisplayPathKind.Physical && path.IsPrimary);
 
+    public static DisplayTopologySnapshot FromPaths(IReadOnlyList<DisplayPathSnapshot> paths)
+    {
+        bool mirrorMode = paths
+            .GroupBy(path => new { path.X, path.Y, path.Width, path.Height })
+            .Any(group => group.Count() > 1);
+
+        return new DisplayTopologySnapshot(paths, mirrorMode);
+    }
+
     public static DisplayTopologySnapshot PhysicalOnly(
         string physicalDisplayId,
         int width,
@@ -27,7 +36,9 @@ public sealed record DisplayTopologySnapshot(IReadOnlyList<DisplayPathSnapshot> 
                     width,
                     height,
                     refreshHz,
-                    IsPrimary: true)
+                    IsPrimary: true,
+                    X: 0,
+                    Y: 0)
             ],
             IsMirrorMode: false);
     }
@@ -48,14 +59,18 @@ public sealed record DisplayTopologySnapshot(IReadOnlyList<DisplayPathSnapshot> 
                     width,
                     height,
                     refreshHz,
-                    IsPrimary: !virtualPrimary),
+                    IsPrimary: !virtualPrimary,
+                    X: virtualPrimary ? width : 0,
+                    Y: 0),
                 new DisplayPathSnapshot(
                     virtualDisplayId,
                     DisplayPathKind.Virtual,
                     width,
                     height,
                     refreshHz,
-                    IsPrimary: virtualPrimary)
+                    IsPrimary: virtualPrimary,
+                    X: virtualPrimary ? 0 : width,
+                    Y: 0)
             ],
             IsMirrorMode: false);
     }
@@ -75,14 +90,18 @@ public sealed record DisplayTopologySnapshot(IReadOnlyList<DisplayPathSnapshot> 
                     width,
                     height,
                     refreshHz,
-                    IsPrimary: true),
+                    IsPrimary: true,
+                    X: 0,
+                    Y: 0),
                 new DisplayPathSnapshot(
                     virtualDisplayId,
                     DisplayPathKind.Virtual,
                     width,
                     height,
                     refreshHz,
-                    IsPrimary: false)
+                    IsPrimary: false,
+                    X: 0,
+                    Y: 0)
             ],
             IsMirrorMode: true);
     }
@@ -104,7 +123,9 @@ public sealed record DisplayPathSnapshot(
     int Width,
     int Height,
     int RefreshHz,
-    bool IsPrimary);
+    bool IsPrimary,
+    int X = 0,
+    int Y = 0);
 
 public enum DisplayPathKind
 {
