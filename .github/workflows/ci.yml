@@ -19,6 +19,8 @@ jobs:
 
   client-lab:
     runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.54.1-noble
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -36,5 +38,4 @@ jobs:
       - run: pnpm --dir src/Beacon.ClientLab test
       - run: pnpm --dir tests/Beacon.ClientLab.Playwright install --frozen-lockfile
       - run: pnpm --dir tests/Beacon.ClientLab.Playwright lint
-      - run: pnpm --dir tests/Beacon.ClientLab.Playwright exec playwright install --with-deps chromium
       - run: pnpm --dir tests/Beacon.ClientLab.Playwright test
