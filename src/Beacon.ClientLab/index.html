@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Beacon Client Lab</title>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="mast">
+        <div>
+          <p class="eyebrow">z-fold-7</p>
+          <h1>Beacon Client Lab</h1>
+        </div>
+        <button id="helloButton" type="button">Hello</button>
+      </section>
+
+      <section class="grid">
+        <form class="panel" id="profileForm">
+          <h2>Client Profile</h2>
+          <div class="fields">
+            <label>
+              <span>Width</span>
+              <input id="widthInput" name="width" type="number" min="1" value="2560" />
+            </label>
+            <label>
+              <span>Height</span>
+              <input id="heightInput" name="height" type="number" min="1" value="1600" />
+            </label>
+            <label>
+              <span>Refresh</span>
+              <input id="refreshInput" name="refresh" type="number" min="1" value="120" />
+            </label>
+            <label>
+              <span>HDR</span>
+              <select id="hdrInput" name="hdr">
+                <option value="Prefer">Prefer</option>
+                <option value="Off">Off</option>
+                <option value="Require">Require</option>
+              </select>
+            </label>
+            <label>
+              <span>Codec</span>
+              <select id="codecInput" name="codec">
+                <option value="auto">Auto</option>
+                <option value="av1">AV1</option>
+                <option value="hevc">HEVC</option>
+                <option value="h264">H.264</option>
+              </select>
+            </label>
+            <label>
+              <span>Bitrate</span>
+              <input id="bitrateInput" name="bitrate" type="number" min="1" placeholder="auto" />
+            </label>
+          </div>
+          <p id="profileError" class="error" role="alert"></p>
+          <div class="actions">
+            <button id="saveButton" type="submit">Save Profile</button>
+            <button id="planButton" type="button">Plan</button>
+            <button id="launchButton" type="button">Launch</button>
+          </div>
+        </form>
+
+        <section class="panel">
+          <h2>Session</h2>
+          <div class="actions stack">
+            <button id="disconnectButton" type="button">Disconnect</button>
+            <button id="reconnectButton" type="button">Reconnect</button>
+            <button id="quitButton" type="button">Quit</button>
+            <button id="restoreButton" type="button">Restore</button>
+          </div>
+          <div id="eventLog" class="log" aria-live="polite"></div>
+        </section>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

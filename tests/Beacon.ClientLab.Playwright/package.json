@@ -1,0 +1,16 @@
+{
+  "name": "@beacon/client-lab-playwright",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "tsc --noEmit",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.54.1",
+    "@types/node": "24.0.13",
+    "typescript": "5.9.2",
+    "vite": "7.0.4"
+  }
+}
