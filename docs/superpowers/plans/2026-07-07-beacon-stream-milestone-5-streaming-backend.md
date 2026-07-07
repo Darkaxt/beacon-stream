@@ -826,7 +826,7 @@ git push
 - Test: `tests/Beacon.Platform.Windows.Tests/Streaming/ExternalProcessStreamingBackendTests.cs`
 - Modify: `docs/extraction-map.md`
 
-- [ ] **Step 1: Write failing command-building tests**
+- [x] **Step 1: Write failing command-building tests**
 
 Create `tests/Beacon.Platform.Windows.Tests/Streaming/ExternalProcessStreamingBackendTests.cs`:
 
@@ -868,7 +868,7 @@ public sealed class ExternalProcessStreamingBackendTests
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -878,7 +878,7 @@ dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.cs
 
 Expected: fail because the external streaming backend does not exist.
 
-- [ ] **Step 3: Implement command boundary**
+- [x] **Step 3: Implement command boundary**
 
 Create `src/Beacon.Platform.Windows/Streaming/ExternalProcessStreamingBackend.cs`:
 
@@ -920,7 +920,7 @@ Add:
 using System.Globalization;
 ```
 
-- [ ] **Step 4: Update extraction map**
+- [x] **Step 4: Update extraction map**
 
 Modify the Sunshine row in `docs/extraction-map.md` to:
 
@@ -928,7 +928,7 @@ Modify the Sunshine row in `docs/extraction-map.md` to:
 | Sunshine | Streaming protocol, capture, encode, audio, input reference; Milestone 5 external process boundary only | No | `src/Beacon.Platform.Windows/Streaming/ExternalProcessStreamingBackend.cs` passes Beacon plans to a wrapper without copying Sunshine source |
 ```
 
-- [ ] **Step 5: Verify green**
+- [x] **Step 5: Verify green**
 
 Run:
 
@@ -938,7 +938,7 @@ dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.cs
 
 Expected: command-boundary test passes.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add src/Beacon.Platform.Windows/Streaming tests/Beacon.Platform.Windows.Tests/Streaming docs/extraction-map.md
