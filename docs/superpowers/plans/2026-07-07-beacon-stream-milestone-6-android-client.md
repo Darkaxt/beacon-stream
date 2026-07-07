@@ -270,7 +270,7 @@ git commit -m "Document Android client milestone"
 git push
 ```
 
-- [ ] **Step 6: Open PR, wait for CI, mark ready, merge**
+- [x] **Step 6: Open PR, wait for CI, mark ready, merge**
 
 ```powershell
 gh pr create --draft --base main --head codex/milestone-6-android-client --title "Add thin Android client" --body "Milestone 6 thin Android client implementation."
