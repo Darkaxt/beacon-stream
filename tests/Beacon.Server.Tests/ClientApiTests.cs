@@ -161,4 +161,19 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.True(quitJson.RootElement.GetProperty("displayRemoved").GetBoolean());
         Assert.True(restoreJson.RootElement.GetProperty("restoreRequested").GetBoolean());
     }
+
+    [Fact]
+    public async Task DisplayRecoverRunsManualRecoveryForClientLease()
+    {
+        HttpClient client = factory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/display/recover", new { });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.Equal("client-z-fold-7", root.GetProperty("displayId").GetString());
+        Assert.True(root.GetProperty("recovered").GetBoolean());
+    }
 }

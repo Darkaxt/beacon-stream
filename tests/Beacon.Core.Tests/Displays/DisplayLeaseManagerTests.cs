@@ -22,7 +22,7 @@ public sealed class DisplayLeaseManagerTests
         Assert.True(result.Success);
         DisplayLease lease = Assert.IsType<DisplayLease>(result.Lease);
         Assert.Equal("client-z-fold-7", lease.DisplayId);
-        Assert.Equal("client-z-fold-7:2560x1600@120", Assert.Single(backend.EnsureCalls));
+        Assert.Equal("client-z-fold-7:2560x1600@120:hdr=Prefer", Assert.Single(backend.EnsureCalls));
     }
 
     [Fact]
@@ -69,6 +69,71 @@ public sealed class DisplayLeaseManagerTests
     }
 
     [Fact]
+    public async Task CleanupRestoresPhysicalPrimaryWhenClientInactiveButOwnedWindowRemains()
+    {
+        var backend = new FakeDisplayBackend();
+        var manager = new DisplayLeaseManager(backend);
+
+        bool removed = await manager.CleanupIfAllowedAsync(
+            "client-z-fold-7",
+            clientActive: false,
+            ownedProcessRunning: false,
+            ownedWindowRemaining: true,
+            CancellationToken.None);
+
+        Assert.False(removed);
+        Assert.Empty(backend.RemoveCalls);
+        Assert.Equal("physical-primary", Assert.Single(backend.RestoreCalls));
+    }
+
+    [Fact]
+    public async Task CleanupRestoresPhysicalPrimaryBeforeRemovingLeaseWhenNoOwnedWorkRemains()
+    {
+        var backend = new FakeDisplayBackend();
+        var manager = new DisplayLeaseManager(backend);
+
+        bool removed = await manager.CleanupIfAllowedAsync(
+            "client-z-fold-7",
+            clientActive: false,
+            ownedProcessRunning: false,
+            ownedWindowRemaining: false,
+            CancellationToken.None);
+
+        Assert.True(removed);
+        Assert.Equal("physical-primary", Assert.Single(backend.RestoreCalls));
+        Assert.Equal("client-z-fold-7", Assert.Single(backend.RemoveCalls));
+    }
+
+    [Fact]
+    public async Task RecoverDisplayAsyncManualOverrideRestoresPhysicalPrimaryAndRemovesVirtualDisplay()
+    {
+        var backend = new FakeDisplayBackend();
+        var manager = new DisplayLeaseManager(backend);
+
+        DisplayRecoveryResult result = await manager.RecoverDisplayAsync("client-z-fold-7", CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal("physical-primary", Assert.Single(backend.RestoreCalls));
+        Assert.Equal("client-z-fold-7", Assert.Single(backend.RemoveCalls));
+    }
+
+    [Fact]
+    public async Task RecoverDisplayAsyncWhenRestoreFailsDoesNotRemoveVirtualDisplay()
+    {
+        var backend = new FakeDisplayBackend
+        {
+            NextRestoreResult = DisplayRestoreResult.Fail("physical primary could not be verified")
+        };
+        var manager = new DisplayLeaseManager(backend);
+
+        DisplayRecoveryResult result = await manager.RecoverDisplayAsync("client-z-fold-7", CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("physical primary could not be verified", result.Error ?? string.Empty);
+        Assert.Empty(backend.RemoveCalls);
+    }
+
+    [Fact]
     public async Task MissingVirtualDisplayFailsInsteadOfFallingBackToPhysicalDisplay()
     {
         var backend = new FakeDisplayBackend { AllowEnsure = false };
@@ -79,6 +144,7 @@ public sealed class DisplayLeaseManagerTests
         Assert.False(result.Success);
         Assert.Null(result.Lease);
         Assert.Contains("refusing to fall back", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(backend.RestoreCalls);
         Assert.Empty(backend.RemoveCalls);
     }
 }

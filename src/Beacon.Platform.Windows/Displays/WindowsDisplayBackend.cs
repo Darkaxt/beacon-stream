@@ -1,0 +1,205 @@
+using Beacon.Core.Displays;
+
+namespace Beacon.Platform.Windows.Displays;
+
+public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBackend
+{
+    private readonly List<DisplayOperationLogEntry> operationLog = [];
+
+    public IReadOnlyList<DisplayOperationLogEntry> OperationLog => operationLog;
+
+    public async Task<DisplayEnsureResult> EnsureVirtualDisplayAsync(
+        string displayId,
+        int width,
+        int height,
+        int refreshHz,
+        HdrPreference hdrPreference,
+        CancellationToken cancellationToken)
+    {
+        DisplayDriverStatus driverStatus = api.GetDriverStatus();
+        if (!driverStatus.Ready)
+        {
+            DisplayEnsureResult fail = DisplayEnsureResult.Fail(driverStatus.Diagnostic);
+            LogEnsure(displayId, width, height, refreshHz, before: null, after: null, fail, "driver-not-ready");
+            return fail;
+        }
+
+        DisplayTopologySnapshot before = await api.QueryTopologyAsync(cancellationToken);
+        DisplayApiResult createResult = await api.CreateVirtualDisplayAsync(
+            displayId,
+            width,
+            height,
+            refreshHz,
+            cancellationToken);
+        if (!createResult.Success)
+        {
+            DisplayEnsureResult fail = DisplayEnsureResult.Fail(createResult.Error ?? $"Unable to create virtual display {displayId}.");
+            LogEnsure(displayId, width, height, refreshHz, before, after: null, fail, "create-failed");
+            return fail;
+        }
+
+        DisplayTopologySnapshot afterCreate = await api.QueryTopologyAsync(cancellationToken);
+        if (afterCreate.IsMirrorMode)
+        {
+            DisplayEnsureResult fail = await FailAfterCreateAsync(
+                displayId,
+                $"Refusing mirror mode for virtual display {displayId}.",
+                cancellationToken);
+            LogEnsure(displayId, width, height, refreshHz, before, afterCreate, fail, "mirror-mode-rejected");
+            return fail;
+        }
+
+        if (!afterCreate.HasDisplayMode(displayId, width, height, refreshHz))
+        {
+            DisplayEnsureResult fail = await FailAfterCreateAsync(
+                displayId,
+                $"Virtual display {displayId} did not expose {width}x{height}@{refreshHz}.",
+                cancellationToken);
+            LogEnsure(displayId, width, height, refreshHz, before, afterCreate, fail, "mode-verification-failed");
+            return fail;
+        }
+
+        DisplayApiResult primaryResult = await api.SetVirtualPrimaryAsync(displayId, cancellationToken);
+        if (!primaryResult.Success)
+        {
+            DisplayEnsureResult fail = await FailAfterCreateAsync(
+                displayId,
+                primaryResult.Error ?? $"Unable to make virtual display {displayId} primary.",
+                cancellationToken);
+            LogEnsure(displayId, width, height, refreshHz, before, afterCreate, fail, "primary-apply-failed");
+            return fail;
+        }
+
+        DisplayTopologySnapshot afterPrimary = await api.QueryTopologyAsync(cancellationToken);
+        if (!afterPrimary.IsPrimary(displayId))
+        {
+            DisplayEnsureResult fail = await FailAfterCreateAsync(
+                displayId,
+                $"Virtual display {displayId} was not primary after topology apply.",
+                cancellationToken);
+            LogEnsure(displayId, width, height, refreshHz, before, afterPrimary, fail, "primary-verification-failed");
+            return fail;
+        }
+
+        DisplayHdrCapability hdrCapability = await api.QueryHdrCapabilityAsync(displayId, cancellationToken);
+        DisplayEnsureResult result = NegotiateHdr(hdrPreference, hdrCapability);
+        LogEnsure(displayId, width, height, refreshHz, before, afterPrimary, result, "virtual-primary topology verified");
+        return result;
+    }
+
+    public async Task<DisplayRestoreResult> RestorePhysicalPrimaryAsync(CancellationToken cancellationToken)
+    {
+        var seenUnverifiedTopologies = new HashSet<string>(StringComparer.Ordinal);
+        DisplayTopologySnapshot before = await api.QueryTopologyAsync(cancellationToken);
+
+        while (true)
+        {
+            DisplayApiResult restoreResult = await api.RestorePhysicalPrimaryAsync(cancellationToken);
+            if (!restoreResult.Success)
+            {
+                DisplayRestoreResult fail = DisplayRestoreResult.Fail(restoreResult.Error ?? "Physical primary restore failed.");
+                LogRestore(before, after: null, fail, "restore-apply-failed");
+                return fail;
+            }
+
+            DisplayTopologySnapshot topology = await api.QueryTopologyAsync(cancellationToken);
+            if (topology.PhysicalPrimaryVerified)
+            {
+                DisplayRestoreResult result = DisplayRestoreResult.Ok();
+                LogRestore(before, topology, result, "physical primary verified");
+                return result;
+            }
+
+            if (!seenUnverifiedTopologies.Add(topology.Fingerprint))
+            {
+                DisplayRestoreResult fail = DisplayRestoreResult.Fail("Physical primary restore was not verified after topology reconciliation.");
+                LogRestore(before, topology, fail, "restore-verification-failed");
+                return fail;
+            }
+        }
+    }
+
+    public async Task<DisplayRemoveResult> RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken)
+    {
+        DisplayApiResult result = await api.RemoveVirtualDisplayAsync(displayId, cancellationToken);
+        return result.Success
+            ? DisplayRemoveResult.Ok()
+            : DisplayRemoveResult.Fail(result.Error ?? $"Virtual display {displayId} removal failed.");
+    }
+
+    private static DisplayEnsureResult NegotiateHdr(HdrPreference preference, DisplayHdrCapability capability)
+    {
+        if (preference == HdrPreference.Off)
+        {
+            return DisplayEnsureResult.Ok(hdrReason: "HDR disabled by profile.");
+        }
+
+        if (capability.Supported && capability.Enabled)
+        {
+            return DisplayEnsureResult.Ok(hdrEnabled: true, hdrReason: capability.Reason);
+        }
+
+        if (preference == HdrPreference.Require)
+        {
+            return DisplayEnsureResult.Fail($"HDR required but unavailable: {capability.Reason}");
+        }
+
+        return DisplayEnsureResult.Ok(hdrReason: capability.Reason);
+    }
+
+    private async Task<DisplayEnsureResult> FailAfterCreateAsync(
+        string displayId,
+        string error,
+        CancellationToken cancellationToken)
+    {
+        DisplayApiResult removeResult = await api.RemoveVirtualDisplayAsync(displayId, cancellationToken);
+        if (!removeResult.Success)
+        {
+            return DisplayEnsureResult.Fail($"{error} Cleanup failed: {removeResult.Error}");
+        }
+
+        return DisplayEnsureResult.Fail(error);
+    }
+
+    private void LogEnsure(
+        string displayId,
+        int width,
+        int height,
+        int refreshHz,
+        DisplayTopologySnapshot? before,
+        DisplayTopologySnapshot? after,
+        DisplayEnsureResult result,
+        string reason)
+    {
+        operationLog.Add(new DisplayOperationLogEntry(
+            Operation: "ensure-virtual-display",
+            DisplayId: displayId,
+            Width: width,
+            Height: height,
+            RefreshHz: refreshHz,
+            Primary: after?.IsPrimary(displayId),
+            HdrEnabled: result.HdrEnabled,
+            Reason: result.Success ? reason : $"{reason}: {result.Error}",
+            Before: before,
+            After: after));
+    }
+
+    private void LogRestore(
+        DisplayTopologySnapshot? before,
+        DisplayTopologySnapshot? after,
+        DisplayRestoreResult result,
+        string reason)
+    {
+        operationLog.Add(new DisplayOperationLogEntry(
+            Operation: "restore-physical-primary",
+            DisplayId: "physical",
+            Width: null,
+            Height: null,
+            RefreshHz: null,
+            Primary: after?.PhysicalPrimaryVerified,
+            HdrEnabled: null,
+            Reason: result.Success ? reason : $"{reason}: {result.Error}",
+            Before: before,
+            After: after));
+    }
+}

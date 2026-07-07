@@ -192,6 +192,19 @@ public static class ClientEndpoints
             return Results.Ok(new { clientId, cleanupEvaluated = true, displayRemoved = removed });
         });
 
+        clients.MapPost("/{clientId}/display/recover", async (
+            string clientId,
+            DisplayLeaseManager leases,
+            CancellationToken cancellationToken) =>
+        {
+            string displayId = DisplayLease.CreateDisplayId(new ClientId(clientId));
+            DisplayRecoveryResult result = await leases.RecoverDisplayAsync(displayId, cancellationToken);
+
+            return result.Success
+                ? Results.Ok(new { clientId, displayId, recovered = true })
+                : Results.Problem(result.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+        });
+
         clients.MapPost("/{clientId}/emergency-restore", async (
             string clientId,
             IDisplayBackend displayBackend,
