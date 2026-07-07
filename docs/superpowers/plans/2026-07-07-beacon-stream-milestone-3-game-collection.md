@@ -968,7 +968,7 @@ Expected: draft PR exists and CI starts.
 **Files:**
 - Same files touched above.
 
-- [ ] **Step 1: Review for boundaries**
+- [x] **Step 1: Review for boundaries**
 
 Checklist:
 
@@ -978,7 +978,7 @@ Checklist:
 - Generated covers are deterministic and do not require external services.
 - Provider diagnostics are actionable.
 
-- [ ] **Step 2: Refactor only if the checklist finds concrete issues**
+- [x] **Step 2: Refactor only if the checklist finds concrete issues**
 
 Allowed refactors:
 
@@ -987,7 +987,7 @@ Allowed refactors:
 - Extract fixture builders from tests.
 - Tighten diagnostics wording.
 
-- [ ] **Step 3: Repeat validation**
+- [x] **Step 3: Repeat validation**
 
 Run:
 
@@ -1004,7 +1004,7 @@ dotnet run --project src/Beacon.GameProbe -- scan --json
 
 Expected: exit code 0 for all validation commands.
 
-- [ ] **Step 4: Final sync for Milestone 3**
+- [x] **Step 4: Final sync for Milestone 3**
 
 ```bash
 git status --short

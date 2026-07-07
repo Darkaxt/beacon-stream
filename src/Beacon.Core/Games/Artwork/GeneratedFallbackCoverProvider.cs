@@ -27,8 +27,17 @@ public sealed class GeneratedFallbackCoverProvider(string rootDirectory) : IArtw
 
     private static string CreateAccent(string value)
     {
-        int hash = StringComparer.OrdinalIgnoreCase.GetHashCode(value);
-        int hue = Math.Abs(hash % 360);
+        const uint offsetBasis = 2166136261;
+        const uint prime = 16777619;
+
+        uint hash = offsetBasis;
+        foreach (char character in value.ToUpperInvariant())
+        {
+            hash ^= character;
+            hash *= prime;
+        }
+
+        uint hue = hash % 360;
         return $"hsl({hue}, 78%, 58%)";
     }
 
