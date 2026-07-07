@@ -166,7 +166,7 @@ git commit -m "Document Windows host composition milestone"
 git push
 ```
 
-- [ ] **Step 5: Open PR, wait for CI, mark ready, merge**
+- [x] **Step 5: Open PR, wait for CI, mark ready, merge**
 
 ```powershell
 gh pr create --draft --base main --head codex/milestone-9-windows-host-composition --title "Add explicit Windows host mode" --body "Milestone 9 Windows host composition implementation."
