@@ -15,9 +15,10 @@ public interface IDisplayBackend
     Task RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken);
 }
 
-public sealed record DisplayEnsureResult(bool Success, string? Error)
+public sealed record DisplayEnsureResult(bool Success, string? Error, bool HdrEnabled = false, string? HdrReason = null)
 {
-    public static DisplayEnsureResult Ok() => new(true, null);
+    public static DisplayEnsureResult Ok(bool hdrEnabled = false, string? hdrReason = null) =>
+        new(true, null, hdrEnabled, hdrReason);
 
     public static DisplayEnsureResult Fail(string error) => new(false, error);
 }
