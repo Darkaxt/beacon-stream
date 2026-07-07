@@ -46,6 +46,26 @@ export interface PlanRequest {
   gameId?: string;
 }
 
+export interface StreamState {
+  sessionId: string;
+  clientId: string;
+  appId: string;
+  displayId: string;
+  codec: string;
+  fps: number;
+  initialBitrateMbps: number;
+  transport: string;
+  state: string;
+  error: string | null;
+}
+
+export interface LaunchResponse {
+  clientId: string;
+  displayId: string;
+  state: string;
+  stream: StreamState | null;
+}
+
 export function createDefaultProfile(): ProfileDraft {
   return {
     clientId: 'z-fold-7',
@@ -80,6 +100,15 @@ export function createGamePlanRequest(selectedGameId: string): PlanRequest {
     title: 'Dispatch',
     source: 'steam-shortcut'
   };
+}
+
+export function formatLaunchEvents(launch: LaunchResponse): string[] {
+  const events = [`${launch.state} ${launch.displayId}`];
+  if (launch.stream !== null) {
+    events.push(`${launch.stream.state} ${launch.stream.codec} ${launch.stream.fps}fps`);
+  }
+
+  return events;
 }
 
 export async function getJson<T>(path: string): Promise<T> {

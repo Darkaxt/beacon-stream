@@ -954,7 +954,7 @@ git push
 - Modify: `src/Beacon.ClientLab/src/clientLab.test.ts`
 - Modify: `tests/Beacon.ClientLab.Playwright/tests/client-lab.spec.ts`
 
-- [ ] **Step 1: Write failing Client Lab tests**
+- [x] **Step 1: Write failing Client Lab tests**
 
 Update the launch response fixture in `src/Beacon.ClientLab/src/clientLab.test.ts` to:
 
@@ -992,7 +992,7 @@ await expect(page.locator('#log')).toContainText('streaming');
 await expect(page.locator('#log')).toContainText('running av1 120fps');
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -1003,7 +1003,7 @@ pnpm --dir tests/Beacon.ClientLab.Playwright test
 
 Expected: fail because Client Lab does not model the `stream` response yet.
 
-- [ ] **Step 3: Add stream response types**
+- [x] **Step 3: Add stream response types**
 
 Modify `src/Beacon.ClientLab/src/clientLab.ts`:
 
@@ -1029,7 +1029,7 @@ export interface LaunchResponse {
 }
 ```
 
-- [ ] **Step 4: Render stream state**
+- [x] **Step 4: Render stream state**
 
 Modify launch handling in `src/Beacon.ClientLab/src/main.ts`:
 
@@ -1040,7 +1040,7 @@ if (launch.stream) {
 }
 ```
 
-- [ ] **Step 5: Verify green**
+- [x] **Step 5: Verify green**
 
 Run:
 
@@ -1053,7 +1053,7 @@ pnpm --dir tests/Beacon.ClientLab.Playwright test
 
 Expected: TypeScript, Vitest, and Playwright pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add src/Beacon.ClientLab tests/Beacon.ClientLab.Playwright

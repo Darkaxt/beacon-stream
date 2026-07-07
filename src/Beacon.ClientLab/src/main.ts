@@ -1,6 +1,7 @@
 import './style.css';
 import {
   createDefaultProfile,
+  formatLaunchEvents,
   createGamePlanRequest,
   getJson,
   patchJson,
@@ -9,6 +10,7 @@ import {
   type GameDescriptor,
   type GameLibrarySnapshot,
   type HdrPreference,
+  type LaunchResponse,
   type PlanRequest,
   type ProfileDraft
 } from './clientLab';
@@ -67,8 +69,10 @@ element('planButton').addEventListener('click', async () => {
 });
 
 element('launchButton').addEventListener('click', async () => {
-  const launch = await postJson<{ displayId: string; state: string }>(`/clients/${clientId}/launch`, createPlanRequest());
-  appendLog(`${launch.state} ${launch.displayId}`);
+  const launch = await postJson<LaunchResponse>(`/clients/${clientId}/launch`, createPlanRequest());
+  for (const message of formatLaunchEvents(launch)) {
+    appendLog(message);
+  }
 });
 
 element('disconnectButton').addEventListener('click', async () => {
