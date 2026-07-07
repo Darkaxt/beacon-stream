@@ -577,7 +577,7 @@ git commit -m "Add WPF cockpit shell"
 - Modify: `docs/extraction-map.md` if ApolloDisplayRescue is used as implementation reference.
 - Modify: `docs/superpowers/plans/2026-07-07-beacon-stream-milestone-4-wpf-cockpit.md`
 
-- [ ] **Step 1: Update docs**
+- [x] **Step 1: Update docs**
 
 Add:
 
@@ -587,7 +587,7 @@ dotnet run --project src/Beacon.Cockpit -- --server http://localhost:5000
 
 Document that the cockpit calls server endpoints and does not directly operate on display drivers.
 
-- [ ] **Step 2: Static validation**
+- [x] **Step 2: Static validation**
 
 Run:
 
@@ -598,7 +598,7 @@ dotnet build Beacon.slnx -warnaserror
 
 Expected: pass.
 
-- [ ] **Step 3: Dynamic validation**
+- [x] **Step 3: Dynamic validation**
 
 Run:
 
@@ -613,7 +613,7 @@ dotnet run --project src/Beacon.GameProbe -- scan --json
 
 Expected: pass. GameProbe still reports normalized local game data and any stale local Steam diagnostics.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add README.md docs src tests Beacon.slnx
