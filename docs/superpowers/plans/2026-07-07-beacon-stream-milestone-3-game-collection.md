@@ -77,10 +77,10 @@ public sealed class GameDescriptorTests
     public void GameDescriptorCarriesLaunchArtworkInstalledAndHintsWithoutDisplayPolicy()
     {
         var game = new GameDescriptor(
-            Id: "steam-shortcut:4261181811",
+            Id: "steam-shortcut:4261190003",
             Title: "Stranger of Sword City",
             Source: "steam-shortcut",
-            Launch: new GameLaunchIntent("steam-rungameid", "steam://rungameid/18301636520588607488"),
+            Launch: new GameLaunchIntent("steam-rungameid", "steam://rungameid/18301671704960696320"),
             Artwork: new GameArtwork("C:/ProgramData/BeaconStream/artwork/stranger.png", "steamgriddb"),
             Installed: true,
             ProcessHints: new GameProcessHints("SoSC.exe", "D:/Games/Saviors of Sapphire Wings Stranger of Sword City Revisited/SoSC"));
@@ -294,7 +294,7 @@ public sealed class SteamShortcutBinaryParserTests
 
         Assert.Equal(unchecked((int)0xFDFC9973), parsed.AppId);
         Assert.Equal("DRAGON QUEST III HD-2D Remake", parsed.AppName);
-        Assert.Equal("steam://rungameid/18301636520588607488", SteamShortcutLaunchId.FromStoredAppId(parsed.AppId).ToUri());
+        Assert.Equal("steam://rungameid/18301671704960696320", SteamShortcutLaunchId.FromStoredAppId(parsed.AppId).ToUri());
     }
 
     private static class SteamShortcutFixture
