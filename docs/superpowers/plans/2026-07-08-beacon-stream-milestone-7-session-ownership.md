@@ -135,7 +135,7 @@ Files:
 - Modify: `src/Beacon.ClientLab/src/main.ts`
 - Modify: `src/Beacon.Android/app/src/main/java/dev/beacon/android/BeaconApiClient.java`
 
-- [ ] **Step 1: Add endpoint tests**
+- [x] **Step 1: Add endpoint tests**
 
 Cover:
 
@@ -144,23 +144,23 @@ Cover:
 - quit ignores stale client owned-work flags and uses server-owned snapshot.
 - quit removes display after server-owned work disappears.
 
-- [ ] **Step 2: Register services**
+- [x] **Step 2: Register services**
 
 Register `IGameLauncher` and `ISessionOwnershipTracker` using fake implementations by default until real launch is explicitly selected.
 
-- [ ] **Step 3: Wire launch endpoint**
+- [x] **Step 3: Wire launch endpoint**
 
 After display lease success and before stream start, call the launcher and record the resulting launch state. If launch fails, restore physical primary and return an explicit 503.
 
-- [ ] **Step 4: Wire quit endpoint**
+- [x] **Step 4: Wire quit endpoint**
 
 Use `ISessionOwnershipTracker.GetSnapshotAsync` for owned process/window state. The request may still carry `clientActive`; it must not decide owned work.
 
-- [ ] **Step 5: Update clients**
+- [x] **Step 5: Update clients**
 
 Remove owned-process/window booleans from Client Lab and Android quit payloads where possible. Keep server DTO compatibility for older clients but ignore those fields for ownership decisions.
 
-- [ ] **Step 6: Verify tests and commit**
+- [x] **Step 6: Verify tests and commit**
 
 ```powershell
 dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter ClientApiTests

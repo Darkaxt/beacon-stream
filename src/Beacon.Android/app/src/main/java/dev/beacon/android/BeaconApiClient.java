@@ -213,20 +213,14 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
 
     public static final class QuitState {
         public final boolean clientActive;
-        public final boolean ownedProcessRunning;
-        public final boolean ownedWindowRemaining;
 
-        public QuitState(boolean clientActive, boolean ownedProcessRunning, boolean ownedWindowRemaining) {
+        public QuitState(boolean clientActive) {
             this.clientActive = clientActive;
-            this.ownedProcessRunning = ownedProcessRunning;
-            this.ownedWindowRemaining = ownedWindowRemaining;
         }
 
         JsonObject toJson() {
             JsonObject json = new JsonObject();
             json.addProperty("clientActive", clientActive);
-            json.addProperty("ownedProcessRunning", ownedProcessRunning);
-            json.addProperty("ownedWindowRemaining", ownedWindowRemaining);
             return json;
         }
     }
