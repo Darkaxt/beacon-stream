@@ -223,7 +223,7 @@ git commit -m "Document session ownership milestone"
 git push
 ```
 
-- [ ] **Step 5: Open PR, wait for CI, mark ready, merge**
+- [x] **Step 5: Open PR, wait for CI, mark ready, merge**
 
 ```powershell
 gh pr create --draft --base main --head codex/milestone-7-session-ownership --title "Add server-owned session cleanup state" --body "Milestone 7 session ownership implementation."
