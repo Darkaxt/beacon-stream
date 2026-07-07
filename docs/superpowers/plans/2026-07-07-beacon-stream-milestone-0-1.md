@@ -702,7 +702,7 @@ Expected: PASS.
 - Modify: `src/Beacon.Server/Program.cs`
 - Create: `tests/Beacon.Server.Tests/ClientApiTests.cs`
 
-- [ ] **Step 1: Write failing API tests**
+- [x] **Step 1: Write failing API tests**
 
 Create tests using `WebApplicationFactory<Program>`:
 
@@ -727,7 +727,7 @@ public async Task PlanReturnsCompletePlanBeforeLaunch()
 
 Expected: `POST /clients/z-fold-7/plan` returns display, stream, recovery, and reasons.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -737,7 +737,7 @@ dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter Client
 
 Expected: FAIL because endpoints do not exist.
 
-- [ ] **Step 3: Implement API endpoints**
+- [x] **Step 3: Implement API endpoints**
 
 Expose these endpoints:
 
@@ -762,7 +762,7 @@ Rules:
 - Launch endpoint only uses fake display backend.
 - Disconnect endpoint never removes the display by itself.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
