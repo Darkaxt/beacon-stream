@@ -1,6 +1,7 @@
 using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
+using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Server.State;
 
@@ -16,10 +17,12 @@ public static class AdminEndpoints
             InMemoryClientStore clients,
             InMemorySessionStore sessions,
             IStreamingBackend streaming,
+            ISessionOwnershipTracker ownership,
             GameLibraryService games,
             CancellationToken cancellationToken) =>
         {
             GameLibrarySnapshot gameSnapshot = await games.ScanAsync(cancellationToken);
+            IReadOnlyList<SessionOwnershipSnapshot> ownershipSnapshots = await ownership.GetSnapshotsAsync(cancellationToken);
             return Results.Ok(new
             {
                 clients = clients.GetProfiles().Select(profile => new
@@ -31,6 +34,7 @@ public static class AdminEndpoints
                 }),
                 sessions = sessions.GetAll(),
                 streams = streaming.GetSessions(),
+                ownership = ownershipSnapshots,
                 games = new
                 {
                     total = gameSnapshot.Games.Count,

@@ -87,9 +87,7 @@ element('reconnectButton').addEventListener('click', async () => {
 
 element('quitButton').addEventListener('click', async () => {
   const result = await postJson<{ cleanupEvaluated: boolean; displayRemoved: boolean }>(`/clients/${clientId}/quit`, {
-    clientActive: false,
-    ownedProcessRunning: false,
-    ownedWindowRemaining: false
+    clientActive: false
   });
   appendLog(`${result.cleanupEvaluated ? 'cleanup evaluated' : 'cleanup skipped'} ${result.displayRemoved ? 'display removed' : 'display retained'}`);
 });

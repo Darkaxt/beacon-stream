@@ -88,7 +88,7 @@ public final class BeaconActivity extends Activity {
         root.addView(button("Launch", model -> model.launch(readGame())));
         root.addView(button("Stop Stream", model -> model.stopStream()));
         root.addView(button("Disconnect", model -> model.disconnect()));
-        root.addView(button("Quit", model -> model.quit(new BeaconApiClient.QuitState(false, false, false))));
+        root.addView(button("Quit", model -> model.quit(new BeaconApiClient.QuitState(false))));
         root.addView(button("Emergency Restore", model -> model.emergencyRestore()));
 
         status = text("Idle", 14, false);

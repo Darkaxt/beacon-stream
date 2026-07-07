@@ -124,8 +124,6 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
     private static object CreateQuitRequest() =>
         new
         {
-            clientActive = false,
-            ownedProcessRunning = false,
-            ownedWindowRemaining = false
+            clientActive = false
         };
 }

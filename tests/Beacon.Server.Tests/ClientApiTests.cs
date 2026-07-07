@@ -1,6 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Beacon.Core.Displays;
+using Beacon.Core.Games;
+using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -215,9 +218,70 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
 
         Assert.Equal("streaming", root.GetProperty("state").GetString());
         Assert.Equal("client-z-fold-7", root.GetProperty("displayId").GetString());
+        Assert.Equal("steam-rungameid", root.GetProperty("launch").GetProperty("launchType").GetString());
         Assert.Equal("running", root.GetProperty("stream").GetProperty("state").GetString());
         Assert.Equal("av1", root.GetProperty("stream").GetProperty("codec").GetString());
         Assert.Equal(120, root.GetProperty("stream").GetProperty("fps").GetInt32());
+    }
+
+    [Fact]
+    public async Task LaunchRecordsServerOwnedSessionState()
+    {
+        var launcher = new FakeGameLauncher { NextProcessId = 4321 };
+        var inspector = new FakeSessionActivityInspector();
+        var ownership = new SessionOwnershipTracker(inspector);
+        WebApplicationFactory<Program> ownedFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IGameLauncher>();
+                services.RemoveAll<FakeSessionActivityInspector>();
+                services.RemoveAll<ISessionActivityInspector>();
+                services.RemoveAll<ISessionOwnershipTracker>();
+                services.AddSingleton<IGameLauncher>(launcher);
+                services.AddSingleton<ISessionActivityInspector>(inspector);
+                services.AddSingleton<ISessionOwnershipTracker>(ownership);
+            }));
+        HttpClient client = ownedFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
+        {
+            gameId = "steam-shortcut:3767414131"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Single(launcher.Requests);
+        Assert.Equal("client-z-fold-7", launcher.Requests[0].DisplayId);
+        SessionOwnershipSnapshot? snapshot = await ownership.GetSnapshotAsync("z-fold-7-steam-shortcut:3767414131", CancellationToken.None);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal(4321, snapshot.LaunchedProcessId);
+        Assert.False(snapshot.HasOwnedWork);
+    }
+
+    [Fact]
+    public async Task LaunchSurfacesGameLaunchFailureAndRestoresPhysicalPrimary()
+    {
+        var display = new FakeDisplayBackend();
+        var launcher = new FakeGameLauncher { NextError = "Steam unavailable" };
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.RemoveAll<IGameLauncher>();
+                services.AddSingleton<IDisplayBackend>(display);
+                services.AddSingleton<IGameLauncher>(launcher);
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
+        {
+            gameId = "steam-shortcut:3767414131"
+        });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        string body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("Steam unavailable", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("physical-primary", display.RestoreCalls);
     }
 
     [Fact]
@@ -251,9 +315,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         HttpResponseMessage reconnect = await client.PostAsJsonAsync("/clients/z-fold-7/reconnect", new { });
         HttpResponseMessage quit = await client.PostAsJsonAsync("/clients/z-fold-7/quit", new
         {
-            clientActive = false,
-            ownedProcessRunning = false,
-            ownedWindowRemaining = false
+            clientActive = false
         });
         HttpResponseMessage restore = await client.PostAsJsonAsync("/clients/z-fold-7/emergency-restore", new { });
 
@@ -285,9 +347,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         HttpResponseMessage stop = await client.PostAsJsonAsync("/clients/z-fold-7/stream/stop", new { });
         HttpResponseMessage quit = await client.PostAsJsonAsync("/clients/z-fold-7/quit", new
         {
-            clientActive = false,
-            ownedProcessRunning = false,
-            ownedWindowRemaining = false
+            clientActive = false
         });
 
         Assert.Equal(HttpStatusCode.OK, statusBeforeStop.StatusCode);
@@ -301,6 +361,58 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal("running", statusJson.RootElement.GetProperty("stream").GetProperty("state").GetString());
         Assert.Equal("stopped", stopJson.RootElement.GetProperty("stream").GetProperty("state").GetString());
         Assert.True(quitJson.RootElement.GetProperty("displayRemoved").GetBoolean());
+    }
+
+    [Fact]
+    public async Task QuitIgnoresStaleClientOwnedWorkFlagsAndUsesServerSnapshot()
+    {
+        HttpClient client = factory.CreateClient();
+
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        HttpResponseMessage quit = await client.PostAsJsonAsync("/clients/z-fold-7/quit", new
+        {
+            clientActive = false,
+            ownedProcessRunning = true,
+            ownedWindowRemaining = true
+        });
+
+        Assert.Equal(HttpStatusCode.OK, quit.StatusCode);
+        using JsonDocument quitJson = await JsonDocument.ParseAsync(await quit.Content.ReadAsStreamAsync());
+
+        Assert.True(quitJson.RootElement.GetProperty("displayRemoved").GetBoolean());
+    }
+
+    [Fact]
+    public async Task QuitRetainsDisplayUntilServerOwnedWorkClears()
+    {
+        var inspector = new FakeSessionActivityInspector();
+        var ownership = new SessionOwnershipTracker(inspector);
+        WebApplicationFactory<Program> ownedFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<FakeSessionActivityInspector>();
+                services.RemoveAll<ISessionActivityInspector>();
+                services.RemoveAll<ISessionOwnershipTracker>();
+                services.AddSingleton<ISessionActivityInspector>(inspector);
+                services.AddSingleton<ISessionOwnershipTracker>(ownership);
+            }));
+        HttpClient client = ownedFactory.CreateClient();
+        const string sessionId = "z-fold-7-steam-shortcut:3767414131";
+
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        inspector.SetActivity(sessionId, new SessionActivitySnapshot(true, false, false, []));
+        HttpResponseMessage retained = await client.PostAsJsonAsync("/clients/z-fold-7/quit", new { clientActive = false });
+        inspector.ClearActivity(sessionId);
+        HttpResponseMessage removed = await client.PostAsJsonAsync("/clients/z-fold-7/quit", new { clientActive = false });
+
+        Assert.Equal(HttpStatusCode.OK, retained.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, removed.StatusCode);
+        using JsonDocument retainedJson = await JsonDocument.ParseAsync(await retained.Content.ReadAsStreamAsync());
+        using JsonDocument removedJson = await JsonDocument.ParseAsync(await removed.Content.ReadAsStreamAsync());
+
+        Assert.False(retainedJson.RootElement.GetProperty("displayRemoved").GetBoolean());
+        Assert.True(retainedJson.RootElement.GetProperty("ownership").GetProperty("launchedProcessRunning").GetBoolean());
+        Assert.True(removedJson.RootElement.GetProperty("displayRemoved").GetBoolean());
     }
 
     [Fact]

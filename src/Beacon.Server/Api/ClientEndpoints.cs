@@ -131,6 +131,8 @@ public static class ClientEndpoints
             GameLibraryService games,
             DisplayLeaseManager leases,
             IDisplayBackend displayBackend,
+            IGameLauncher launcher,
+            ISessionOwnershipTracker ownership,
             IStreamingBackend streaming,
             CancellationToken cancellationToken) =>
         {
@@ -165,6 +167,23 @@ public static class ClientEndpoints
 
             sessions.Save(planResult.Plan);
 
+            GameLaunchResult launchResult = await launcher.LaunchAsync(
+                new GameLaunchRequest(resolution.Game!, planResult.Plan, leaseResult.Lease.DisplayId),
+                cancellationToken);
+            if (!launchResult.Success || launchResult.State is null)
+            {
+                DisplayRestoreResult restore = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
+                string restoreStatus = restore.Success
+                    ? "Physical primary restore requested after game launch failure."
+                    : $"Physical primary restore failed after game launch failure: {restore.Error}";
+
+                return Results.Problem(
+                    $"{launchResult.Error} {restoreStatus}",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            await ownership.RecordLaunchAsync(planResult.Plan, launchResult.State, cancellationToken);
+
             StreamingStartResult streamResult = await streaming.StartAsync(planResult.Plan, cancellationToken);
             if (!streamResult.Success || streamResult.Session is null)
             {
@@ -183,6 +202,7 @@ public static class ClientEndpoints
                 clientId,
                 displayId = leaseResult.Lease.DisplayId,
                 state = "streaming",
+                launch = launchResult.State,
                 stream = streamResult.Session
             });
         });
@@ -268,25 +288,33 @@ public static class ClientEndpoints
             QuitRequest request,
             InMemorySessionStore sessions,
             DisplayLeaseManager leases,
+            ISessionOwnershipTracker ownership,
             IStreamingBackend streaming,
             CancellationToken cancellationToken) =>
         {
             SessionPlan? plan = sessions.Get(clientId);
             StreamingSessionState? stream = null;
+            SessionOwnershipSnapshot? ownershipSnapshot = null;
             if (plan is not null)
             {
                 StreamingStopResult stop = await streaming.StopAsync(plan.SessionId, cancellationToken);
                 stream = stop.Session;
+                ownershipSnapshot = await ownership.GetSnapshotAsync(plan.SessionId, cancellationToken);
             }
 
             bool removed = await leases.CleanupIfAllowedAsync(
                 DisplayLease.CreateDisplayId(new ClientId(clientId)),
                 request.ClientActive,
-                request.OwnedProcessRunning,
-                request.OwnedWindowRemaining,
+                ownershipSnapshot?.LaunchedProcessRunning == true || ownershipSnapshot?.ChildProcessRunning == true,
+                ownershipSnapshot?.OwnedWindowRemaining == true,
                 cancellationToken);
 
-            return Results.Ok(new { clientId, cleanupEvaluated = true, displayRemoved = removed, stream });
+            if (removed && plan is not null)
+            {
+                await ownership.ClearAsync(plan.SessionId, cancellationToken);
+            }
+
+            return Results.Ok(new { clientId, cleanupEvaluated = true, displayRemoved = removed, stream, ownership = ownershipSnapshot });
         });
 
         clients.MapPost("/{clientId}/display/recover", async (
@@ -417,4 +445,4 @@ internal sealed record GameResolution(GameDescriptor? Game, IResult? Error);
 
 public sealed record PlanRequest(string? AppId = null, string? Title = null, string? Source = null, string? GameId = null);
 
-public sealed record QuitRequest(bool ClientActive, bool OwnedProcessRunning, bool OwnedWindowRemaining);
+public sealed record QuitRequest(bool ClientActive, bool? OwnedProcessRunning = null, bool? OwnedWindowRemaining = null);

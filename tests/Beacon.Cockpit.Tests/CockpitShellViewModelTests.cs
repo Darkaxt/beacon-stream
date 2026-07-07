@@ -21,6 +21,14 @@ public sealed class CockpitShellViewModelTests
                 "lan-direct",
                 "running",
                 null)],
+            [new CockpitOwnershipSummary(
+                "z-fold-7-steam-shortcut:3767414131",
+                "steam-shortcut:3767414131",
+                4321,
+                false,
+                false,
+                false,
+                [])],
             new CockpitGameSummary(36, ["Steam library stale"])));
         var viewModel = new CockpitShellViewModel(api);
 
@@ -29,17 +37,19 @@ public sealed class CockpitShellViewModelTests
         Assert.Equal(1, viewModel.ClientCount);
         Assert.Equal(1, viewModel.SessionCount);
         Assert.Equal(1, viewModel.StreamCount);
+        Assert.Equal(1, viewModel.OwnershipCount);
         Assert.Equal(36, viewModel.GameCount);
         Assert.Contains("z-fold-7", viewModel.Clients);
         Assert.Contains("steam-shortcut:3767414131", viewModel.Sessions);
         Assert.Contains("z-fold-7 steam-shortcut:3767414131 running av1 120fps", viewModel.Streams);
+        Assert.Contains("steam-shortcut:3767414131 process=False child=False window=False", viewModel.Ownership);
         Assert.Contains("Steam library stale", viewModel.Diagnostics);
     }
 
     [Fact]
     public async Task RecoveryMethodsDelegateToServer()
     {
-        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], new CockpitGameSummary(0, [])));
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], new CockpitGameSummary(0, [])));
         var viewModel = new CockpitShellViewModel(api) { SelectedClientId = "z-fold-7" };
 
         await viewModel.RestorePhysicalAsync(CancellationToken.None);
@@ -52,7 +62,7 @@ public sealed class CockpitShellViewModelTests
     [Fact]
     public async Task RecoverSelectedClientReportsMissingSelection()
     {
-        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], new CockpitGameSummary(0, [])));
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], new CockpitGameSummary(0, [])));
         var viewModel = new CockpitShellViewModel(api);
 
         await viewModel.RecoverSelectedClientAsync(CancellationToken.None);
@@ -64,7 +74,7 @@ public sealed class CockpitShellViewModelTests
     [Fact]
     public void ConstructorStoresServerUrl()
     {
-        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], new CockpitGameSummary(0, [])));
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], new CockpitGameSummary(0, [])));
         var viewModel = new CockpitShellViewModel(api, "http://127.0.0.1:5000");
 
         Assert.Equal("http://127.0.0.1:5000", viewModel.ServerUrl);

@@ -78,6 +78,9 @@
                     <TextBlock Text="Streams" Style="{StaticResource LabelText}" />
                     <TextBlock Text="{Binding StreamCount}" Style="{StaticResource MetricText}" />
 
+                    <TextBlock Text="Ownership" Style="{StaticResource LabelText}" />
+                    <TextBlock Text="{Binding OwnershipCount}" Style="{StaticResource MetricText}" />
+
                     <TextBlock Text="Games" Style="{StaticResource LabelText}" />
                     <TextBlock Text="{Binding GameCount}" Style="{StaticResource MetricText}" />
 
@@ -118,6 +121,12 @@
                 <TabItem Header="Streams">
                     <Grid Margin="10">
                         <ListBox ItemsSource="{Binding Streams}" />
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Ownership">
+                    <Grid Margin="10">
+                        <ListBox ItemsSource="{Binding Ownership}" />
                     </Grid>
                 </TabItem>
 
