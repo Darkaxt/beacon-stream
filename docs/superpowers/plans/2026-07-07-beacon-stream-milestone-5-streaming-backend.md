@@ -1067,7 +1067,7 @@ git push
 - Modify: `README.md`
 - Modify: `docs/superpowers/plans/2026-07-07-beacon-stream-milestone-5-streaming-backend.md`
 
-- [ ] **Step 1: Update docs**
+- [x] **Step 1: Update docs**
 
 Add to `README.md`:
 
@@ -1082,7 +1082,7 @@ dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter Client
 Milestone 5 currently uses `FakeStreamingBackend` for deterministic no-phone validation and `ExternalProcessStreamingBackend` as the Windows boundary for future Sunshine-compatible process integration. No Sunshine source is copied by this milestone.
 ````
 
-- [ ] **Step 2: Static validation**
+- [x] **Step 2: Static validation**
 
 Run:
 
@@ -1093,7 +1093,7 @@ dotnet build Beacon.slnx -warnaserror
 
 Expected: both commands pass.
 
-- [ ] **Step 3: Dynamic validation**
+- [x] **Step 3: Dynamic validation**
 
 Run:
 
@@ -1108,7 +1108,7 @@ dotnet run --project src/Beacon.GameProbe -- scan --json
 
 Expected: all tests pass. GameProbe may still report the local stale `G:\SteamLibrary\steamapps` diagnostic.
 
-- [ ] **Step 4: Boundary audit**
+- [x] **Step 4: Boundary audit**
 
 Run:
 
@@ -1122,7 +1122,7 @@ Expected:
 - First command only matches documentation strings or the `ExternalProcessStreamingBackend` boundary; no copied Sunshine source appears under `src`.
 - Second command has no new cancellation timeout patterns.
 
-- [ ] **Step 5: Commit docs and validation record**
+- [x] **Step 5: Commit docs and validation record**
 
 ```powershell
 git add README.md docs/superpowers/plans/2026-07-07-beacon-stream-milestone-5-streaming-backend.md
