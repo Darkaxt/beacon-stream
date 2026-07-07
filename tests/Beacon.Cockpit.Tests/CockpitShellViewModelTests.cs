@@ -48,6 +48,25 @@ public sealed class CockpitShellViewModelTests
         Assert.Equal("Select a client before recovering its display.", viewModel.StatusMessage);
     }
 
+    [Fact]
+    public void ConstructorStoresServerUrl()
+    {
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], new CockpitGameSummary(0, [])));
+        var viewModel = new CockpitShellViewModel(api, "http://127.0.0.1:5000");
+
+        Assert.Equal("http://127.0.0.1:5000", viewModel.ServerUrl);
+    }
+
+    [Fact]
+    public async Task RefreshReportsServerFailures()
+    {
+        var viewModel = new CockpitShellViewModel(new FailingCockpitApi("server unavailable"));
+
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        Assert.Equal("Refresh failed: server unavailable", viewModel.StatusMessage);
+    }
+
     private sealed class FakeCockpitApi(CockpitSnapshot snapshot) : ICockpitApi
     {
         public bool RestorePhysicalCalled { get; private set; }
@@ -67,5 +86,17 @@ public sealed class CockpitShellViewModelTests
             RecoveredClientId = clientId;
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class FailingCockpitApi(string message) : ICockpitApi
+    {
+        public Task<CockpitSnapshot> GetSnapshotAsync(CancellationToken cancellationToken) =>
+            Task.FromException<CockpitSnapshot>(new InvalidOperationException(message));
+
+        public Task RestorePhysicalAsync(CancellationToken cancellationToken) =>
+            Task.FromException(new InvalidOperationException(message));
+
+        public Task RecoverClientDisplayAsync(string clientId, CancellationToken cancellationToken) =>
+            Task.FromException(new InvalidOperationException(message));
     }
 }

@@ -535,11 +535,11 @@ git commit -m "Add cockpit shell view model"
 - Create: `src/Beacon.Cockpit/MainWindow.xaml.cs`
 - Modify: `src/Beacon.Cockpit/Beacon.Cockpit.csproj`
 
-- [ ] **Step 1: Add startup wiring**
+- [x] **Step 1: Add startup wiring**
 
 `App.xaml.cs` must parse an optional `--server` argument. Default to `http://localhost:5000`. It creates `HttpClient`, `CockpitApiClient`, `CockpitShellViewModel`, and `MainWindow`.
 
-- [ ] **Step 2: Add shell XAML**
+- [x] **Step 2: Add shell XAML**
 
 `MainWindow.xaml` must be a dense local admin tool:
 
@@ -553,17 +553,17 @@ git commit -m "Add cockpit shell view model"
 
 No marketing hero, no decorative art, no nested cards. Use a restrained Windows admin style.
 
-- [ ] **Step 3: Bind controls**
+- [x] **Step 3: Bind controls**
 
 Bind buttons to `RefreshCommand`, `RestorePhysicalCommand`, and `RecoverSelectedClientCommand`. Bind client selector to `SelectedClientId`, lists to `Clients`, `Sessions`, and `Diagnostics`, and counters to `ClientCount`, `SessionCount`, `GameCount`.
 
-- [ ] **Step 4: Build cockpit**
+- [x] **Step 4: Build cockpit**
 
 Run: `dotnet build src/Beacon.Cockpit/Beacon.Cockpit.csproj -warnaserror`
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/Beacon.Cockpit

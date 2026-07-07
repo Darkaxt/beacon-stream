@@ -13,9 +13,10 @@ public sealed class CockpitShellViewModel : ObservableObject
     private string selectedClientId = string.Empty;
     private string statusMessage = "Ready.";
 
-    public CockpitShellViewModel(ICockpitApi api)
+    public CockpitShellViewModel(ICockpitApi api, string serverUrl = "http://localhost:5000")
     {
         this.api = api;
+        ServerUrl = serverUrl;
         RefreshCommand = new RelayCommand(() => RefreshAsync(CancellationToken.None));
         RestorePhysicalCommand = new RelayCommand(() => RestorePhysicalAsync(CancellationToken.None));
         recoverSelectedClientCommand = new RelayCommand(
@@ -60,6 +61,8 @@ public sealed class CockpitShellViewModel : ObservableObject
         private set => SetProperty(ref statusMessage, value);
     }
 
+    public string ServerUrl { get; }
+
     public ObservableCollection<string> Clients { get; } = [];
 
     public ObservableCollection<string> Sessions { get; } = [];
@@ -74,7 +77,16 @@ public sealed class CockpitShellViewModel : ObservableObject
 
     public async Task RefreshAsync(CancellationToken cancellationToken)
     {
-        CockpitSnapshot snapshot = await api.GetSnapshotAsync(cancellationToken);
+        CockpitSnapshot snapshot;
+        try
+        {
+            snapshot = await api.GetSnapshotAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Refresh failed: {ex.Message}";
+            return;
+        }
 
         Replace(Clients, snapshot.Clients.Select(client => client.ClientId));
         Replace(Sessions, snapshot.Sessions.Select(session => session.AppId));
@@ -94,8 +106,15 @@ public sealed class CockpitShellViewModel : ObservableObject
 
     public async Task RestorePhysicalAsync(CancellationToken cancellationToken)
     {
-        await api.RestorePhysicalAsync(cancellationToken);
-        StatusMessage = "Physical display restore requested.";
+        try
+        {
+            await api.RestorePhysicalAsync(cancellationToken);
+            StatusMessage = "Physical display restore requested.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Restore failed: {ex.Message}";
+        }
     }
 
     public async Task RecoverSelectedClientAsync(CancellationToken cancellationToken)
@@ -106,8 +125,15 @@ public sealed class CockpitShellViewModel : ObservableObject
             return;
         }
 
-        await api.RecoverClientDisplayAsync(SelectedClientId, cancellationToken);
-        StatusMessage = $"Display recovery requested for {SelectedClientId}.";
+        try
+        {
+            await api.RecoverClientDisplayAsync(SelectedClientId, cancellationToken);
+            StatusMessage = $"Display recovery requested for {SelectedClientId}.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Recovery failed: {ex.Message}";
+        }
     }
 
     private static void Replace(ObservableCollection<string> collection, IEnumerable<string> values)
