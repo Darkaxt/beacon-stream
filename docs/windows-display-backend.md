@@ -27,6 +27,23 @@ dotnet run --project src/Beacon.DisplayProbe -- remove --client z-fold-7
 
 Use `restore-physical` before `remove` when recovering from an active virtual-primary topology. If the legacy display enumeration cannot find the physical panel while the virtual display is primary, Beacon falls back to DisplayConfig path data and restores the non-origin physical candidate rather than failing immediately.
 
+## Server Host Mode
+
+Beacon Server defaults to fake host mode, which is safe for deterministic local tests and does not call the Windows display driver:
+
+```powershell
+dotnet run --project src\Beacon.Server
+```
+
+Real Windows host composition must be selected explicitly:
+
+```powershell
+$env:BEACON_HOST_MODE='windows'
+dotnet run --project src\Beacon.Server
+```
+
+In Windows host mode, the server registers `WindowsDisplayBackend`, `WindowsGameLauncher`, and `WindowsSessionActivityInspector`. Launch endpoints can create virtual displays and start applications. The streaming backend remains fake until a real wrapper is selected explicitly. `/admin/snapshot` exposes `host.mode` and the selected backend names so the active composition is visible before testing.
+
 ## Expected Z Fold 7 Check
 
 The manual no-phone validation path is:
