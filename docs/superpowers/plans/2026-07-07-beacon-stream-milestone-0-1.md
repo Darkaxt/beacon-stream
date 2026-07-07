@@ -523,7 +523,7 @@ Expected: PASS.
 - Create: `src/Beacon.Core/Sessions/SessionPlanner.cs`
 - Create: `tests/Beacon.Core.Tests/Sessions/SessionPlannerTests.cs`
 
-- [ ] **Step 1: Write failing planner tests**
+- [x] **Step 1: Write failing planner tests**
 
 Create `tests/Beacon.Core.Tests/Sessions/SessionPlannerTests.cs` with tests for:
 
@@ -555,7 +555,7 @@ public void CongestedTelemetryLowersInitialBitrateButDoesNotChangeDisplayResolut
 
 Assert high packet loss lowers bitrate and keeps `2560x1600`.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -565,7 +565,7 @@ dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter SessionPla
 
 Expected: FAIL because planner types do not exist.
 
-- [ ] **Step 3: Implement minimal planner**
+- [x] **Step 3: Implement minimal planner**
 
 Define immutable records:
 
@@ -591,7 +591,7 @@ Planner rules:
 - Bitrate starts at `65`, drops to `35` when packet loss is at least `2.0`, and drops to `25` when RTT is at least `80`.
 - Resolution never changes because of telemetry.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
