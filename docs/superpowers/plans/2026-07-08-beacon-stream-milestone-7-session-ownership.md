@@ -31,7 +31,7 @@ Files:
 git switch -c codex/milestone-7-session-ownership
 ```
 
-- [ ] **Step 2: Commit plan**
+- [x] **Step 2: Commit plan**
 
 ```powershell
 git add docs/superpowers/plans/2026-07-08-beacon-stream-milestone-7-session-ownership.md
@@ -49,7 +49,7 @@ Files:
 - Add: `tests/Beacon.Core.Tests/Games/FakeGameLauncherTests.cs`
 - Add: `tests/Beacon.Platform.Windows.Tests/Games/WindowsGameLauncherTests.cs`
 
-- [ ] **Step 1: Write launch boundary tests**
+- [x] **Step 1: Write launch boundary tests**
 
 Cover:
 
@@ -57,7 +57,7 @@ Cover:
 - failed launch returns a diagnostic error.
 - Windows command builder handles `process`, `steam-app`, and `steam-rungameid` launch intents without starting anything in tests.
 
-- [ ] **Step 2: Add launch contracts**
+- [x] **Step 2: Add launch contracts**
 
 Create:
 
@@ -68,11 +68,11 @@ Create:
 
 The request must include the resolved `GameDescriptor`, `SessionPlan`, and display id.
 
-- [ ] **Step 3: Add fake and Windows boundary implementation**
+- [x] **Step 3: Add fake and Windows boundary implementation**
 
 The Windows implementation may expose command creation separately from actual `Process.Start` so tests can validate behavior without launching games.
 
-- [ ] **Step 4: Verify tests and commit**
+- [x] **Step 4: Verify tests and commit**
 
 ```powershell
 dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter GameLauncher
