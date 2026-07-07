@@ -126,7 +126,7 @@ Until Client Lab exists, skip only the pnpm commands and record that skip in the
 - Create: `tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj`
 - Create: `tests/Beacon.FakeEndpoint.Tests/Beacon.FakeEndpoint.Tests.csproj`
 
-- [ ] **Step 1: Verify remote-first state**
+- [x] **Step 1: Verify remote-first state**
 
 Run:
 
@@ -145,7 +145,7 @@ branch is codex/milestone-0-1-scaffold
 working tree contains only planned docs/scaffold edits
 ```
 
-- [ ] **Step 2: Create .NET 10 solution and projects**
+- [x] **Step 2: Create .NET 10 solution and projects**
 
 Run:
 
@@ -173,7 +173,7 @@ dotnet add tests/Beacon.FakeEndpoint.Tests/Beacon.FakeEndpoint.Tests.csproj refe
 
 Expected: all commands exit 0.
 
-- [ ] **Step 3: Replace default placeholder classes**
+- [x] **Step 3: Replace default placeholder classes**
 
 Delete generated `Class1.cs` and `UnitTest1.cs` files before adding real tests.
 
@@ -186,7 +186,7 @@ Get-ChildItem -Recurse -Filter UnitTest1.cs
 
 Expected: the files exist before deletion and do not exist after deletion.
 
-- [ ] **Step 4: Add repository build defaults**
+- [x] **Step 4: Add repository build defaults**
 
 Create `Directory.Build.props`:
 
@@ -223,7 +223,7 @@ dotnet_style_qualification_for_event = false:suggestion
 csharp_style_namespace_declarations = file_scoped:suggestion
 ```
 
-- [ ] **Step 5: Update README with scope**
+- [x] **Step 5: Update README with scope**
 
 Replace `README.md` with:
 
@@ -240,7 +240,7 @@ See:
 - `docs/superpowers/plans/2026-07-07-beacon-stream-milestone-0-1.md`
 ```
 
-- [ ] **Step 6: Validate scaffold**
+- [x] **Step 6: Validate scaffold**
 
 Run:
 
@@ -252,7 +252,7 @@ dotnet test Beacon.slnx
 
 Expected: restore, build, and tests exit 0.
 
-- [ ] **Step 7: Sync baseline checkpoint**
+- [x] **Step 7: Sync baseline checkpoint**
 
 Run:
 
@@ -276,7 +276,7 @@ Expected: commit created and branch pushed to GitHub.
 - Create: `src/Beacon.Core/Displays/HdrPreference.cs`
 - Create: `tests/Beacon.Core.Tests/Clients/ClientProfilePatcherTests.cs`
 
-- [ ] **Step 1: Write failing profile allowlist tests**
+- [x] **Step 1: Write failing profile allowlist tests**
 
 Create `tests/Beacon.Core.Tests/Clients/ClientProfilePatcherTests.cs`:
 
@@ -349,7 +349,7 @@ public sealed class ClientProfilePatcherTests
 }
 ```
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -359,7 +359,7 @@ dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter ClientProf
 
 Expected: FAIL because `Beacon.Core.Clients` and `Beacon.Core.Displays` types do not exist.
 
-- [ ] **Step 3: Implement minimal client profile model**
+- [x] **Step 3: Implement minimal client profile model**
 
 Create `src/Beacon.Core/Clients/ClientId.cs`:
 
@@ -503,7 +503,7 @@ public static class ClientProfilePatcher
 }
 ```
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
