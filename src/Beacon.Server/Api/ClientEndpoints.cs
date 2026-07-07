@@ -103,7 +103,7 @@ public static class ClientEndpoints
                 profile,
                 clients.GetCapabilities(clientId),
                 clients.GetTelemetry(clientId),
-                new GameDescriptor(request.AppId, request.Title, request.Source));
+                CreateRequestedGame(request));
 
             if (!result.Success || result.Plan is null)
             {
@@ -132,7 +132,7 @@ public static class ClientEndpoints
                 profile,
                 clients.GetCapabilities(clientId),
                 clients.GetTelemetry(clientId),
-                new GameDescriptor(request.AppId, request.Title, request.Source));
+                CreateRequestedGame(request));
 
             if (!planResult.Success || planResult.Plan is null)
             {
@@ -232,6 +232,16 @@ public static class ClientEndpoints
                 terminateOwnedAppOnQuit = !profile.Session.KeepAppRunningOnDisconnect
             }
         };
+
+    private static GameDescriptor CreateRequestedGame(PlanRequest request) =>
+        new(
+            request.AppId,
+            request.Title,
+            request.Source,
+            new GameLaunchIntent("manual-request", request.AppId),
+            new GameArtwork(null, "none"),
+            Installed: true,
+            new GameProcessHints(null, null));
 
     private static ClientProfilePatch CreatePatch(JsonElement body) =>
         new(
