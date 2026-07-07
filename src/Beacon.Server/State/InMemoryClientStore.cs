@@ -17,6 +17,9 @@ public sealed class InMemoryClientStore
     public ClientProfile? GetProfile(string clientId) =>
         profiles.GetValueOrDefault(clientId);
 
+    public IReadOnlyList<ClientProfile> GetProfiles() =>
+        profiles.Values.OrderBy(profile => profile.ClientId.Value, StringComparer.OrdinalIgnoreCase).ToArray();
+
     public void SaveProfile(ClientProfile profile) =>
         profiles[profile.ClientId.Value] = profile;
 

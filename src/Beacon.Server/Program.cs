@@ -36,6 +36,7 @@ builder.Services.AddSingleton(sp => new GameLibraryService(
 var app = builder.Build();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+app.MapAdminEndpoints();
 app.MapGameEndpoints();
 app.MapClientEndpoints();
 

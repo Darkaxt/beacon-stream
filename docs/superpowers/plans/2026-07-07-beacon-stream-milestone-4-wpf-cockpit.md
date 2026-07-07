@@ -59,7 +59,7 @@ Not included:
 - Modify: `src/Beacon.Server/State/InMemorySessionStore.cs`
 - Test: `tests/Beacon.Server.Tests/AdminApiTests.cs`
 
-- [ ] **Step 1: Write failing admin snapshot test**
+- [x] **Step 1: Write failing admin snapshot test**
 
 ```csharp
 using System.Net;
@@ -91,13 +91,13 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter AdminApiTests`
 
 Expected: fail because `/admin/snapshot` is missing.
 
-- [ ] **Step 3: Add state enumeration**
+- [x] **Step 3: Add state enumeration**
 
 Add to `InMemoryClientStore`:
 
@@ -113,7 +113,7 @@ public IReadOnlyList<SessionPlan> GetAll() =>
     plans.Values.OrderBy(plan => plan.ClientId.Value, StringComparer.OrdinalIgnoreCase).ToArray();
 ```
 
-- [ ] **Step 4: Add admin endpoint mapper**
+- [x] **Step 4: Add admin endpoint mapper**
 
 Create `src/Beacon.Server/Api/AdminEndpoints.cs`:
 
@@ -165,13 +165,13 @@ Modify `Program.cs`:
 app.MapAdminEndpoints();
 ```
 
-- [ ] **Step 5: Verify green**
+- [x] **Step 5: Verify green**
 
 Run: `dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter AdminApiTests`
 
 Expected: pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/Beacon.Server tests/Beacon.Server.Tests
