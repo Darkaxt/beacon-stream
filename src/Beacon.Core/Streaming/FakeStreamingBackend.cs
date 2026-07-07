@@ -8,9 +8,16 @@ public sealed class FakeStreamingBackend : IStreamingBackend
 
     public string? NextStartError { get; set; }
 
+    public string? NextPreflightError { get; set; }
+
     public List<string> StartCalls { get; } = [];
 
     public List<string> StopCalls { get; } = [];
+
+    public Task<StreamingPreflightResult> CheckReadinessAsync(SessionPlan plan, CancellationToken cancellationToken) =>
+        Task.FromResult(string.IsNullOrWhiteSpace(NextPreflightError)
+            ? StreamingPreflightResult.Ok()
+            : StreamingPreflightResult.Fail(NextPreflightError));
 
     public Task<StreamingStartResult> StartAsync(SessionPlan plan, CancellationToken cancellationToken)
     {

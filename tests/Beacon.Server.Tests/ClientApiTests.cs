@@ -307,6 +307,36 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task LaunchStopsBeforeDisplayLeaseWhenStreamingPreflightFails()
+    {
+        var display = new FakeDisplayBackend();
+        var launcher = new FakeGameLauncher();
+        var backend = new FakeStreamingBackend { NextPreflightError = "stream wrapper missing" };
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.RemoveAll<IGameLauncher>();
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IDisplayBackend>(display);
+                services.AddSingleton<IGameLauncher>(launcher);
+                services.AddSingleton<IStreamingBackend>(backend);
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
+        {
+            gameId = "steam-shortcut:3767414131"
+        });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        string body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("stream wrapper missing", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(display.EnsureCalls);
+        Assert.Empty(launcher.Requests);
+    }
+
+    [Fact]
     public async Task DisconnectQuitAndEmergencyRestoreReturnExplicitRecoveryState()
     {
         HttpClient client = factory.CreateClient();

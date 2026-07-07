@@ -27,6 +27,18 @@ public sealed class FakeStreamingBackendTests
     }
 
     [Fact]
+    public async Task PreflightCanFailBeforeStart()
+    {
+        var backend = new FakeStreamingBackend { NextPreflightError = "stream wrapper missing" };
+
+        StreamingPreflightResult result = await backend.CheckReadinessAsync(CreatePlan(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("stream wrapper missing", result.Error);
+        Assert.Empty(backend.GetSessions());
+    }
+
+    [Fact]
     public async Task StopMarksSessionStoppedWithoutDeletingState()
     {
         var backend = new FakeStreamingBackend();

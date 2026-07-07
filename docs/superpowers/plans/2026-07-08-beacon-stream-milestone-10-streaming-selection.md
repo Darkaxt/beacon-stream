@@ -31,7 +31,7 @@ Files:
 git switch -c codex/milestone-10-streaming-selection
 ```
 
-- [ ] **Step 2: Commit plan**
+- [x] **Step 2: Commit plan**
 
 ```powershell
 git add docs/superpowers/plans/2026-07-08-beacon-stream-milestone-10-streaming-selection.md
@@ -49,19 +49,19 @@ Files:
 - Modify: `src/Beacon.Server/Api/ClientEndpoints.cs`
 - Modify: `tests/Beacon.Server.Tests/ClientApiTests.cs`
 
-- [ ] **Step 1: Extend streaming contract**
+- [x] **Step 1: Extend streaming contract**
 
 Add a preflight method that validates whether the backend can start the given `SessionPlan` without starting the stream.
 
-- [ ] **Step 2: Fake backend supports deterministic preflight**
+- [x] **Step 2: Fake backend supports deterministic preflight**
 
 Fake streaming must report readiness by default and allow tests to inject a preflight error.
 
-- [ ] **Step 3: Launch checks preflight before display lease**
+- [x] **Step 3: Launch checks preflight before display lease**
 
 `POST /clients/{clientId}/launch` must run streaming preflight before `DisplayLeaseManager.EnsureLeaseAsync` and before `IGameLauncher.LaunchAsync`.
 
-- [ ] **Step 4: Verify focused tests and commit**
+- [x] **Step 4: Verify focused tests and commit**
 
 ```powershell
 dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter FakeStreamingBackend
