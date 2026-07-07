@@ -655,7 +655,7 @@ pnpm --dir tests/Beacon.ClientLab.Playwright test
 
 Expected: pass.
 
-- [ ] **Step 3: Push and open PR**
+- [x] **Step 3: Push and open PR**
 
 ```bash
 git status --short
