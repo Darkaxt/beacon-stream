@@ -472,7 +472,7 @@ git push
 - Modify: `src/Beacon.Server/Api/ClientEndpoints.cs`
 - Test: `tests/Beacon.Server.Tests/ClientApiTests.cs`
 
-- [ ] **Step 1: Write failing lifecycle tests**
+- [x] **Step 1: Write failing lifecycle tests**
 
 Add these tests to `ClientApiTests`:
 
@@ -522,7 +522,7 @@ public async Task DisconnectStopsStreamAndRetainsDisplayLease()
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -532,7 +532,7 @@ dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter "Strea
 
 Expected: fail because `/stream`, `/stream/stop`, and disconnect stream stop behavior do not exist.
 
-- [ ] **Step 3: Add stream status endpoint**
+- [x] **Step 3: Add stream status endpoint**
 
 Add this endpoint after launch in `ClientEndpoints`:
 
@@ -556,7 +556,7 @@ clients.MapGet("/{clientId}/stream", async (
 });
 ```
 
-- [ ] **Step 4: Add stream stop endpoint**
+- [x] **Step 4: Add stream stop endpoint**
 
 Add this endpoint after stream status:
 
@@ -580,7 +580,7 @@ clients.MapPost("/{clientId}/stream/stop", async (
 });
 ```
 
-- [ ] **Step 5: Stop stream on disconnect and quit**
+- [x] **Step 5: Stop stream on disconnect and quit**
 
 Modify disconnect to inject `InMemorySessionStore sessions` and `IStreamingBackend streaming`, then return:
 
@@ -615,7 +615,7 @@ Add `stream` to the quit response:
 return Results.Ok(new { clientId, cleanupEvaluated = true, displayRemoved = removed, stream });
 ```
 
-- [ ] **Step 6: Verify green**
+- [x] **Step 6: Verify green**
 
 Run:
 
@@ -625,7 +625,7 @@ dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter Client
 
 Expected: all client API tests pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add src/Beacon.Server tests/Beacon.Server.Tests

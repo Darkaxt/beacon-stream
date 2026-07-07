@@ -276,6 +276,50 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task StreamStatusAndStopAreIndependentFromDisplayCleanup()
+    {
+        HttpClient client = factory.CreateClient();
+
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        HttpResponseMessage statusBeforeStop = await client.GetAsync("/clients/z-fold-7/stream");
+        HttpResponseMessage stop = await client.PostAsJsonAsync("/clients/z-fold-7/stream/stop", new { });
+        HttpResponseMessage quit = await client.PostAsJsonAsync("/clients/z-fold-7/quit", new
+        {
+            clientActive = false,
+            ownedProcessRunning = false,
+            ownedWindowRemaining = false
+        });
+
+        Assert.Equal(HttpStatusCode.OK, statusBeforeStop.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, stop.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, quit.StatusCode);
+
+        using JsonDocument statusJson = await JsonDocument.ParseAsync(await statusBeforeStop.Content.ReadAsStreamAsync());
+        using JsonDocument stopJson = await JsonDocument.ParseAsync(await stop.Content.ReadAsStreamAsync());
+        using JsonDocument quitJson = await JsonDocument.ParseAsync(await quit.Content.ReadAsStreamAsync());
+
+        Assert.Equal("running", statusJson.RootElement.GetProperty("stream").GetProperty("state").GetString());
+        Assert.Equal("stopped", stopJson.RootElement.GetProperty("stream").GetProperty("state").GetString());
+        Assert.True(quitJson.RootElement.GetProperty("displayRemoved").GetBoolean());
+    }
+
+    [Fact]
+    public async Task DisconnectStopsStreamAndRetainsDisplayLease()
+    {
+        HttpClient client = factory.CreateClient();
+
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        HttpResponseMessage disconnect = await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
+
+        Assert.Equal(HttpStatusCode.OK, disconnect.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await disconnect.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.True(root.GetProperty("leaseRetained").GetBoolean());
+        Assert.Equal("stopped", root.GetProperty("stream").GetProperty("state").GetString());
+    }
+
+    [Fact]
     public async Task DisplayRecoverRunsManualRecoveryForClientLease()
     {
         HttpClient client = factory.CreateClient();
