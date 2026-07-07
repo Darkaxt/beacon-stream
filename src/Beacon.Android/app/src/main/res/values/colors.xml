@@ -1,0 +1,6 @@
+<resources>
+    <color name="beacon_background">#101418</color>
+    <color name="beacon_surface">#1C232B</color>
+    <color name="beacon_text">#F4F7FA</color>
+    <color name="beacon_accent">#39A7F4</color>
+</resources>

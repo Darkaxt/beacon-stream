@@ -1,0 +1,102 @@
+package dev.beacon.android;
+
+import org.junit.Test;
+
+import java.io.IOException;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+public final class BeaconApiClientTest {
+    @Test
+    public void helloSendsClientIdentityOnlyToHelloEndpoint() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        BeaconApiClient client = new BeaconApiClient(new BeaconClientConfig("http://server/", "z-fold-7"), transport);
+
+        BeaconApiClient.BeaconResult result = client.hello();
+
+        assertEquals(200, result.statusCode());
+        assertEquals("POST", transport.method);
+        assertEquals("/clients/hello", transport.path);
+        assertTrue(transport.body.contains("\"clientId\":\"z-fold-7\""));
+        assertFalse(transport.body.contains("preferredWidth"));
+    }
+
+    @Test
+    public void profilePatchSerializesOnlyApkAllowedFields() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        BeaconApiClient client = new BeaconApiClient(new BeaconClientConfig("http://server", "z-fold-7"), transport);
+        BeaconApiClient.ProfilePatch patch = new BeaconApiClient.ProfilePatch();
+        patch.preferredWidth = 2560;
+        patch.preferredHeight = 1600;
+        patch.preferredRefreshHz = 120;
+        patch.hdrPreference = "prefer";
+        patch.codecPreference = "av1";
+        patch.qualityMode = "quality";
+        patch.bitrateCapMbps = 65;
+        patch.audioMode = "stereo";
+        patch.keepAppRunningOnDisconnect = false;
+
+        client.patchProfile(patch);
+
+        assertEquals("PATCH", transport.method);
+        assertEquals("/clients/z-fold-7/profile", transport.path);
+        assertTrue(transport.body.contains("\"preferredWidth\":2560"));
+        assertTrue(transport.body.contains("\"preferredHeight\":1600"));
+        assertTrue(transport.body.contains("\"preferredRefreshHz\":120"));
+        assertTrue(transport.body.contains("\"hdrPreference\":\"prefer\""));
+        assertTrue(transport.body.contains("\"codecPreference\":\"av1\""));
+        assertTrue(transport.body.contains("\"qualityMode\":\"quality\""));
+        assertTrue(transport.body.contains("\"bitrateCapMbps\":65"));
+        assertTrue(transport.body.contains("\"audioMode\":\"stereo\""));
+        assertTrue(transport.body.contains("\"keepAppRunningOnDisconnect\":false"));
+        assertFalse(transport.body.contains("mode"));
+        assertFalse(transport.body.contains("blackout"));
+        assertFalse(transport.body.contains("mirror"));
+        assertFalse(transport.body.contains("restorePhysicalDisplayOnEnd"));
+    }
+
+    @Test
+    public void emergencyRestorePostsToOwningClientEndpoint() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        BeaconApiClient client = new BeaconApiClient(new BeaconClientConfig("http://server", "z-fold-7"), transport);
+
+        client.emergencyRestore();
+
+        assertEquals("POST", transport.method);
+        assertEquals("/clients/z-fold-7/emergency-restore", transport.path);
+        assertEquals("{}", transport.body);
+    }
+
+    @Test
+    public void launchConsumesServerPlanWithoutChoosingDisplayTopologyLocally() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        transport.response = new BeaconHttpResponse(200, "{\"state\":\"streaming\",\"displayId\":\"client-z-fold-7\",\"stream\":{\"fps\":120}}");
+        BeaconApiClient client = new BeaconApiClient(new BeaconClientConfig("http://server", "z-fold-7"), transport);
+
+        BeaconApiClient.BeaconResult result = client.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+
+        assertEquals(200, result.statusCode());
+        assertEquals("/clients/z-fold-7/launch", transport.path);
+        assertTrue(transport.body.contains("\"gameId\":\"steam-shortcut:3767414131\""));
+        assertFalse(transport.body.contains("display"));
+        assertFalse(transport.body.contains("mode"));
+        assertTrue(result.body().contains("\"state\":\"streaming\""));
+    }
+
+    private static final class FakeTransport implements BeaconHttpTransport {
+        String method;
+        String path;
+        String body;
+        BeaconHttpResponse response = new BeaconHttpResponse(200, "{}");
+
+        @Override
+        public BeaconHttpResponse send(String method, String path, String body) throws IOException {
+            this.method = method;
+            this.path = path;
+            this.body = body;
+            return response;
+        }
+    }
+}
