@@ -948,7 +948,7 @@ Expected: no matches.
 **Files:**
 - Create: `.github/workflows/ci.yml`
 
-- [ ] **Step 1: Add CI**
+- [x] **Step 1: Add CI**
 
 Create `.github/workflows/ci.yml`:
 
@@ -989,7 +989,7 @@ jobs:
       - run: pnpm --dir tests/Beacon.ClientLab.Playwright test
 ```
 
-- [ ] **Step 2: Run local static validation**
+- [x] **Step 2: Run local static validation**
 
 Run:
 
@@ -1002,7 +1002,7 @@ pnpm --dir tests/Beacon.ClientLab.Playwright lint
 
 Expected: all commands exit 0.
 
-- [ ] **Step 3: Run local dynamic validation**
+- [x] **Step 3: Run local dynamic validation**
 
 Run:
 
@@ -1014,7 +1014,7 @@ pnpm --dir tests/Beacon.ClientLab.Playwright test
 
 Expected: all commands exit 0.
 
-- [ ] **Step 4: Sync implementation checkpoint**
+- [x] **Step 4: Sync implementation checkpoint**
 
 Run:
 

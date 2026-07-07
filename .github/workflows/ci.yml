@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  dotnet:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet restore Beacon.slnx
+      - run: dotnet format Beacon.slnx --verify-no-changes --no-restore
+      - run: dotnet build Beacon.slnx -warnaserror --no-restore
+      - run: dotnet test Beacon.slnx --no-build
+
+  client-lab:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            src/Beacon.ClientLab/pnpm-lock.yaml
+            tests/Beacon.ClientLab.Playwright/pnpm-lock.yaml
+      - run: pnpm --dir src/Beacon.ClientLab install --frozen-lockfile
+      - run: pnpm --dir src/Beacon.ClientLab lint
+      - run: pnpm --dir src/Beacon.ClientLab test
+      - run: pnpm --dir tests/Beacon.ClientLab.Playwright install --frozen-lockfile
+      - run: pnpm --dir tests/Beacon.ClientLab.Playwright lint
+      - run: pnpm --dir tests/Beacon.ClientLab.Playwright exec playwright install --with-deps chromium
+      - run: pnpm --dir tests/Beacon.ClientLab.Playwright test
