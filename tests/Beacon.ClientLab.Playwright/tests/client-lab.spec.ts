@@ -32,7 +32,7 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
             id: 'steam-shortcut:3767414131',
             title: 'Dispatch',
             source: 'steam-shortcut',
-            launch: { type: 'steam-rungameid', command: 'steam://rungameid/16180979725241544704' },
+            launch: { type: 'steam-rungameid', command: 'steam://rungameid/16180920483166814208' },
             artwork: { coverPath: null, source: 'none' },
             installed: true
           }

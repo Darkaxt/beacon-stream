@@ -23,7 +23,7 @@ builder.Services.AddSingleton<IGameLibraryProvider>(_ => new StaticGameLibraryPr
             "steam-shortcut:3767414131",
             "Dispatch",
             "steam-shortcut",
-            new GameLaunchIntent("steam-rungameid", "steam://rungameid/16180979725241544704"),
+            new GameLaunchIntent("steam-rungameid", "steam://rungameid/16180920483166814208"),
             new GameArtwork(null, "none"),
             Installed: true,
             new GameProcessHints(null, null))

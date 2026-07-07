@@ -87,7 +87,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal("Dispatch", dispatch.GetProperty("title").GetString());
         Assert.Equal("steam-shortcut", dispatch.GetProperty("source").GetString());
         Assert.Equal("steam-rungameid", dispatch.GetProperty("launch").GetProperty("type").GetString());
-        Assert.Equal("steam://rungameid/16180979725241544704", dispatch.GetProperty("launch").GetProperty("command").GetString());
+        Assert.Equal("steam://rungameid/16180920483166814208", dispatch.GetProperty("launch").GetProperty("command").GetString());
         Assert.True(dispatch.GetProperty("installed").GetBoolean());
     }
 

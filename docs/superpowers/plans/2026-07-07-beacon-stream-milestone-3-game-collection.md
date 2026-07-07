@@ -857,7 +857,7 @@ git commit -m "Expose normalized game library to clients"
 - Test: `tests/Beacon.GameProbe.Tests/Beacon.GameProbe.Tests.csproj`
 - Test: `tests/Beacon.GameProbe.Tests/GameProbeCommandLineTests.cs`
 
-- [ ] **Step 1: Write failing CLI parser test**
+- [x] **Step 1: Write failing CLI parser test**
 
 ```csharp
 namespace Beacon.GameProbe.Tests;
@@ -875,13 +875,13 @@ public sealed class GameProbeCommandLineTests
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/Beacon.GameProbe.Tests/Beacon.GameProbe.Tests.csproj`
 
 Expected: project or types missing.
 
-- [ ] **Step 3: Implement probe**
+- [x] **Step 3: Implement probe**
 
 Commands:
 
@@ -889,7 +889,7 @@ Commands:
 - `scan --json`: print full JSON with diagnostics.
 - `steam-shortcuts <path>`: parse one `shortcuts.vdf` and print title plus `steam://rungameid`.
 
-- [ ] **Step 4: Verify with local read-only scan**
+- [x] **Step 4: Verify with local read-only scan**
 
 Run:
 
@@ -900,7 +900,7 @@ dotnet run --project src/Beacon.GameProbe -- scan --json
 
 Expected: tests pass; local scan does not mutate Steam/Heroic/Hydra files and prints diagnostics.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Beacon.slnx src/Beacon.GameProbe tests/Beacon.GameProbe.Tests

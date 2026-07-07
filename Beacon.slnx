@@ -3,6 +3,7 @@
     <Project Path="src/Beacon.Core/Beacon.Core.csproj" />
     <Project Path="src/Beacon.DisplayProbe/Beacon.DisplayProbe.csproj" />
     <Project Path="src/Beacon.FakeEndpoint/Beacon.FakeEndpoint.csproj" />
+    <Project Path="src/Beacon.GameProbe/Beacon.GameProbe.csproj" />
     <Project Path="src/Beacon.Platform.Windows/Beacon.Platform.Windows.csproj" />
     <Project Path="src/Beacon.Server/Beacon.Server.csproj" />
   </Folder>
@@ -10,6 +11,7 @@
     <Project Path="tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj" />
     <Project Path="tests/Beacon.DisplayProbe.Tests/Beacon.DisplayProbe.Tests.csproj" />
     <Project Path="tests/Beacon.FakeEndpoint.Tests/Beacon.FakeEndpoint.Tests.csproj" />
+    <Project Path="tests/Beacon.GameProbe.Tests/Beacon.GameProbe.Tests.csproj" />
     <Project Path="tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj" />
     <Project Path="tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj" />
   </Folder>
