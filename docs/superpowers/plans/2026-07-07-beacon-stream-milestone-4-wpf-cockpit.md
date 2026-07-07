@@ -416,7 +416,7 @@ git commit -m "Add cockpit API client"
 - Create: `src/Beacon.Cockpit/Cockpit/CockpitShellViewModel.cs`
 - Test: `tests/Beacon.Cockpit.Tests/CockpitShellViewModelTests.cs`
 
-- [ ] **Step 1: Write failing ViewModel tests**
+- [x] **Step 1: Write failing ViewModel tests**
 
 ```csharp
 using Beacon.Cockpit.Cockpit;
@@ -471,13 +471,13 @@ private sealed class FakeCockpitApi(CockpitSnapshot snapshot) : ICockpitApi
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/Beacon.Cockpit.Tests/Beacon.Cockpit.Tests.csproj --filter CockpitShellViewModelTests`
 
 Expected: fail because ViewModel types are missing.
 
-- [ ] **Step 3: Add API interface and ViewModel**
+- [x] **Step 3: Add API interface and ViewModel**
 
 Add `ICockpitApi` to `CockpitApiClient.cs` and implement it:
 
@@ -513,13 +513,13 @@ public string StatusMessage { get; private set; } = "Ready.";
 
 Do not use cancellation timeouts. Use the command invocation cancellation token supplied by tests or `CancellationToken.None` from UI commands.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: `dotnet test tests/Beacon.Cockpit.Tests/Beacon.Cockpit.Tests.csproj --filter CockpitShellViewModelTests`
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/Beacon.Cockpit tests/Beacon.Cockpit.Tests
