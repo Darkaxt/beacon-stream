@@ -78,15 +78,15 @@ Files:
 - Modify: `src/Beacon.Platform.Windows/Streaming/ExternalProcessStreamingBackend.cs`
 - Modify: `tests/Beacon.Platform.Windows.Tests/Streaming/ExternalProcessStreamingBackendTests.cs`
 
-- [ ] **Step 1: Add backend options**
+- [x] **Step 1: Add backend options**
 
 Represent the executable path as typed options. Missing path should produce a clear preflight failure.
 
-- [ ] **Step 2: Add fakeable process runner boundary**
+- [x] **Step 2: Add fakeable process runner boundary**
 
 Start and stop external processes through an interface so tests never launch a real wrapper.
 
-- [ ] **Step 3: Implement `IStreamingBackend`**
+- [x] **Step 3: Implement `IStreamingBackend`**
 
 External backend must:
 
@@ -96,7 +96,7 @@ External backend must:
 - stop the owned wrapper process when asked.
 - surface start/stop failures as diagnostics.
 
-- [ ] **Step 4: Verify focused tests and commit**
+- [x] **Step 4: Verify focused tests and commit**
 
 ```powershell
 dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj --filter ExternalProcessStreamingBackend
