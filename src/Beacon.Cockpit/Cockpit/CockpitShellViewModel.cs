@@ -9,6 +9,7 @@ public sealed class CockpitShellViewModel : ObservableObject
     private readonly RelayCommand recoverSelectedClientCommand;
     private int clientCount;
     private int sessionCount;
+    private int streamCount;
     private int gameCount;
     private string selectedClientId = string.Empty;
     private string statusMessage = "Ready.";
@@ -43,6 +44,12 @@ public sealed class CockpitShellViewModel : ObservableObject
         private set => SetProperty(ref gameCount, value);
     }
 
+    public int StreamCount
+    {
+        get => streamCount;
+        private set => SetProperty(ref streamCount, value);
+    }
+
     public string SelectedClientId
     {
         get => selectedClientId;
@@ -67,6 +74,8 @@ public sealed class CockpitShellViewModel : ObservableObject
 
     public ObservableCollection<string> Sessions { get; } = [];
 
+    public ObservableCollection<string> Streams { get; } = [];
+
     public ObservableCollection<string> Diagnostics { get; } = [];
 
     public ICommand RefreshCommand { get; }
@@ -90,10 +99,13 @@ public sealed class CockpitShellViewModel : ObservableObject
 
         Replace(Clients, snapshot.Clients.Select(client => client.ClientId));
         Replace(Sessions, snapshot.Sessions.Select(session => session.AppId));
+        Replace(Streams, snapshot.Streams.Select(stream =>
+            $"{stream.ClientId} {stream.AppId} {stream.State} {stream.Codec} {stream.Fps}fps"));
         Replace(Diagnostics, snapshot.Games.Diagnostics);
 
         ClientCount = snapshot.Clients.Count;
         SessionCount = snapshot.Sessions.Count;
+        StreamCount = snapshot.Streams.Count;
         GameCount = snapshot.Games.Total;
 
         if (string.IsNullOrWhiteSpace(SelectedClientId) && Clients.Count > 0)

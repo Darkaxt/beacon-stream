@@ -644,7 +644,7 @@ git push
 - Modify: `tests/Beacon.Cockpit.Tests/CockpitApiClientTests.cs`
 - Modify: `tests/Beacon.Cockpit.Tests/CockpitShellViewModelTests.cs`
 
-- [ ] **Step 1: Write failing admin snapshot stream test**
+- [x] **Step 1: Write failing admin snapshot stream test**
 
 Modify `SnapshotReturnsClientsGamesAndSessions` in `AdminApiTests` to launch a game before snapshot:
 
@@ -660,7 +660,7 @@ Assert.Equal("running", root.GetProperty("streams")[0].GetProperty("state").GetS
 Assert.Equal("client-z-fold-7", root.GetProperty("streams")[0].GetProperty("displayId").GetString());
 ```
 
-- [ ] **Step 2: Write failing cockpit model tests**
+- [x] **Step 2: Write failing cockpit model tests**
 
 Update the JSON in `CockpitApiClientTests.LoadsSnapshotFromServer`:
 
@@ -699,7 +699,7 @@ Assert.Equal(1, viewModel.StreamCount);
 Assert.Contains("z-fold-7 steam-shortcut:3767414131 running av1 120fps", viewModel.Streams);
 ```
 
-- [ ] **Step 3: Verify red**
+- [x] **Step 3: Verify red**
 
 Run:
 
@@ -710,7 +710,7 @@ dotnet test tests/Beacon.Cockpit.Tests/Beacon.Cockpit.Tests.csproj
 
 Expected: fail because snapshots and cockpit models do not include streams.
 
-- [ ] **Step 4: Add streams to admin endpoint**
+- [x] **Step 4: Add streams to admin endpoint**
 
 Modify `src/Beacon.Server/Api/AdminEndpoints.cs` to inject `IStreamingBackend streaming` into `/admin/snapshot`, and add:
 
@@ -724,7 +724,7 @@ Add:
 using Beacon.Core.Streaming;
 ```
 
-- [ ] **Step 5: Add cockpit stream DTOs**
+- [x] **Step 5: Add cockpit stream DTOs**
 
 Modify `CockpitModels.cs`:
 
@@ -754,7 +754,7 @@ Update empty snapshot construction in `CockpitApiClient`:
 return snapshot ?? new CockpitSnapshot([], [], [], new CockpitGameSummary(0, []));
 ```
 
-- [ ] **Step 6: Add ViewModel stream projection**
+- [x] **Step 6: Add ViewModel stream projection**
 
 Add properties to `CockpitShellViewModel`:
 
@@ -778,7 +778,7 @@ Replace(Streams, snapshot.Streams.Select(stream =>
 StreamCount = snapshot.Streams.Count;
 ```
 
-- [ ] **Step 7: Add stream UI**
+- [x] **Step 7: Add stream UI**
 
 Modify `MainWindow.xaml`:
 
@@ -799,7 +799,7 @@ Modify `MainWindow.xaml`:
 </TabItem>
 ```
 
-- [ ] **Step 8: Verify green**
+- [x] **Step 8: Verify green**
 
 Run:
 
@@ -811,7 +811,7 @@ dotnet build src/Beacon.Cockpit/Beacon.Cockpit.csproj -warnaserror
 
 Expected: admin, cockpit tests, and WPF build pass.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```powershell
 git add src/Beacon.Server tests/Beacon.Server.Tests src/Beacon.Cockpit tests/Beacon.Cockpit.Tests

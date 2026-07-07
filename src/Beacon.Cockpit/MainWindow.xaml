@@ -75,6 +75,9 @@
                     <TextBlock Text="Sessions" Style="{StaticResource LabelText}" />
                     <TextBlock Text="{Binding SessionCount}" Style="{StaticResource MetricText}" />
 
+                    <TextBlock Text="Streams" Style="{StaticResource LabelText}" />
+                    <TextBlock Text="{Binding StreamCount}" Style="{StaticResource MetricText}" />
+
                     <TextBlock Text="Games" Style="{StaticResource LabelText}" />
                     <TextBlock Text="{Binding GameCount}" Style="{StaticResource MetricText}" />
 
@@ -109,6 +112,12 @@
                         <GroupBox Header="Sessions" Grid.Column="2">
                             <ListBox ItemsSource="{Binding Sessions}" />
                         </GroupBox>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Streams">
+                    <Grid Margin="10">
+                        <ListBox ItemsSource="{Binding Streams}" />
                     </Grid>
                 </TabItem>
 
