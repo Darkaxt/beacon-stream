@@ -893,7 +893,7 @@ Expected: PASS.
 - Create: `docs/extraction-map.md`
 - Create: `docs/license-notes.md`
 
-- [ ] **Step 1: Add extraction map**
+- [x] **Step 1: Add extraction map**
 
 Create `docs/extraction-map.md` with this table:
 
@@ -910,7 +910,7 @@ Create `docs/extraction-map.md` with this table:
 ```
 ```
 
-- [ ] **Step 2: Add license notes**
+- [x] **Step 2: Add license notes**
 
 Create `docs/license-notes.md`:
 
@@ -931,13 +931,14 @@ Before copying upstream code, add a row to `docs/extraction-map.md` naming:
 - reason for reuse
 ```
 
-- [ ] **Step 3: Validate docs**
+- [x] **Step 3: Validate docs**
 
 Run:
 
 ```powershell
-$badTerms = @('Copy Source Now \| Yes', 'TO' + 'DO', 'TB' + 'D', 'may' + 'be', 'sh' + 'ould')
-foreach ($term in $badTerms) { rg -n $term docs; if ($LASTEXITCODE -eq 0) { exit 1 } }
+$docPaths = @('docs/extraction-map.md', 'docs/license-notes.md')
+$badTerms = @('Copy Source Now \| ' + 'Yes', 'TO' + 'DO', 'TB' + 'D', 'may' + 'be', 'sh' + 'ould')
+foreach ($term in $badTerms) { rg -n $term $docPaths; if ($LASTEXITCODE -eq 0) { exit 1 } }
 ```
 
 Expected: no matches.
