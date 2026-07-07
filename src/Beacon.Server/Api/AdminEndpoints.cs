@@ -1,3 +1,5 @@
+using Beacon.Core.Clients;
+using Beacon.Core.Displays;
 using Beacon.Core.Games;
 using Beacon.Server.State;
 
@@ -32,6 +34,27 @@ public static class AdminEndpoints
                     diagnostics = gameSnapshot.Diagnostics
                 }
             });
+        });
+
+        admin.MapPost("/recovery/restore-physical", async (
+            IDisplayBackend displayBackend,
+            CancellationToken cancellationToken) =>
+        {
+            await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
+            return Results.Ok(new { restoreRequested = true });
+        });
+
+        admin.MapPost("/clients/{clientId}/display/recover", async (
+            string clientId,
+            DisplayLeaseManager leases,
+            CancellationToken cancellationToken) =>
+        {
+            string displayId = DisplayLease.CreateDisplayId(new ClientId(clientId));
+            DisplayRecoveryResult result = await leases.RecoverDisplayAsync(displayId, cancellationToken);
+
+            return result.Success
+                ? Results.Ok(new { clientId, displayId, recovered = true })
+                : Results.Problem(result.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
         });
 
         return endpoints;

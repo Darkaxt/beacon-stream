@@ -184,7 +184,7 @@ git commit -m "Expose cockpit admin snapshot"
 - Modify: `src/Beacon.Server/Api/AdminEndpoints.cs`
 - Test: `tests/Beacon.Server.Tests/AdminApiTests.cs`
 
-- [ ] **Step 1: Write failing recovery endpoint tests**
+- [x] **Step 1: Write failing recovery endpoint tests**
 
 Add to `AdminApiTests`:
 
@@ -208,13 +208,13 @@ public async Task AdminCanRequestPhysicalRestoreAndClientRecovery()
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter AdminCanRequestPhysicalRestoreAndClientRecovery`
 
 Expected: fail because admin recovery endpoints are missing.
 
-- [ ] **Step 3: Implement endpoints**
+- [x] **Step 3: Implement endpoints**
 
 Add to `MapAdminEndpoints`:
 
@@ -248,13 +248,13 @@ using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 ```
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run: `dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter AdminCanRequestPhysicalRestoreAndClientRecovery`
 
 Expected: pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/Beacon.Server tests/Beacon.Server.Tests

@@ -24,4 +24,22 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.Equal("z-fold-7", root.GetProperty("clients")[0].GetProperty("clientId").GetString());
         Assert.Equal("steam-shortcut:3767414131", root.GetProperty("sessions")[0].GetProperty("appId").GetString());
     }
+
+    [Fact]
+    public async Task AdminCanRequestPhysicalRestoreAndClientRecovery()
+    {
+        HttpClient client = factory.CreateClient();
+
+        HttpResponseMessage restore = await client.PostAsJsonAsync("/admin/recovery/restore-physical", new { });
+        HttpResponseMessage recover = await client.PostAsJsonAsync("/admin/clients/z-fold-7/display/recover", new { });
+
+        Assert.Equal(HttpStatusCode.OK, restore.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, recover.StatusCode);
+
+        using JsonDocument restoreJson = await JsonDocument.ParseAsync(await restore.Content.ReadAsStreamAsync());
+        using JsonDocument recoverJson = await JsonDocument.ParseAsync(await recover.Content.ReadAsStreamAsync());
+
+        Assert.True(restoreJson.RootElement.GetProperty("restoreRequested").GetBoolean());
+        Assert.True(recoverJson.RootElement.GetProperty("recovered").GetBoolean());
+    }
 }
