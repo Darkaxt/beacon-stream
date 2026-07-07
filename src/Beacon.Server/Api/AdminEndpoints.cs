@@ -3,6 +3,7 @@ using Beacon.Core.Displays;
 using Beacon.Core.Games;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
+using Beacon.Server.Hosting;
 using Beacon.Server.State;
 
 namespace Beacon.Server.Api;
@@ -19,6 +20,7 @@ public static class AdminEndpoints
             IStreamingBackend streaming,
             ISessionOwnershipTracker ownership,
             GameLibraryService games,
+            BeaconHostOptions hostOptions,
             CancellationToken cancellationToken) =>
         {
             GameLibrarySnapshot gameSnapshot = await games.ScanAsync(cancellationToken);
@@ -35,6 +37,14 @@ public static class AdminEndpoints
                 sessions = sessions.GetAll(),
                 streams = streaming.GetSessions(),
                 ownership = ownershipSnapshots,
+                host = new
+                {
+                    mode = hostOptions.ModeName,
+                    displayBackend = hostOptions.DisplayBackendName,
+                    gameLauncher = hostOptions.GameLauncherName,
+                    activityInspector = hostOptions.ActivityInspectorName,
+                    streamingBackend = hostOptions.StreamingBackendName
+                },
                 games = new
                 {
                     total = gameSnapshot.Games.Count,
