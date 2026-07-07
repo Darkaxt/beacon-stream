@@ -15,6 +15,37 @@ export interface ValidationResult {
   message: string;
 }
 
+export interface GameLibrarySnapshot {
+  games: GameDescriptor[];
+  diagnostics: string[];
+}
+
+export interface GameDescriptor {
+  id: string;
+  title: string;
+  source: string;
+  launch: GameLaunchIntent;
+  artwork: GameArtwork;
+  installed: boolean;
+}
+
+export interface GameLaunchIntent {
+  type: string;
+  command: string;
+}
+
+export interface GameArtwork {
+  coverPath: string | null;
+  source: string;
+}
+
+export interface PlanRequest {
+  appId?: string;
+  title?: string;
+  source?: string;
+  gameId?: string;
+}
+
 export function createDefaultProfile(): ProfileDraft {
   return {
     clientId: 'z-fold-7',
@@ -36,6 +67,24 @@ export function validateProfileDraft(profile: ProfileDraft): ValidationResult {
   }
 
   return { ok: true, message: '' };
+}
+
+export function createGamePlanRequest(selectedGameId: string): PlanRequest {
+  const gameId = selectedGameId.trim();
+  if (gameId !== '') {
+    return { gameId };
+  }
+
+  return {
+    appId: 'steam-shortcut:3767414131',
+    title: 'Dispatch',
+    source: 'steam-shortcut'
+  };
+}
+
+export async function getJson<T>(path: string): Promise<T> {
+  const response = await fetch(path);
+  return readJson<T>(response);
 }
 
 export async function postJson<T>(path: string, body: unknown): Promise<T> {

@@ -7,7 +7,14 @@ namespace Beacon.Core.Tests.Sessions;
 
 public sealed class SessionPlannerTests
 {
-    private static readonly GameDescriptor Dispatch = new("steam-shortcut:3767414131", "Dispatch", "steam-shortcut");
+    private static readonly GameDescriptor Dispatch = new(
+        "steam-shortcut:3767414131",
+        "Dispatch",
+        "steam-shortcut",
+        new GameLaunchIntent("steam-rungameid", "steam://rungameid/16180920483166814208"),
+        new GameArtwork(null, "none"),
+        Installed: true,
+        new GameProcessHints(null, null));
 
     [Fact]
     public void PreservesZFoldResolutionRefreshAndVirtualPrimaryMode()
