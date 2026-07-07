@@ -271,7 +271,7 @@ git commit -m "Add cockpit recovery endpoints"
 - Create: `tests/Beacon.Cockpit.Tests/CockpitApiClientTests.cs`
 - Modify: `Beacon.slnx`
 
-- [ ] **Step 1: Write failing API client tests**
+- [x] **Step 1: Write failing API client tests**
 
 ```csharp
 using System.Net;
@@ -321,13 +321,13 @@ private sealed class FakeHttpHandler(string responseBody) : HttpMessageHandler
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/Beacon.Cockpit.Tests/Beacon.Cockpit.Tests.csproj`
 
 Expected: fail because the cockpit project does not exist.
 
-- [ ] **Step 3: Create WPF project and models**
+- [x] **Step 3: Create WPF project and models**
 
 Create `src/Beacon.Cockpit/Beacon.Cockpit.csproj`:
 
@@ -364,7 +364,7 @@ public sealed record CockpitGameSummary(int Total, IReadOnlyList<string> Diagnos
 public sealed record CockpitRecoveryResult(bool RestoreRequested, bool Recovered, string? DisplayId);
 ```
 
-- [ ] **Step 4: Implement API client**
+- [x] **Step 4: Implement API client**
 
 Create `CockpitApiClient.cs`:
 
@@ -395,13 +395,13 @@ public sealed class CockpitApiClient(HttpClient httpClient)
 }
 ```
 
-- [ ] **Step 5: Verify green**
+- [x] **Step 5: Verify green**
 
 Run: `dotnet test tests/Beacon.Cockpit.Tests/Beacon.Cockpit.Tests.csproj`
 
 Expected: pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add Beacon.slnx src/Beacon.Cockpit tests/Beacon.Cockpit.Tests
