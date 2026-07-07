@@ -56,20 +56,37 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
         return NegotiateHdr(hdrPreference, hdrCapability);
     }
 
-    public async Task RestorePhysicalPrimaryAsync(CancellationToken cancellationToken)
+    public async Task<DisplayRestoreResult> RestorePhysicalPrimaryAsync(CancellationToken cancellationToken)
     {
-        DisplayApiResult restoreResult = await api.RestorePhysicalPrimaryAsync(cancellationToken);
-        if (!restoreResult.Success)
-        {
-            return;
-        }
+        var seenUnverifiedTopologies = new HashSet<string>(StringComparer.Ordinal);
 
-        await api.QueryTopologyAsync(cancellationToken);
+        while (true)
+        {
+            DisplayApiResult restoreResult = await api.RestorePhysicalPrimaryAsync(cancellationToken);
+            if (!restoreResult.Success)
+            {
+                return DisplayRestoreResult.Fail(restoreResult.Error ?? "Physical primary restore failed.");
+            }
+
+            DisplayTopologySnapshot topology = await api.QueryTopologyAsync(cancellationToken);
+            if (topology.PhysicalPrimaryVerified)
+            {
+                return DisplayRestoreResult.Ok();
+            }
+
+            if (!seenUnverifiedTopologies.Add(topology.Fingerprint))
+            {
+                return DisplayRestoreResult.Fail("Physical primary restore was not verified after topology reconciliation.");
+            }
+        }
     }
 
-    public async Task RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken)
+    public async Task<DisplayRemoveResult> RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken)
     {
-        await api.RemoveVirtualDisplayAsync(displayId, cancellationToken);
+        DisplayApiResult result = await api.RemoveVirtualDisplayAsync(displayId, cancellationToken);
+        return result.Success
+            ? DisplayRemoveResult.Ok()
+            : DisplayRemoveResult.Fail(result.Error ?? $"Virtual display {displayId} removal failed.");
     }
 
     private static DisplayEnsureResult NegotiateHdr(HdrPreference preference, DisplayHdrCapability capability)

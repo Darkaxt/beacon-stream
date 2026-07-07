@@ -17,6 +17,8 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi
 
     public DisplayTopologySnapshot? AfterRestoreTopology { get; set; }
 
+    public Queue<DisplayTopologySnapshot> RestoreTopologies { get; } = new();
+
     public DisplayHdrCapability HdrCapability { get; set; } =
         new(Supported: false, Enabled: false, Reason: "Windows Advanced Color reports SDR only.");
 
@@ -84,6 +86,12 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi
     public Task<DisplayApiResult> RestorePhysicalPrimaryAsync(CancellationToken cancellationToken)
     {
         RestoreRequests.Add("physical-primary");
+        if (RestoreTopologies.Count > 0)
+        {
+            CurrentTopology = RestoreTopologies.Dequeue();
+            return Task.FromResult(DisplayApiResult.Ok());
+        }
+
         if (AfterRestoreTopology is not null)
         {
             CurrentTopology = AfterRestoreTopology;

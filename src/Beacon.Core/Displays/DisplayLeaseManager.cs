@@ -47,14 +47,35 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend)
             return false;
         }
 
-        await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
+        DisplayRestoreResult restoreResult = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
+        if (!restoreResult.Success)
+        {
+            return false;
+        }
 
         if (ownedProcessRunning || ownedWindowRemaining)
         {
             return false;
         }
 
-        await displayBackend.RemoveVirtualDisplayAsync(displayId, cancellationToken);
-        return true;
+        DisplayRemoveResult removeResult = await displayBackend.RemoveVirtualDisplayAsync(displayId, cancellationToken);
+        return removeResult.Success;
+    }
+
+    public async Task<DisplayRecoveryResult> RecoverDisplayAsync(string displayId, CancellationToken cancellationToken)
+    {
+        DisplayRestoreResult restoreResult = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
+        if (!restoreResult.Success)
+        {
+            return DisplayRecoveryResult.Fail(restoreResult.Error ?? "Physical primary restore failed.");
+        }
+
+        DisplayRemoveResult removeResult = await displayBackend.RemoveVirtualDisplayAsync(displayId, cancellationToken);
+        if (!removeResult.Success)
+        {
+            return DisplayRecoveryResult.Fail(removeResult.Error ?? $"Virtual display {displayId} removal failed.");
+        }
+
+        return DisplayRecoveryResult.Ok();
     }
 }

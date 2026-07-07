@@ -4,6 +4,10 @@ public sealed class FakeDisplayBackend : IDisplayBackend
 {
     public bool AllowEnsure { get; set; } = true;
 
+    public DisplayRestoreResult NextRestoreResult { get; set; } = DisplayRestoreResult.Ok();
+
+    public DisplayRemoveResult NextRemoveResult { get; set; } = DisplayRemoveResult.Ok();
+
     public List<string> EnsureCalls { get; } = [];
 
     public List<string> RestoreCalls { get; } = [];
@@ -24,15 +28,15 @@ public sealed class FakeDisplayBackend : IDisplayBackend
             : DisplayEnsureResult.Fail("virtual display is unavailable"));
     }
 
-    public Task RestorePhysicalPrimaryAsync(CancellationToken cancellationToken)
+    public Task<DisplayRestoreResult> RestorePhysicalPrimaryAsync(CancellationToken cancellationToken)
     {
         RestoreCalls.Add("physical-primary");
-        return Task.CompletedTask;
+        return Task.FromResult(NextRestoreResult);
     }
 
-    public Task RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken)
+    public Task<DisplayRemoveResult> RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken)
     {
         RemoveCalls.Add(displayId);
-        return Task.CompletedTask;
+        return Task.FromResult(NextRemoveResult);
     }
 }

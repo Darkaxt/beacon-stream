@@ -121,4 +121,28 @@ public sealed class WindowsDisplayBackendTests
         Assert.Contains("HDR required", result.Error ?? string.Empty);
         Assert.Contains("virtual display exposes no HDR metadata", result.Error ?? string.Empty);
     }
+
+    [Fact]
+    public async Task RestorePhysicalPrimaryAsync_WhenFirstTopologyIsStale_ReappliesUntilVerified()
+    {
+        var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
+        api.RestoreTopologies.Enqueue(DisplayTopologySnapshot.Extended(
+            physicalDisplayId: "physical-laptop-panel",
+            virtualDisplayId: "client-z-fold-7",
+            width: 2560,
+            height: 1600,
+            refreshHz: 120,
+            virtualPrimary: true));
+        api.RestoreTopologies.Enqueue(DisplayTopologySnapshot.PhysicalOnly(
+            physicalDisplayId: "physical-laptop-panel",
+            width: 2560,
+            height: 1600,
+            refreshHz: 120));
+        var backend = new WindowsDisplayBackend(api);
+
+        DisplayRestoreResult result = await backend.RestorePhysicalPrimaryAsync(CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(2, api.RestoreRequests.Count);
+    }
 }

@@ -2,6 +2,14 @@ namespace Beacon.Platform.Windows.Displays;
 
 public sealed record DisplayTopologySnapshot(IReadOnlyList<DisplayPathSnapshot> Paths, bool IsMirrorMode)
 {
+    public string Fingerprint =>
+        string.Join(
+            "|",
+            Paths
+                .OrderBy(path => path.DisplayId, StringComparer.Ordinal)
+                .Select(path => $"{path.DisplayId}:{path.Kind}:{path.Width}x{path.Height}@{path.RefreshHz}:primary={path.IsPrimary}")) +
+        $"|mirror={IsMirrorMode}";
+
     public bool PhysicalPrimaryVerified =>
         Paths.Any(path => path.Kind == DisplayPathKind.Physical && path.IsPrimary);
 
