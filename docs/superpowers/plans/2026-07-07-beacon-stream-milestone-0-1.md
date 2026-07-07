@@ -779,7 +779,7 @@ Expected: PASS.
 - Create: `src/Beacon.FakeEndpoint/FakeEndpointRunner.cs`
 - Create: `tests/Beacon.FakeEndpoint.Tests/FakeEndpointRunnerTests.cs`
 
-- [ ] **Step 1: Write failing CLI flow tests**
+- [x] **Step 1: Write failing CLI flow tests**
 
 Create tests proving a scripted endpoint can:
 
@@ -798,7 +798,7 @@ emergency-restore
 
 Expected: runner emits ordered operations and blocks `2560x1440`.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -808,11 +808,11 @@ dotnet test tests/Beacon.FakeEndpoint.Tests/Beacon.FakeEndpoint.Tests.csproj --f
 
 Expected: FAIL because runner does not exist.
 
-- [ ] **Step 3: Implement runner**
+- [x] **Step 3: Implement runner**
 
 Implement a runner class that accepts an `HttpClient`, a client id, and command arguments. Keep it thin: it serializes requests to server endpoints and returns a structured `FakeEndpointResult`.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 
