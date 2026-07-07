@@ -61,4 +61,14 @@ public sealed class DisplayTopologySnapshotTests
         Assert.Equal(first, second);
         Assert.NotEqual(first, other);
     }
+
+    [Fact]
+    public void SelectAddedDisplayNameReturnsSingleNewDisplayName()
+    {
+        string? added = WindowsDisplayApi.SelectAddedDisplayName(
+            before: [@"\\.\DISPLAY5"],
+            after: [@"\\.\DISPLAY5", @"\\.\DISPLAY7"]);
+
+        Assert.Equal(@"\\.\DISPLAY7", added);
+    }
 }

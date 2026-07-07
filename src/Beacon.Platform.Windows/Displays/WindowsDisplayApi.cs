@@ -20,6 +20,11 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
     private const uint FileShareWrite = 0x00000002;
     private const uint OpenExisting = 3;
     private const uint FileAttributeNormal = 0x00000080;
+    private const uint CdsUpdateRegistry = 0x00000001;
+    private const uint CdsSetPrimary = 0x00000010;
+    private const uint CdsNoReset = 0x10000000;
+    private const uint DmPosition = 0x00000020;
+    private const int DispChangeSuccessful = 0;
     private const uint IoctlAddVirtualDisplay = 0x800;
     private const uint IoctlRemoveVirtualDisplay = 0x801;
     private const uint IoctlGetProtocolVersion = 0x8FF;
@@ -27,6 +32,8 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
     private const byte ExpectedProtocolMinor = 2;
     private const int EnumCurrentSettings = -1;
     private static readonly Guid SudoVdaInterfaceGuid = new("e5bcc234-1e0c-418a-a0d4-ef8b7501414d");
+    private readonly Lock displayMapLock = new();
+    private readonly Dictionary<string, string> displayNameByDisplayId = new(StringComparer.Ordinal);
 
     public DisplayDriverStatus GetDriverStatus()
     {
@@ -55,6 +62,8 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        IReadOnlyList<string> beforeDisplayNames = EnumerateActiveDisplayNames();
+
         using SafeFileHandle? handle = OpenSudoVdaDevice(out string diagnostic);
         if (handle is null)
         {
@@ -81,6 +90,16 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
             out _,
             IntPtr.Zero);
 
+        if (success)
+        {
+            IReadOnlyList<string> afterDisplayNames = EnumerateActiveDisplayNames();
+            string? addedDisplayName = SelectAddedDisplayName(beforeDisplayNames, afterDisplayNames);
+            if (addedDisplayName is not null)
+            {
+                RememberDisplayName(displayId, addedDisplayName);
+            }
+        }
+
         return Task.FromResult(success
             ? DisplayApiResult.Ok()
             : DisplayApiResult.Fail($"SudoVDA create failed for {displayId}. Win32={Marshal.GetLastWin32Error()}."));
@@ -95,15 +114,25 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
     public Task<DisplayApiResult> SetVirtualPrimaryAsync(string displayId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(DisplayApiResult.Fail(
-            $"Virtual-primary topology apply is not wired yet for {displayId}."));
+        return Task.FromResult(TrySetPrimaryDisplay(displayId, out string diagnostic)
+            ? DisplayApiResult.Ok()
+            : DisplayApiResult.Fail(diagnostic));
     }
 
     public Task<DisplayApiResult> RestorePhysicalPrimaryAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(DisplayApiResult.Fail(
-            "Physical-primary topology restore is not wired yet."));
+        DisplayPathSnapshot? physicalDisplay = EnumerateActiveDisplayPaths(displayIdByDisplayName: null)
+            .FirstOrDefault(path => path.Kind == DisplayPathKind.Physical);
+
+        if (physicalDisplay is null)
+        {
+            return Task.FromResult(DisplayApiResult.Fail("No active physical display was found for restore."));
+        }
+
+        return Task.FromResult(TrySetPrimaryDisplay(physicalDisplay.DisplayId, out string diagnostic)
+            ? DisplayApiResult.Ok()
+            : DisplayApiResult.Fail(diagnostic));
     }
 
     public Task<DisplayApiResult> RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken)
@@ -129,6 +158,11 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
             0,
             out _,
             IntPtr.Zero);
+
+        if (success)
+        {
+            ForgetDisplayName(displayId);
+        }
 
         return Task.FromResult(success
             ? DisplayApiResult.Ok()
@@ -168,7 +202,30 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
         return new Guid(guidBytes);
     }
 
-    private static DisplayTopologySnapshot QueryActiveTopology()
+    public static string? SelectAddedDisplayName(IReadOnlyList<string> before, IReadOnlyList<string> after)
+    {
+        HashSet<string> beforeSet = new(before, StringComparer.OrdinalIgnoreCase);
+        string[] added = after
+            .Where(name => !beforeSet.Contains(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return added.Length == 1 ? added[0] : null;
+    }
+
+    private DisplayTopologySnapshot QueryActiveTopology()
+    {
+        Dictionary<string, string> displayIdByDisplayName = CreateDisplayIdByDisplayNameSnapshot();
+        return DisplayTopologySnapshot.FromPaths(EnumerateActiveDisplayPaths(displayIdByDisplayName));
+    }
+
+    private static IReadOnlyList<string> EnumerateActiveDisplayNames() =>
+        EnumerateActiveDisplayPaths(displayIdByDisplayName: null)
+            .Select(path => path.DisplayId)
+            .ToArray();
+
+    private static IReadOnlyList<DisplayPathSnapshot> EnumerateActiveDisplayPaths(
+        IReadOnlyDictionary<string, string>? displayIdByDisplayName)
     {
         var paths = new List<DisplayPathSnapshot>();
 
@@ -191,8 +248,13 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
                 continue;
             }
 
+            string displayId = displayIdByDisplayName is not null &&
+                displayIdByDisplayName.TryGetValue(device.DeviceName, out string? mappedDisplayId)
+                    ? mappedDisplayId
+                    : device.DeviceName;
+
             paths.Add(new DisplayPathSnapshot(
-                device.DeviceName,
+                displayId,
                 ClassifyDisplayKind(device.DeviceString, device.DeviceId),
                 checked((int)mode.PelsWidth),
                 checked((int)mode.PelsHeight),
@@ -202,11 +264,121 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
                 Y: mode.Position.Y));
         }
 
-        return DisplayTopologySnapshot.FromPaths(paths);
+        return paths;
+    }
+
+    private bool TrySetPrimaryDisplay(string displayId, out string diagnostic)
+    {
+        if (!TryResolveDisplayName(displayId, out string? primaryDisplayName) || primaryDisplayName is null)
+        {
+            diagnostic = $"Unable to resolve Windows display name for {displayId}.";
+            return false;
+        }
+
+        if (!TryGetCurrentMode(primaryDisplayName, out DevMode primaryMode))
+        {
+            diagnostic = $"Unable to read display mode for {primaryDisplayName}.";
+            return false;
+        }
+
+        int offsetX = primaryMode.Position.X;
+        int offsetY = primaryMode.Position.Y;
+
+        foreach (DisplayPathSnapshot display in EnumerateActiveDisplayPaths(displayIdByDisplayName: null))
+        {
+            if (!TryGetCurrentMode(display.DisplayId, out DevMode mode))
+            {
+                continue;
+            }
+
+            mode.Position.X -= offsetX;
+            mode.Position.Y -= offsetY;
+            mode.Fields = DmPosition;
+
+            uint flags = CdsUpdateRegistry | CdsNoReset;
+            if (string.Equals(display.DisplayId, primaryDisplayName, StringComparison.OrdinalIgnoreCase))
+            {
+                mode.Position.X = 0;
+                mode.Position.Y = 0;
+                flags |= CdsSetPrimary;
+            }
+
+            int changeResult = NativeMethods.ChangeDisplaySettingsEx(
+                display.DisplayId,
+                ref mode,
+                IntPtr.Zero,
+                flags,
+                IntPtr.Zero);
+
+            if (changeResult != DispChangeSuccessful)
+            {
+                diagnostic = $"ChangeDisplaySettingsEx failed for {display.DisplayId}. Result={changeResult}.";
+                return false;
+            }
+        }
+
+        int applyResult = NativeMethods.ChangeDisplaySettingsEx(
+            null,
+            IntPtr.Zero,
+            IntPtr.Zero,
+            0,
+            IntPtr.Zero);
+
+        diagnostic = applyResult == DispChangeSuccessful
+            ? $"Display {primaryDisplayName} set primary."
+            : $"Final display topology apply failed. Result={applyResult}.";
+        return applyResult == DispChangeSuccessful;
+    }
+
+    private bool TryResolveDisplayName(string displayId, out string? displayName)
+    {
+        if (displayId.StartsWith(@"\\.\DISPLAY", StringComparison.OrdinalIgnoreCase))
+        {
+            displayName = displayId;
+            return true;
+        }
+
+        lock (displayMapLock)
+        {
+            return displayNameByDisplayId.TryGetValue(displayId, out displayName);
+        }
+    }
+
+    private static bool TryGetCurrentMode(string displayName, out DevMode mode)
+    {
+        mode = DevMode.Create();
+        return NativeMethods.EnumDisplaySettings(displayName, EnumCurrentSettings, ref mode);
     }
 
     private static bool ContainsOrdinalIgnoreCase(string value, string fragment) =>
         value.Contains(fragment, StringComparison.OrdinalIgnoreCase);
+
+    private void RememberDisplayName(string displayId, string displayName)
+    {
+        lock (displayMapLock)
+        {
+            displayNameByDisplayId[displayId] = displayName;
+        }
+    }
+
+    private void ForgetDisplayName(string displayId)
+    {
+        lock (displayMapLock)
+        {
+            displayNameByDisplayId.Remove(displayId);
+        }
+    }
+
+    private Dictionary<string, string> CreateDisplayIdByDisplayNameSnapshot()
+    {
+        lock (displayMapLock)
+        {
+            return displayNameByDisplayId.ToDictionary(
+                pair => pair.Value,
+                pair => pair.Key,
+                StringComparer.OrdinalIgnoreCase);
+        }
+    }
 
     private static SafeFileHandle? OpenSudoVdaDevice(out string diagnostic)
     {
@@ -404,6 +576,22 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
             int outBufferSize,
             out uint bytesReturned,
             IntPtr overlapped);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int ChangeDisplaySettingsEx(
+            string? deviceName,
+            ref DevMode devMode,
+            IntPtr hwnd,
+            uint flags,
+            IntPtr lParam);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int ChangeDisplaySettingsEx(
+            string? deviceName,
+            IntPtr devMode,
+            IntPtr hwnd,
+            uint flags,
+            IntPtr lParam);
     }
 
     [StructLayout(LayoutKind.Sequential)]
