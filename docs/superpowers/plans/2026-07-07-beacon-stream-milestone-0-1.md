@@ -833,7 +833,7 @@ Expected: PASS.
 - Create: `tests/Beacon.ClientLab.Playwright/playwright.config.ts`
 - Create: `tests/Beacon.ClientLab.Playwright/tests/client-lab.spec.ts`
 
-- [ ] **Step 1: Write failing browser tests**
+- [x] **Step 1: Write failing browser tests**
 
 Create Playwright tests proving:
 
@@ -852,7 +852,7 @@ Expected UI states:
 - quit result says cleanup evaluated
 - emergency restore button calls the restore endpoint
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run:
 
@@ -863,7 +863,7 @@ pnpm --dir tests/Beacon.ClientLab.Playwright test
 
 Expected: FAIL because Client Lab does not exist.
 
-- [ ] **Step 3: Implement minimal Client Lab**
+- [x] **Step 3: Implement minimal Client Lab**
 
 Use plain TypeScript and Vite. The UI must be functional and compact:
 
@@ -876,7 +876,7 @@ Use plain TypeScript and Vite. The UI must be functional and compact:
 
 The app must not expose global server settings or display topology policy controls.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run:
 

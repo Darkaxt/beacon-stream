@@ -155,6 +155,27 @@ public static class ClientEndpoints
             return Results.Ok(new { clientId, leaseRetained = true });
         });
 
+        clients.MapPost("/{clientId}/reconnect", async (
+            string clientId,
+            InMemoryClientStore clients,
+            DisplayLeaseManager leases,
+            CancellationToken cancellationToken) =>
+        {
+            ClientProfile? profile = clients.GetProfile(clientId);
+            if (profile is null)
+            {
+                return Results.NotFound(new { error = $"Client '{clientId}' is not registered." });
+            }
+
+            DisplayLeaseResult leaseResult = await leases.EnsureLeaseAsync(profile, cancellationToken);
+            if (!leaseResult.Success || leaseResult.Lease is null)
+            {
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            }
+
+            return Results.Ok(new { clientId, displayId = leaseResult.Lease.DisplayId, state = "reconnected" });
+        });
+
         clients.MapPost("/{clientId}/quit", async (
             string clientId,
             QuitRequest request,

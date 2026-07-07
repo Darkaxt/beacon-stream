@@ -135,6 +135,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         HttpClient client = factory.CreateClient();
 
         HttpResponseMessage disconnect = await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
+        HttpResponseMessage reconnect = await client.PostAsJsonAsync("/clients/z-fold-7/reconnect", new { });
         HttpResponseMessage quit = await client.PostAsJsonAsync("/clients/z-fold-7/quit", new
         {
             clientActive = false,
@@ -144,14 +145,18 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         HttpResponseMessage restore = await client.PostAsJsonAsync("/clients/z-fold-7/emergency-restore", new { });
 
         Assert.Equal(HttpStatusCode.OK, disconnect.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, reconnect.StatusCode);
         Assert.Equal(HttpStatusCode.OK, quit.StatusCode);
         Assert.Equal(HttpStatusCode.OK, restore.StatusCode);
 
         using JsonDocument disconnectJson = await JsonDocument.ParseAsync(await disconnect.Content.ReadAsStreamAsync());
+        using JsonDocument reconnectJson = await JsonDocument.ParseAsync(await reconnect.Content.ReadAsStreamAsync());
         using JsonDocument quitJson = await JsonDocument.ParseAsync(await quit.Content.ReadAsStreamAsync());
         using JsonDocument restoreJson = await JsonDocument.ParseAsync(await restore.Content.ReadAsStreamAsync());
 
         Assert.True(disconnectJson.RootElement.GetProperty("leaseRetained").GetBoolean());
+        Assert.Equal("reconnected", reconnectJson.RootElement.GetProperty("state").GetString());
+        Assert.Equal("client-z-fold-7", reconnectJson.RootElement.GetProperty("displayId").GetString());
         Assert.True(quitJson.RootElement.GetProperty("cleanupEvaluated").GetBoolean());
         Assert.True(quitJson.RootElement.GetProperty("displayRemoved").GetBoolean());
         Assert.True(restoreJson.RootElement.GetProperty("restoreRequested").GetBoolean());

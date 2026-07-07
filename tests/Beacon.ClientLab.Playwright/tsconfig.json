@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ESNext", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "types": ["@playwright/test", "node"],
+    "noEmit": true
+  },
+  "include": ["tests", "playwright.config.ts"]
+}
