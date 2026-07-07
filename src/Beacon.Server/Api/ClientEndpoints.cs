@@ -87,11 +87,13 @@ public static class ClientEndpoints
             return Results.Ok(new { clientId, accepted = true });
         });
 
-        clients.MapPost("/{clientId}/plan", (
+        clients.MapPost("/{clientId}/plan", async (
             string clientId,
             PlanRequest request,
             InMemoryClientStore clients,
-            InMemorySessionStore sessions) =>
+            InMemorySessionStore sessions,
+            GameLibraryService games,
+            CancellationToken cancellationToken) =>
         {
             ClientProfile? profile = clients.GetProfile(clientId);
             if (profile is null)
@@ -99,11 +101,17 @@ public static class ClientEndpoints
                 return Results.NotFound(new { error = $"Client '{clientId}' is not registered." });
             }
 
+            GameResolution resolution = await ResolveRequestedGameAsync(request, games, cancellationToken);
+            if (resolution.Error is not null)
+            {
+                return resolution.Error;
+            }
+
             SessionPlanResult result = SessionPlanner.CreatePlan(
                 profile,
                 clients.GetCapabilities(clientId),
                 clients.GetTelemetry(clientId),
-                CreateRequestedGame(request));
+                resolution.Game!);
 
             if (!result.Success || result.Plan is null)
             {
@@ -119,6 +127,7 @@ public static class ClientEndpoints
             PlanRequest request,
             InMemoryClientStore clients,
             InMemorySessionStore sessions,
+            GameLibraryService games,
             DisplayLeaseManager leases,
             CancellationToken cancellationToken) =>
         {
@@ -128,11 +137,17 @@ public static class ClientEndpoints
                 return Results.NotFound(new { error = $"Client '{clientId}' is not registered." });
             }
 
+            GameResolution resolution = await ResolveRequestedGameAsync(request, games, cancellationToken);
+            if (resolution.Error is not null)
+            {
+                return resolution.Error;
+            }
+
             SessionPlanResult planResult = SessionPlanner.CreatePlan(
                 profile,
                 clients.GetCapabilities(clientId),
                 clients.GetTelemetry(clientId),
-                CreateRequestedGame(request));
+                resolution.Game!);
 
             if (!planResult.Success || planResult.Plan is null)
             {
@@ -233,12 +248,38 @@ public static class ClientEndpoints
             }
         };
 
+    private static async Task<GameResolution> ResolveRequestedGameAsync(
+        PlanRequest request,
+        GameLibraryService games,
+        CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(request.GameId))
+        {
+            GameLibrarySnapshot snapshot = await games.ScanAsync(cancellationToken);
+            GameDescriptor? game = snapshot.Games.FirstOrDefault(game =>
+                game.Id.Equals(request.GameId, StringComparison.OrdinalIgnoreCase));
+
+            return game is null
+                ? new GameResolution(null, Results.NotFound(new { error = $"Game '{request.GameId}' is not available in the normalized library." }))
+                : new GameResolution(game, null);
+        }
+
+        if (string.IsNullOrWhiteSpace(request.AppId) ||
+            string.IsNullOrWhiteSpace(request.Title) ||
+            string.IsNullOrWhiteSpace(request.Source))
+        {
+            return new GameResolution(null, Results.BadRequest(new { error = "Provide either gameId or appId, title, and source." }));
+        }
+
+        return new GameResolution(CreateRequestedGame(request), null);
+    }
+
     private static GameDescriptor CreateRequestedGame(PlanRequest request) =>
         new(
-            request.AppId,
-            request.Title,
-            request.Source,
-            new GameLaunchIntent("manual-request", request.AppId),
+            request.AppId!,
+            request.Title!,
+            request.Source!,
+            new GameLaunchIntent("manual-request", request.AppId!),
             new GameArtwork(null, "none"),
             Installed: true,
             new GameProcessHints(null, null));
@@ -290,6 +331,8 @@ public static class ClientEndpoints
 
 public sealed record ClientHelloRequest(string ClientId, string? Name);
 
-public sealed record PlanRequest(string AppId, string Title, string Source);
+internal sealed record GameResolution(GameDescriptor? Game, IResult? Error);
+
+public sealed record PlanRequest(string? AppId = null, string? Title = null, string? Source = null, string? GameId = null);
 
 public sealed record QuitRequest(bool ClientActive, bool OwnedProcessRunning, bool OwnedWindowRemaining);

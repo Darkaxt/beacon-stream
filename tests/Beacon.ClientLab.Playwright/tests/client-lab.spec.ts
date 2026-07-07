@@ -23,6 +23,24 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
       })
     });
   });
+  await page.route('**/games', async route => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        games: [
+          {
+            id: 'steam-shortcut:3767414131',
+            title: 'Dispatch',
+            source: 'steam-shortcut',
+            launch: { type: 'steam-rungameid', command: 'steam://rungameid/16180979725241544704' },
+            artwork: { coverPath: null, source: 'none' },
+            installed: true
+          }
+        ],
+        diagnostics: []
+      })
+    });
+  });
   await page.route('**/clients/z-fold-7/profile', async route => {
     if (route.request().method() === 'PATCH') {
       const body = route.request().postDataJSON();
@@ -37,6 +55,7 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({}) });
   });
   await page.route('**/clients/z-fold-7/plan', async route => {
+    expect(route.request().postDataJSON()).toEqual({ gameId: 'steam-shortcut:3767414131' });
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
@@ -46,6 +65,13 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
         stream: { fps: 120, codec: 'av1', initialBitrateMbps: 65 },
         recovery: { restorePhysicalDisplayOnEnd: true, allowClientAbort: true }
       })
+    });
+  });
+  await page.route('**/clients/z-fold-7/launch', async route => {
+    expect(route.request().postDataJSON()).toEqual({ gameId: 'steam-shortcut:3767414131' });
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ state: 'started', displayId: 'client-z-fold-7' })
     });
   });
   await page.route('**/clients/z-fold-7/disconnect', async route => {
@@ -68,6 +94,8 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
   await expect(page.getByLabel('Width')).toHaveValue('2560');
   await expect(page.getByLabel('Height')).toHaveValue('1600');
   await expect(page.getByLabel('Refresh')).toHaveValue('120');
+  await expect(page.getByLabel('Game')).toHaveValue('steam-shortcut:3767414131');
+  await expect(page.getByText('steam-shortcut | installed | steam-rungameid')).toBeVisible();
 
   await page.getByLabel('Height').fill('1440');
   await page.getByRole('button', { name: 'Save Profile' }).click();
@@ -76,6 +104,9 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
   await page.getByLabel('Height').fill('1600');
   await page.getByRole('button', { name: 'Plan' }).click();
   await expect(page.getByText('virtual-primary')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Launch' }).click();
+  await expect(page.getByText('started client-z-fold-7')).toBeVisible();
 
   await page.getByRole('button', { name: 'Disconnect' }).click();
   await expect(page.getByText('lease retained')).toBeVisible();

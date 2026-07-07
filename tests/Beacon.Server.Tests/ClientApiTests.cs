@@ -71,6 +71,46 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task GameLibraryEndpointReturnsNormalizedGames()
+    {
+        HttpClient client = factory.CreateClient();
+
+        HttpResponseMessage response = await client.GetAsync("/games");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+        JsonElement games = root.GetProperty("games");
+
+        Assert.True(games.GetArrayLength() > 0);
+        JsonElement dispatch = Assert.Single(games.EnumerateArray(), game => game.GetProperty("id").GetString() == "steam-shortcut:3767414131");
+        Assert.Equal("Dispatch", dispatch.GetProperty("title").GetString());
+        Assert.Equal("steam-shortcut", dispatch.GetProperty("source").GetString());
+        Assert.Equal("steam-rungameid", dispatch.GetProperty("launch").GetProperty("type").GetString());
+        Assert.Equal("steam://rungameid/16180979725241544704", dispatch.GetProperty("launch").GetProperty("command").GetString());
+        Assert.True(dispatch.GetProperty("installed").GetBoolean());
+    }
+
+    [Fact]
+    public async Task PlanCanResolveNormalizedGameIdFromLibrary()
+    {
+        HttpClient client = factory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/plan", new
+        {
+            gameId = "steam-shortcut:3767414131"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.Equal("steam-shortcut:3767414131", root.GetProperty("appId").GetString());
+        Assert.Equal(2560, root.GetProperty("display").GetProperty("width").GetInt32());
+        Assert.Equal(1600, root.GetProperty("display").GetProperty("height").GetInt32());
+    }
+
+    [Fact]
     public async Task CapabilitiesAndTelemetryInfluencePlanWithoutChangingDisplayGeometry()
     {
         HttpClient client = factory.CreateClient();
@@ -119,6 +159,24 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             appId = "steam-shortcut:3767414131",
             title = "Dispatch",
             source = "steam-shortcut"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.Equal("client-z-fold-7", root.GetProperty("displayId").GetString());
+        Assert.Equal("started", root.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task LaunchCanResolveNormalizedGameIdFromLibrary()
+    {
+        HttpClient client = factory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
+        {
+            gameId = "steam-shortcut:3767414131"
         });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

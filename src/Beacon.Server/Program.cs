@@ -1,5 +1,7 @@
 using System.Text.Json.Serialization;
 using Beacon.Core.Displays;
+using Beacon.Core.Games;
+using Beacon.Core.Games.Artwork;
 using Beacon.Server.Api;
 using Beacon.Server.State;
 
@@ -14,10 +16,27 @@ builder.Services.AddSingleton<InMemoryClientStore>();
 builder.Services.AddSingleton<InMemorySessionStore>();
 builder.Services.AddSingleton<IDisplayBackend, FakeDisplayBackend>();
 builder.Services.AddSingleton<DisplayLeaseManager>();
+builder.Services.AddSingleton<IGameLibraryProvider>(_ => new StaticGameLibraryProvider(
+    "seed",
+    [
+        new GameDescriptor(
+            "steam-shortcut:3767414131",
+            "Dispatch",
+            "steam-shortcut",
+            new GameLaunchIntent("steam-rungameid", "steam://rungameid/16180979725241544704"),
+            new GameArtwork(null, "none"),
+            Installed: true,
+            new GameProcessHints(null, null))
+    ]));
+builder.Services.AddSingleton<IArtworkProvider, NoArtworkProvider>();
+builder.Services.AddSingleton(sp => new GameLibraryService(
+    sp.GetServices<IGameLibraryProvider>().ToArray(),
+    sp.GetRequiredService<IArtworkProvider>()));
 
 var app = builder.Build();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+app.MapGameEndpoints();
 app.MapClientEndpoints();
 
 app.Run();

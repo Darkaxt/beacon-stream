@@ -789,7 +789,7 @@ git commit -m "Aggregate and dedupe game libraries"
 - Modify: `src/Beacon.ClientLab/src/clientLab.test.ts`
 - Modify: `tests/Beacon.ClientLab.Playwright/tests/client-lab.spec.ts`
 
-- [ ] **Step 1: Write failing API tests**
+- [x] **Step 1: Write failing API tests**
 
 ```csharp
 [Fact]
@@ -807,13 +807,13 @@ public async Task GameLibraryEndpointReturnsNormalizedGames()
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run: `dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter GameLibraryEndpointReturnsNormalizedGames`
 
 Expected: endpoint missing or compile failure.
 
-- [ ] **Step 3: Add endpoint and Client Lab wiring**
+- [x] **Step 3: Add endpoint and Client Lab wiring**
 
 Server behavior:
 
@@ -827,7 +827,7 @@ Client Lab behavior:
 - Show title, source, installed state, and cover.
 - Plan and launch selected `gameId`.
 
-- [ ] **Step 4: Verify API and web tests**
+- [x] **Step 4: Verify API and web tests**
 
 Run:
 
@@ -841,7 +841,7 @@ pnpm --dir tests/Beacon.ClientLab.Playwright test
 
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/Beacon.Server tests/Beacon.Server.Tests src/Beacon.ClientLab tests/Beacon.ClientLab.Playwright

@@ -1,5 +1,17 @@
 import './style.css';
-import { createDefaultProfile, patchJson, postJson, validateProfileDraft, type HdrPreference, type ProfileDraft } from './clientLab';
+import {
+  createDefaultProfile,
+  createGamePlanRequest,
+  getJson,
+  patchJson,
+  postJson,
+  validateProfileDraft,
+  type GameDescriptor,
+  type GameLibrarySnapshot,
+  type HdrPreference,
+  type PlanRequest,
+  type ProfileDraft
+} from './clientLab';
 
 const clientId = 'z-fold-7';
 const widthInput = input('widthInput');
@@ -8,14 +20,25 @@ const refreshInput = input('refreshInput');
 const hdrInput = select('hdrInput');
 const codecInput = select('codecInput');
 const bitrateInput = input('bitrateInput');
+const gameSelect = select('gameSelect');
+const gameCover = element('gameCover');
+const gameTitle = element('gameTitle');
+const gameMeta = element('gameMeta');
+const gameDiagnostics = element('gameDiagnostics');
 const profileError = element('profileError');
 const eventLog = element('eventLog');
+let games: GameDescriptor[] = [];
 
 setDraft(createDefaultProfile());
 
 element('helloButton').addEventListener('click', async () => {
   const result = await postJson<{ clientId: string }>('/clients/hello', { clientId, name: 'Z Fold 7' });
+  await loadGames();
   appendLog(`hello ${result.clientId}`);
+});
+
+gameSelect.addEventListener('change', () => {
+  updateGameSummary();
 });
 
 element('profileForm').addEventListener('submit', async event => {
@@ -93,12 +116,58 @@ function setDraft(profile: ProfileDraft): void {
   bitrateInput.value = profile.bitrateCapMbps === null ? '' : String(profile.bitrateCapMbps);
 }
 
-function createPlanRequest(): { appId: string; title: string; source: string } {
-  return {
-    appId: 'steam-shortcut:3767414131',
-    title: 'Dispatch',
-    source: 'steam-shortcut'
-  };
+function createPlanRequest(): PlanRequest {
+  return createGamePlanRequest(gameSelect.value);
+}
+
+async function loadGames(): Promise<void> {
+  const snapshot = await getJson<GameLibrarySnapshot>('/games');
+  games = snapshot.games;
+  gameSelect.replaceChildren();
+
+  if (games.length === 0) {
+    gameSelect.append(new Option('Dispatch fallback', ''));
+  } else {
+    for (const game of games) {
+      gameSelect.append(new Option(`${game.title} (${game.source})`, game.id));
+    }
+  }
+
+  gameDiagnostics.textContent = snapshot.diagnostics.length === 0 ? '' : `${snapshot.diagnostics.length} diagnostic(s)`;
+  updateGameSummary();
+}
+
+function updateGameSummary(): void {
+  const selected = games.find(game => game.id === gameSelect.value);
+  if (!selected) {
+    setGameCover(null, 'Dispatch');
+    gameTitle.textContent = 'Dispatch';
+    gameMeta.textContent = 'steam-shortcut | fallback request';
+    return;
+  }
+
+  setGameCover(selected.artwork.coverPath, selected.title);
+  gameTitle.textContent = selected.title;
+  gameMeta.textContent = `${selected.source} | ${selected.installed ? 'installed' : 'not installed'} | ${selected.launch.type}`;
+}
+
+function setGameCover(coverPath: string | null, title: string): void {
+  gameCover.textContent = createInitials(title);
+  gameCover.style.backgroundImage = '';
+
+  if (coverPath !== null && coverPath.trim() !== '') {
+    gameCover.textContent = '';
+    gameCover.style.backgroundImage = `url("${coverPath}")`;
+  }
+}
+
+function createInitials(title: string): string {
+  return title
+    .split(/\s+/)
+    .filter(part => part.length > 0)
+    .slice(0, 2)
+    .map(part => part[0].toUpperCase())
+    .join('');
 }
 
 function appendLog(message: string): void {

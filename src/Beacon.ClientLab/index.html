@@ -52,6 +52,20 @@
               <span>Bitrate</span>
               <input id="bitrateInput" name="bitrate" type="number" min="1" placeholder="auto" />
             </label>
+            <label class="game-picker">
+              <span>Game</span>
+              <select id="gameSelect" name="game">
+                <option value="">Dispatch fallback</option>
+              </select>
+            </label>
+          </div>
+          <div class="game-summary">
+            <div id="gameCover" class="cover" aria-hidden="true">DS</div>
+            <div>
+              <p id="gameTitle" class="game-title">Dispatch</p>
+              <p id="gameMeta" class="game-meta">steam-shortcut | fallback request</p>
+              <p id="gameDiagnostics" class="game-meta"></p>
+            </div>
           </div>
           <p id="profileError" class="error" role="alert"></p>
           <div class="actions">
