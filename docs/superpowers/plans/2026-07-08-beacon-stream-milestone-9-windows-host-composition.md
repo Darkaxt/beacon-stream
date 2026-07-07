@@ -28,7 +28,7 @@ Files:
 git switch -c codex/milestone-9-windows-host-composition
 ```
 
-- [ ] **Step 2: Commit plan**
+- [x] **Step 2: Commit plan**
 
 ```powershell
 git add docs/superpowers/plans/2026-07-08-beacon-stream-milestone-9-windows-host-composition.md
@@ -46,7 +46,7 @@ Files:
 - Modify: `src/Beacon.Server/Program.cs`
 - Add: `tests/Beacon.Server.Tests/BeaconServiceRegistrationTests.cs`
 
-- [ ] **Step 1: Write registration tests**
+- [x] **Step 1: Write registration tests**
 
 Cover:
 
@@ -54,7 +54,7 @@ Cover:
 - `windows` mode registers Windows display, launcher, and activity inspector services.
 - unknown mode fails with a clear configuration error.
 
-- [ ] **Step 2: Add options and parser**
+- [x] **Step 2: Add options and parser**
 
 Read host mode from configuration key `Beacon:HostMode` or environment variable `BEACON_HOST_MODE`.
 
@@ -63,11 +63,11 @@ Allowed values:
 - `fake`
 - `windows`
 
-- [ ] **Step 3: Move service registration into helper**
+- [x] **Step 3: Move service registration into helper**
 
 Keep `Program.cs` small and make registration testable.
 
-- [ ] **Step 4: Verify focused tests and commit**
+- [x] **Step 4: Verify focused tests and commit**
 
 ```powershell
 dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter BeaconServiceRegistration
@@ -85,11 +85,11 @@ Files:
 - Modify: `src/Beacon.Server/appsettings.Development.json`
 - Modify: `tests/Beacon.Server.Tests/BeaconServiceRegistrationTests.cs`
 
-- [ ] **Step 1: Fake mode remains default**
+- [x] **Step 1: Fake mode remains default**
 
 Default registration must keep `FakeDisplayBackend`, `FakeGameLauncher`, `FakeSessionActivityInspector`, and `FakeStreamingBackend`.
 
-- [ ] **Step 2: Windows mode registers real boundaries**
+- [x] **Step 2: Windows mode registers real boundaries**
 
 Register:
 
@@ -101,11 +101,11 @@ Register:
 
 Keep `IStreamingBackend` fake until a real streaming wrapper is selected explicitly.
 
-- [ ] **Step 3: Expose selected mode in admin snapshot**
+- [x] **Step 3: Expose selected mode in admin snapshot**
 
 Add `host.mode` and backend names to `/admin/snapshot`.
 
-- [ ] **Step 4: Verify tests and commit**
+- [x] **Step 4: Verify tests and commit**
 
 ```powershell
 dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter "BeaconServiceRegistration|AdminApiTests"
