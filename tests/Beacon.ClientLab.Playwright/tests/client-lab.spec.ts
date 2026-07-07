@@ -71,7 +71,23 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
     expect(route.request().postDataJSON()).toEqual({ gameId: 'steam-shortcut:3767414131' });
     await route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify({ state: 'started', displayId: 'client-z-fold-7' })
+      body: JSON.stringify({
+        clientId: 'z-fold-7',
+        state: 'streaming',
+        displayId: 'client-z-fold-7',
+        stream: {
+          sessionId: 'z-fold-7-steam-shortcut:3767414131',
+          clientId: 'z-fold-7',
+          appId: 'steam-shortcut:3767414131',
+          displayId: 'client-z-fold-7',
+          codec: 'av1',
+          fps: 120,
+          initialBitrateMbps: 65,
+          transport: 'lan-direct',
+          state: 'running',
+          error: null
+        }
+      })
     });
   });
   await page.route('**/clients/z-fold-7/disconnect', async route => {
@@ -106,7 +122,8 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
   await expect(page.getByText('virtual-primary')).toBeVisible();
 
   await page.getByRole('button', { name: 'Launch' }).click();
-  await expect(page.getByText('started client-z-fold-7')).toBeVisible();
+  await expect(page.getByText('streaming client-z-fold-7')).toBeVisible();
+  await expect(page.getByText('running av1 120fps')).toBeVisible();
 
   await page.getByRole('button', { name: 'Disconnect' }).click();
   await expect(page.getByText('lease retained')).toBeVisible();

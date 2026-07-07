@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
 using Beacon.Core.Games.Artwork;
+using Beacon.Core.Streaming;
 using Beacon.Server.Api;
 using Beacon.Server.State;
 
@@ -16,6 +17,7 @@ builder.Services.AddSingleton<InMemoryClientStore>();
 builder.Services.AddSingleton<InMemorySessionStore>();
 builder.Services.AddSingleton<IDisplayBackend, FakeDisplayBackend>();
 builder.Services.AddSingleton<DisplayLeaseManager>();
+builder.Services.AddSingleton<IStreamingBackend, FakeStreamingBackend>();
 builder.Services.AddSingleton<IGameLibraryProvider>(_ => new StaticGameLibraryProvider(
     "seed",
     [

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultProfile, createGamePlanRequest, validateProfileDraft } from './clientLab';
+import { createDefaultProfile, createGamePlanRequest, formatLaunchEvents, validateProfileDraft, type LaunchResponse } from './clientLab';
 
 describe('Client Lab profile validation', () => {
   it('blocks the Z Fold 7 2560x1440 collapse before a profile patch', () => {
@@ -31,5 +31,30 @@ describe('Client Lab profile validation', () => {
       title: 'Dispatch',
       source: 'steam-shortcut'
     });
+  });
+
+  it('formats streaming launch state with backend details', () => {
+    const launch: LaunchResponse = {
+      clientId: 'z-fold-7',
+      displayId: 'client-z-fold-7',
+      state: 'streaming',
+      stream: {
+        sessionId: 'z-fold-7-steam-shortcut:3767414131',
+        clientId: 'z-fold-7',
+        appId: 'steam-shortcut:3767414131',
+        displayId: 'client-z-fold-7',
+        codec: 'av1',
+        fps: 120,
+        initialBitrateMbps: 65,
+        transport: 'lan-direct',
+        state: 'running',
+        error: null
+      }
+    };
+
+    expect(formatLaunchEvents(launch)).toEqual([
+      'streaming client-z-fold-7',
+      'running av1 120fps'
+    ]);
   });
 });

@@ -3,6 +3,7 @@ using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
 using Beacon.Core.Sessions;
+using Beacon.Core.Streaming;
 using Beacon.Server.State;
 
 namespace Beacon.Server.Api;
@@ -129,6 +130,8 @@ public static class ClientEndpoints
             InMemorySessionStore sessions,
             GameLibraryService games,
             DisplayLeaseManager leases,
+            IDisplayBackend displayBackend,
+            IStreamingBackend streaming,
             CancellationToken cancellationToken) =>
         {
             ClientProfile? profile = clients.GetProfile(clientId);
@@ -161,13 +164,82 @@ public static class ClientEndpoints
             }
 
             sessions.Save(planResult.Plan);
-            return Results.Ok(new { clientId, displayId = leaseResult.Lease.DisplayId, state = "started" });
+
+            StreamingStartResult streamResult = await streaming.StartAsync(planResult.Plan, cancellationToken);
+            if (!streamResult.Success || streamResult.Session is null)
+            {
+                DisplayRestoreResult restore = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
+                string restoreStatus = restore.Success
+                    ? "Physical primary restore requested after stream start failure."
+                    : $"Physical primary restore failed after stream start failure: {restore.Error}";
+
+                return Results.Problem(
+                    $"{streamResult.Error} {restoreStatus}",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            return Results.Ok(new
+            {
+                clientId,
+                displayId = leaseResult.Lease.DisplayId,
+                state = "streaming",
+                stream = streamResult.Session
+            });
         });
 
-        clients.MapPost("/{clientId}/disconnect", async (string clientId, DisplayLeaseManager leases, CancellationToken cancellationToken) =>
+        clients.MapGet("/{clientId}/stream", async (
+            string clientId,
+            InMemorySessionStore sessions,
+            IStreamingBackend streaming,
+            CancellationToken cancellationToken) =>
+        {
+            SessionPlan? plan = sessions.Get(clientId);
+            if (plan is null)
+            {
+                return Results.NotFound(new { error = $"Client '{clientId}' has no session plan." });
+            }
+
+            StreamingSessionState? stream = await streaming.GetSessionAsync(plan.SessionId, cancellationToken);
+            return stream is null
+                ? Results.NotFound(new { error = $"Stream session '{plan.SessionId}' is not running." })
+                : Results.Ok(new { clientId, stream });
+        });
+
+        clients.MapPost("/{clientId}/stream/stop", async (
+            string clientId,
+            InMemorySessionStore sessions,
+            IStreamingBackend streaming,
+            CancellationToken cancellationToken) =>
+        {
+            SessionPlan? plan = sessions.Get(clientId);
+            if (plan is null)
+            {
+                return Results.NotFound(new { error = $"Client '{clientId}' has no session plan." });
+            }
+
+            StreamingStopResult stop = await streaming.StopAsync(plan.SessionId, cancellationToken);
+            return stop.Success && stop.Session is not null
+                ? Results.Ok(new { clientId, stream = stop.Session })
+                : Results.NotFound(new { error = stop.Error });
+        });
+
+        clients.MapPost("/{clientId}/disconnect", async (
+            string clientId,
+            InMemorySessionStore sessions,
+            DisplayLeaseManager leases,
+            IStreamingBackend streaming,
+            CancellationToken cancellationToken) =>
         {
             await leases.DisconnectAsync(DisplayLease.CreateDisplayId(new ClientId(clientId)), cancellationToken);
-            return Results.Ok(new { clientId, leaseRetained = true });
+            SessionPlan? plan = sessions.Get(clientId);
+            StreamingSessionState? stream = null;
+            if (plan is not null)
+            {
+                StreamingStopResult stop = await streaming.StopAsync(plan.SessionId, cancellationToken);
+                stream = stop.Session;
+            }
+
+            return Results.Ok(new { clientId, leaseRetained = true, stream });
         });
 
         clients.MapPost("/{clientId}/reconnect", async (
@@ -194,9 +266,19 @@ public static class ClientEndpoints
         clients.MapPost("/{clientId}/quit", async (
             string clientId,
             QuitRequest request,
+            InMemorySessionStore sessions,
             DisplayLeaseManager leases,
+            IStreamingBackend streaming,
             CancellationToken cancellationToken) =>
         {
+            SessionPlan? plan = sessions.Get(clientId);
+            StreamingSessionState? stream = null;
+            if (plan is not null)
+            {
+                StreamingStopResult stop = await streaming.StopAsync(plan.SessionId, cancellationToken);
+                stream = stop.Session;
+            }
+
             bool removed = await leases.CleanupIfAllowedAsync(
                 DisplayLease.CreateDisplayId(new ClientId(clientId)),
                 request.ClientActive,
@@ -204,7 +286,7 @@ public static class ClientEndpoints
                 request.OwnedWindowRemaining,
                 cancellationToken);
 
-            return Results.Ok(new { clientId, cleanupEvaluated = true, displayRemoved = removed });
+            return Results.Ok(new { clientId, cleanupEvaluated = true, displayRemoved = removed, stream });
         });
 
         clients.MapPost("/{clientId}/display/recover", async (

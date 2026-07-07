@@ -1,6 +1,7 @@
 using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
+using Beacon.Core.Streaming;
 using Beacon.Server.State;
 
 namespace Beacon.Server.Api;
@@ -14,6 +15,7 @@ public static class AdminEndpoints
         admin.MapGet("/snapshot", async (
             InMemoryClientStore clients,
             InMemorySessionStore sessions,
+            IStreamingBackend streaming,
             GameLibraryService games,
             CancellationToken cancellationToken) =>
         {
@@ -28,6 +30,7 @@ public static class AdminEndpoints
                     telemetry = clients.GetTelemetry(profile.ClientId.Value)
                 }),
                 sessions = sessions.GetAll(),
+                streams = streaming.GetSessions(),
                 games = new
                 {
                     total = gameSnapshot.Games.Count,

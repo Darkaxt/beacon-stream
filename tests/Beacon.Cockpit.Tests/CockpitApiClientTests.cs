@@ -13,6 +13,7 @@ public sealed class CockpitApiClientTests
             {
               "clients": [{ "clientId": "z-fold-7", "profile": {}, "capabilities": {}, "telemetry": {} }],
               "sessions": [{ "clientId": { "value": "z-fold-7" }, "appId": "steam-shortcut:3767414131" }],
+              "streams": [{ "sessionId": "z-fold-7-steam-shortcut:3767414131", "clientId": "z-fold-7", "appId": "steam-shortcut:3767414131", "displayId": "client-z-fold-7", "codec": "av1", "fps": 120, "initialBitrateMbps": 65, "transport": "lan-direct", "state": "running", "error": null }],
               "games": { "total": 36, "diagnostics": ["Steam library 'G:\\SteamLibrary\\steamapps' does not exist."] }
             }
             """);
@@ -22,6 +23,9 @@ public sealed class CockpitApiClientTests
 
         Assert.Single(snapshot.Clients);
         Assert.Equal("z-fold-7", snapshot.Clients[0].ClientId);
+        Assert.Single(snapshot.Streams);
+        Assert.Equal("running", snapshot.Streams[0].State);
+        Assert.Equal("client-z-fold-7", snapshot.Streams[0].DisplayId);
         Assert.Equal(36, snapshot.Games.Total);
         Assert.Single(snapshot.Games.Diagnostics);
     }
