@@ -2,7 +2,7 @@
 
 Beacon Stream is a server-authoritative personal game-streaming orchestrator.
 
-Milestone 0/1 covers the control plane, fake backends, planner, profile ownership, phone-free testing, and source-boundary documentation. Milestone 2 adds the real Windows SudoVDA/DisplayConfig lifecycle backend and manual no-phone display probe. Milestone 3 adds the normalized game library model, Steam/Heroic/Hydra/manual providers, SteamGridDB/fallback artwork providers, server/client-lab game selection, and a read-only local game probe. Milestone 4 adds a WPF cockpit for local server administration. Milestone 5 adds the streaming backend boundary, fake no-phone stream lifecycle, and external-process adapter boundary for future Sunshine-compatible integration. Milestone 6 adds a thin Android control-plane APK shell. Milestone 7 adds the server-owned game launch and session ownership cleanup boundary. Real video decode, native input forwarding, and full Windows window enumeration come later.
+Milestone 0/1 covers the control plane, fake backends, planner, profile ownership, phone-free testing, and source-boundary documentation. Milestone 2 adds the real Windows SudoVDA/DisplayConfig lifecycle backend and manual no-phone display probe. Milestone 3 adds the normalized game library model, Steam/Heroic/Hydra/manual providers, SteamGridDB/fallback artwork providers, server/client-lab game selection, and a read-only local game probe. Milestone 4 adds a WPF cockpit for local server administration. Milestone 5 adds the streaming backend boundary, fake no-phone stream lifecycle, and external-process adapter boundary for future Sunshine-compatible integration. Milestone 6 adds a thin Android control-plane APK shell. Milestone 7 adds the server-owned game launch and session ownership cleanup boundary. Milestone 8 adds the Windows process/window activity inspector. Real video decode, native input forwarding, and Windows-host service composition come later.
 
 ## Local Probes
 
@@ -50,6 +50,14 @@ dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter Client
 
 Milestone 7 records game launch state and uses server-owned ownership snapshots when deciding whether quit can remove a virtual display. Client-supplied owned-process/window flags are accepted only for backward-compatible request shape and are not the cleanup authority.
 
+Windows activity inspector checks:
+
+```powershell
+dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj --filter WindowsSessionActivityInspector
+```
+
+Milestone 8 adds `WindowsSessionActivityInspector`, which can inspect launched-process liveness, child-process liveness, and visible top-level windows on the planned display using fake-testable Windows API boundaries. The default server composition still uses fake services until a Windows-host mode is selected explicitly.
+
 Android client checks:
 
 ```powershell
@@ -68,4 +76,5 @@ See:
 - `docs/superpowers/plans/2026-07-07-beacon-stream-milestone-5-streaming-backend.md`
 - `docs/superpowers/plans/2026-07-07-beacon-stream-milestone-6-android-client.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-7-session-ownership.md`
+- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-8-windows-activity-inspector.md`
 - `docs/windows-display-backend.md`
