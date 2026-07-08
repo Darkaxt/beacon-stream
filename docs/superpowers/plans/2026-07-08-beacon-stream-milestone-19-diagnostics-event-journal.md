@@ -761,7 +761,7 @@ Expected: cockpit diagnostics checkpoint is synced.
 - Modify: `README.md`
 - Modify: `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-19-diagnostics-event-journal.md`
 
-- [ ] **Step 1: Update docs**
+- [x] **Step 1: Update docs**
 
 Add to `README.md` under Recovery actions:
 
@@ -769,7 +769,7 @@ Add to `README.md` under Recovery actions:
 `/admin/snapshot` also returns recent operational diagnostics. These events include display lease decisions, physical-primary restore attempts, recovery actions, and streaming preflight/start/stop failures. The WPF cockpit shows them in the Diagnostics tab together with game-provider diagnostics.
 ```
 
-- [ ] **Step 2: Static validation**
+- [x] **Step 2: Static validation**
 
 Run:
 
@@ -780,7 +780,7 @@ dotnet build Beacon.slnx -warnaserror
 
 Expected: both commands pass.
 
-- [ ] **Step 3: Dynamic validation**
+- [x] **Step 3: Dynamic validation**
 
 Run:
 
@@ -795,7 +795,7 @@ pnpm --dir tests\Beacon.ClientLab.Playwright test
 
 Expected: all commands pass; the Gradle 9 deprecation warning remains acceptable if the command exits successfully.
 
-- [ ] **Step 4: Boundary audit**
+- [x] **Step 4: Boundary audit**
 
 Run:
 
@@ -805,7 +805,7 @@ rg "Thread\.Sleep|Task\.Delay|timeout|Timeout|CancelAfter|CancellationTokenSourc
 
 Expected: no matches; diagnostics must not introduce timeout-based lifecycle behavior.
 
-- [ ] **Step 5: Commit and sync**
+- [x] **Step 5: Commit and sync**
 
 Run:
 
