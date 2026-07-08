@@ -661,6 +661,26 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task ClientStreamStopReturnsServiceUnavailableWhenBackendStopFails()
+    {
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IStreamingBackend>(new FailingStopStreamingBackend("wrapper refused stop"));
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage launch = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        HttpResponseMessage stop = await client.PostAsJsonAsync("/clients/z-fold-7/stream/stop", new { });
+
+        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, stop.StatusCode);
+        string body = await stop.Content.ReadAsStringAsync();
+        Assert.Contains("wrapper refused stop", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task QuitIgnoresStaleClientOwnedWorkFlagsAndUsesServerSnapshot()
     {
         HttpClient client = factory.CreateClient();

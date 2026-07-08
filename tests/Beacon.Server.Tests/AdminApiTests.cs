@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Beacon.Core.Displays;
+using Beacon.Core.Streaming;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -127,6 +128,26 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
 
         Assert.Equal("z-fold-7", root.GetProperty("clientId").GetString());
         Assert.Equal("stopped", root.GetProperty("stream").GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task AdminStopSelectedClientStreamReturnsServiceUnavailableWhenBackendStopFails()
+    {
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IStreamingBackend>(new FailingStopStreamingBackend("wrapper refused stop"));
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage launch = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        HttpResponseMessage stop = await client.PostAsJsonAsync("/admin/clients/z-fold-7/stream/stop", new { });
+
+        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, stop.StatusCode);
+        string body = await stop.Content.ReadAsStringAsync();
+        Assert.Contains("wrapper refused stop", body, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
