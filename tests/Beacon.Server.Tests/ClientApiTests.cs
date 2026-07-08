@@ -1108,24 +1108,47 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
 
     private static async Task WaitForStreamingDescriptorAsync(string descriptorRoot)
     {
-        if (Directory.EnumerateFiles(descriptorRoot, "*.json").Any())
+        if (HasReadableStreamingDescriptor(descriptorRoot))
         {
             return;
         }
 
-        var descriptorWritten = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var descriptorChanged = new SemaphoreSlim(0);
         using var watcher = new FileSystemWatcher(descriptorRoot, "*.json");
-        FileSystemEventHandler signal = (_, _) => descriptorWritten.TrySetResult();
+        FileSystemEventHandler signal = (_, _) => descriptorChanged.Release();
         watcher.Created += signal;
         watcher.Changed += signal;
         watcher.EnableRaisingEvents = true;
 
-        if (Directory.EnumerateFiles(descriptorRoot, "*.json").Any())
+        while (true)
         {
-            return;
+            if (HasReadableStreamingDescriptor(descriptorRoot))
+            {
+                return;
+            }
+
+            await descriptorChanged.WaitAsync();
+        }
+    }
+
+    private static bool HasReadableStreamingDescriptor(string descriptorRoot)
+    {
+        foreach (string path in Directory.EnumerateFiles(descriptorRoot, "*.json"))
+        {
+            try
+            {
+                using FileStream stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using JsonDocument document = JsonDocument.Parse(stream);
+                return document.RootElement.TryGetProperty("metadata", out JsonElement metadata)
+                    && metadata.TryGetProperty("wrapper", out JsonElement wrapper)
+                    && string.Equals(wrapper.GetString(), "Beacon.StreamingProbe", StringComparison.Ordinal);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+            }
         }
 
-        await descriptorWritten.Task;
+        return false;
     }
 
     private sealed class FakeExternalStreamingProcessRunner(IEnumerable<string>? existingFiles = null) : IExternalStreamingProcessRunner

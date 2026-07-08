@@ -187,6 +187,7 @@ This section is the implementation contract. If a later plan contradicts this re
 - `REQ-REC-007`: Recovery tooling is a user escape hatch. It must not become a substitute for correct orchestrator lifecycle behavior.
 - `REQ-REC-008`: Logs must expose display API access failures, driver readiness, virtual display creation result, topology changes, restore attempts, stream backend failures, and selected repair actions.
 - `REQ-REC-009`: Error messages must be clear, but root fixes and safe auto-repair are preferred over merely surfacing nicer errors.
+- `REQ-REC-010`: Admin diagnostics must expose the stream backend's advertised connection protocol, launch URI when available, and static endpoint map so wrapper/client handoff mistakes are visible before phone testing.
 
 ### Testing Without Phone
 

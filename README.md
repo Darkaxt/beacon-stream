@@ -88,7 +88,7 @@ dotnet run --project src\Beacon.Server
 
 The external-process backend preflights the executable path before display creation or game launch. It launches the wrapper with the executable directory as the process working directory, passes the session plan through command arguments and `BEACON_*` environment variables, records stream state, and stops only its owned wrapper process. This is a wrapper boundary; no Sunshine source is copied.
 
-`/admin/snapshot` reports read-only streaming backend health under `streamingHealth`: selected backend, executable readiness, optional wrapper manifest readiness, advertised codecs/transports/encoders/capture, HDR10 support, max FPS/bitrate, active stream count, and diagnostics. Cockpit renders the same summary in the dashboard and diagnostics list.
+`/admin/snapshot` reports read-only streaming backend health under `streamingHealth`: selected backend, executable readiness, optional wrapper manifest readiness, advertised connection protocol/launch URI/endpoints, codecs/transports/encoders/capture, HDR10 support, max FPS/bitrate, active stream count, and diagnostics. Cockpit renders the same summary in the dashboard and diagnostics list.
 
 For external-process streaming, Beacon reconciles owned wrapper process liveness whenever health or session state is read. If a wrapper process has exited, the session is marked `exited`, the process is removed from active counts, and the diagnostic journal records the exit reason. This is on-demand state reconciliation, not a polling watchdog.
 
@@ -182,6 +182,7 @@ dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter FakeStream
 dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj --filter ExternalProcessStreamingBackend
 dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj --filter WindowsRunnerCreatesStartInfoWithWrapperWorkingDirectory
 dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj --filter SunshineEndpointProfile
+dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj --filter GetHealthAsyncReportsSunshineEndpointProfile
 dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter ClientApiTests
 dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter FakeEndpointScriptCompletesAgainstStreamingProbeWrapper
 dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter FakeEndpointScriptCompletesAgainstStreamingProbeWithSunshineProfile
@@ -271,6 +272,7 @@ See:
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-57-wrapper-working-directory.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-58-sunshine-port-profile.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-59-sunshine-profile-wrapper-integration.md`
+- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-60-streaming-health-endpoints.md`
 - `docs/external-streaming-wrapper-manifest.md`
 - `docs/source-audits/2026-07-08-windows-input-sink-upstream-audit.md`
 - `docs/windows-display-backend.md`

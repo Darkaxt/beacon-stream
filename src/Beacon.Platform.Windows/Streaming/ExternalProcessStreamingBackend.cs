@@ -237,6 +237,7 @@ public sealed class ExternalProcessStreamingBackend(
             ManifestName: TrimOrNull(manifest?.Name),
             Protocol: ResolveConfiguredConnectionProtocol(options) ?? TrimOrNull(manifest?.Protocol),
             LaunchUri: TrimOrNull(options.ConnectionLaunchUri) ?? TrimOrNull(manifest?.LaunchUri),
+            Endpoints: CreateEndpointDescriptors(ResolveHealthConnectionEndpoints(manifest)),
             Codecs: NormalizeList(manifest?.Codecs),
             Transports: NormalizeList(manifest?.Transports),
             Encoders: NormalizeList(manifest?.Encoders),
@@ -586,12 +587,7 @@ public sealed class ExternalProcessStreamingBackend(
         string protocol = string.IsNullOrWhiteSpace(protocolSource)
             ? "external-process"
             : protocolSource.Trim();
-        IReadOnlyList<StreamingEndpointDescriptor> endpoints = (endpointSource
-                ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))
-            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
-            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(pair => new StreamingEndpointDescriptor(pair.Key.Trim(), pair.Value.Trim()))
-            .ToArray();
+        IReadOnlyList<StreamingEndpointDescriptor> endpoints = CreateEndpointDescriptors(endpointSource);
         var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (!string.IsNullOrWhiteSpace(options.ManifestPath))
         {
@@ -630,6 +626,14 @@ public sealed class ExternalProcessStreamingBackend(
             string.IsNullOrWhiteSpace(launchUriSource) ? null : launchUriSource.Trim(),
             endpoints,
             metadata);
+    }
+
+    private IReadOnlyDictionary<string, string>? ResolveHealthConnectionEndpoints(ExternalStreamingManifest? manifest)
+    {
+        IReadOnlyDictionary<string, string>? configuredEndpoints = ResolveConfiguredConnectionEndpoints(options);
+        return configuredEndpoints is { Count: > 0 }
+            ? configuredEndpoints
+            : manifest?.Endpoints;
     }
 
     private static string? ResolveConfiguredConnectionProtocol(ExternalProcessStreamingOptions? options)
@@ -671,6 +675,14 @@ public sealed class ExternalProcessStreamingBackend(
 
         return endpoints.Count == 0 ? null : endpoints;
     }
+
+    private static IReadOnlyList<StreamingEndpointDescriptor> CreateEndpointDescriptors(
+        IReadOnlyDictionary<string, string>? endpointSource) =>
+        (endpointSource ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
+            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(pair => new StreamingEndpointDescriptor(pair.Key.Trim(), pair.Value.Trim()))
+            .ToArray();
 
     private ExternalStreamingManifestReadResult ReadManifestIfConfigured()
     {

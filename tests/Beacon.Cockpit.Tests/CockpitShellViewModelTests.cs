@@ -67,6 +67,7 @@ public sealed class CockpitShellViewModelTests
         Assert.Contains("physical primary verified", viewModel.DisplayHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("external-process", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("1 active stream", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("2 endpoint", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("windows-sendinput", viewModel.InputHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("tap", viewModel.InputHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("keyboard", viewModel.InputHealthSummary, StringComparison.OrdinalIgnoreCase);
@@ -361,6 +362,11 @@ public sealed class CockpitShellViewModelTests
             ManifestName: "Sunshine bridge",
             Protocol: "gamestream",
             LaunchUri: "moonlight://beacon/z-fold-7",
+            Endpoints:
+            [
+                new CockpitStreamEndpoint("rtsp", "rtsp://127.0.0.1:48010"),
+                new CockpitStreamEndpoint("audio", "udp://127.0.0.1:48000")
+            ],
             Codecs: ["av1", "hevc"],
             Transports: ["lan-direct"],
             Encoders: ["nvenc"],

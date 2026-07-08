@@ -30,6 +30,7 @@ public sealed class FakeStreamingBackend : IStreamingBackend
             ManifestName: null,
             Protocol: "beacon-fake",
             LaunchUri: null,
+            Endpoints: [new StreamingEndpointDescriptor("control", "beacon-fake://health/control")],
             Codecs: ["h264", "hevc", "av1"],
             Transports: ["lan-direct", "relay"],
             Encoders: ["fake"],

@@ -92,6 +92,8 @@ When configured, the profile advertises `gamestream` if no explicit protocol is 
 
 The profile is endpoint metadata only. Beacon intentionally does not generate a Moonlight launch URI from host and port because launch URI shape belongs to the wrapper, explicit configuration, or runtime descriptor.
 
+`/admin/snapshot` exposes the currently advertised static endpoint map in `streamingHealth.endpoints`. This is diagnostic state for admin/WPF visibility; per-session runtime descriptors still live under each running stream's `connection`.
+
 ## Runtime Session Descriptor
 
 The manifest describes wrapper capability before any side effects. A started wrapper can also publish actual per-session connection data by writing JSON to the path Beacon passes as:

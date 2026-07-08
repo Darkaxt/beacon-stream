@@ -126,6 +126,23 @@ public sealed class ExternalProcessStreamingBackendTests
     }
 
     [Fact]
+    public async Task GetHealthAsyncReportsSunshineEndpointProfile()
+    {
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions(
+                "C:\\Tools\\sunshine-wrapper.exe",
+                SunshineProfile: new SunshineEndpointProfile("127.0.0.1", 47989)),
+            new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]));
+
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.True(health.Ready);
+        Assert.Equal("gamestream", health.Protocol);
+        Assert.Contains(health.Endpoints, endpoint => endpoint.Role == "rtsp" && endpoint.Uri == "rtsp://127.0.0.1:48010");
+        Assert.Contains(health.Endpoints, endpoint => endpoint.Role == "audio" && endpoint.Uri == "udp://127.0.0.1:48000");
+    }
+
+    [Fact]
     public async Task PreflightFailsWhenExecutablePathIsMissing()
     {
         var backend = new ExternalProcessStreamingBackend(
