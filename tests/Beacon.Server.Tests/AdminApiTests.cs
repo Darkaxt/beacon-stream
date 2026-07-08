@@ -38,6 +38,11 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.Equal("FakeStreamingBackend", root.GetProperty("host").GetProperty("streamingBackend").GetString());
         Assert.Equal("memory", root.GetProperty("profiles").GetProperty("store").GetString());
         Assert.False(root.GetProperty("profiles").GetProperty("pairingEnabled").GetBoolean());
+        Assert.True(root.GetProperty("display").GetProperty("driverReady").GetBoolean());
+        Assert.True(root.GetProperty("display").GetProperty("topologyAvailable").GetBoolean());
+        Assert.False(root.GetProperty("display").GetProperty("mirrorMode").GetBoolean());
+        Assert.True(root.GetProperty("display").GetProperty("physicalPrimaryVerified").GetBoolean());
+        Assert.True(root.GetProperty("display").GetProperty("paths").GetArrayLength() > 0);
     }
 
     [Fact]
@@ -143,6 +148,27 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.Equal("recovery", diagnostic.GetProperty("category").GetString());
         Assert.Equal("restore-physical", diagnostic.GetProperty("operation").GetString());
         Assert.Contains("Physical display restore", diagnostic.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SnapshotReportsDisplayUnavailableWhenHealthCheckThrows()
+    {
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.AddSingleton<IDisplayBackend>(new ThrowingDisplayBackend("display api exploded"));
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage response = await client.GetAsync("/admin/snapshot");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement display = document.RootElement.GetProperty("display");
+        Assert.False(display.GetProperty("driverReady").GetBoolean());
+        Assert.False(display.GetProperty("topologyAvailable").GetBoolean());
+        Assert.Contains("display api exploded", display.GetProperty("diagnostic").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -260,5 +286,26 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         string body = await response.Content.ReadAsStringAsync();
         Assert.Contains("2560x1440", body, StringComparison.Ordinal);
+    }
+
+    private sealed class ThrowingDisplayBackend(string message) : IDisplayBackend
+    {
+        public Task<DisplayHealth> GetHealthAsync(CancellationToken cancellationToken) =>
+            Task.FromException<DisplayHealth>(new InvalidOperationException(message));
+
+        public Task<DisplayEnsureResult> EnsureVirtualDisplayAsync(
+            string displayId,
+            int width,
+            int height,
+            int refreshHz,
+            HdrPreference hdrPreference,
+            CancellationToken cancellationToken) =>
+            Task.FromException<DisplayEnsureResult>(new InvalidOperationException(message));
+
+        public Task<DisplayRestoreResult> RestorePhysicalPrimaryAsync(CancellationToken cancellationToken) =>
+            Task.FromException<DisplayRestoreResult>(new InvalidOperationException(message));
+
+        public Task<DisplayRemoveResult> RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken) =>
+            Task.FromException<DisplayRemoveResult>(new InvalidOperationException(message));
     }
 }

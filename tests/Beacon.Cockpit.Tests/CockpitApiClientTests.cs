@@ -43,6 +43,16 @@ public sealed class CockpitApiClientTests
                 }
               }],
               "ownership": [{ "sessionId": "z-fold-7-steam-shortcut:3767414131", "appId": "steam-shortcut:3767414131", "launchedProcessId": 4321, "launchedProcessRunning": false, "childProcessRunning": false, "ownedWindowRemaining": false, "reasons": [] }],
+              "display": {
+                "driverReady": true,
+                "diagnostic": "SudoVDA driver is ready. Protocol 0.2.1.",
+                "topologyAvailable": true,
+                "mirrorMode": false,
+                "physicalPrimaryVerified": true,
+                "paths": [
+                  { "displayId": "\\\\.\\DISPLAY5", "kind": "Physical", "width": 2560, "height": 1600, "refreshHz": 240, "isPrimary": true, "x": 0, "y": 0 }
+                ]
+              },
               "games": { "total": 36, "diagnostics": ["Steam library 'G:\\SteamLibrary\\steamapps' does not exist."] },
               "diagnostics": [{
                 "id": "evt-1",
@@ -75,6 +85,10 @@ public sealed class CockpitApiClientTests
         Assert.Equal("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", snapshot.Streams[0].Connection?.LaunchUri);
         Assert.Single(snapshot.Ownership);
         Assert.Equal(4321, snapshot.Ownership[0].LaunchedProcessId);
+        Assert.True(snapshot.Display.DriverReady);
+        Assert.True(snapshot.Display.PhysicalPrimaryVerified);
+        Assert.Single(snapshot.Display.Paths);
+        Assert.Equal(@"\\.\DISPLAY5", snapshot.Display.Paths[0].DisplayId);
         Assert.Equal(36, snapshot.Games.Total);
         Assert.Single(snapshot.Games.Diagnostics);
         Assert.Single(snapshot.Diagnostics);

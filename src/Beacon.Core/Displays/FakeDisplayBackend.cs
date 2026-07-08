@@ -4,6 +4,25 @@ public sealed class FakeDisplayBackend : IDisplayBackend
 {
     public bool AllowEnsure { get; set; } = true;
 
+    public DisplayHealth Health { get; set; } = new(
+        DriverReady: true,
+        Diagnostic: "Fake display backend ready.",
+        TopologyAvailable: true,
+        MirrorMode: false,
+        PhysicalPrimaryVerified: true,
+        Paths:
+        [
+            new DisplayPathHealth(
+                "physical-fake",
+                "Physical",
+                2560,
+                1600,
+                120,
+                IsPrimary: true,
+                X: 0,
+                Y: 0)
+        ]);
+
     public DisplayRestoreResult NextRestoreResult { get; set; } = DisplayRestoreResult.Ok();
 
     public DisplayRemoveResult NextRemoveResult { get; set; } = DisplayRemoveResult.Ok();
@@ -15,6 +34,9 @@ public sealed class FakeDisplayBackend : IDisplayBackend
     public List<string> RestoreCalls { get; } = [];
 
     public List<string> RemoveCalls { get; } = [];
+
+    public Task<DisplayHealth> GetHealthAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(Health);
 
     public Task<DisplayEnsureResult> EnsureVirtualDisplayAsync(
         string displayId,

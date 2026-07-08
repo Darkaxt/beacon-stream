@@ -5,6 +5,7 @@ public sealed record CockpitSnapshot(
     IReadOnlyList<CockpitSessionSummary> Sessions,
     IReadOnlyList<CockpitStreamSummary> Streams,
     IReadOnlyList<CockpitOwnershipSummary> Ownership,
+    CockpitDisplayHealth Display,
     CockpitGameSummary Games,
     IReadOnlyList<CockpitDiagnosticEvent> Diagnostics);
 
@@ -92,6 +93,33 @@ public sealed record CockpitOwnershipSummary(
     bool ChildProcessRunning,
     bool OwnedWindowRemaining,
     IReadOnlyList<string> Reasons);
+
+public sealed record CockpitDisplayHealth(
+    bool DriverReady,
+    string Diagnostic,
+    bool TopologyAvailable,
+    bool MirrorMode,
+    bool PhysicalPrimaryVerified,
+    IReadOnlyList<CockpitDisplayPath> Paths)
+{
+    public static CockpitDisplayHealth Unknown { get; } = new(
+        DriverReady: false,
+        Diagnostic: "Display health unavailable.",
+        TopologyAvailable: false,
+        MirrorMode: false,
+        PhysicalPrimaryVerified: false,
+        Paths: []);
+}
+
+public sealed record CockpitDisplayPath(
+    string DisplayId,
+    string Kind,
+    int Width,
+    int Height,
+    int RefreshHz,
+    bool IsPrimary,
+    int X,
+    int Y);
 
 public sealed record CockpitGameSummary(int Total, IReadOnlyList<string> Diagnostics);
 
