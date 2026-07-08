@@ -308,7 +308,7 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         public Double y;
         public Integer buttons;
 
-        static InputEvent pointer(String action, int pointerId, double x, double y, int buttons) {
+        static InputEvent pointer(String action, int pointerId, double x, double y, Integer buttons) {
             InputEvent event = new InputEvent();
             event.type = "pointer";
             event.action = action;
