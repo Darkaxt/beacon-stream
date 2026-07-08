@@ -53,6 +53,26 @@ public sealed class SessionPlannerTests
     }
 
     [Fact]
+    public void DisplayReasonExplainsPhysicalBlackoutModeBeforeLaunch()
+    {
+        ClientProfile profile = ClientProfile.CreateZFold7Default() with
+        {
+            Display = ClientProfile.CreateZFold7Default().Display with { Mode = "physical-blackout" }
+        };
+
+        SessionPlanResult result = SessionPlanner.CreatePlan(
+            profile,
+            new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: true, VirtualDisplayHdrSupported: false, MaxFps: 120),
+            new TelemetrySnapshot(RttMs: 8, PacketLossPercent: 0, DecoderLoadPercent: 20, EstimatedBandwidthMbps: 120, WifiBand: "wifi-7"),
+            Dispatch);
+
+        SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
+        Assert.Equal("physical-blackout", plan.Display.Mode);
+        Assert.Contains("blackout", plan.Display.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("HDR disabled", plan.Display.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void HdrRequireFailsBeforeLaunchWhenHdrChainIsIncomplete()
     {
         ClientProfile profile = ClientProfile.CreateZFold7Default() with

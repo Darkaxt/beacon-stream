@@ -72,7 +72,15 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
       body: JSON.stringify({
         clientId: 'z-fold-7',
         appId: 'steam-shortcut:3767414131',
-        display: { displayId: 'client-z-fold-7', width: 2560, height: 1600, refreshHz: 120, mode: 'virtual-primary' },
+        display: {
+          displayId: 'client-z-fold-7',
+          width: 2560,
+          height: 1600,
+          refreshHz: 120,
+          mode: 'virtual-primary',
+          reason:
+            'Display mode virtual-primary selected by server profile policy. HDR disabled because virtual display does not report HDR capability.'
+        },
         stream: {
           fps: 120,
           codec: 'av1',
@@ -144,6 +152,7 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
   await page.getByLabel('Height').fill('1600');
   await page.getByRole('button', { name: 'Plan' }).click();
   await expect(page.getByText('virtual-primary')).toBeVisible();
+  await expect(page.getByText('Display mode virtual-primary selected by server profile policy.')).toBeVisible();
   await expect(page.getByText('Excellent LAN telemetry kept 120 FPS.')).toBeVisible();
   expect(capabilityBodies).toHaveLength(1);
   expect(telemetryBodies).toHaveLength(1);

@@ -88,6 +88,7 @@ export interface PlanResponse {
     width: number;
     height: number;
     refreshHz: number;
+    reason: string;
   };
   stream: {
     codec: string;
@@ -194,7 +195,7 @@ export function createTelemetryPayload(profile: TelemetryProfileName): Telemetry
 }
 
 export function formatPlanDetails(plan: PlanResponse): string {
-  return `${plan.display.mode} ${plan.display.width}x${plan.display.height}@${plan.display.refreshHz} ${plan.stream.codec} ${plan.stream.fps}fps ${plan.stream.initialBitrateMbps}Mbps ${plan.stream.transport}/${plan.stream.congestionPolicy} - ${plan.stream.reason}`;
+  return `${plan.display.mode} ${plan.display.width}x${plan.display.height}@${plan.display.refreshHz} ${plan.stream.codec} ${plan.stream.fps}fps ${plan.stream.initialBitrateMbps}Mbps ${plan.stream.transport}/${plan.stream.congestionPolicy} - ${plan.display.reason} ${plan.stream.reason}`;
 }
 
 export function formatLaunchEvents(launch: LaunchResponse): string[] {
