@@ -8,6 +8,8 @@ Milestone 67 adds explicit inactive-client disconnect cleanup: empty/default dis
 
 Milestone 68 adds explicit client beacon lease preparation: active beacon prepares the per-client display lease before launch, while inactive beacon evaluates the same server-owned cleanup gate without timers or watchdogs.
 
+Milestone 69 adds Client Lab active/inactive beacon controls and Playwright coverage so the browser simulator exercises the same lifecycle action without a phone.
+
 ## Server Host Mode
 
 The server defaults to deterministic fake host mode:
@@ -72,7 +74,7 @@ Supported profiles are `excellent-lan`, `congested-lan`, `high-rtt`, `packet-los
 
 `--end-after-stream-connection true` stops the fake endpoint script immediately after the required stream descriptor is validated. This is useful for no-phone wrapper handoff tests where the stream must remain running long enough for runtime descriptor evidence before an explicit disconnect.
 
-Plan display reasons include both the selected display mode policy, such as `virtual-primary` or `physical-blackout`, and the HDR/SDR decision. Client Lab renders that display reason with the stream planning reason before launch.
+Plan display reasons include both the selected display mode policy, such as `virtual-primary` or `physical-blackout`, and the HDR/SDR decision. Client Lab renders that display reason with the stream planning reason before launch. Client Lab also has Active Beacon and Inactive Beacon controls that send only client activity state; Beacon Server owns the resulting display lease and cleanup policy.
 
 ## Streaming Backend Mode
 
@@ -243,7 +245,7 @@ The APK also exposes manual active and inactive beacon actions; these only repor
 
 If the server returns a stream connection with endpoints but no `launchUri`, the APK records a visible diagnostic instead of silently doing nothing. Endpoint-only native streaming is a future client capability, not something the current thin APK fakes.
 
-Client input uses `POST /clients/{clientId}/input`. The server resolves the active session plan and running stream before forwarding a typed input batch to `IClientInputSink`, so the client never supplies display topology or session ownership. The default fake-host sink is a no-op for phone-free testing. In Windows host mode, `WindowsClientInputSink` resolves the active display topology, targets the leased display id, and sends pointer `move`, `down`, `up`, and `tap` commands plus keyboard `down`, `up`, and `press` commands through a fakeable Win32 `SendInput` boundary. Keyboard support is a conservative virtual-key subset for common gaming/navigation keys such as letters, digits, arrows, Escape, Space, Enter, modifiers, and F1-F12; text composition, IME, controller, and GameStream-native input are still future work. The Android shell has a simple touch surface that maps Android pointer down/up plus batched multi-pointer move/cancel events into normalized pointer batches; this is still not a native touch or gesture protocol. Client Lab sends separate deterministic pointer gesture and Escape keyboard press batches, while the CLI fake endpoint includes both in its no-phone scripted input validation. Accepted, rejected, and failed input batches publish `input` diagnostics into `/admin/snapshot`; `inputHealth` reports whether the active sink is `no-op`, `windows-sendinput`, or unknown, including supported pointer and keyboard actions.
+Client input uses `POST /clients/{clientId}/input`. The server resolves the active session plan and running stream before forwarding a typed input batch to `IClientInputSink`, so the client never supplies display topology or session ownership. The default fake-host sink is a no-op for phone-free testing. In Windows host mode, `WindowsClientInputSink` resolves the active display topology, targets the leased display id, and sends pointer `move`, `down`, `up`, and `tap` commands plus keyboard `down`, `up`, and `press` commands through a fakeable Win32 `SendInput` boundary. Keyboard support is a conservative virtual-key subset for common gaming/navigation keys such as letters, digits, arrows, Escape, Space, Enter, modifiers, and F1-F12; text composition, IME, controller, and GameStream-native input are still future work. The Android shell has a simple touch surface that maps Android pointer down/up plus batched multi-pointer move/cancel events into normalized pointer batches; this is still not a native touch or gesture protocol. Client Lab sends active/inactive beacon actions, separate deterministic pointer gesture, and Escape keyboard press batches, while the CLI fake endpoint includes beacon and input in its no-phone scripted validation. Accepted, rejected, and failed input batches publish `input` diagnostics into `/admin/snapshot`; `inputHealth` reports whether the active sink is `no-op`, `windows-sendinput`, or unknown, including supported pointer and keyboard actions.
 
 See:
 
@@ -308,6 +310,7 @@ See:
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-66-wrapper-child-config-invariant.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-67-inactive-disconnect-cleanup.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-68-client-beacon-lease.md`
+- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-69-client-lab-beacon.md`
 - `docs/external-streaming-wrapper-manifest.md`
 - `docs/source-audits/2026-07-08-windows-input-sink-upstream-audit.md`
 - `docs/windows-display-backend.md`

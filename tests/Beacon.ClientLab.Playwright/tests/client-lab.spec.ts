@@ -1,8 +1,9 @@
 import { expect, test } from '@playwright/test';
 
-test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and emergency restore', async ({ page }) => {
+test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit, and emergency restore', async ({ page }) => {
   const capabilityBodies: unknown[] = [];
   const telemetryBodies: unknown[] = [];
+  const beaconBodies: unknown[] = [];
   const inputBodies: unknown[] = [];
 
   await page.route('**/clients/hello', async route => {
@@ -65,6 +66,19 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
   await page.route('**/clients/z-fold-7/telemetry', async route => {
     telemetryBodies.push(route.request().postDataJSON());
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ accepted: true }) });
+  });
+  await page.route('**/clients/z-fold-7/beacon', async route => {
+    const body = route.request().postDataJSON();
+    beaconBodies.push(body);
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        state: body.active ? 'active' : 'inactive',
+        displayId: 'client-z-fold-7',
+        leasePrepared: body.active,
+        displayRemoved: !body.active
+      })
+    });
   });
   await page.route('**/clients/z-fold-7/plan', async route => {
     expect(route.request().postDataJSON()).toEqual({ gameId: 'steam-shortcut:3767414131' });
@@ -163,6 +177,10 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
   await expect(page.getByText('2560x1440')).toBeVisible();
 
   await page.getByLabel('Height').fill('1600');
+  await page.getByRole('button', { name: 'Active Beacon', exact: true }).click();
+  await expect(page.getByText('beacon active client-z-fold-7 prepared')).toBeVisible();
+  expect(beaconBodies).toEqual([{ active: true }]);
+
   await page.getByRole('button', { name: 'Plan' }).click();
   await expect(page.getByText('virtual-primary')).toBeVisible();
   await expect(page.getByText('Display mode virtual-primary selected by server profile policy.')).toBeVisible();
@@ -217,6 +235,10 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
 
   await page.getByRole('button', { name: 'Quit' }).click();
   await expect(page.getByText('cleanup evaluated')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Inactive Beacon', exact: true }).click();
+  await expect(page.getByText('beacon inactive client-z-fold-7 removed')).toBeVisible();
+  expect(beaconBodies).toEqual([{ active: true }, { active: false }]);
 
   await page.getByRole('button', { name: 'Restore' }).click();
   await expect(page.getByText('restore requested')).toBeVisible();
