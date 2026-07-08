@@ -1,4 +1,5 @@
 using System.Globalization;
+using Beacon.Core.Diagnostics;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 
@@ -65,7 +66,8 @@ public interface IExternalStreamingManifestReader
 public sealed class ExternalProcessStreamingBackend(
     ExternalProcessStreamingOptions options,
     IExternalStreamingProcessRunner runner,
-    IExternalStreamingManifestReader? manifestReader = null) : IStreamingBackend
+    IExternalStreamingManifestReader? manifestReader = null,
+    IDiagnosticEventSink? diagnostics = null) : IStreamingBackend
 {
     private static readonly ExternalStreamingManifest EmptyManifest = new(
         null,
@@ -91,20 +93,22 @@ public sealed class ExternalProcessStreamingBackend(
         cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(options.ExecutablePath))
         {
-            return Task.FromResult(StreamingPreflightResult.Fail(
-                "External streaming executable path is not configured. Set Beacon:Streaming:ExternalProcess:ExecutablePath or BEACON_EXTERNAL_STREAMING_EXECUTABLE."));
+            return PreflightFailure(
+                plan,
+                "External streaming executable path is not configured. Set Beacon:Streaming:ExternalProcess:ExecutablePath or BEACON_EXTERNAL_STREAMING_EXECUTABLE.");
         }
 
         if (!runner.FileExists(options.ExecutablePath))
         {
-            return Task.FromResult(StreamingPreflightResult.Fail(
-                $"External streaming executable '{options.ExecutablePath}' does not exist."));
+            return PreflightFailure(
+                plan,
+                $"External streaming executable '{options.ExecutablePath}' does not exist.");
         }
 
         ExternalStreamingManifestReadResult manifest = ReadManifestIfConfigured();
         if (!manifest.Success)
         {
-            return Task.FromResult(StreamingPreflightResult.Fail(manifest.Error ?? "External streaming manifest is invalid."));
+            return PreflightFailure(plan, manifest.Error ?? "External streaming manifest is invalid.");
         }
 
         if (manifest.Manifest is not null)
@@ -112,10 +116,11 @@ public sealed class ExternalProcessStreamingBackend(
             string? compatibilityError = ValidateManifest(plan, manifest.Manifest);
             if (!string.IsNullOrWhiteSpace(compatibilityError))
             {
-                return Task.FromResult(StreamingPreflightResult.Fail(compatibilityError));
+                return PreflightFailure(plan, compatibilityError);
             }
         }
 
+        Publish(plan, "preflight", DiagnosticSeverity.Information, "External streaming backend preflight passed.");
         return Task.FromResult(StreamingPreflightResult.Ok());
     }
 
@@ -156,10 +161,12 @@ public sealed class ExternalProcessStreamingBackend(
                 processes[plan.SessionId] = process;
             }
 
+            Publish(plan, "start", DiagnosticSeverity.Information, "External streaming process started.");
             return StreamingStartResult.Ok(session);
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or FileNotFoundException)
         {
+            Publish(plan, "start", DiagnosticSeverity.Error, $"External streaming process failed to start: {ex.Message}");
             return StreamingStartResult.Fail($"External streaming process failed to start: {ex.Message}");
         }
     }
@@ -186,6 +193,7 @@ public sealed class ExternalProcessStreamingBackend(
             ExternalStreamingProcessStopResult stop = runner.Stop(process);
             if (!stop.Success)
             {
+                Publish(session, "stop", DiagnosticSeverity.Error, stop.Error ?? $"External streaming process {process.ProcessId} did not stop.");
                 StreamingSessionState failed = session with { State = "stop-failed", Error = stop.Error };
                 lock (gate)
                 {
@@ -203,6 +211,7 @@ public sealed class ExternalProcessStreamingBackend(
             processes.Remove(sessionId);
         }
 
+        Publish(stopped, "stop", DiagnosticSeverity.Information, "External streaming process stopped.");
         return Task.FromResult(StreamingStopResult.Ok(stopped));
     }
 
@@ -378,6 +387,69 @@ public sealed class ExternalProcessStreamingBackend(
 
     private static bool Contains(IReadOnlyList<string>? values, string expected) =>
         values?.Any(value => value.Equals(expected, StringComparison.OrdinalIgnoreCase)) == true;
+
+    private Task<StreamingPreflightResult> PreflightFailure(SessionPlan plan, string message)
+    {
+        Publish(plan, "preflight", DiagnosticSeverity.Error, message);
+        return Task.FromResult(StreamingPreflightResult.Fail(message));
+    }
+
+    private void Publish(SessionPlan plan, string operation, string severity, string message)
+    {
+        diagnostics?.Publish(DiagnosticEvent.Create(
+            severity,
+            "streaming",
+            operation,
+            message,
+            plan.ClientId.Value,
+            plan.SessionId,
+            plan.Display.DisplayId,
+            StreamingMetadata(plan)));
+    }
+
+    private void Publish(StreamingSessionState session, string operation, string severity, string message)
+    {
+        diagnostics?.Publish(DiagnosticEvent.Create(
+            severity,
+            "streaming",
+            operation,
+            message,
+            session.ClientId,
+            session.SessionId,
+            session.DisplayId,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["codec"] = session.Codec,
+                ["fps"] = session.Fps.ToString(CultureInfo.InvariantCulture),
+                ["bitrateMbps"] = session.InitialBitrateMbps.ToString(CultureInfo.InvariantCulture),
+                ["transport"] = session.Transport,
+                ["state"] = session.State
+            }));
+    }
+
+    private Dictionary<string, string> StreamingMetadata(SessionPlan plan)
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["appId"] = plan.AppId,
+            ["codec"] = plan.Stream.Codec,
+            ["fps"] = plan.Stream.Fps.ToString(CultureInfo.InvariantCulture),
+            ["bitrateMbps"] = plan.Stream.InitialBitrateMbps.ToString(CultureInfo.InvariantCulture),
+            ["transport"] = plan.Stream.Transport
+        };
+
+        if (!string.IsNullOrWhiteSpace(options.ManifestPath))
+        {
+            metadata["manifestPath"] = options.ManifestPath.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.ExecutablePath))
+        {
+            metadata["executablePath"] = options.ExecutablePath.Trim();
+        }
+
+        return metadata;
+    }
 
     private sealed class NoExternalStreamingManifestReader : IExternalStreamingManifestReader
     {

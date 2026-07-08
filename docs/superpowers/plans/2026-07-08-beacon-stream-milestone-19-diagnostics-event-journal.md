@@ -492,7 +492,7 @@ Expected: display diagnostics checkpoint is synced.
 - Modify: `src/Beacon.Platform.Windows/Streaming/ExternalProcessStreamingBackend.cs`
 - Test: `tests/Beacon.Platform.Windows.Tests/Streaming/ExternalProcessStreamingBackendTests.cs`
 
-- [ ] **Step 1: Write failing streaming diagnostics test**
+- [x] **Step 1: Write failing streaming diagnostics test**
 
 Add to `ExternalProcessStreamingBackendTests`:
 
@@ -532,7 +532,7 @@ private sealed class RecordingDiagnosticSink : IDiagnosticEventSink
 
 Add `using Beacon.Core.Diagnostics;`.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -542,7 +542,7 @@ dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.cs
 
 Expected: compile failure because `ExternalProcessStreamingBackend` does not accept the diagnostic sink.
 
-- [ ] **Step 3: Publish external streaming diagnostics**
+- [x] **Step 3: Publish external streaming diagnostics**
 
 Change constructor:
 
@@ -579,7 +579,7 @@ Call it for:
 
 Keep existing return/error behavior unchanged.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run:
 
@@ -589,7 +589,7 @@ dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.cs
 
 Expected: all external streaming backend tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
