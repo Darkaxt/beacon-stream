@@ -141,13 +141,31 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         public boolean h264;
         public boolean hdr10;
         public boolean virtualDisplayHdrSupported;
+        public int maxFps;
+        public boolean lowLatencyDecode;
+        public String currentScreenMode;
 
         public ClientCapabilities(boolean av1, boolean hevc, boolean h264, boolean hdr10, boolean virtualDisplayHdrSupported) {
+            this(av1, hevc, h264, hdr10, virtualDisplayHdrSupported, 120, true, null);
+        }
+
+        public ClientCapabilities(
+            boolean av1,
+            boolean hevc,
+            boolean h264,
+            boolean hdr10,
+            boolean virtualDisplayHdrSupported,
+            int maxFps,
+            boolean lowLatencyDecode,
+            String currentScreenMode) {
             this.av1 = av1;
             this.hevc = hevc;
             this.h264 = h264;
             this.hdr10 = hdr10;
             this.virtualDisplayHdrSupported = virtualDisplayHdrSupported;
+            this.maxFps = maxFps;
+            this.lowLatencyDecode = lowLatencyDecode;
+            this.currentScreenMode = currentScreenMode;
         }
 
         JsonObject toJson() {
@@ -157,6 +175,9 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             json.addProperty("h264", h264);
             json.addProperty("hdr10", hdr10);
             json.addProperty("virtualDisplayHdrSupported", virtualDisplayHdrSupported);
+            json.addProperty("maxFps", maxFps);
+            json.addProperty("lowLatencyDecode", lowLatencyDecode);
+            add(json, "currentScreenMode", currentScreenMode);
             return json;
         }
     }
@@ -165,11 +186,30 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         public int rttMs;
         public double packetLossPercent;
         public int decoderLoadPercent;
+        public int estimatedBandwidthMbps;
+        public String wifiBand;
+        public int batteryPercent;
+        public String thermalState;
 
         public ClientTelemetry(int rttMs, double packetLossPercent, int decoderLoadPercent) {
+            this(rttMs, packetLossPercent, decoderLoadPercent, 0, null, 0, null);
+        }
+
+        public ClientTelemetry(
+            int rttMs,
+            double packetLossPercent,
+            int decoderLoadPercent,
+            int estimatedBandwidthMbps,
+            String wifiBand,
+            int batteryPercent,
+            String thermalState) {
             this.rttMs = rttMs;
             this.packetLossPercent = packetLossPercent;
             this.decoderLoadPercent = decoderLoadPercent;
+            this.estimatedBandwidthMbps = estimatedBandwidthMbps;
+            this.wifiBand = wifiBand;
+            this.batteryPercent = batteryPercent;
+            this.thermalState = thermalState;
         }
 
         JsonObject toJson() {
@@ -177,6 +217,14 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             json.addProperty("rttMs", rttMs);
             json.addProperty("packetLossPercent", packetLossPercent);
             json.addProperty("decoderLoadPercent", decoderLoadPercent);
+            if (estimatedBandwidthMbps > 0) {
+                json.addProperty("estimatedBandwidthMbps", estimatedBandwidthMbps);
+            }
+            add(json, "wifiBand", wifiBand);
+            if (batteryPercent > 0) {
+                json.addProperty("batteryPercent", batteryPercent);
+            }
+            add(json, "thermalState", thermalState);
             return json;
         }
     }

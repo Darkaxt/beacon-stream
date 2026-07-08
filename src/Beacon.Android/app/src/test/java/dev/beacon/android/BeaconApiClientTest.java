@@ -70,6 +70,33 @@ public final class BeaconApiClientTest {
     }
 
     @Test
+    public void capabilitiesSerializeExpandedPlanningFacts() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        BeaconApiClient client = new BeaconApiClient(new BeaconClientConfig("http://server", "z-fold-7"), transport);
+
+        client.reportCapabilities(new BeaconApiClient.ClientCapabilities(true, true, true, false, false, 120, true, "2560x1600@120"));
+
+        assertEquals("/clients/z-fold-7/capabilities", transport.path);
+        assertTrue(transport.body.contains("\"maxFps\":120"));
+        assertTrue(transport.body.contains("\"lowLatencyDecode\":true"));
+        assertTrue(transport.body.contains("\"currentScreenMode\":\"2560x1600@120\""));
+    }
+
+    @Test
+    public void telemetrySerializesExpandedPlanningFacts() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        BeaconApiClient client = new BeaconApiClient(new BeaconClientConfig("http://server", "z-fold-7"), transport);
+
+        client.reportTelemetry(new BeaconApiClient.ClientTelemetry(8, 0.0, 20, 120, "wifi-7", 80, "nominal"));
+
+        assertEquals("/clients/z-fold-7/telemetry", transport.path);
+        assertTrue(transport.body.contains("\"estimatedBandwidthMbps\":120"));
+        assertTrue(transport.body.contains("\"wifiBand\":\"wifi-7\""));
+        assertTrue(transport.body.contains("\"batteryPercent\":80"));
+        assertTrue(transport.body.contains("\"thermalState\":\"nominal\""));
+    }
+
+    @Test
     public void launchConsumesServerPlanWithoutChoosingDisplayTopologyLocally() throws Exception {
         FakeTransport transport = new FakeTransport();
         transport.response = new BeaconHttpResponse(200, "{\"state\":\"streaming\",\"displayId\":\"client-z-fold-7\",\"stream\":{\"fps\":120}}");
