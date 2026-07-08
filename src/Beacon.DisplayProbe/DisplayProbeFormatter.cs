@@ -40,4 +40,9 @@ public static class DisplayProbeFormatter
         result.Success
             ? "restore-physical: success verified=True"
             : $"restore-physical: failed: {result.Error}";
+
+    public static string FormatRecoveryResult(DisplayRecoveryResult result) =>
+        result.Success
+            ? "recover: success"
+            : $"recover: failed: {result.Error}";
 }

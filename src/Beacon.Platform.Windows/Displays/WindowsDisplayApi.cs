@@ -181,13 +181,9 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
             return Task.FromResult(DisplayApiResult.Fail(restoreDiagnostic));
         }
 
-        if (!TrySetPrimaryDisplay(displayName, out string diagnostic))
-        {
-            return Task.FromResult(DisplayApiResult.Fail(diagnostic));
-        }
-
-        DisplayTopologySnapshot verified = QueryActiveTopology();
-        return Task.FromResult(WindowsDisplayDiagnostics.VerifyPhysicalRestore(displayName, verified));
+        return Task.FromResult(TrySetPrimaryDisplay(displayName, out string diagnostic)
+            ? DisplayApiResult.Ok()
+            : DisplayApiResult.Fail(diagnostic));
     }
 
     public Task<DisplayApiResult> RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken)

@@ -73,6 +73,40 @@ public sealed class DisplayProbeAppTests
         Assert.Equal(2, api.RestoreCalls);
     }
 
+    [Fact]
+    public async Task RecoverCommandRemovesDisplayAfterInitialRestoreFailure()
+    {
+        var api = new ProbeWindowsDisplayApi
+        {
+            CurrentTopology = DisplayTopologySnapshot.Extended(
+                physicalDisplayId: "physical-laptop-panel",
+                virtualDisplayId: "client-z-fold-7",
+                width: 2560,
+                height: 1600,
+                refreshHz: 120,
+                virtualPrimary: true),
+            AfterRemoveTopology = DisplayTopologySnapshot.PhysicalOnly(
+                physicalDisplayId: "physical-laptop-panel",
+                width: 2560,
+                height: 1600,
+                refreshHz: 120)
+        };
+        api.RestoreResults.Enqueue(DisplayApiResult.Fail("physical primary was not verified"));
+        api.RestoreResults.Enqueue(DisplayApiResult.Ok());
+        using var output = new StringWriter();
+
+        int exitCode = await DisplayProbeApp.RunAsync(
+            api,
+            ["recover", "--client", "z-fold-7"],
+            output,
+            TextWriter.Null);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("recover: success", output.ToString());
+        Assert.Equal(2, api.RestoreCalls);
+        Assert.Equal("client-z-fold-7", Assert.Single(api.RemovedDisplays));
+    }
+
     private sealed class ProbeWindowsDisplayApi : IWindowsDisplayApi
     {
         public DisplayTopologySnapshot CurrentTopology { get; set; } =
@@ -80,9 +114,15 @@ public sealed class DisplayProbeAppTests
 
         public DisplayTopologySnapshot? AfterCreateTopology { get; set; }
 
+        public DisplayTopologySnapshot? AfterRemoveTopology { get; set; }
+
         public Queue<DisplayTopologySnapshot> RestoreTopologies { get; } = new();
 
+        public Queue<DisplayApiResult> RestoreResults { get; } = new();
+
         public List<(string DisplayId, int Width, int Height, int RefreshHz)> CreatedDisplays { get; } = [];
+
+        public List<string> RemovedDisplays { get; } = [];
 
         public int PrimaryCalls { get; private set; }
 
@@ -118,6 +158,11 @@ public sealed class DisplayProbeAppTests
         public Task<DisplayApiResult> RestorePhysicalPrimaryAsync(CancellationToken cancellationToken)
         {
             RestoreCalls++;
+            if (RestoreResults.Count > 0)
+            {
+                return Task.FromResult(RestoreResults.Dequeue());
+            }
+
             if (RestoreTopologies.Count > 0)
             {
                 CurrentTopology = RestoreTopologies.Dequeue();
@@ -126,8 +171,16 @@ public sealed class DisplayProbeAppTests
             return Task.FromResult(DisplayApiResult.Ok());
         }
 
-        public Task<DisplayApiResult> RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken) =>
-            Task.FromResult(DisplayApiResult.Ok());
+        public Task<DisplayApiResult> RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken)
+        {
+            RemovedDisplays.Add(displayId);
+            if (AfterRemoveTopology is not null)
+            {
+                CurrentTopology = AfterRemoveTopology;
+            }
+
+            return Task.FromResult(DisplayApiResult.Ok());
+        }
 
         public Task<DisplayHdrCapability> QueryHdrCapabilityAsync(string displayId, CancellationToken cancellationToken) =>
             Task.FromResult(new DisplayHdrCapability(false, false, "SDR only."));
