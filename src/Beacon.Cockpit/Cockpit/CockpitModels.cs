@@ -5,7 +5,8 @@ public sealed record CockpitSnapshot(
     IReadOnlyList<CockpitSessionSummary> Sessions,
     IReadOnlyList<CockpitStreamSummary> Streams,
     IReadOnlyList<CockpitOwnershipSummary> Ownership,
-    CockpitGameSummary Games);
+    CockpitGameSummary Games,
+    IReadOnlyList<CockpitDiagnosticEvent> Diagnostics);
 
 public sealed record CockpitClientSummary(string ClientId, CockpitClientProfile Profile);
 
@@ -93,5 +94,17 @@ public sealed record CockpitOwnershipSummary(
     IReadOnlyList<string> Reasons);
 
 public sealed record CockpitGameSummary(int Total, IReadOnlyList<string> Diagnostics);
+
+public sealed record CockpitDiagnosticEvent(
+    string Id,
+    DateTimeOffset TimestampUtc,
+    string Severity,
+    string Category,
+    string Operation,
+    string Message,
+    string? ClientId,
+    string? SessionId,
+    string? DisplayId,
+    IReadOnlyDictionary<string, string> Metadata);
 
 public sealed record CockpitRecoveryResult(bool RestoreRequested, bool Recovered, string? DisplayId);

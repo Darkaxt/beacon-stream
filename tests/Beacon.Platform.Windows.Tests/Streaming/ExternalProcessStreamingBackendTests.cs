@@ -1,4 +1,5 @@
 using Beacon.Core.Clients;
+using Beacon.Core.Diagnostics;
 using Beacon.Core.Displays;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
@@ -50,6 +51,27 @@ public sealed class ExternalProcessStreamingBackendTests
 
         Assert.False(result.Success);
         Assert.Contains("does not exist", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PreflightFailurePublishesDiagnostic()
+    {
+        var sink = new RecordingDiagnosticSink();
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions("C:\\Tools\\missing-wrapper.exe"),
+            new FakeExternalStreamingProcessRunner(),
+            manifestReader: null,
+            sink);
+
+        StreamingPreflightResult result = await backend.CheckReadinessAsync(CreatePlan(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        DiagnosticEvent evt = Assert.Single(sink.Events);
+        Assert.Equal("streaming", evt.Category);
+        Assert.Equal("preflight", evt.Operation);
+        Assert.Equal("error", evt.Severity);
+        Assert.Equal("z-fold-7-steam-shortcut:3767414131", evt.SessionId);
+        Assert.Contains("missing-wrapper.exe", evt.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -305,5 +327,12 @@ public sealed class ExternalProcessStreamingBackendTests
             Manifests.TryGetValue(path, out ExternalStreamingManifest? manifest)
                 ? ExternalStreamingManifestReadResult.Ok(manifest)
                 : ExternalStreamingManifestReadResult.Fail($"External streaming manifest '{path}' does not exist.");
+    }
+
+    private sealed class RecordingDiagnosticSink : IDiagnosticEventSink
+    {
+        public List<DiagnosticEvent> Events { get; } = [];
+
+        public void Publish(DiagnosticEvent diagnosticEvent) => Events.Add(diagnosticEvent);
     }
 }

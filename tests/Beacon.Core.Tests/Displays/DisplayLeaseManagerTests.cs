@@ -1,4 +1,5 @@
 using Beacon.Core.Clients;
+using Beacon.Core.Diagnostics;
 using Beacon.Core.Displays;
 
 namespace Beacon.Core.Tests.Displays;
@@ -146,5 +147,51 @@ public sealed class DisplayLeaseManagerTests
         Assert.Contains("refusing to fall back", result.Error, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(backend.RestoreCalls);
         Assert.Empty(backend.RemoveCalls);
+    }
+
+    [Fact]
+    public async Task EnsureLeasePublishesFailureDiagnosticBeforeRefusingPhysicalFallback()
+    {
+        var backend = new FakeDisplayBackend { AllowEnsure = false };
+        var sink = new RecordingDiagnosticSink();
+        var manager = new DisplayLeaseManager(backend, sink);
+
+        DisplayLeaseResult result = await manager.EnsureLeaseAsync(ClientProfile.CreateZFold7Default(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        DiagnosticEvent evt = Assert.Single(sink.Events);
+        Assert.Equal("display", evt.Category);
+        Assert.Equal("lease.ensure", evt.Operation);
+        Assert.Equal("error", evt.Severity);
+        Assert.Equal("client-z-fold-7", evt.DisplayId);
+        Assert.Equal("2560", evt.Metadata["width"]);
+        Assert.Contains("virtual display is unavailable", evt.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task CleanupPublishesOwnedWorkRetentionDiagnostic()
+    {
+        var backend = new FakeDisplayBackend();
+        var sink = new RecordingDiagnosticSink();
+        var manager = new DisplayLeaseManager(backend, sink);
+
+        bool removed = await manager.CleanupIfAllowedAsync(
+            "client-z-fold-7",
+            clientActive: false,
+            ownedProcessRunning: true,
+            ownedWindowRemaining: false,
+            CancellationToken.None);
+
+        Assert.False(removed);
+        Assert.Contains(sink.Events, evt =>
+            evt.Operation == "lease.cleanup.retained" &&
+            evt.Metadata["ownedProcessRunning"] == "true");
+    }
+
+    private sealed class RecordingDiagnosticSink : IDiagnosticEventSink
+    {
+        public List<DiagnosticEvent> Events { get; } = [];
+
+        public void Publish(DiagnosticEvent diagnosticEvent) => Events.Add(diagnosticEvent);
     }
 }

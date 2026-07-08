@@ -1,5 +1,6 @@
 using Beacon.Core.Clients;
 using Beacon.Core.Displays;
+using Beacon.Core.Diagnostics;
 using Beacon.Core.Games;
 using Beacon.Core.Recovery;
 using Beacon.Core.Sessions;
@@ -23,6 +24,7 @@ public static class AdminEndpoints
             GameLibraryService games,
             BeaconHostOptions hostOptions,
             ClientPairingOptions pairingOptions,
+            IDiagnosticEventSource diagnostics,
             CancellationToken cancellationToken) =>
         {
             GameLibrarySnapshot gameSnapshot = await games.ScanAsync(cancellationToken);
@@ -58,15 +60,24 @@ public static class AdminEndpoints
                 {
                     total = gameSnapshot.Games.Count,
                     diagnostics = gameSnapshot.Diagnostics
-                }
+                },
+                diagnostics = diagnostics.GetRecent(100)
             });
         });
 
         admin.MapPost("/recovery/restore-physical", async (
             IDisplayBackend displayBackend,
+            IDiagnosticEventSink diagnostics,
             CancellationToken cancellationToken) =>
         {
-            await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
+            DisplayRestoreResult result = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
+            diagnostics.Publish(DiagnosticEvent.Create(
+                result.Success ? DiagnosticSeverity.Information : DiagnosticSeverity.Error,
+                "recovery",
+                "restore-physical",
+                result.Success
+                    ? "Physical display restore requested."
+                    : $"Physical display restore failed: {result.Error}"));
             return Results.Ok(new { restoreRequested = true });
         });
 

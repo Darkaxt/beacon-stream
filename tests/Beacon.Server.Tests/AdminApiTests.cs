@@ -72,6 +72,25 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
     }
 
     [Fact]
+    public async Task SnapshotIncludesRecentOperationalDiagnostics()
+    {
+        HttpClient client = factory.CreateClient();
+
+        await client.PostAsJsonAsync("/admin/recovery/restore-physical", new { });
+        HttpResponseMessage response = await client.GetAsync("/admin/snapshot");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostics")
+            .EnumerateArray()
+            .First(evt => evt.GetProperty("operation").GetString() == "restore-physical");
+
+        Assert.Equal("recovery", diagnostic.GetProperty("category").GetString());
+        Assert.Equal("restore-physical", diagnostic.GetProperty("operation").GetString());
+        Assert.Contains("Physical display restore", diagnostic.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task AdminCanStopSelectedClientStream()
     {
         HttpClient client = factory.CreateClient();

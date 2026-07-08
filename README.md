@@ -131,6 +131,8 @@ curl.exe -X POST http://localhost:5000/admin/clients/z-fold-7/stream/stop
 
 In the WPF cockpit, the Recovery tab exposes the same actions. Display lease removal restores the physical primary display and removes the selected client's virtual display. These are explicit manual escape hatches; normal session cleanup still belongs to the server lifecycle rules.
 
+`/admin/snapshot` also returns recent operational diagnostics. These events include display lease decisions, physical-primary restore attempts, recovery actions, and streaming preflight/start/stop failures. The WPF cockpit shows them in the Diagnostics tab together with game-provider diagnostics.
+
 Streaming backend checks:
 
 ```powershell
