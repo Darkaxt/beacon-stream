@@ -57,6 +57,22 @@ public final class BeaconViewModelTest {
     }
 
     @Test
+    public void loadGamesFormatsServerCatalog() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(
+            200,
+            "{\"games\":[{\"id\":\"steam-shortcut:3767414131\",\"title\":\"Dispatch\",\"source\":\"steam-shortcut\",\"installed\":true}],\"diagnostics\":[]}");
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
+
+        model.loadGames();
+
+        assertEquals("games", service.lastAction);
+        assertEquals("games: 200", model.status());
+        assertTrue(model.latestGames().contains("Dispatch"));
+        assertTrue(model.latestGames().contains("steam-shortcut:3767414131"));
+    }
+
+    @Test
     public void launchRecordsServerSelectedStreamState() throws Exception {
         FakeService service = new FakeService();
         service.next = new BeaconApiClient.BeaconResult(200, "{\"state\":\"streaming\",\"stream\":{\"fps\":120}}");
@@ -195,6 +211,12 @@ public final class BeaconViewModelTest {
         @Override
         public BeaconApiClient.BeaconResult reportTelemetry(BeaconApiClient.ClientTelemetry telemetry) throws IOException {
             record("telemetry");
+            return next;
+        }
+
+        @Override
+        public BeaconApiClient.BeaconResult games() throws IOException {
+            record("games");
             return next;
         }
 

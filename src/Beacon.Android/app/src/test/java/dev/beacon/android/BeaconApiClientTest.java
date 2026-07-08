@@ -97,6 +97,21 @@ public final class BeaconApiClientTest {
     }
 
     @Test
+    public void gamesFetchesServerCatalogWithGet() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        transport.response = new BeaconHttpResponse(200, "{\"games\":[]}");
+        BeaconApiClient client = new BeaconApiClient(new BeaconClientConfig("http://server", "z-fold-7"), transport);
+
+        BeaconApiClient.BeaconResult result = client.games();
+
+        assertEquals(200, result.statusCode());
+        assertEquals("GET", transport.method);
+        assertEquals("/games", transport.path);
+        assertEquals(null, transport.body);
+        assertTrue(result.body().contains("\"games\""));
+    }
+
+    @Test
     public void launchConsumesServerPlanWithoutChoosingDisplayTopologyLocally() throws Exception {
         FakeTransport transport = new FakeTransport();
         transport.response = new BeaconHttpResponse(200, "{\"state\":\"streaming\",\"displayId\":\"client-z-fold-7\",\"stream\":{\"fps\":120}}");

@@ -41,6 +41,11 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
     }
 
     @Override
+    public BeaconResult games() throws IOException {
+        return get("/games");
+    }
+
+    @Override
     public BeaconResult requestPlan(GameSelection game) throws IOException {
         return post("/clients/" + config.clientId() + "/plan", game.toJson());
     }
@@ -78,8 +83,12 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         return send("PATCH", path, body);
     }
 
+    private BeaconResult get(String path) throws IOException {
+        return send("GET", path, null);
+    }
+
     private BeaconResult send(String method, String path, JsonObject body) throws IOException {
-        BeaconHttpResponse response = transport.send(method, path, BeaconJson.gson().toJson(body));
+        BeaconHttpResponse response = transport.send(method, path, body == null ? null : BeaconJson.gson().toJson(body));
         return new BeaconResult(response.statusCode(), response.body());
     }
 

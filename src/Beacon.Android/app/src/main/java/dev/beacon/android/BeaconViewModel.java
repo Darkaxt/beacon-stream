@@ -9,6 +9,7 @@ public final class BeaconViewModel {
     private final String serverUrl;
 
     private String status = "Idle";
+    private String latestGames = "";
     private String latestPlan = "";
     private String latestStream = "";
     private String latestError = "";
@@ -44,6 +45,10 @@ public final class BeaconViewModel {
         return latestPlan;
     }
 
+    public String latestGames() {
+        return latestGames;
+    }
+
     public String latestStream() {
         return latestStream;
     }
@@ -66,6 +71,12 @@ public final class BeaconViewModel {
 
     public void reportTelemetry(BeaconApiClient.ClientTelemetry telemetry) throws IOException {
         record("telemetry", service.reportTelemetry(telemetry));
+    }
+
+    public void loadGames() throws IOException {
+        BeaconApiClient.BeaconResult result = service.games();
+        record("games", result);
+        latestGames = result.isSuccess() ? BeaconGameCatalog.summarize(result.body()) : "";
     }
 
     public void preflight(
@@ -144,6 +155,8 @@ public final class BeaconViewModel {
         BeaconApiClient.BeaconResult reportCapabilities(BeaconApiClient.ClientCapabilities capabilities) throws IOException;
 
         BeaconApiClient.BeaconResult reportTelemetry(BeaconApiClient.ClientTelemetry telemetry) throws IOException;
+
+        BeaconApiClient.BeaconResult games() throws IOException;
 
         BeaconApiClient.BeaconResult requestPlan(BeaconApiClient.GameSelection game) throws IOException;
 
