@@ -12,6 +12,16 @@ Milestone 69 adds Client Lab active/inactive beacon controls and Playwright cove
 
 Milestone 70 splits prepared display leases from session activation: active beacon creates/verifies the per-client virtual display without making it primary, while launch remains the point that activates virtual-primary for the session.
 
+Milestone 71 adds the no-phone `DisplayProbe prepare` command for real SudoVDA lease preparation checks.
+
+Milestone 72 lets launch activation reuse a display prepared by an earlier beacon instead of recreating it.
+
+Milestone 73 hardens recovery when physical-primary restore reports stale topology by removing the selected client lease and verifying physical-primary health again.
+
+Milestone 74 routes owning-client APK emergency restore through the same client-scoped recovery path as local admin recovery.
+
+Milestone 75 completes the Android local-settings editing boundary for version 1: touch layout, multitouch, controller overlay marker, haptics, UI density, theme, wake lock, and decoder overlay remain APK-local and do not affect server display policy.
+
 ## Server Host Mode
 
 The server defaults to deterministic fake host mode:
@@ -242,7 +252,7 @@ Android client checks:
 & "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.14.1-bin\baw1sv0jfoi8rxs14qo3h49cs\gradle-8.14.1\bin\gradle.bat" --no-daemon -p src\Beacon.Android test assembleDebug
 ```
 
-`Beacon.Android` is a thin Java APK shell for the client control plane. It can identify the device, patch only APK-allowed client profile fields, fetch and show the server-owned game catalog, report expanded capability and telemetry facts, request/launch a server plan, delegate the server-provided `stream.connection.launchUri` through Android `ACTION_VIEW` on the Activity UI thread, stop/disconnect/quit, forward pointer input including batched multi-pointer touch events, send a simple Escape keyboard press, manage APK-local theme/wake-lock/debug-overlay controls, and call owning-client emergency restore. Plan and launch actions send the profile patch, capabilities, and telemetry first so the server can compute the stream plan from the current client facts. Display behavior policy still belongs to Beacon Server, not the APK. It does not implement real video decode, Moonlight/Sunshine protocol handling, controller, or native touch/gesture protocol support yet.
+`Beacon.Android` is a thin Java APK shell for the client control plane. It can identify the device, patch only APK-allowed client profile fields, fetch and show the server-owned game catalog, report expanded capability and telemetry facts, request/launch a server plan, delegate the server-provided `stream.connection.launchUri` through Android `ACTION_VIEW` on the Activity UI thread, stop/disconnect/quit, forward pointer input including batched multi-pointer touch events, send a simple Escape keyboard press, manage APK-local touch layout, multitouch, controller overlay marker, haptics, UI density, theme, wake-lock, and decoder overlay controls, and call owning-client emergency restore. Plan and launch actions send the profile patch, capabilities, and telemetry first so the server can compute the stream plan from the current client facts. Display behavior policy still belongs to Beacon Server, not the APK. It does not implement real video decode, Moonlight/Sunshine protocol handling, controller protocol, or native touch/gesture protocol support yet.
 
 The APK also exposes manual active and inactive beacon actions; these only report client activity to Beacon Server and do not move display policy into the APK.
 
@@ -315,6 +325,11 @@ See:
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-68-client-beacon-lease.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-69-client-lab-beacon.md`
 - `docs/superpowers/plans/2026-07-09-beacon-stream-milestone-70-prepared-display-lease.md`
+- `docs/superpowers/plans/2026-07-09-beacon-stream-milestone-71-display-probe-prepare.md`
+- `docs/superpowers/plans/2026-07-09-beacon-stream-milestone-72-activation-reuses-prepared-display.md`
+- `docs/superpowers/plans/2026-07-09-beacon-stream-milestone-73-recover-after-restore-failure.md`
+- `docs/superpowers/plans/2026-07-09-beacon-stream-milestone-74-apk-emergency-recovery-parity.md`
+- `docs/superpowers/plans/2026-07-09-beacon-stream-milestone-75-android-local-settings-ui-completion.md`
 - `docs/external-streaming-wrapper-manifest.md`
 - `docs/source-audits/2026-07-08-windows-input-sink-upstream-audit.md`
 - `docs/windows-display-backend.md`
