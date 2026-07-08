@@ -271,6 +271,11 @@ public static class ClientEndpoints
             if (plan is not null)
             {
                 StreamingStopResult stop = await streaming.StopAsync(plan.SessionId, cancellationToken);
+                if (!stop.Success)
+                {
+                    return Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+
                 stream = stop.Session;
             }
 
@@ -313,6 +318,11 @@ public static class ClientEndpoints
             if (plan is not null)
             {
                 StreamingStopResult stop = await streaming.StopAsync(plan.SessionId, cancellationToken);
+                if (!stop.Success)
+                {
+                    return Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+
                 stream = stop.Session;
                 ownershipSnapshot = await ownership.GetSnapshotAsync(plan.SessionId, cancellationToken);
             }

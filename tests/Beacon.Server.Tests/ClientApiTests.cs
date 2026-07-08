@@ -681,6 +681,50 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task DisconnectReturnsServiceUnavailableWhenBackendStopFails()
+    {
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IStreamingBackend>(new FailingStopStreamingBackend("wrapper refused stop"));
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage launch = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        HttpResponseMessage disconnect = await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
+
+        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, disconnect.StatusCode);
+        string body = await disconnect.Content.ReadAsStringAsync();
+        Assert.Contains("wrapper refused stop", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task QuitReturnsServiceUnavailableWhenBackendStopFailsAndSkipsDisplayCleanup()
+    {
+        var display = new FakeDisplayBackend();
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IDisplayBackend>(display);
+                services.AddSingleton<IStreamingBackend>(new FailingStopStreamingBackend("wrapper refused stop"));
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage launch = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        HttpResponseMessage quit = await client.PostAsJsonAsync("/clients/z-fold-7/quit", new { clientActive = false });
+
+        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, quit.StatusCode);
+        string body = await quit.Content.ReadAsStringAsync();
+        Assert.Contains("wrapper refused stop", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(display.RemoveCalls);
+    }
+
+    [Fact]
     public async Task QuitIgnoresStaleClientOwnedWorkFlagsAndUsesServerSnapshot()
     {
         HttpClient client = factory.CreateClient();
