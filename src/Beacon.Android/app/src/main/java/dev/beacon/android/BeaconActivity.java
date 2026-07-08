@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -22,6 +23,7 @@ import java.util.concurrent.Executors;
 public final class BeaconActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final List<BeaconGameCatalog.GameEntry> gameEntries = new ArrayList<>();
+    private final BeaconTouchInputMapper touchInputMapper = new BeaconTouchInputMapper();
 
     private EditText serverUrl;
     private EditText clientId;
@@ -129,6 +131,7 @@ public final class BeaconActivity extends Activity {
             readCapabilities(),
             readTelemetry(),
             readGame())));
+        root.addView(touchSurface());
         root.addView(button("Send Input", model -> model.sendInput(BeaconApiClient.InputBatch.pointerTap(1, 0.5, 0.5))));
         root.addView(button("Stop Stream", model -> model.stopStream()));
         root.addView(button("Disconnect", model -> model.disconnect()));
@@ -140,6 +143,31 @@ public final class BeaconActivity extends Activity {
         root.addView(status);
 
         return scrollView;
+    }
+
+    private View touchSurface() {
+        TextView surface = text("Touch input surface", 18, false);
+        surface.setGravity(Gravity.CENTER);
+        surface.setMinHeight(360);
+        surface.setBackgroundColor(Color.rgb(32, 42, 52));
+        surface.setOnTouchListener((view, event) -> {
+            String action = pointerAction(event);
+            if (action.isEmpty()) {
+                return false;
+            }
+
+            int pointerIndex = pointerIndex(event);
+            BeaconApiClient.InputBatch batch = touchInputMapper.map(
+                action,
+                event.getPointerId(pointerIndex),
+                event.getX(pointerIndex),
+                event.getY(pointerIndex),
+                view.getWidth(),
+                view.getHeight());
+            runAction("Touch Input", model -> model.sendInput(batch));
+            return true;
+        });
+        return surface;
     }
 
     private EditText input(String hint, String value) {
@@ -167,6 +195,24 @@ public final class BeaconActivity extends Activity {
         button.setAllCaps(false);
         button.setOnClickListener(view -> runAction(label, action));
         return button;
+    }
+
+    private static String pointerAction(MotionEvent event) {
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                return "down";
+            case MotionEvent.ACTION_MOVE:
+                return "move";
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                return "up";
+            default:
+                return "";
+        }
+    }
+
+    private static int pointerIndex(MotionEvent event) {
+        return event.getActionMasked() == MotionEvent.ACTION_MOVE ? 0 : event.getActionIndex();
     }
 
     private void runAction(String label, BeaconAction action) {
