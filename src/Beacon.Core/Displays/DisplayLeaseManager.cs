@@ -26,10 +26,53 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend, IDiagnos
                 profile.ClientId.Value,
                 displayId,
                 DisplayMetadata(profile));
-            return new DisplayLeaseResult(
-                false,
-                null,
-                $"{ensureResult.Error}; refusing to fall back to physical display.");
+
+            DisplayRestoreResult restoreResult = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
+            if (!restoreResult.Success)
+            {
+                Publish(
+                    DiagnosticSeverity.Error,
+                    "lease.ensure.repair",
+                    $"Display preflight repair failed because physical primary restore failed: {restoreResult.Error}",
+                    profile.ClientId.Value,
+                    displayId,
+                    DisplayMetadata(profile));
+                return new DisplayLeaseResult(
+                    false,
+                    null,
+                    $"{ensureResult.Error}; repair failed because physical primary restore failed: {restoreResult.Error}; refusing to fall back to physical display.");
+            }
+
+            Publish(
+                DiagnosticSeverity.Information,
+                "lease.ensure.repair",
+                "Physical primary restore requested before retrying virtual display ensure.",
+                profile.ClientId.Value,
+                displayId,
+                DisplayMetadata(profile));
+
+            ensureResult = await displayBackend.EnsureVirtualDisplayAsync(
+                displayId,
+                profile.Display.PreferredWidth,
+                profile.Display.PreferredHeight,
+                profile.Display.PreferredRefreshHz,
+                profile.Display.HdrPreference,
+                cancellationToken);
+
+            if (!ensureResult.Success)
+            {
+                Publish(
+                    DiagnosticSeverity.Error,
+                    "lease.ensure.repair",
+                    $"Virtual display ensure still failed after repair: {ensureResult.Error}",
+                    profile.ClientId.Value,
+                    displayId,
+                    DisplayMetadata(profile));
+                return new DisplayLeaseResult(
+                    false,
+                    null,
+                    $"After repair, virtual display ensure still failed: {ensureResult.Error}; refusing to fall back to physical display.");
+            }
         }
 
         var lease = new DisplayLease(

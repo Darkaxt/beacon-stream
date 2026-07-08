@@ -8,6 +8,8 @@ public sealed class FakeDisplayBackend : IDisplayBackend
 
     public DisplayRemoveResult NextRemoveResult { get; set; } = DisplayRemoveResult.Ok();
 
+    public Queue<DisplayEnsureResult> EnsureResults { get; } = [];
+
     public List<string> EnsureCalls { get; } = [];
 
     public List<string> RestoreCalls { get; } = [];
@@ -23,6 +25,11 @@ public sealed class FakeDisplayBackend : IDisplayBackend
         CancellationToken cancellationToken)
     {
         EnsureCalls.Add($"{displayId}:{width}x{height}@{refreshHz}:hdr={hdrPreference}");
+        if (EnsureResults.Count > 0)
+        {
+            return Task.FromResult(EnsureResults.Dequeue());
+        }
+
         return Task.FromResult(AllowEnsure
             ? DisplayEnsureResult.Ok()
             : DisplayEnsureResult.Fail("virtual display is unavailable"));

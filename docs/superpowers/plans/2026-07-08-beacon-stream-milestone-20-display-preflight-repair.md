@@ -39,7 +39,7 @@
 - Modify: `tests/Beacon.Core.Tests/Displays/DisplayLeaseManagerTests.cs`
 - Modify: `src/Beacon.Core/Displays/FakeDisplayBackend.cs`
 
-- [ ] **Step 1: Write failing repair tests**
+- [x] **Step 1: Write failing repair tests**
 
 Add to `DisplayLeaseManagerTests`:
 
@@ -103,7 +103,7 @@ public async Task EnsureLeaseFailsExplicitlyWhenSecondEnsureFailsAfterRepair()
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -113,7 +113,7 @@ dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter DisplayLea
 
 Expected: compile failure for missing `FakeDisplayBackend.EnsureResults`, or test failure because repair is not implemented.
 
-- [ ] **Step 3: Add queued fake ensure results**
+- [x] **Step 3: Add queued fake ensure results**
 
 In `FakeDisplayBackend`, add:
 
@@ -134,7 +134,7 @@ return Task.FromResult(AllowEnsure
     : DisplayEnsureResult.Fail("virtual display is unavailable"));
 ```
 
-- [ ] **Step 4: Implement one safe repair attempt**
+- [x] **Step 4: Implement one safe repair attempt**
 
 In `DisplayLeaseManager.EnsureLeaseAsync`, after the first ensure failure:
 
@@ -162,7 +162,7 @@ return new DisplayLeaseResult(
 
 7. Continue creating the lease when the second ensure succeeds.
 
-- [ ] **Step 5: Verify green**
+- [x] **Step 5: Verify green**
 
 Run:
 
@@ -172,7 +172,7 @@ dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter DisplayLea
 
 Expected: all display lease manager tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run:
 

@@ -145,7 +145,7 @@ public sealed class DisplayLeaseManagerTests
         Assert.False(result.Success);
         Assert.Null(result.Lease);
         Assert.Contains("refusing to fall back", result.Error, StringComparison.OrdinalIgnoreCase);
-        Assert.Empty(backend.RestoreCalls);
+        Assert.Equal("physical-primary", Assert.Single(backend.RestoreCalls));
         Assert.Empty(backend.RemoveCalls);
     }
 
@@ -159,13 +159,72 @@ public sealed class DisplayLeaseManagerTests
         DisplayLeaseResult result = await manager.EnsureLeaseAsync(ClientProfile.CreateZFold7Default(), CancellationToken.None);
 
         Assert.False(result.Success);
-        DiagnosticEvent evt = Assert.Single(sink.Events);
+        DiagnosticEvent evt = Assert.Single(sink.Events, evt => evt.Operation == "lease.ensure");
         Assert.Equal("display", evt.Category);
         Assert.Equal("lease.ensure", evt.Operation);
         Assert.Equal("error", evt.Severity);
         Assert.Equal("client-z-fold-7", evt.DisplayId);
         Assert.Equal("2560", evt.Metadata["width"]);
         Assert.Contains("virtual display is unavailable", evt.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(sink.Events, repair => repair.Operation == "lease.ensure.repair" && repair.Severity == "error");
+    }
+
+    [Fact]
+    public async Task EnsureLeaseRepairsOnceAfterInitialVirtualDisplayFailure()
+    {
+        var backend = new FakeDisplayBackend();
+        backend.EnsureResults.Enqueue(DisplayEnsureResult.Fail("virtual display disappeared"));
+        backend.EnsureResults.Enqueue(DisplayEnsureResult.Ok());
+        var sink = new RecordingDiagnosticSink();
+        var manager = new DisplayLeaseManager(backend, sink);
+
+        DisplayLeaseResult result = await manager.EnsureLeaseAsync(ClientProfile.CreateZFold7Default(), CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.NotNull(result.Lease);
+        Assert.Equal(2, backend.EnsureCalls.Count);
+        Assert.Equal("physical-primary", Assert.Single(backend.RestoreCalls));
+        Assert.Contains(sink.Events, evt => evt.Operation == "lease.ensure.repair" && evt.Severity == "information");
+    }
+
+    [Fact]
+    public async Task EnsureLeaseFailsWhenRepairRestoreFails()
+    {
+        var backend = new FakeDisplayBackend
+        {
+            NextRestoreResult = DisplayRestoreResult.Fail("physical primary could not be restored")
+        };
+        backend.EnsureResults.Enqueue(DisplayEnsureResult.Fail("virtual display disappeared"));
+        var sink = new RecordingDiagnosticSink();
+        var manager = new DisplayLeaseManager(backend, sink);
+
+        DisplayLeaseResult result = await manager.EnsureLeaseAsync(ClientProfile.CreateZFold7Default(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Null(result.Lease);
+        Assert.Single(backend.EnsureCalls);
+        Assert.Equal("physical-primary", Assert.Single(backend.RestoreCalls));
+        Assert.Contains("repair failed", result.Error ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(sink.Events, evt => evt.Operation == "lease.ensure.repair" && evt.Severity == "error");
+    }
+
+    [Fact]
+    public async Task EnsureLeaseFailsExplicitlyWhenSecondEnsureFailsAfterRepair()
+    {
+        var backend = new FakeDisplayBackend();
+        backend.EnsureResults.Enqueue(DisplayEnsureResult.Fail("virtual display disappeared"));
+        backend.EnsureResults.Enqueue(DisplayEnsureResult.Fail("driver still unavailable"));
+        var sink = new RecordingDiagnosticSink();
+        var manager = new DisplayLeaseManager(backend, sink);
+
+        DisplayLeaseResult result = await manager.EnsureLeaseAsync(ClientProfile.CreateZFold7Default(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Null(result.Lease);
+        Assert.Equal(2, backend.EnsureCalls.Count);
+        Assert.Equal("physical-primary", Assert.Single(backend.RestoreCalls));
+        Assert.Contains("after repair", result.Error ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(sink.Events, evt => evt.Operation == "lease.ensure.repair" && evt.Severity == "error");
     }
 
     [Fact]
