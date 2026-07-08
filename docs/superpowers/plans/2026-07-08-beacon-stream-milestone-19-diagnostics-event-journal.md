@@ -358,7 +358,7 @@ Expected: branch contains the admin diagnostics checkpoint.
 - Modify: `src/Beacon.Core/Displays/DisplayLeaseManager.cs`
 - Test: `tests/Beacon.Core.Tests/Displays/DisplayLeaseManagerTests.cs`
 
-- [ ] **Step 1: Write failing display diagnostics tests**
+- [x] **Step 1: Write failing display diagnostics tests**
 
 Create or extend `tests/Beacon.Core.Tests/Displays/DisplayLeaseManagerTests.cs` with:
 
@@ -423,7 +423,7 @@ public sealed class DisplayLeaseManagerTests
 
 If `DisplayLeaseManagerTests` already exists, add only the two tests and local fake/sink pieces needed.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -433,7 +433,7 @@ dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter DisplayLea
 
 Expected: compile failure or assertion failure because `DisplayLeaseManager` does not accept/publish diagnostics.
 
-- [ ] **Step 3: Add optional diagnostic sink to display manager**
+- [x] **Step 3: Add optional diagnostic sink to display manager**
 
 Change constructor:
 
@@ -464,7 +464,7 @@ new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 }
 ```
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run:
 
@@ -474,7 +474,7 @@ dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter DisplayLea
 
 Expected: display diagnostics tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
