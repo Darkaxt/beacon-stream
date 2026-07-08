@@ -108,6 +108,12 @@ public static class WindowsDisplayDiagnostics
         return candidates.FirstOrDefault(candidate => candidate.X != 0 || candidate.Y != 0)?.DisplayId;
     }
 
+    public static DisplayApiResult VerifyPhysicalRestore(string displayName, DisplayTopologySnapshot topology) =>
+        topology.PhysicalPrimaryVerified
+            ? DisplayApiResult.Ok()
+            : DisplayApiResult.Fail(
+                $"DisplayConfig apply reported success for {displayName}, but physical primary was not verified. LastTopology={topology.Fingerprint}.");
+
     private static bool Has(uint flags, uint mask) => (flags & mask) != 0;
 }
 

@@ -27,6 +27,8 @@ dotnet run --project src/Beacon.DisplayProbe -- remove --client z-fold-7
 
 Use `restore-physical` before `remove` when recovering from an active virtual-primary topology. If the legacy display enumeration cannot find the physical panel while the virtual display is primary, Beacon falls back to DisplayConfig path data and restores the non-origin physical candidate rather than failing immediately.
 
+`restore-physical` uses the verified backend path, not the raw one-shot API call. The command can fail even after Windows accepts the DisplayConfig apply if the follow-up topology query still shows a virtual primary or no physical primary.
+
 ## Server Host Mode
 
 Beacon Server defaults to fake host mode, which is safe for deterministic local tests and does not call the Windows display driver:

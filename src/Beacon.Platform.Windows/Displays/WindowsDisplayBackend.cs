@@ -112,7 +112,8 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
 
             if (!seenUnverifiedTopologies.Add(topology.Fingerprint))
             {
-                DisplayRestoreResult fail = DisplayRestoreResult.Fail("Physical primary restore was not verified after topology reconciliation.");
+                DisplayRestoreResult fail = DisplayRestoreResult.Fail(
+                    $"Physical primary restore was not verified after topology reconciliation. LastTopology={topology.Fingerprint}.");
                 LogRestore(before, topology, fail, "restore-verification-failed");
                 return fail;
             }
