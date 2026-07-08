@@ -197,7 +197,7 @@ git commit -m "Document manual recovery actions milestone"
 git push
 ```
 
-- [ ] **Step 5: Open PR, wait for CI, mark ready, merge**
+- [x] **Step 5: Open PR, wait for CI, mark ready, merge**
 
 ```powershell
 gh pr create --draft --base main --head codex/milestone-11-recovery-actions --title "Add manual recovery actions" --body "Milestone 11 manual recovery actions implementation."
