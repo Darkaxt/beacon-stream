@@ -139,6 +139,8 @@ Beacon Server can populate those wrapper child environment values from server-ow
 
 When `ChildExecutablePath` is configured, Beacon preflights the child executable path before display creation or app launch. This keeps missing Sunshine-compatible child binaries as readiness errors instead of letting the probe start and then fail after topology or app side effects.
 
+`/admin/snapshot` exposes wrapper child readiness in `streamingHealth`: `wrapperChildExecutableConfigured`, `wrapperChildExecutableAvailable`, `wrapperChildExecutablePath`, and `wrapperChildArgumentsConfigured`. Cockpit renders the same state in its streaming health summary so missing child binaries or argument-only misconfiguration are visible before phone testing.
+
 ## Stability Rules
 
 - Manifest validation happens during streaming preflight, before display or launch side effects.

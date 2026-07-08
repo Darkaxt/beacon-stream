@@ -252,6 +252,55 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
     }
 
     [Fact]
+    public async Task SnapshotIncludesWrapperChildStreamingHealthFields()
+    {
+        var health = new StreamingBackendHealth(
+            Ready: true,
+            Backend: "external-process",
+            Diagnostic: "External streaming backend ready.",
+            ExecutableConfigured: true,
+            ExecutableAvailable: true,
+            ExecutablePath: "C:\\Tools\\beacon-streaming-probe.exe",
+            WrapperChildExecutableConfigured: true,
+            WrapperChildExecutableAvailable: true,
+            WrapperChildExecutablePath: "C:\\Tools\\sunshine.exe",
+            WrapperChildArgumentsConfigured: true,
+            ManifestConfigured: false,
+            ManifestAvailable: false,
+            ManifestPath: null,
+            ManifestName: null,
+            Protocol: "gamestream",
+            LaunchUri: null,
+            Endpoints: [new StreamingEndpointDescriptor("rtsp", "rtsp://127.0.0.1:48010")],
+            Codecs: ["av1"],
+            Transports: ["lan-direct"],
+            Encoders: ["nvenc"],
+            Capture: ["dxgi"],
+            MaxFps: 120,
+            MaxBitrateMbps: 150,
+            Hdr10: false,
+            ActiveSessions: 0,
+            Diagnostics: ["child process available"]);
+        WebApplicationFactory<Program> childHealthFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IStreamingBackend>(new StaticStreamingBackend(health));
+            }));
+        HttpClient client = childHealthFactory.CreateClient();
+
+        HttpResponseMessage response = await client.GetAsync("/admin/snapshot");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement streaming = document.RootElement.GetProperty("streamingHealth");
+        Assert.True(streaming.GetProperty("wrapperChildExecutableConfigured").GetBoolean());
+        Assert.True(streaming.GetProperty("wrapperChildExecutableAvailable").GetBoolean());
+        Assert.Equal("C:\\Tools\\sunshine.exe", streaming.GetProperty("wrapperChildExecutablePath").GetString());
+        Assert.True(streaming.GetProperty("wrapperChildArgumentsConfigured").GetBoolean());
+    }
+
+    [Fact]
     public async Task AdminCanStopSelectedClientStream()
     {
         HttpClient client = factory.CreateClient();
@@ -408,5 +457,25 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
 
         public IReadOnlyList<StreamingSessionState> GetSessions() =>
             throw new InvalidOperationException(message);
+    }
+
+    private sealed class StaticStreamingBackend(StreamingBackendHealth health) : IStreamingBackend
+    {
+        public Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(health);
+
+        public Task<StreamingPreflightResult> CheckReadinessAsync(SessionPlan plan, CancellationToken cancellationToken) =>
+            Task.FromResult(StreamingPreflightResult.Ok());
+
+        public Task<StreamingStartResult> StartAsync(SessionPlan plan, CancellationToken cancellationToken) =>
+            Task.FromResult(StreamingStartResult.Fail("static backend does not start streams"));
+
+        public Task<StreamingStopResult> StopAsync(string sessionId, CancellationToken cancellationToken) =>
+            Task.FromResult(StreamingStopResult.Fail("static backend does not stop streams"));
+
+        public Task<StreamingSessionState?> GetSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+            Task.FromResult<StreamingSessionState?>(null);
+
+        public IReadOnlyList<StreamingSessionState> GetSessions() => [];
     }
 }
