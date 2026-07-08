@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using Beacon.Core.Diagnostics;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
@@ -13,7 +14,8 @@ public sealed record ExternalProcessStreamingOptions(
     string? ManifestPath = null,
     SunshineEndpointProfile? SunshineProfile = null,
     string? WrapperChildExecutablePath = null,
-    string? WrapperChildArguments = null);
+    string? WrapperChildArguments = null,
+    string? ArgumentTemplate = null);
 
 public sealed record ExternalStreamingManifest(
     string? Name,
@@ -132,6 +134,24 @@ public sealed class ExternalProcessStreamingBackend(
     private const string WrapperChildArgumentsWithoutExecutableMessage =
         "External streaming wrapper child arguments are configured without a wrapper child executable path.";
 
+    private static readonly HashSet<string> ArgumentTemplateTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "sessionId",
+        "clientId",
+        "appId",
+        "displayId",
+        "codec",
+        "fps",
+        "bitrateMbps",
+        "transport",
+        "sessionDescriptorPath",
+        "manifestPath",
+        "connectionProtocol",
+        "connectionLaunchUri",
+        "wrapperChildExecutablePath",
+        "wrapperChildArguments"
+    };
+
     private static readonly ExternalStreamingManifest EmptyManifest = new(
         null,
         null,
@@ -200,6 +220,8 @@ public sealed class ExternalProcessStreamingBackend(
             {
                 diagnostic ??= WrapperChildArgumentsWithoutExecutableMessage;
             }
+
+            diagnostic ??= ValidateArgumentTemplate(options.ArgumentTemplate);
 
             if (manifestConfigured)
             {
@@ -308,6 +330,12 @@ public sealed class ExternalProcessStreamingBackend(
             return PreflightFailure(
                 plan,
                 $"External streaming wrapper child executable '{wrapperChildExecutablePath}' does not exist.");
+        }
+
+        string? argumentTemplateError = ValidateArgumentTemplate(options.ArgumentTemplate);
+        if (!string.IsNullOrWhiteSpace(argumentTemplateError))
+        {
+            return PreflightFailure(plan, argumentTemplateError);
         }
 
         ExternalStreamingManifestReadResult manifest = ReadManifestIfConfigured();
@@ -555,13 +583,156 @@ public sealed class ExternalProcessStreamingBackend(
             environment["BEACON_STREAM_SESSION_DESCRIPTOR_PATH"] = streamSessionDescriptorPath.Trim();
         }
 
+        string arguments = CreateStartArguments(plan, options, streamSessionDescriptorPath);
+
+        return new ExternalStreamingCommand(executablePath, arguments, environment);
+    }
+
+    private static string CreateStartArguments(
+        SessionPlan plan,
+        ExternalProcessStreamingOptions? options,
+        string? streamSessionDescriptorPath)
+    {
+        string? argumentTemplate = TrimOrNull(options?.ArgumentTemplate);
+        if (argumentTemplate is not null)
+        {
+            return ExpandArgumentTemplate(argumentTemplate, CreateArgumentTemplateValues(plan, options, streamSessionDescriptorPath));
+        }
+
         string arguments = $"--session \"{plan.SessionId}\" --display \"{plan.Display.DisplayId}\"";
         if (!string.IsNullOrWhiteSpace(streamSessionDescriptorPath))
         {
             arguments = $"{arguments} --stream-session-descriptor \"{streamSessionDescriptorPath.Trim()}\"";
         }
 
-        return new ExternalStreamingCommand(executablePath, arguments, environment);
+        return arguments;
+    }
+
+    private static IReadOnlyDictionary<string, string> CreateArgumentTemplateValues(
+        SessionPlan plan,
+        ExternalProcessStreamingOptions? options,
+        string? streamSessionDescriptorPath) =>
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["sessionId"] = plan.SessionId,
+            ["clientId"] = plan.ClientId.Value,
+            ["appId"] = plan.AppId,
+            ["displayId"] = plan.Display.DisplayId,
+            ["codec"] = plan.Stream.Codec,
+            ["fps"] = plan.Stream.Fps.ToString(CultureInfo.InvariantCulture),
+            ["bitrateMbps"] = plan.Stream.InitialBitrateMbps.ToString(CultureInfo.InvariantCulture),
+            ["transport"] = plan.Stream.Transport,
+            ["sessionDescriptorPath"] = TrimOrNull(streamSessionDescriptorPath) ?? string.Empty,
+            ["manifestPath"] = TrimOrNull(options?.ManifestPath) ?? string.Empty,
+            ["connectionProtocol"] = ResolveConfiguredConnectionProtocol(options) ?? string.Empty,
+            ["connectionLaunchUri"] = TrimOrNull(options?.ConnectionLaunchUri) ?? string.Empty,
+            ["wrapperChildExecutablePath"] = TrimOrNull(options?.WrapperChildExecutablePath) ?? string.Empty,
+            ["wrapperChildArguments"] = TrimOrNull(options?.WrapperChildArguments) ?? string.Empty
+        };
+
+    private static string ExpandArgumentTemplate(
+        string argumentTemplate,
+        IReadOnlyDictionary<string, string> values)
+    {
+        var expanded = new StringBuilder(argumentTemplate.Length);
+        int cursor = 0;
+        while (cursor < argumentTemplate.Length)
+        {
+            int tokenStart = argumentTemplate.IndexOf('{', cursor);
+            if (tokenStart < 0)
+            {
+                expanded.Append(argumentTemplate[cursor..]);
+                break;
+            }
+
+            expanded.Append(argumentTemplate[cursor..tokenStart]);
+            int tokenEnd = argumentTemplate.IndexOf('}', tokenStart + 1);
+            if (tokenEnd < 0)
+            {
+                throw new InvalidOperationException("External streaming argument template contains an unclosed token.");
+            }
+
+            string token = argumentTemplate[(tokenStart + 1)..tokenEnd];
+            if (!values.TryGetValue(token, out string? value))
+            {
+                throw new InvalidOperationException($"External streaming argument template contains unknown token '{token}'.");
+            }
+
+            expanded.Append(QuoteArgumentValue(value));
+            cursor = tokenEnd + 1;
+        }
+
+        return expanded.ToString();
+    }
+
+    private static string? ValidateArgumentTemplate(string? argumentTemplate)
+    {
+        if (string.IsNullOrWhiteSpace(argumentTemplate))
+        {
+            return null;
+        }
+
+        int cursor = 0;
+        while (cursor < argumentTemplate.Length)
+        {
+            int tokenStart = argumentTemplate.IndexOf('{', cursor);
+            if (tokenStart < 0)
+            {
+                return null;
+            }
+
+            int tokenEnd = argumentTemplate.IndexOf('}', tokenStart + 1);
+            if (tokenEnd < 0)
+            {
+                return "External streaming argument template contains an unclosed token.";
+            }
+
+            string token = argumentTemplate[(tokenStart + 1)..tokenEnd];
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                return "External streaming argument template contains an empty token.";
+            }
+
+            if (!ArgumentTemplateTokens.Contains(token))
+            {
+                return $"External streaming argument template contains unknown token '{token}'.";
+            }
+
+            cursor = tokenEnd + 1;
+        }
+
+        return null;
+    }
+
+    private static string QuoteArgumentValue(string value)
+    {
+        var quoted = new StringBuilder(value.Length + 2);
+        quoted.Append('"');
+        int backslashes = 0;
+        foreach (char c in value)
+        {
+            if (c == '\\')
+            {
+                backslashes++;
+                continue;
+            }
+
+            if (c == '"')
+            {
+                quoted.Append('\\', backslashes * 2 + 1);
+                quoted.Append('"');
+                backslashes = 0;
+                continue;
+            }
+
+            quoted.Append('\\', backslashes);
+            backslashes = 0;
+            quoted.Append(c);
+        }
+
+        quoted.Append('\\', backslashes * 2);
+        quoted.Append('"');
+        return quoted.ToString();
     }
 
     private static void AddConnectionEnvironment(

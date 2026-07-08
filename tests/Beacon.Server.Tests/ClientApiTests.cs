@@ -1413,6 +1413,18 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    [Fact]
+    public async Task DescriptorChangeSignalToleratesLateSignalsAfterWaitCompletes()
+    {
+        var signal = new DescriptorChangeSignal();
+
+        Task wait = signal.ResetAndGetTask();
+        signal.Signal();
+        await wait;
+
+        signal.Signal();
+    }
+
     private static string GetStreamingProbeExecutablePath()
     {
         string assemblyPath = typeof(StreamingProbeApp).Assembly.Location;
@@ -1438,9 +1450,9 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             return;
         }
 
-        using var descriptorChanged = new SemaphoreSlim(0);
         using var watcher = new FileSystemWatcher(descriptorRoot, "*.json");
-        FileSystemEventHandler signal = (_, _) => descriptorChanged.Release();
+        var descriptorChanged = new DescriptorChangeSignal();
+        FileSystemEventHandler signal = (_, _) => descriptorChanged.Signal();
         watcher.Created += signal;
         watcher.Changed += signal;
         watcher.EnableRaisingEvents = true;
@@ -1452,7 +1464,13 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
                 return;
             }
 
-            await descriptorChanged.WaitAsync();
+            Task wait = descriptorChanged.ResetAndGetTask();
+            if (HasReadableStreamingDescriptor(descriptorRoot))
+            {
+                return;
+            }
+
+            await wait;
         }
     }
 
@@ -1474,6 +1492,35 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         }
 
         return false;
+    }
+
+    private sealed class DescriptorChangeSignal
+    {
+        private readonly Lock gate = new();
+        private TaskCompletionSource change = NewChange();
+
+        public Task ResetAndGetTask()
+        {
+            lock (gate)
+            {
+                change = NewChange();
+                return change.Task;
+            }
+        }
+
+        public void Signal()
+        {
+            TaskCompletionSource snapshot;
+            lock (gate)
+            {
+                snapshot = change;
+            }
+
+            snapshot.TrySetResult();
+        }
+
+        private static TaskCompletionSource NewChange() =>
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     private sealed class FakeExternalStreamingProcessRunner(IEnumerable<string>? existingFiles = null) : IExternalStreamingProcessRunner

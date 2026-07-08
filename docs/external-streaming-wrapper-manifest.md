@@ -28,6 +28,34 @@ Beacon passes the same path to the wrapper as `BEACON_WRAPPER_MANIFEST_PATH`.
 
 Beacon launches the wrapper process with the executable directory as `WorkingDirectory`. Wrapper-relative config, logs, or helper files should be resolved from there or from explicit paths passed through arguments, environment variables, or the manifest.
 
+Wrappers can opt into a server-owned argument template when their command-line shape must be explicit:
+
+```powershell
+$env:BEACON_EXTERNAL_STREAMING_ARGUMENT_TEMPLATE='--session {sessionId} --display {displayId} --descriptor {sessionDescriptorPath}'
+```
+
+or:
+
+```json
+{
+  "Beacon": {
+    "Streaming": {
+      "ExternalProcess": {
+        "ArgumentTemplate": "--session {sessionId} --display {displayId} --descriptor {sessionDescriptorPath}"
+      }
+    }
+  }
+}
+```
+
+Beacon expands each token into a quoted argument value before launching the wrapper. Supported tokens are `sessionId`, `clientId`, `appId`, `displayId`, `codec`, `fps`, `bitrateMbps`, `transport`, `sessionDescriptorPath`, `manifestPath`, `connectionProtocol`, `connectionLaunchUri`, `wrapperChildExecutablePath`, and `wrapperChildArguments`. Unknown, empty, or unclosed tokens make external streaming health not ready and fail streaming preflight before display creation or app launch.
+
+When no argument template is configured, Beacon keeps the default wrapper arguments:
+
+```text
+--session "<sessionId>" --display "<displayId>" --stream-session-descriptor "<sessionDescriptorPath>"
+```
+
 ## Example
 
 The checked example is parsed by the Windows manifest reader test so docs and runtime deserialization cannot drift:

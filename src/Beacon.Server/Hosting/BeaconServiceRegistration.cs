@@ -31,6 +31,8 @@ public static class BeaconServiceRegistration
     public const string ExternalStreamingWrapperChildArgumentsConfigurationKey = "Beacon:Streaming:ExternalProcess:Wrapper:ChildArguments";
     public const string ExternalStreamingWrapperChildExecutableEnvironmentVariable = "BEACON_EXTERNAL_STREAMING_WRAPPER_CHILD_EXECUTABLE";
     public const string ExternalStreamingWrapperChildArgumentsEnvironmentVariable = "BEACON_EXTERNAL_STREAMING_WRAPPER_CHILD_ARGUMENTS";
+    public const string ExternalStreamingArgumentTemplateConfigurationKey = "Beacon:Streaming:ExternalProcess:ArgumentTemplate";
+    public const string ExternalStreamingArgumentTemplateEnvironmentVariable = "BEACON_EXTERNAL_STREAMING_ARGUMENT_TEMPLATE";
     public const string ExternalStreamingConnectionProtocolConfigurationKey = "Beacon:Streaming:ExternalProcess:Connection:Protocol";
     public const string ExternalStreamingConnectionLaunchUriConfigurationKey = "Beacon:Streaming:ExternalProcess:Connection:LaunchUri";
     public const string ExternalStreamingConnectionSunshineHostConfigurationKey = "Beacon:Streaming:ExternalProcess:Connection:Sunshine:Host";
@@ -60,7 +62,8 @@ public static class BeaconServiceRegistration
             Environment.GetEnvironmentVariable(ClientProfilesPathEnvironmentVariable),
             Environment.GetEnvironmentVariable(PairingTokenEnvironmentVariable),
             Environment.GetEnvironmentVariable(ExternalStreamingWrapperChildExecutableEnvironmentVariable),
-            Environment.GetEnvironmentVariable(ExternalStreamingWrapperChildArgumentsEnvironmentVariable));
+            Environment.GetEnvironmentVariable(ExternalStreamingWrapperChildArgumentsEnvironmentVariable),
+            Environment.GetEnvironmentVariable(ExternalStreamingArgumentTemplateEnvironmentVariable));
 
     public static IServiceCollection AddBeaconServices(
         this IServiceCollection services,
@@ -76,7 +79,8 @@ public static class BeaconServiceRegistration
         string? environmentClientProfilesPath = null,
         string? environmentPairingToken = null,
         string? environmentExternalStreamingWrapperChildExecutable = null,
-        string? environmentExternalStreamingWrapperChildArguments = null)
+        string? environmentExternalStreamingWrapperChildArguments = null,
+        string? environmentExternalStreamingArgumentTemplate = null)
     {
         BeaconHostMode mode = ResolveHostMode(configuration, environmentHostMode);
         BeaconStreamingBackendMode streamingBackendMode = ResolveStreamingBackendMode(configuration, environmentStreamingBackend);
@@ -122,7 +126,8 @@ public static class BeaconServiceRegistration
             environmentExternalStreamingConnectionSunshineBasePort,
             environmentExternalStreamingManifest,
             environmentExternalStreamingWrapperChildExecutable,
-            environmentExternalStreamingWrapperChildArguments);
+            environmentExternalStreamingWrapperChildArguments,
+            environmentExternalStreamingArgumentTemplate);
         return services;
     }
 
@@ -220,7 +225,8 @@ public static class BeaconServiceRegistration
         string? environmentExternalStreamingConnectionSunshineBasePort,
         string? environmentExternalStreamingManifest,
         string? environmentExternalStreamingWrapperChildExecutable,
-        string? environmentExternalStreamingWrapperChildArguments)
+        string? environmentExternalStreamingWrapperChildArguments,
+        string? environmentExternalStreamingArgumentTemplate)
     {
         switch (mode)
         {
@@ -237,7 +243,8 @@ public static class BeaconServiceRegistration
                     environmentExternalStreamingConnectionSunshineBasePort,
                     environmentExternalStreamingManifest,
                     environmentExternalStreamingWrapperChildExecutable,
-                    environmentExternalStreamingWrapperChildArguments));
+                    environmentExternalStreamingWrapperChildArguments,
+                    environmentExternalStreamingArgumentTemplate));
                 services.AddSingleton<IExternalStreamingProcessRunner, WindowsExternalStreamingProcessRunner>();
                 services.AddSingleton<IExternalStreamingManifestReader, WindowsExternalStreamingManifestReader>();
                 services.AddSingleton<IExternalStreamingSessionDescriptorStore, WindowsExternalStreamingSessionDescriptorStore>();
@@ -264,7 +271,8 @@ public static class BeaconServiceRegistration
         string? environmentExternalStreamingConnectionSunshineBasePort,
         string? environmentExternalStreamingManifest,
         string? environmentExternalStreamingWrapperChildExecutable,
-        string? environmentExternalStreamingWrapperChildArguments)
+        string? environmentExternalStreamingWrapperChildArguments,
+        string? environmentExternalStreamingArgumentTemplate)
     {
         string? protocol = string.IsNullOrWhiteSpace(environmentExternalStreamingConnectionProtocol)
             ? configuration[ExternalStreamingConnectionProtocolConfigurationKey]
@@ -281,6 +289,9 @@ public static class BeaconServiceRegistration
         string? wrapperChildArguments = string.IsNullOrWhiteSpace(environmentExternalStreamingWrapperChildArguments)
             ? configuration[ExternalStreamingWrapperChildArgumentsConfigurationKey]
             : environmentExternalStreamingWrapperChildArguments;
+        string? argumentTemplate = string.IsNullOrWhiteSpace(environmentExternalStreamingArgumentTemplate)
+            ? configuration[ExternalStreamingArgumentTemplateConfigurationKey]
+            : environmentExternalStreamingArgumentTemplate;
         Dictionary<string, string> endpoints = configuration
             .GetSection("Beacon:Streaming:ExternalProcess:Connection:Endpoints")
             .GetChildren()
@@ -299,7 +310,8 @@ public static class BeaconServiceRegistration
             ManifestPath: manifestPath,
             SunshineProfile: sunshineProfile,
             WrapperChildExecutablePath: wrapperChildExecutablePath,
-            WrapperChildArguments: wrapperChildArguments);
+            WrapperChildArguments: wrapperChildArguments,
+            ArgumentTemplate: argumentTemplate);
     }
 
     private static SunshineEndpointProfile? CreateSunshineEndpointProfile(
