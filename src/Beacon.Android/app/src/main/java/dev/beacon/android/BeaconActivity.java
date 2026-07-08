@@ -171,7 +171,11 @@ public final class BeaconActivity extends Activity {
 
     private BeaconViewModel createModel() {
         BeaconClientConfig config = new BeaconClientConfig(serverUrl.getText().toString(), clientId.getText().toString());
-        return new BeaconViewModel(config.clientId(), config.serverUrl(), new BeaconApiClient(config));
+        return new BeaconViewModel(
+            config.clientId(),
+            config.serverUrl(),
+            new BeaconApiClient(config),
+            new AndroidIntentStreamConnectionLauncher(this));
     }
 
     private BeaconApiClient.ProfilePatch readPatch() {

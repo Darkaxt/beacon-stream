@@ -69,6 +69,46 @@ public final class BeaconViewModelTest {
     }
 
     @Test
+    public void launchDelegatesServerConnectionLaunchUri() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(
+            200,
+            "{\"state\":\"streaming\",\"stream\":{\"connection\":{\"launchUri\":\"moonlight://stream/z-fold-7\"}}}");
+        RecordingStreamConnectionLauncher launcher = new RecordingStreamConnectionLauncher();
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service, launcher);
+
+        model.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+
+        assertEquals("moonlight://stream/z-fold-7", launcher.launchedUri);
+    }
+
+    @Test
+    public void launchDoesNotDelegateConnectionUriWhenServerLaunchFails() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(
+            503,
+            "{\"stream\":{\"connection\":{\"launchUri\":\"moonlight://stream/z-fold-7\"}}}");
+        RecordingStreamConnectionLauncher launcher = new RecordingStreamConnectionLauncher();
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service, launcher);
+
+        model.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+
+        assertEquals("", launcher.launchedUri);
+    }
+
+    @Test
+    public void launchDoesNotDelegateConnectionUriWhenServerDoesNotProvideOne() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(200, "{\"state\":\"streaming\",\"stream\":{\"fps\":120}}");
+        RecordingStreamConnectionLauncher launcher = new RecordingStreamConnectionLauncher();
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service, launcher);
+
+        model.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+
+        assertEquals("", launcher.launchedUri);
+    }
+
+    @Test
     public void preflightAndPlanPatchesProfileThenReportsFactsThenRequestsPlan() throws Exception {
         FakeService service = new FakeService();
         BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
@@ -104,6 +144,15 @@ public final class BeaconViewModelTest {
 
     private static BeaconApiClient.ClientTelemetry defaultTelemetry() {
         return new BeaconApiClient.ClientTelemetry(8, 0.0, 20, 120, "wifi-7", 80, "nominal");
+    }
+
+    private static final class RecordingStreamConnectionLauncher implements StreamConnectionLauncher {
+        String launchedUri = "";
+
+        @Override
+        public void launch(String launchUri) {
+            launchedUri = launchUri;
+        }
     }
 
     private static final class FakeService implements BeaconViewModel.BeaconService {
