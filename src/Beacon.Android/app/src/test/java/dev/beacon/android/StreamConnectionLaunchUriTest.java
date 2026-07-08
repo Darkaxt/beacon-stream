@@ -27,6 +27,30 @@ public final class StreamConnectionLaunchUriTest {
     }
 
     @Test
+    public void descriptorExtractsProtocolLaunchUriAndEndpoints() {
+        StreamConnectionDescriptor descriptor = StreamConnectionDescriptor.extract(
+            "{\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"launchUri\":\"moonlight://stream/z-fold-7\",\"endpoints\":[{\"role\":\"rtsp\",\"uri\":\"rtsp://127.0.0.1:48010\"},{\"role\":\"audio\",\"uri\":\"udp://127.0.0.1:48000\"}]}}}");
+
+        assertEquals("gamestream", descriptor.protocol());
+        assertEquals("moonlight://stream/z-fold-7", descriptor.launchUri());
+        assertEquals("rtsp=rtsp://127.0.0.1:48010, audio=udp://127.0.0.1:48000", descriptor.endpointSummary());
+        assertEquals("", descriptor.missingLaunchUriDiagnostic());
+    }
+
+    @Test
+    public void descriptorReportsEndpointOnlyConnectionWithoutLaunchUri() {
+        StreamConnectionDescriptor descriptor = StreamConnectionDescriptor.extract(
+            "{\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"endpoints\":[{\"role\":\"rtsp\",\"uri\":\"rtsp://127.0.0.1:48010\"}]}}}");
+
+        assertEquals("gamestream", descriptor.protocol());
+        assertEquals("", descriptor.launchUri());
+        assertEquals("rtsp=rtsp://127.0.0.1:48010", descriptor.endpointSummary());
+        assertEquals(
+            "Stream connection did not include a launch URI. protocol=gamestream endpoints=rtsp=rtsp://127.0.0.1:48010",
+            descriptor.missingLaunchUriDiagnostic());
+    }
+
+    @Test
     public void dispatchingLauncherPostsLaunchToDispatcher() {
         RecordingDispatcher dispatcher = new RecordingDispatcher();
         RecordingLauncher inner = new RecordingLauncher();

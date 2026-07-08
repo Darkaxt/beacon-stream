@@ -306,7 +306,8 @@ public final class BeaconActivity extends Activity {
         executor.execute(() -> {
             try {
                 action.run(model);
-                setStatus(model.status() + "\nGames: " + model.latestGames() + "\nPlan: " + model.latestPlan() + "\nStream: " + model.latestStream());
+                String error = model.latestError().isEmpty() ? "" : "\nError: " + model.latestError();
+                setStatus(model.status() + "\nGames: " + model.latestGames() + "\nPlan: " + model.latestPlan() + "\nStream: " + model.latestStream() + error);
             } catch (IOException | RuntimeException ex) {
                 setStatus(label + " failed: " + ex.getMessage());
             }

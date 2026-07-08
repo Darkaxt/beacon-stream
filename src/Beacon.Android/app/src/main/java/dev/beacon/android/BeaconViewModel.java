@@ -121,9 +121,15 @@ public final class BeaconViewModel {
         record("launch", result);
         latestStream = result.body();
         if (result.isSuccess()) {
-            String launchUri = StreamConnectionLaunchUri.extract(result.body());
+            StreamConnectionDescriptor connection = StreamConnectionDescriptor.extract(result.body());
+            String launchUri = connection.launchUri();
             if (!launchUri.isEmpty()) {
                 connectionLauncher.launch(launchUri);
+            } else {
+                String diagnostic = connection.missingLaunchUriDiagnostic();
+                if (!diagnostic.isEmpty()) {
+                    latestError = diagnostic;
+                }
             }
         }
     }
