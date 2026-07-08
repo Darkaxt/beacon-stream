@@ -12,21 +12,48 @@ public final class BeaconTouchInputMapper {
         float y,
         int surfaceWidth,
         int surfaceHeight) {
+        return mapPointers(
+            action,
+            new int[] { pointerId },
+            new float[] { x },
+            new float[] { y },
+            surfaceWidth,
+            surfaceHeight);
+    }
+
+    public BeaconApiClient.InputBatch mapPointers(
+        String action,
+        int[] pointerIds,
+        float[] xs,
+        float[] ys,
+        int surfaceWidth,
+        int surfaceHeight) {
         if (surfaceWidth <= 0 || surfaceHeight <= 0) {
             throw new IllegalArgumentException("Touch surface width and height must be positive.");
+        }
+
+        if (pointerIds == null ||
+            xs == null ||
+            ys == null ||
+            pointerIds.length == 0 ||
+            pointerIds.length != xs.length ||
+            pointerIds.length != ys.length) {
+            throw new IllegalArgumentException("Pointer id and coordinate arrays must be the same non-zero length.");
         }
 
         String normalizedAction = normalizeAction(action);
         BeaconApiClient.InputBatch batch = new BeaconApiClient.InputBatch();
         batch.sequence = nextSequence++;
-        batch.events = new BeaconApiClient.InputEvent[] {
-            BeaconApiClient.InputEvent.pointer(
+        batch.events = new BeaconApiClient.InputEvent[pointerIds.length];
+        for (int i = 0; i < pointerIds.length; i++) {
+            batch.events[i] = BeaconApiClient.InputEvent.pointer(
                 normalizedAction,
-                pointerId,
-                clamp(x / surfaceWidth),
-                clamp(y / surfaceHeight),
-                buttonMask(normalizedAction))
-        };
+                pointerIds[i],
+                clamp(xs[i] / surfaceWidth),
+                clamp(ys[i] / surfaceHeight),
+                buttonMask(normalizedAction));
+        }
+
         return batch;
     }
 

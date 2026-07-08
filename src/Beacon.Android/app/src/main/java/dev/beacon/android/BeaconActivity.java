@@ -191,23 +191,54 @@ public final class BeaconActivity extends Activity {
         surface.setMinHeight(360);
         surface.setBackgroundColor(uiState.surfaceColor());
         surface.setOnTouchListener((view, event) -> {
-            String action = pointerAction(event);
-            if (action.isEmpty()) {
+            BeaconApiClient.InputBatch batch = mapTouchEvent(event, view.getWidth(), view.getHeight());
+            if (batch == null) {
                 return false;
             }
 
-            int pointerIndex = pointerIndex(event);
-            BeaconApiClient.InputBatch batch = touchInputMapper.map(
-                action,
-                event.getPointerId(pointerIndex),
-                event.getX(pointerIndex),
-                event.getY(pointerIndex),
-                view.getWidth(),
-                view.getHeight());
             runAction("Touch Input", model -> model.sendInput(batch));
             return true;
         });
         return surface;
+    }
+
+    private BeaconApiClient.InputBatch mapTouchEvent(MotionEvent event, int surfaceWidth, int surfaceHeight) {
+        String action = pointerAction(event);
+        if (action.isEmpty()) {
+            return null;
+        }
+
+        if (event.getActionMasked() == MotionEvent.ACTION_MOVE ||
+            event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+            return mapAllPointers(action, event, surfaceWidth, surfaceHeight);
+        }
+
+        int pointerIndex = event.getActionIndex();
+        return touchInputMapper.map(
+            action,
+            event.getPointerId(pointerIndex),
+            event.getX(pointerIndex),
+            event.getY(pointerIndex),
+            surfaceWidth,
+            surfaceHeight);
+    }
+
+    private BeaconApiClient.InputBatch mapAllPointers(
+        String action,
+        MotionEvent event,
+        int surfaceWidth,
+        int surfaceHeight) {
+        int pointerCount = event.getPointerCount();
+        int[] pointerIds = new int[pointerCount];
+        float[] xs = new float[pointerCount];
+        float[] ys = new float[pointerCount];
+        for (int i = 0; i < pointerCount; i++) {
+            pointerIds[i] = event.getPointerId(i);
+            xs[i] = event.getX(i);
+            ys[i] = event.getY(i);
+        }
+
+        return touchInputMapper.mapPointers(action, pointerIds, xs, ys, surfaceWidth, surfaceHeight);
     }
 
     private EditText input(String hint, String value) {
@@ -256,19 +287,17 @@ public final class BeaconActivity extends Activity {
     private static String pointerAction(MotionEvent event) {
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
+            case MotionEvent.ACTION_POINTER_DOWN:
                 return "down";
             case MotionEvent.ACTION_MOVE:
                 return "move";
             case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_POINTER_UP:
             case MotionEvent.ACTION_CANCEL:
                 return "up";
             default:
                 return "";
         }
-    }
-
-    private static int pointerIndex(MotionEvent event) {
-        return event.getActionMasked() == MotionEvent.ACTION_MOVE ? 0 : event.getActionIndex();
     }
 
     private void runAction(String label, BeaconAction action) {
