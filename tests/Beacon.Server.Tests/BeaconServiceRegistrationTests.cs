@@ -194,6 +194,19 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public void ExternalProcessArgumentTemplateUsesConfiguration()
+    {
+        using ServiceProvider provider = BuildProvider(
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "external-process"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey, "C:\\Tools\\beacon-streaming-probe.exe"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingArgumentTemplateConfigurationKey, "--session {sessionId} --display {displayId}"));
+
+        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
+
+        Assert.Equal("--session {sessionId} --display {displayId}", options.ArgumentTemplate);
+    }
+
+    [Fact]
     public void ExternalProcessWrapperChildOptionsUseEnvironmentOverrides()
     {
         IConfiguration configuration = CreateConfiguration(
@@ -214,6 +227,26 @@ public sealed class BeaconServiceRegistrationTests
 
         Assert.Equal("C:\\Tools\\env-sunshine.exe", options.WrapperChildExecutablePath);
         Assert.Equal("--env", options.WrapperChildArguments);
+    }
+
+    [Fact]
+    public void ExternalProcessArgumentTemplateUsesEnvironmentOverride()
+    {
+        IConfiguration configuration = CreateConfiguration(
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "external-process"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey, "C:\\Tools\\beacon-streaming-probe.exe"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingArgumentTemplateConfigurationKey, "--configured {sessionId}"));
+
+        using ServiceProvider provider = new ServiceCollection()
+            .AddBeaconServices(
+                configuration,
+                environmentHostMode: null,
+                environmentExternalStreamingArgumentTemplate: "--env {displayId}")
+            .BuildServiceProvider();
+
+        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
+
+        Assert.Equal("--env {displayId}", options.ArgumentTemplate);
     }
 
     [Fact]

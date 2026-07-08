@@ -129,6 +129,22 @@ public sealed class ExternalProcessStreamingBackendTests
     }
 
     [Fact]
+    public async Task GetHealthAsyncReportsInvalidArgumentTemplateAsNotReady()
+    {
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions(
+                "C:\\Tools\\sunshine-wrapper.exe",
+                ArgumentTemplate: "--session {sessionId} --config {sunshineConfig}"),
+            new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]));
+
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.False(health.Ready);
+        Assert.Contains("argument template", health.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("sunshineConfig", health.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CreateStartInfoPassesSessionPlanAsArgumentsAndEnvironment()
     {
         SessionPlan plan = CreatePlan();
@@ -144,6 +160,45 @@ public sealed class ExternalProcessStreamingBackendTests
         Assert.Equal("av1", command.Environment["BEACON_STREAM_CODEC"]);
         Assert.Equal("120", command.Environment["BEACON_STREAM_FPS"]);
         Assert.Equal("65", command.Environment["BEACON_STREAM_BITRATE_MBPS"]);
+    }
+
+    [Fact]
+    public void CreateStartCommandExpandsConfiguredArgumentTemplate()
+    {
+        SessionPlan plan = CreatePlan();
+
+        ExternalStreamingCommand command = ExternalProcessStreamingBackend.CreateStartCommand(
+            "C:\\Tools\\sunshine-wrapper.exe",
+            plan,
+            new ExternalProcessStreamingOptions(
+                "C:\\Tools\\sunshine-wrapper.exe",
+                "gamestream",
+                "moonlight://beacon/z-fold-7",
+                ManifestPath: "C:\\Tools\\beacon-streaming.json",
+                WrapperChildExecutablePath: "C:\\Tools\\sunshine.exe",
+                WrapperChildArguments: "--config sunshine.json",
+                ArgumentTemplate: "--session {sessionId} --client {clientId} --app {appId} --display {displayId} --codec {codec} --fps {fps} --bitrate {bitrateMbps} --transport {transport} --manifest {manifestPath} --protocol {connectionProtocol} --launch {connectionLaunchUri} --child {wrapperChildExecutablePath} --child-args {wrapperChildArguments} --descriptor {sessionDescriptorPath}"),
+            "C:\\Beacon\\Runtime\\z-fold-7-steam-shortcut-3767414131.json");
+
+        Assert.Equal(
+            "--session \"z-fold-7-steam-shortcut:3767414131\" --client \"z-fold-7\" --app \"steam-shortcut:3767414131\" --display \"client-z-fold-7\" --codec \"av1\" --fps \"120\" --bitrate \"65\" --transport \"lan-direct\" --manifest \"C:\\Tools\\beacon-streaming.json\" --protocol \"gamestream\" --launch \"moonlight://beacon/z-fold-7\" --child \"C:\\Tools\\sunshine.exe\" --child-args \"--config sunshine.json\" --descriptor \"C:\\Beacon\\Runtime\\z-fold-7-steam-shortcut-3767414131.json\"",
+            command.Arguments);
+    }
+
+    [Fact]
+    public async Task PreflightFailsWhenArgumentTemplateContainsUnknownToken()
+    {
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions(
+                "C:\\Tools\\sunshine-wrapper.exe",
+                ArgumentTemplate: "--session {sessionId} --config {sunshineConfig}"),
+            new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]));
+
+        StreamingPreflightResult result = await backend.CheckReadinessAsync(CreatePlan(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("argument template", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("sunshineConfig", result.Error, StringComparison.Ordinal);
     }
 
     [Fact]
