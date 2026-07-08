@@ -131,19 +131,19 @@ Files:
 - Modify: `tests/Beacon.Cockpit.Tests/CockpitApiClientTests.cs`
 - Modify: `tests/Beacon.Cockpit.Tests/CockpitShellViewModelTests.cs`
 
-- [ ] **Step 1: Add cockpit API methods**
+- [x] **Step 1: Add cockpit API methods**
 
 Expose the three new admin endpoints.
 
-- [ ] **Step 2: Add view-model commands**
+- [x] **Step 2: Add view-model commands**
 
 Add commands for move all back, close virtual windows, and terminate virtual processes.
 
-- [ ] **Step 3: Add Recovery tab buttons**
+- [x] **Step 3: Add Recovery tab buttons**
 
 Keep the UI simple and functional. The move-all-back action should request minimized moved windows.
 
-- [ ] **Step 4: Verify focused tests and commit**
+- [x] **Step 4: Verify focused tests and commit**
 
 ```powershell
 dotnet test tests/Beacon.Cockpit.Tests/Beacon.Cockpit.Tests.csproj

@@ -161,6 +161,16 @@
                                 Margin="0,0,0,8" />
                         <Button Content="Recover Selected Client Display"
                                 Command="{Binding RecoverSelectedClientCommand}"
+                                Margin="0,0,0,8" />
+                        <Separator Margin="0,6,0,14" />
+                        <Button Content="Move All Back Minimized"
+                                Command="{Binding MoveWindowsBackCommand}"
+                                Margin="0,0,0,8" />
+                        <Button Content="Close Virtual Windows"
+                                Command="{Binding CloseVirtualWindowsCommand}"
+                                Margin="0,0,0,8" />
+                        <Button Content="Terminate Virtual Processes"
+                                Command="{Binding TerminateVirtualProcessesCommand}"
                                 Margin="0" />
                     </StackPanel>
                 </TabItem>

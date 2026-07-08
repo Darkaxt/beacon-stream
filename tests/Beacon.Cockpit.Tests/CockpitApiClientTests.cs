@@ -40,13 +40,22 @@ public sealed class CockpitApiClientTests
         var client = new CockpitApiClient(new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5000") });
 
         await client.RestorePhysicalAsync(CancellationToken.None);
+        await client.MoveWindowsBackAsync(minimize: true, CancellationToken.None);
+        await client.CloseVirtualWindowsAsync(CancellationToken.None);
+        await client.TerminateVirtualProcessesAsync(CancellationToken.None);
         await client.RecoverClientDisplayAsync("z fold/7", CancellationToken.None);
 
-        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal(5, handler.Requests.Count);
         Assert.Equal(HttpMethod.Post, handler.Requests[0].Method);
         Assert.Equal("/admin/recovery/restore-physical", handler.Requests[0].RequestUri?.PathAndQuery);
         Assert.Equal(HttpMethod.Post, handler.Requests[1].Method);
-        Assert.Equal("/admin/clients/z%20fold%2F7/display/recover", handler.Requests[1].RequestUri?.PathAndQuery);
+        Assert.Equal("/admin/recovery/move-windows-back", handler.Requests[1].RequestUri?.PathAndQuery);
+        Assert.Equal(HttpMethod.Post, handler.Requests[2].Method);
+        Assert.Equal("/admin/recovery/close-virtual-windows", handler.Requests[2].RequestUri?.PathAndQuery);
+        Assert.Equal(HttpMethod.Post, handler.Requests[3].Method);
+        Assert.Equal("/admin/recovery/terminate-virtual-processes", handler.Requests[3].RequestUri?.PathAndQuery);
+        Assert.Equal(HttpMethod.Post, handler.Requests[4].Method);
+        Assert.Equal("/admin/clients/z%20fold%2F7/display/recover", handler.Requests[4].RequestUri?.PathAndQuery);
     }
 
     private sealed class FakeHttpHandler(string responseBody) : HttpMessageHandler
