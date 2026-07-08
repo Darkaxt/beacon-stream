@@ -363,7 +363,8 @@ public final class BeaconActivity extends Activity {
             try {
                 action.run(model);
                 String error = model.latestError().isEmpty() ? "" : "\nError: " + model.latestError();
-                setStatus(model.status() + "\nGames: " + model.latestGames() + "\nPlan: " + model.latestPlan() + "\nStream: " + model.latestStream() + error);
+                String nativeStream = model.latestNativeStream().isEmpty() ? "" : "\nNative stream: " + model.latestNativeStream();
+                setStatus(model.status() + "\nGames: " + model.latestGames() + "\nPlan: " + model.latestPlan() + "\nStream: " + model.latestStream() + nativeStream + error);
             } catch (IOException | RuntimeException ex) {
                 setStatus(label + " failed: " + ex.getMessage());
             }

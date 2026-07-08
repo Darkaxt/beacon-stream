@@ -7,6 +7,7 @@ import java.util.List;
 public final class BeaconViewModel {
     private final BeaconService service;
     private final StreamConnectionLauncher connectionLauncher;
+    private final NativeStreamClient nativeStreamClient;
     private final String clientId;
     private final String serverUrl;
 
@@ -14,7 +15,9 @@ public final class BeaconViewModel {
     private String latestGames = "";
     private String latestPlan = "";
     private String latestStream = "";
+    private String latestNativeStream = "";
     private String latestError = "";
+    private boolean nativeStreamActive;
     private List<BeaconGameCatalog.GameEntry> latestGameEntries = Collections.emptyList();
 
     public BeaconViewModel(String clientId, String serverUrl, BeaconService service) {
@@ -26,10 +29,20 @@ public final class BeaconViewModel {
         String serverUrl,
         BeaconService service,
         StreamConnectionLauncher connectionLauncher) {
+        this(clientId, serverUrl, service, connectionLauncher, new DiagnosticNativeStreamClient());
+    }
+
+    public BeaconViewModel(
+        String clientId,
+        String serverUrl,
+        BeaconService service,
+        StreamConnectionLauncher connectionLauncher,
+        NativeStreamClient nativeStreamClient) {
         this.clientId = clientId;
         this.serverUrl = serverUrl;
         this.service = service;
         this.connectionLauncher = connectionLauncher;
+        this.nativeStreamClient = nativeStreamClient;
     }
 
     public String clientId() {
@@ -58,6 +71,10 @@ public final class BeaconViewModel {
 
     public String latestStream() {
         return latestStream;
+    }
+
+    public String latestNativeStream() {
+        return latestNativeStream;
     }
 
     public String latestError() {
@@ -125,16 +142,33 @@ public final class BeaconViewModel {
         record("launch", result);
         latestStream = result.body();
         if (result.isSuccess()) {
+            clearNativeStream();
             StreamConnectionDescriptor connection = StreamConnectionDescriptor.extract(result.body());
             String launchUri = connection.launchUri();
             if (!launchUri.isEmpty()) {
                 connectionLauncher.launch(launchUri);
             } else {
-                String diagnostic = connection.missingLaunchUriDiagnostic();
-                if (!diagnostic.isEmpty()) {
-                    latestError = diagnostic;
-                }
+                startNativeStream(connection);
             }
+        }
+    }
+
+    private void startNativeStream(StreamConnectionDescriptor connection) {
+        if (!connection.present()) {
+            return;
+        }
+
+        NativeStreamStartResult start = nativeStreamClient.start(connection);
+        if (start.success()) {
+            latestNativeStream = start.status();
+            latestError = "";
+            nativeStreamActive = true;
+            return;
+        }
+
+        String diagnostic = start.diagnostic();
+        if (!diagnostic.isEmpty()) {
+            latestError = diagnostic;
         }
     }
 
@@ -155,6 +189,18 @@ public final class BeaconViewModel {
         BeaconApiClient.BeaconResult result = service.stopStream();
         record("stop stream", result);
         latestStream = result.body();
+        if (result.isSuccess()) {
+            clearNativeStream();
+        }
+    }
+
+    private void clearNativeStream() {
+        if (nativeStreamActive) {
+            nativeStreamClient.stop();
+            nativeStreamActive = false;
+        }
+
+        latestNativeStream = "";
     }
 
     public void disconnect() throws IOException {

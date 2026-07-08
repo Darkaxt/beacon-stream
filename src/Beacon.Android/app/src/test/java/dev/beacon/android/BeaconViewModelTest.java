@@ -169,6 +169,72 @@ public final class BeaconViewModelTest {
     }
 
     @Test
+    public void launchStartsNativeStreamClientForSupportedEndpointOnlyConnection() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(
+            200,
+            "{\"state\":\"streaming\",\"stream\":{\"connection\":{\"protocol\":\"beacon-test\",\"endpoints\":[{\"role\":\"video\",\"uri\":\"beacon-test://pattern/color-bars\"}]}}}");
+        RecordingStreamConnectionLauncher launcher = new RecordingStreamConnectionLauncher();
+        RecordingNativeStreamClient nativeStreamClient = new RecordingNativeStreamClient(
+            NativeStreamStartResult.started("Native stream ready. protocol=beacon-test endpoints=video=beacon-test://pattern/color-bars"));
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service, launcher, nativeStreamClient);
+
+        model.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+
+        assertEquals("", launcher.launchedUri);
+        assertEquals("beacon-test", nativeStreamClient.startedConnection.protocol());
+        assertEquals(
+            "Native stream ready. protocol=beacon-test endpoints=video=beacon-test://pattern/color-bars",
+            model.latestNativeStream());
+        assertEquals("", model.latestError());
+    }
+
+    @Test
+    public void stopStreamStopsNativeStreamStateAfterSuccessfulServerStop() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(
+            200,
+            "{\"state\":\"streaming\",\"stream\":{\"connection\":{\"protocol\":\"beacon-test\",\"endpoints\":[{\"role\":\"video\",\"uri\":\"beacon-test://pattern/color-bars\"}]}}}");
+        RecordingNativeStreamClient nativeStreamClient = new RecordingNativeStreamClient(
+            NativeStreamStartResult.started("Native stream ready. protocol=beacon-test endpoints=video=beacon-test://pattern/color-bars"));
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7",
+            "http://server",
+            service,
+            new RecordingStreamConnectionLauncher(),
+            nativeStreamClient);
+        model.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+        service.next = new BeaconApiClient.BeaconResult(200, "{\"state\":\"stopped\"}");
+
+        model.stopStream();
+
+        assertEquals(1, nativeStreamClient.stopCount);
+        assertEquals("", model.latestNativeStream());
+    }
+
+    @Test
+    public void launchUriLaunchClearsPreviousNativeStreamState() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(
+            200,
+            "{\"state\":\"streaming\",\"stream\":{\"connection\":{\"protocol\":\"beacon-test\",\"endpoints\":[{\"role\":\"video\",\"uri\":\"beacon-test://pattern/color-bars\"}]}}}");
+        RecordingStreamConnectionLauncher launcher = new RecordingStreamConnectionLauncher();
+        RecordingNativeStreamClient nativeStreamClient = new RecordingNativeStreamClient(
+            NativeStreamStartResult.started("Native stream ready. protocol=beacon-test endpoints=video=beacon-test://pattern/color-bars"));
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service, launcher, nativeStreamClient);
+        model.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+        service.next = new BeaconApiClient.BeaconResult(
+            200,
+            "{\"state\":\"streaming\",\"stream\":{\"connection\":{\"launchUri\":\"moonlight://stream/z-fold-7\"}}}");
+
+        model.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+
+        assertEquals("moonlight://stream/z-fold-7", launcher.launchedUri);
+        assertEquals(1, nativeStreamClient.stopCount);
+        assertEquals("", model.latestNativeStream());
+    }
+
+    @Test
     public void sendInputCallsOwningClientInputRoute() throws Exception {
         FakeService service = new FakeService();
         BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
@@ -223,6 +289,27 @@ public final class BeaconViewModelTest {
         @Override
         public void launch(String launchUri) {
             launchedUri = launchUri;
+        }
+    }
+
+    private static final class RecordingNativeStreamClient implements NativeStreamClient {
+        private final NativeStreamStartResult result;
+        StreamConnectionDescriptor startedConnection;
+        int stopCount;
+
+        RecordingNativeStreamClient(NativeStreamStartResult result) {
+            this.result = result;
+        }
+
+        @Override
+        public NativeStreamStartResult start(StreamConnectionDescriptor connection) {
+            startedConnection = connection;
+            return result;
+        }
+
+        @Override
+        public void stop() {
+            stopCount++;
         }
     }
 
