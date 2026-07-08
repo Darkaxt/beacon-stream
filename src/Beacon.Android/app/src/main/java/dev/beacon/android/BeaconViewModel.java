@@ -4,6 +4,7 @@ import java.io.IOException;
 
 public final class BeaconViewModel {
     private final BeaconService service;
+    private final StreamConnectionLauncher connectionLauncher;
     private final String clientId;
     private final String serverUrl;
 
@@ -13,9 +14,18 @@ public final class BeaconViewModel {
     private String latestError = "";
 
     public BeaconViewModel(String clientId, String serverUrl, BeaconService service) {
+        this(clientId, serverUrl, service, launchUri -> { });
+    }
+
+    public BeaconViewModel(
+        String clientId,
+        String serverUrl,
+        BeaconService service,
+        StreamConnectionLauncher connectionLauncher) {
         this.clientId = clientId;
         this.serverUrl = serverUrl;
         this.service = service;
+        this.connectionLauncher = connectionLauncher;
     }
 
     public String clientId() {
@@ -86,6 +96,12 @@ public final class BeaconViewModel {
         BeaconApiClient.BeaconResult result = service.launch(game);
         record("launch", result);
         latestStream = result.body();
+        if (result.isSuccess()) {
+            String launchUri = StreamConnectionLaunchUri.extract(result.body());
+            if (!launchUri.isEmpty()) {
+                connectionLauncher.launch(launchUri);
+            }
+        }
     }
 
     public void preflightAndLaunch(
