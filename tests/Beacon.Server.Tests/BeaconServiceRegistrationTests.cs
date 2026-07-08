@@ -5,6 +5,7 @@ using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Displays;
 using Beacon.Platform.Windows.Games;
 using Beacon.Platform.Windows.Sessions;
+using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,7 +22,9 @@ public sealed class BeaconServiceRegistrationTests
         BeaconHostOptions options = provider.GetRequiredService<BeaconHostOptions>();
 
         Assert.Equal(BeaconHostMode.Fake, options.Mode);
+        Assert.Equal(BeaconStreamingBackendMode.Fake, options.StreamingBackendMode);
         Assert.Equal("fake", options.ModeName);
+        Assert.Equal("fake", options.StreamingBackendModeName);
         Assert.IsType<FakeDisplayBackend>(provider.GetRequiredService<IDisplayBackend>());
         Assert.IsType<FakeGameLauncher>(provider.GetRequiredService<IGameLauncher>());
         Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
@@ -38,6 +41,7 @@ public sealed class BeaconServiceRegistrationTests
         BeaconHostOptions options = provider.GetRequiredService<BeaconHostOptions>();
 
         Assert.Equal(BeaconHostMode.Windows, options.Mode);
+        Assert.Equal(BeaconStreamingBackendMode.Fake, options.StreamingBackendMode);
         Assert.Equal("windows", options.ModeName);
         Assert.IsType<WindowsDisplayApi>(provider.GetRequiredService<IWindowsDisplayApi>());
         Assert.IsType<WindowsDisplayBackend>(provider.GetRequiredService<IDisplayBackend>());
@@ -45,6 +49,24 @@ public sealed class BeaconServiceRegistrationTests
         Assert.IsType<WindowsSessionActivityApi>(provider.GetRequiredService<IWindowsSessionActivityApi>());
         Assert.IsType<WindowsSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
         Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+    }
+
+    [Fact]
+    public void ExternalProcessStreamingRegistrationUsesExplicitBackendAndOptions()
+    {
+        using ServiceProvider provider = BuildProvider(
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "external-process"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey, "C:\\Tools\\beacon-stream-wrapper.exe"));
+
+        BeaconHostOptions options = provider.GetRequiredService<BeaconHostOptions>();
+
+        Assert.Equal(BeaconStreamingBackendMode.ExternalProcess, options.StreamingBackendMode);
+        Assert.Equal("external-process", options.StreamingBackendModeName);
+        Assert.IsType<ExternalProcessStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+        Assert.IsType<WindowsExternalStreamingProcessRunner>(provider.GetRequiredService<IExternalStreamingProcessRunner>());
+        Assert.Equal(
+            "C:\\Tools\\beacon-stream-wrapper.exe",
+            provider.GetRequiredService<ExternalProcessStreamingOptions>().ExecutablePath);
     }
 
     [Fact]
@@ -60,6 +82,18 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public void EnvironmentStreamingModeOverridesConfiguration()
+    {
+        IConfiguration configuration = CreateConfiguration(new KeyValuePair<string, string?>(
+            BeaconServiceRegistration.StreamingBackendConfigurationKey,
+            "fake"));
+
+        BeaconStreamingBackendMode mode = BeaconServiceRegistration.ResolveStreamingBackendMode(configuration, "external-process");
+
+        Assert.Equal(BeaconStreamingBackendMode.ExternalProcess, mode);
+    }
+
+    [Fact]
     public void UnknownHostModeFailsWithClearConfigurationError()
     {
         IConfiguration configuration = CreateConfiguration(new KeyValuePair<string, string?>(
@@ -72,6 +106,21 @@ public sealed class BeaconServiceRegistrationTests
 
         Assert.Contains("Unsupported Beacon host mode 'broken'", exception.Message, StringComparison.Ordinal);
         Assert.Contains("fake, windows", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnknownStreamingModeFailsWithClearConfigurationError()
+    {
+        IConfiguration configuration = CreateConfiguration(new KeyValuePair<string, string?>(
+            BeaconServiceRegistration.StreamingBackendConfigurationKey,
+            "broken"));
+        var services = new ServiceCollection();
+
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
+            services.AddBeaconServices(configuration, environmentHostMode: null));
+
+        Assert.Contains("Unsupported Beacon streaming backend 'broken'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("fake, external-process", exception.Message, StringComparison.Ordinal);
     }
 
     private static ServiceProvider BuildProvider(params KeyValuePair<string, string?>[] values)

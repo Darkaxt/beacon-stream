@@ -6,6 +6,7 @@ using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Displays;
 using Beacon.Platform.Windows.Games;
 using Beacon.Platform.Windows.Sessions;
+using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.State;
 
 namespace Beacon.Server.Hosting;
@@ -14,19 +15,30 @@ public static class BeaconServiceRegistration
 {
     public const string HostModeConfigurationKey = "Beacon:HostMode";
     public const string HostModeEnvironmentVariable = "BEACON_HOST_MODE";
+    public const string StreamingBackendConfigurationKey = "Beacon:Streaming:Backend";
+    public const string StreamingBackendEnvironmentVariable = "BEACON_STREAMING_BACKEND";
+    public const string ExternalStreamingExecutableConfigurationKey = "Beacon:Streaming:ExternalProcess:ExecutablePath";
+    public const string ExternalStreamingExecutableEnvironmentVariable = "BEACON_EXTERNAL_STREAMING_EXECUTABLE";
 
     public static IServiceCollection AddBeaconServices(
         this IServiceCollection services,
         IConfiguration configuration) =>
-        services.AddBeaconServices(configuration, Environment.GetEnvironmentVariable(HostModeEnvironmentVariable));
+        services.AddBeaconServices(
+            configuration,
+            Environment.GetEnvironmentVariable(HostModeEnvironmentVariable),
+            Environment.GetEnvironmentVariable(StreamingBackendEnvironmentVariable),
+            Environment.GetEnvironmentVariable(ExternalStreamingExecutableEnvironmentVariable));
 
     public static IServiceCollection AddBeaconServices(
         this IServiceCollection services,
         IConfiguration configuration,
-        string? environmentHostMode)
+        string? environmentHostMode,
+        string? environmentStreamingBackend = null,
+        string? environmentExternalStreamingExecutable = null)
     {
         BeaconHostMode mode = ResolveHostMode(configuration, environmentHostMode);
-        services.AddSingleton(BeaconHostOptions.Create(mode));
+        BeaconStreamingBackendMode streamingBackendMode = ResolveStreamingBackendMode(configuration, environmentStreamingBackend);
+        services.AddSingleton(BeaconHostOptions.Create(mode, streamingBackendMode));
         services.AddSingleton<InMemoryClientStore>();
         services.AddSingleton<InMemorySessionStore>();
         services.AddSingleton<DisplayLeaseManager>();
@@ -48,12 +60,9 @@ public static class BeaconServiceRegistration
             sp.GetServices<IGameLibraryProvider>().ToArray(),
             sp.GetRequiredService<IArtworkProvider>()));
 
-        return mode switch
-        {
-            BeaconHostMode.Fake => services.AddFakeHostBoundaries(),
-            BeaconHostMode.Windows => services.AddWindowsHostBoundaries(),
-            _ => throw new ArgumentOutOfRangeException(nameof(configuration), mode, "Unsupported Beacon host mode.")
-        };
+        AddHostBoundaries(services, mode);
+        AddStreamingBackend(services, configuration, streamingBackendMode, environmentExternalStreamingExecutable);
+        return services;
     }
 
     public static BeaconHostMode ResolveHostMode(IConfiguration configuration, string? environmentHostMode)
@@ -76,10 +85,46 @@ public static class BeaconServiceRegistration
         };
     }
 
+    public static BeaconStreamingBackendMode ResolveStreamingBackendMode(
+        IConfiguration configuration,
+        string? environmentStreamingBackend)
+    {
+        string? configuredMode = string.IsNullOrWhiteSpace(environmentStreamingBackend)
+            ? configuration[StreamingBackendConfigurationKey]
+            : environmentStreamingBackend;
+
+        if (string.IsNullOrWhiteSpace(configuredMode))
+        {
+            return BeaconStreamingBackendMode.Fake;
+        }
+
+        return configuredMode.Trim().ToLowerInvariant() switch
+        {
+            "fake" => BeaconStreamingBackendMode.Fake,
+            "external-process" => BeaconStreamingBackendMode.ExternalProcess,
+            _ => throw new InvalidOperationException(
+                $"Unsupported Beacon streaming backend '{configuredMode}'. Set {StreamingBackendConfigurationKey} or {StreamingBackendEnvironmentVariable} to one of: fake, external-process.")
+        };
+    }
+
+    private static void AddHostBoundaries(IServiceCollection services, BeaconHostMode mode)
+    {
+        switch (mode)
+        {
+            case BeaconHostMode.Fake:
+                services.AddFakeHostBoundaries();
+                break;
+            case BeaconHostMode.Windows:
+                services.AddWindowsHostBoundaries();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unsupported Beacon host mode.");
+        }
+    }
+
     private static IServiceCollection AddFakeHostBoundaries(this IServiceCollection services)
     {
         services.AddSingleton<IDisplayBackend, FakeDisplayBackend>();
-        services.AddSingleton<IStreamingBackend, FakeStreamingBackend>();
         services.AddSingleton<IGameLauncher, FakeGameLauncher>();
         services.AddSingleton<FakeSessionActivityInspector>();
         services.AddSingleton<ISessionActivityInspector>(sp => sp.GetRequiredService<FakeSessionActivityInspector>());
@@ -93,7 +138,36 @@ public static class BeaconServiceRegistration
         services.AddSingleton<IGameLauncher, WindowsGameLauncher>();
         services.AddSingleton<IWindowsSessionActivityApi, WindowsSessionActivityApi>();
         services.AddSingleton<ISessionActivityInspector, WindowsSessionActivityInspector>();
-        services.AddSingleton<IStreamingBackend, FakeStreamingBackend>();
         return services;
     }
+
+    private static void AddStreamingBackend(
+        IServiceCollection services,
+        IConfiguration configuration,
+        BeaconStreamingBackendMode mode,
+        string? environmentExternalStreamingExecutable)
+    {
+        switch (mode)
+        {
+            case BeaconStreamingBackendMode.Fake:
+                services.AddSingleton<IStreamingBackend, FakeStreamingBackend>();
+                break;
+            case BeaconStreamingBackendMode.ExternalProcess:
+                services.AddSingleton(new ExternalProcessStreamingOptions(ResolveExternalStreamingExecutable(
+                    configuration,
+                    environmentExternalStreamingExecutable)));
+                services.AddSingleton<IExternalStreamingProcessRunner, WindowsExternalStreamingProcessRunner>();
+                services.AddSingleton<IStreamingBackend, ExternalProcessStreamingBackend>();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unsupported Beacon streaming backend mode.");
+        }
+    }
+
+    private static string? ResolveExternalStreamingExecutable(
+        IConfiguration configuration,
+        string? environmentExternalStreamingExecutable) =>
+        string.IsNullOrWhiteSpace(environmentExternalStreamingExecutable)
+            ? configuration[ExternalStreamingExecutableConfigurationKey]
+            : environmentExternalStreamingExecutable;
 }

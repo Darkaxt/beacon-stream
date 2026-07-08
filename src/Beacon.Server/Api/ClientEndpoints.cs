@@ -159,6 +159,14 @@ public static class ClientEndpoints
                 return Results.BadRequest(new { error = planResult.Error });
             }
 
+            StreamingPreflightResult streamingPreflight = await streaming.CheckReadinessAsync(planResult.Plan, cancellationToken);
+            if (!streamingPreflight.Success)
+            {
+                return Results.Problem(
+                    streamingPreflight.Error,
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
             DisplayLeaseResult leaseResult = await leases.EnsureLeaseAsync(profile, cancellationToken);
             if (!leaseResult.Success || leaseResult.Lease is null)
             {
