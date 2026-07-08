@@ -1091,7 +1091,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
-    public async Task BeaconActiveClientEnsuresDisplayLeaseBeforeLaunch()
+    public async Task BeaconActiveClientPreparesDisplayLeaseWithoutActivatingSession()
     {
         var display = new FakeDisplayBackend();
         WebApplicationFactory<Program> displayFactory = factory.WithWebHostBuilder(builder =>
@@ -1112,7 +1112,8 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal("client-z-fold-7", root.GetProperty("displayId").GetString());
         Assert.True(root.GetProperty("leasePrepared").GetBoolean());
         Assert.False(root.GetProperty("displayRemoved").GetBoolean());
-        Assert.Equal("client-z-fold-7:2560x1600@120:hdr=Prefer", Assert.Single(display.EnsureCalls));
+        Assert.Equal("client-z-fold-7:2560x1600@120:hdr=Prefer", Assert.Single(display.PrepareCalls));
+        Assert.Empty(display.EnsureCalls);
         Assert.Empty(display.RemoveCalls);
     }
 

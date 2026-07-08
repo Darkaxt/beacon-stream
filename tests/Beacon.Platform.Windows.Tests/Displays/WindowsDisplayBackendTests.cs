@@ -108,6 +108,93 @@ public sealed class WindowsDisplayBackendTests
     }
 
     [Fact]
+    public async Task PrepareVirtualDisplayAsync_CreatesDisplayWithoutPrimaryRequest()
+    {
+        var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
+        var backend = new WindowsDisplayBackend(api);
+
+        DisplayEnsureResult result = await backend.PrepareVirtualDisplayAsync(
+            "client-z-fold-7",
+            2560,
+            1600,
+            120,
+            HdrPreference.Prefer,
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(("client-z-fold-7", 2560, 1600, 120), Assert.Single(api.CreatedDisplays));
+        Assert.Empty(api.PrimaryRequests);
+        Assert.Empty(api.RestoreRequests);
+    }
+
+    [Fact]
+    public async Task PrepareVirtualDisplayAsync_WhenCreateStealsPrimary_RestoresPhysicalPrimaryAndKeepsDisplay()
+    {
+        var api = new FakeWindowsDisplayApi
+        {
+            AfterCreateTopology = DisplayTopologySnapshot.Extended(
+                physicalDisplayId: "physical-laptop-panel",
+                virtualDisplayId: "client-z-fold-7",
+                width: 2560,
+                height: 1600,
+                refreshHz: 120,
+                virtualPrimary: true),
+            AfterRestoreTopology = DisplayTopologySnapshot.Extended(
+                physicalDisplayId: "physical-laptop-panel",
+                virtualDisplayId: "client-z-fold-7",
+                width: 2560,
+                height: 1600,
+                refreshHz: 120,
+                virtualPrimary: false)
+        };
+        var backend = new WindowsDisplayBackend(api);
+
+        DisplayEnsureResult result = await backend.PrepareVirtualDisplayAsync(
+            "client-z-fold-7",
+            2560,
+            1600,
+            120,
+            HdrPreference.Prefer,
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(("client-z-fold-7", 2560, 1600, 120), Assert.Single(api.CreatedDisplays));
+        Assert.Empty(api.PrimaryRequests);
+        Assert.Equal("physical-primary", Assert.Single(api.RestoreRequests));
+        Assert.Empty(api.RemovedDisplays);
+    }
+
+    [Fact]
+    public async Task PrepareVirtualDisplayAsync_WritesTopologyDecisionLog()
+    {
+        var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
+        var backend = new WindowsDisplayBackend(api);
+
+        DisplayEnsureResult result = await backend.PrepareVirtualDisplayAsync(
+            "client-z-fold-7",
+            2560,
+            1600,
+            120,
+            HdrPreference.Prefer,
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        DisplayOperationLogEntry entry = Assert.Single(backend.OperationLog);
+        Assert.Equal("prepare-virtual-display", entry.Operation);
+        Assert.Equal("client-z-fold-7", entry.DisplayId);
+        Assert.Equal(2560, entry.Width);
+        Assert.Equal(1600, entry.Height);
+        Assert.Equal(120, entry.RefreshHz);
+        Assert.False(entry.Primary);
+        Assert.False(entry.HdrEnabled);
+        Assert.Contains("prepared", entry.Reason);
+        Assert.NotNull(entry.Before);
+        Assert.NotNull(entry.After);
+        Assert.False(entry.After.IsPrimary("client-z-fold-7"));
+        Assert.True(entry.After.PhysicalPrimaryVerified);
+    }
+
+    [Fact]
     public async Task EnsureVirtualDisplayAsync_WritesTopologyDecisionLog()
     {
         var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();

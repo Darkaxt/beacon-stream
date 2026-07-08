@@ -281,7 +281,7 @@ public static class ClientEndpoints
             string displayId = DisplayLease.CreateDisplayId(new ClientId(clientId));
             if (request.Active)
             {
-                DisplayLeaseResult leaseResult = await leases.EnsureLeaseAsync(profile, cancellationToken);
+                DisplayLeaseResult leaseResult = await leases.PrepareLeaseAsync(profile, cancellationToken);
                 if (!leaseResult.Success || leaseResult.Lease is null)
                 {
                     return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);

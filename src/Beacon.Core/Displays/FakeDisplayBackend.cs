@@ -29,6 +29,10 @@ public sealed class FakeDisplayBackend : IDisplayBackend
 
     public Queue<DisplayEnsureResult> EnsureResults { get; } = [];
 
+    public Queue<DisplayEnsureResult> PrepareResults { get; } = [];
+
+    public List<string> PrepareCalls { get; } = [];
+
     public List<string> EnsureCalls { get; } = [];
 
     public List<string> RestoreCalls { get; } = [];
@@ -38,6 +42,25 @@ public sealed class FakeDisplayBackend : IDisplayBackend
     public Task<DisplayHealth> GetHealthAsync(CancellationToken cancellationToken) =>
         Task.FromResult(Health);
 
+    public Task<DisplayEnsureResult> PrepareVirtualDisplayAsync(
+        string displayId,
+        int width,
+        int height,
+        int refreshHz,
+        HdrPreference hdrPreference,
+        CancellationToken cancellationToken)
+    {
+        PrepareCalls.Add(FormatCall(displayId, width, height, refreshHz, hdrPreference));
+        if (PrepareResults.Count > 0)
+        {
+            return Task.FromResult(PrepareResults.Dequeue());
+        }
+
+        return Task.FromResult(AllowEnsure
+            ? DisplayEnsureResult.Ok()
+            : DisplayEnsureResult.Fail("virtual display is unavailable"));
+    }
+
     public Task<DisplayEnsureResult> EnsureVirtualDisplayAsync(
         string displayId,
         int width,
@@ -46,7 +69,7 @@ public sealed class FakeDisplayBackend : IDisplayBackend
         HdrPreference hdrPreference,
         CancellationToken cancellationToken)
     {
-        EnsureCalls.Add($"{displayId}:{width}x{height}@{refreshHz}:hdr={hdrPreference}");
+        EnsureCalls.Add(FormatCall(displayId, width, height, refreshHz, hdrPreference));
         if (EnsureResults.Count > 0)
         {
             return Task.FromResult(EnsureResults.Dequeue());
@@ -68,4 +91,7 @@ public sealed class FakeDisplayBackend : IDisplayBackend
         RemoveCalls.Add(displayId);
         return Task.FromResult(NextRemoveResult);
     }
+
+    private static string FormatCall(string displayId, int width, int height, int refreshHz, HdrPreference hdrPreference) =>
+        $"{displayId}:{width}x{height}@{refreshHz}:hdr={hdrPreference}";
 }

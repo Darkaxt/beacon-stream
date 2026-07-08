@@ -27,6 +27,21 @@ public sealed class DisplayLeaseManagerTests
     }
 
     [Fact]
+    public async Task PrepareLeaseCreatesClientScopedDisplayWithoutActivatingPrimary()
+    {
+        var backend = new FakeDisplayBackend();
+        var manager = new DisplayLeaseManager(backend);
+
+        DisplayLeaseResult result = await manager.PrepareLeaseAsync(ClientProfile.CreateZFold7Default(), CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        DisplayLease lease = Assert.IsType<DisplayLease>(result.Lease);
+        Assert.Equal("client-z-fold-7", lease.DisplayId);
+        Assert.Equal("client-z-fold-7:2560x1600@120:hdr=Prefer", Assert.Single(backend.PrepareCalls));
+        Assert.Empty(backend.EnsureCalls);
+    }
+
+    [Fact]
     public async Task DisconnectDoesNotTearDownLease()
     {
         var backend = new FakeDisplayBackend();
