@@ -68,69 +68,120 @@ public final class BeaconViewModelTest {
         assertTrue(model.latestStream().contains("\"state\":\"streaming\""));
     }
 
+    @Test
+    public void preflightAndPlanPatchesProfileThenReportsFactsThenRequestsPlan() throws Exception {
+        FakeService service = new FakeService();
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
+
+        model.preflightAndPlan(
+            new BeaconApiClient.ProfilePatch(),
+            defaultCapabilities(),
+            defaultTelemetry(),
+            BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+
+        assertEquals("patch,capabilities,telemetry,plan", service.actions());
+        assertEquals("plan: 200", model.status());
+    }
+
+    @Test
+    public void preflightAndLaunchPatchesProfileThenReportsFactsThenLaunches() throws Exception {
+        FakeService service = new FakeService();
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
+
+        model.preflightAndLaunch(
+            new BeaconApiClient.ProfilePatch(),
+            defaultCapabilities(),
+            defaultTelemetry(),
+            BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+
+        assertEquals("patch,capabilities,telemetry,launch", service.actions());
+        assertEquals("launch: 200", model.status());
+    }
+
+    private static BeaconApiClient.ClientCapabilities defaultCapabilities() {
+        return new BeaconApiClient.ClientCapabilities(true, true, true, false, false, 120, true, "2560x1600@120");
+    }
+
+    private static BeaconApiClient.ClientTelemetry defaultTelemetry() {
+        return new BeaconApiClient.ClientTelemetry(8, 0.0, 20, 120, "wifi-7", 80, "nominal");
+    }
+
     private static final class FakeService implements BeaconViewModel.BeaconService {
         String lastAction = "";
+        private final StringBuilder actions = new StringBuilder();
         BeaconApiClient.ProfilePatch lastPatch;
         BeaconApiClient.BeaconResult next = new BeaconApiClient.BeaconResult(200, "{}");
 
+        String actions() {
+            return actions.toString();
+        }
+
+        private void record(String action) {
+            lastAction = action;
+            if (actions.length() > 0) {
+                actions.append(',');
+            }
+            actions.append(action);
+        }
+
         @Override
         public BeaconApiClient.BeaconResult hello() throws IOException {
-            lastAction = "hello";
+            record("hello");
             return next;
         }
 
         @Override
         public BeaconApiClient.BeaconResult patchProfile(BeaconApiClient.ProfilePatch patch) throws IOException {
-            lastAction = "patch";
+            record("patch");
             lastPatch = patch;
             return next;
         }
 
         @Override
         public BeaconApiClient.BeaconResult reportCapabilities(BeaconApiClient.ClientCapabilities capabilities) throws IOException {
-            lastAction = "capabilities";
+            record("capabilities");
             return next;
         }
 
         @Override
         public BeaconApiClient.BeaconResult reportTelemetry(BeaconApiClient.ClientTelemetry telemetry) throws IOException {
-            lastAction = "telemetry";
+            record("telemetry");
             return next;
         }
 
         @Override
         public BeaconApiClient.BeaconResult requestPlan(BeaconApiClient.GameSelection game) throws IOException {
-            lastAction = "plan";
+            record("plan");
             return next;
         }
 
         @Override
         public BeaconApiClient.BeaconResult launch(BeaconApiClient.GameSelection game) throws IOException {
-            lastAction = "launch";
+            record("launch");
             return next;
         }
 
         @Override
         public BeaconApiClient.BeaconResult stopStream() throws IOException {
-            lastAction = "stop";
+            record("stop");
             return next;
         }
 
         @Override
         public BeaconApiClient.BeaconResult disconnect() throws IOException {
-            lastAction = "disconnect";
+            record("disconnect");
             return next;
         }
 
         @Override
         public BeaconApiClient.BeaconResult quit(BeaconApiClient.QuitState state) throws IOException {
-            lastAction = "quit";
+            record("quit");
             return next;
         }
 
         @Override
         public BeaconApiClient.BeaconResult emergencyRestore() throws IOException {
-            lastAction = "restore";
+            record("restore");
             return next;
         }
     }

@@ -29,6 +29,13 @@ public final class BeaconActivity extends Activity {
     private EditText bitrateCap;
     private EditText audioMode;
     private EditText gameId;
+    private EditText rttMs;
+    private EditText packetLossPercent;
+    private EditText decoderLoadPercent;
+    private EditText estimatedBandwidthMbps;
+    private EditText wifiBand;
+    private EditText batteryPercent;
+    private EditText thermalState;
     private TextView status;
 
     @Override
@@ -65,6 +72,13 @@ public final class BeaconActivity extends Activity {
         bitrateCap = input("Bitrate cap Mbps", "");
         audioMode = input("Audio mode", "stereo");
         gameId = input("Game ID", "steam-shortcut:3767414131");
+        rttMs = input("RTT ms", "8");
+        packetLossPercent = input("Packet loss percent", "0");
+        decoderLoadPercent = input("Decoder load percent", "20");
+        estimatedBandwidthMbps = input("Estimated bandwidth Mbps", "120");
+        wifiBand = input("Wi-Fi band", "wifi-7");
+        batteryPercent = input("Battery percent", "80");
+        thermalState = input("Thermal state", "nominal");
 
         root.addView(serverUrl);
         root.addView(clientId);
@@ -77,15 +91,28 @@ public final class BeaconActivity extends Activity {
         root.addView(bitrateCap);
         root.addView(audioMode);
         root.addView(gameId);
+        root.addView(rttMs);
+        root.addView(packetLossPercent);
+        root.addView(decoderLoadPercent);
+        root.addView(estimatedBandwidthMbps);
+        root.addView(wifiBand);
+        root.addView(batteryPercent);
+        root.addView(thermalState);
 
         root.addView(button("Hello / Refresh", model -> model.refresh()));
         root.addView(button("Patch Profile", model -> model.patchProfile(readPatch())));
-        root.addView(button("Report Capabilities", model -> model.reportCapabilities(
-            new BeaconApiClient.ClientCapabilities(true, true, true, false, false))));
-        root.addView(button("Report Telemetry", model -> model.reportTelemetry(
-            new BeaconApiClient.ClientTelemetry(20, 0.0, 20))));
-        root.addView(button("Plan", model -> model.requestPlan(readGame())));
-        root.addView(button("Launch", model -> model.launch(readGame())));
+        root.addView(button("Report Capabilities", model -> model.reportCapabilities(readCapabilities())));
+        root.addView(button("Report Telemetry", model -> model.reportTelemetry(readTelemetry())));
+        root.addView(button("Plan", model -> model.preflightAndPlan(
+            readPatch(),
+            readCapabilities(),
+            readTelemetry(),
+            readGame())));
+        root.addView(button("Launch", model -> model.preflightAndLaunch(
+            readPatch(),
+            readCapabilities(),
+            readTelemetry(),
+            readGame())));
         root.addView(button("Stop Stream", model -> model.stopStream()));
         root.addView(button("Disconnect", model -> model.disconnect()));
         root.addView(button("Quit", model -> model.quit(new BeaconApiClient.QuitState(false))));
@@ -165,9 +192,45 @@ public final class BeaconActivity extends Activity {
         return BeaconApiClient.GameSelection.byGameId(textValue(gameId));
     }
 
+    private BeaconApiClient.ClientCapabilities readCapabilities() {
+        int refresh = readRequiredInteger(refreshHz);
+        return new BeaconApiClient.ClientCapabilities(
+            true,
+            true,
+            true,
+            false,
+            false,
+            refresh,
+            true,
+            readScreenMode());
+    }
+
+    private BeaconApiClient.ClientTelemetry readTelemetry() {
+        return new BeaconApiClient.ClientTelemetry(
+            readRequiredInteger(rttMs),
+            readRequiredDouble(packetLossPercent),
+            readRequiredInteger(decoderLoadPercent),
+            readRequiredInteger(estimatedBandwidthMbps),
+            textValue(wifiBand),
+            readRequiredInteger(batteryPercent),
+            textValue(thermalState));
+    }
+
+    private String readScreenMode() {
+        return readRequiredInteger(width) + "x" + readRequiredInteger(height) + "@" + readRequiredInteger(refreshHz);
+    }
+
     private Integer readInteger(EditText editText) {
         String value = textValue(editText);
         return value.isEmpty() ? null : Integer.parseInt(value);
+    }
+
+    private int readRequiredInteger(EditText editText) {
+        return Integer.parseInt(textValue(editText));
+    }
+
+    private double readRequiredDouble(EditText editText) {
+        return Double.parseDouble(textValue(editText));
     }
 
     private String textValue(EditText editText) {

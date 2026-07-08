@@ -58,16 +58,43 @@ public final class BeaconViewModel {
         record("telemetry", service.reportTelemetry(telemetry));
     }
 
+    public void preflight(
+        BeaconApiClient.ProfilePatch patch,
+        BeaconApiClient.ClientCapabilities capabilities,
+        BeaconApiClient.ClientTelemetry telemetry) throws IOException {
+        patchProfile(patch);
+        reportCapabilities(capabilities);
+        reportTelemetry(telemetry);
+    }
+
     public void requestPlan(BeaconApiClient.GameSelection game) throws IOException {
         BeaconApiClient.BeaconResult result = service.requestPlan(game);
         record("plan", result);
         latestPlan = result.body();
     }
 
+    public void preflightAndPlan(
+        BeaconApiClient.ProfilePatch patch,
+        BeaconApiClient.ClientCapabilities capabilities,
+        BeaconApiClient.ClientTelemetry telemetry,
+        BeaconApiClient.GameSelection game) throws IOException {
+        preflight(patch, capabilities, telemetry);
+        requestPlan(game);
+    }
+
     public void launch(BeaconApiClient.GameSelection game) throws IOException {
         BeaconApiClient.BeaconResult result = service.launch(game);
         record("launch", result);
         latestStream = result.body();
+    }
+
+    public void preflightAndLaunch(
+        BeaconApiClient.ProfilePatch patch,
+        BeaconApiClient.ClientCapabilities capabilities,
+        BeaconApiClient.ClientTelemetry telemetry,
+        BeaconApiClient.GameSelection game) throws IOException {
+        preflight(patch, capabilities, telemetry);
+        launch(game);
     }
 
     public void stopStream() throws IOException {

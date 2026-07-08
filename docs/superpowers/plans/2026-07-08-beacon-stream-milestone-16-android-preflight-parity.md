@@ -43,7 +43,7 @@
 
 ## Task 1: Android API Payload Parity
 
-- [ ] **Step 1: Write failing API client tests**
+- [x] **Step 1: Write failing API client tests**
 
 Add tests:
 
@@ -76,27 +76,27 @@ public void telemetrySerializesExpandedPlanningFacts() throws Exception {
 }
 ```
 
-- [ ] **Step 2: Verify tests fail**
+- [x] **Step 2: Verify tests fail**
 
 Run:
 
 ```powershell
-& "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.14.1-bin\baw1sv0jfoi8rxs14qo3h49cs\gradle-8.14.1\bin\gradle.bat" --no-daemon -p src\Beacon.Android test --tests dev.beacon.android.BeaconApiClientTest
+& "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.14.1-bin\baw1sv0jfoi8rxs14qo3h49cs\gradle-8.14.1\bin\gradle.bat" --no-daemon -p src\Beacon.Android :app:testDebugUnitTest --tests dev.beacon.android.BeaconApiClientTest
 ```
 
 Expected: compile failures for missing constructor fields.
 
-- [ ] **Step 3: Implement payload fields**
+- [x] **Step 3: Implement payload fields**
 
 Append constructor parameters to keep call sites obvious. `toJson()` must emit exactly the field names accepted by the server: `maxFps`, `lowLatencyDecode`, `currentScreenMode`, `estimatedBandwidthMbps`, `wifiBand`, `batteryPercent`, and `thermalState`.
 
-- [ ] **Step 4: Verify API tests pass**
+- [x] **Step 4: Verify API tests pass**
 
 Run the same filtered Gradle command. Expected: pass.
 
 ## Task 2: Preflight Ordering In ViewModel
 
-- [ ] **Step 1: Write failing ViewModel tests**
+- [x] **Step 1: Write failing ViewModel tests**
 
 Add tests:
 
@@ -136,27 +136,27 @@ private static BeaconApiClient.ClientTelemetry defaultTelemetry() {
 }
 ```
 
-- [ ] **Step 2: Verify tests fail**
+- [x] **Step 2: Verify tests fail**
 
 Run:
 
 ```powershell
-& "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.14.1-bin\baw1sv0jfoi8rxs14qo3h49cs\gradle-8.14.1\bin\gradle.bat" --no-daemon -p src\Beacon.Android test --tests dev.beacon.android.BeaconViewModelTest
+& "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.14.1-bin\baw1sv0jfoi8rxs14qo3h49cs\gradle-8.14.1\bin\gradle.bat" --no-daemon -p src\Beacon.Android :app:testDebugUnitTest --tests dev.beacon.android.BeaconViewModelTest
 ```
 
 Expected: compile failures for missing ViewModel methods and fake action log.
 
-- [ ] **Step 3: Implement ViewModel preflight helpers**
+- [x] **Step 3: Implement ViewModel preflight helpers**
 
 `preflight()` must call `patchProfile`, `reportCapabilities`, and `reportTelemetry` in that order. `preflightAndPlan()` then calls `requestPlan()` and stores `latestPlan`. `preflightAndLaunch()` then calls `launch()` and stores `latestStream`. Do not add display topology decisions to the APK.
 
-- [ ] **Step 4: Verify ViewModel tests pass**
+- [x] **Step 4: Verify ViewModel tests pass**
 
 Run the same filtered Gradle command. Expected: pass.
 
 ## Task 3: Activity Wiring And Docs
 
-- [ ] **Step 1: Wire Activity Plan and Launch buttons**
+- [x] **Step 1: Wire Activity Plan and Launch buttons**
 
 Add or compute:
 
@@ -165,11 +165,11 @@ Add or compute:
 - Plan button calls `preflightAndPlan(readPatch(), readCapabilities(), readTelemetry(), readGame())`.
 - Launch button calls `preflightAndLaunch(readPatch(), readCapabilities(), readTelemetry(), readGame())`.
 
-- [ ] **Step 2: Update README**
+- [x] **Step 2: Update README**
 
 Mention that the Android shell now sends expanded capability/telemetry facts before plan/launch and still leaves display behavior policy on the server.
 
-- [ ] **Step 3: Run validation**
+- [x] **Step 3: Run validation**
 
 Run:
 
@@ -187,7 +187,7 @@ rg "Thread\.Sleep|Task\.Delay|timeout|Timeout|CancelAfter|CancellationTokenSourc
 
 Expected: all commands pass, with the known Gradle 9 deprecation warning allowed if the Android command exits successfully.
 
-- [ ] **Step 4: Commit and sync**
+- [x] **Step 4: Commit and sync**
 
 Run:
 
