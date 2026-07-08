@@ -3,6 +3,7 @@ import {
   createCapabilitiesPayload,
   createDefaultProfile,
   createGamePlanRequest,
+  createKeyboardInputPayload,
   createPointerGesturePayload,
   createTelemetryPayload,
   formatLaunchEvents,
@@ -88,6 +89,11 @@ element('launchButton').addEventListener('click', async () => {
 
 element('inputButton').addEventListener('click', async () => {
   const result = await postJson<InputAcceptedResponse>(`/clients/${clientId}/input`, createPointerGesturePayload(1));
+  appendLog(formatInputAccepted(result));
+});
+
+element('keyboardButton').addEventListener('click', async () => {
+  const result = await postJson<InputAcceptedResponse>(`/clients/${clientId}/input`, createKeyboardInputPayload(2));
   appendLog(formatInputAccepted(result));
 });
 

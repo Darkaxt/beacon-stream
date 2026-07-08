@@ -192,6 +192,23 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
     }
   ]);
 
+  await page.getByRole('button', { name: 'Send Keyboard' }).click();
+  await expect(page.getByText('input accepted 1 event(s) z-fold-7-steam-shortcut:3767414131')).toBeVisible();
+  expect(inputBodies).toEqual([
+    {
+      sequence: 1,
+      events: [
+        { type: 'pointer', action: 'down', pointerId: 1, x: 0.5, y: 0.5, buttons: 1 },
+        { type: 'pointer', action: 'move', pointerId: 1, x: 0.75, y: 0.25 },
+        { type: 'pointer', action: 'up', pointerId: 1, x: 0.75, y: 0.25, buttons: 1 }
+      ]
+    },
+    {
+      sequence: 2,
+      events: [{ type: 'keyboard', action: 'press', key: 'Escape', code: 'Escape' }]
+    }
+  ]);
+
   await page.getByRole('button', { name: 'Disconnect' }).click();
   await expect(page.getByText('lease retained')).toBeVisible();
 

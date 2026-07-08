@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createDefaultProfile,
   createGamePlanRequest,
+  createKeyboardInputPayload,
   createPointerGesturePayload,
   createTelemetryPayload,
   formatLaunchEvents,
@@ -142,6 +143,20 @@ describe('Client Lab profile validation', () => {
           x: 0.75,
           y: 0.25,
           buttons: 1
+        }
+      ]
+    });
+  });
+
+  it('creates a deterministic keyboard input payload for no-phone testing', () => {
+    expect(createKeyboardInputPayload(8)).toEqual({
+      sequence: 8,
+      events: [
+        {
+          type: 'keyboard',
+          action: 'press',
+          key: 'Escape',
+          code: 'Escape'
         }
       ]
     });

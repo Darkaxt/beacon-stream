@@ -241,7 +241,8 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
             {
                 CreatePointerEvent("down", x: 0.5, y: 0.5, buttons: 1),
                 CreatePointerEvent("move", x: 0.75, y: 0.25),
-                CreatePointerEvent("up", x: 0.75, y: 0.25, buttons: 1)
+                CreatePointerEvent("up", x: 0.75, y: 0.25, buttons: 1),
+                CreateKeyboardEvent("press", key: "Escape", code: "Escape")
             }
         };
 
@@ -263,4 +264,13 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
 
         return inputEvent;
     }
+
+    private static Dictionary<string, object> CreateKeyboardEvent(string action, string key, string code) =>
+        new()
+        {
+            ["type"] = "keyboard",
+            ["action"] = action,
+            ["key"] = key,
+            ["code"] = code
+        };
 }
