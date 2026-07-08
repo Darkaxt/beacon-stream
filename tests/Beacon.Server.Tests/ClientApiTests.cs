@@ -776,6 +776,68 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task FakeEndpointScriptCompletesAgainstStreamingProbeWithSunshineProfile()
+    {
+        string descriptorRoot = Path.Combine(Path.GetTempPath(), $"beacon-fake-endpoint-sunshine-profile-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(descriptorRoot);
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions(
+                GetStreamingProbeExecutablePath(),
+                SunshineProfile: new SunshineEndpointProfile("127.0.0.1", 47989)),
+            new WindowsExternalStreamingProcessRunner(),
+            sessionDescriptors: new WindowsExternalStreamingSessionDescriptorStore(descriptorRoot));
+        WebApplicationFactory<Program> streamingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IStreamingBackend>(backend);
+            }));
+        HttpClient client = streamingFactory.CreateClient();
+        var runner = new FakeEndpointRunner(client);
+        FakeEndpointScript script = FakeEndpointScript.CreateZFold7Default() with
+        {
+            RequireStreamConnection = true,
+            EndAfterStreamConnection = true
+        };
+
+        try
+        {
+            FakeEndpointResult result = await runner.RunAsync(script, CancellationToken.None);
+
+            Assert.True(result.Success, result.Error);
+            Assert.Contains("GET /clients/z-fold-7/stream", result.Operations);
+            Assert.Contains("stream connection gamestream", result.Operations);
+            await WaitForStreamingDescriptorAsync(descriptorRoot);
+
+            HttpResponseMessage stream = await client.GetAsync("/clients/z-fold-7/stream");
+            HttpResponseMessage disconnect = await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
+
+            Assert.Equal(HttpStatusCode.OK, stream.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, disconnect.StatusCode);
+            using JsonDocument streamJson = await JsonDocument.ParseAsync(await stream.Content.ReadAsStreamAsync());
+            JsonElement connection = streamJson.RootElement.GetProperty("stream").GetProperty("connection");
+            Assert.Equal("Beacon.StreamingProbe", connection.GetProperty("metadata").GetProperty("wrapper").GetString());
+            Assert.Contains(
+                connection.GetProperty("endpoints").EnumerateArray(),
+                endpoint => endpoint.GetProperty("role").GetString() == "rtsp"
+                    && endpoint.GetProperty("uri").GetString() == "rtsp://127.0.0.1:48010");
+            Assert.Contains(
+                connection.GetProperty("endpoints").EnumerateArray(),
+                endpoint => endpoint.GetProperty("role").GetString() == "audio"
+                    && endpoint.GetProperty("uri").GetString() == "udp://127.0.0.1:48000");
+            Assert.Empty(Directory.EnumerateFiles(descriptorRoot));
+        }
+        finally
+        {
+            await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
+            if (Directory.Exists(descriptorRoot))
+            {
+                Directory.Delete(descriptorRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task ClientStreamStopReturnsServiceUnavailableWhenBackendStopFails()
     {
         WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>

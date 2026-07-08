@@ -184,6 +184,7 @@ dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.cs
 dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj --filter SunshineEndpointProfile
 dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter ClientApiTests
 dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter FakeEndpointScriptCompletesAgainstStreamingProbeWrapper
+dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter FakeEndpointScriptCompletesAgainstStreamingProbeWithSunshineProfile
 dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter BeaconServiceRegistrationTests
 ```
 
@@ -269,6 +270,7 @@ See:
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-56-fake-endpoint-wrapper-integration.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-57-wrapper-working-directory.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-58-sunshine-port-profile.md`
+- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-59-sunshine-profile-wrapper-integration.md`
 - `docs/external-streaming-wrapper-manifest.md`
 - `docs/source-audits/2026-07-08-windows-input-sink-upstream-audit.md`
 - `docs/windows-display-backend.md`
