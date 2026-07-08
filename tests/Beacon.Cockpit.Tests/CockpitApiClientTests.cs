@@ -43,7 +43,19 @@ public sealed class CockpitApiClientTests
                 }
               }],
               "ownership": [{ "sessionId": "z-fold-7-steam-shortcut:3767414131", "appId": "steam-shortcut:3767414131", "launchedProcessId": 4321, "launchedProcessRunning": false, "childProcessRunning": false, "ownedWindowRemaining": false, "reasons": [] }],
-              "games": { "total": 36, "diagnostics": ["Steam library 'G:\\SteamLibrary\\steamapps' does not exist."] }
+              "games": { "total": 36, "diagnostics": ["Steam library 'G:\\SteamLibrary\\steamapps' does not exist."] },
+              "diagnostics": [{
+                "id": "evt-1",
+                "timestampUtc": "1970-01-01T00:00:00+00:00",
+                "severity": "error",
+                "category": "streaming",
+                "operation": "preflight",
+                "message": "External streaming manifest codec av1 is not supported.",
+                "clientId": "z-fold-7",
+                "sessionId": "session-1",
+                "displayId": "client-z-fold-7",
+                "metadata": { "codec": "av1" }
+              }]
             }
             """);
         var client = new CockpitApiClient(new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5000") });
@@ -65,6 +77,9 @@ public sealed class CockpitApiClientTests
         Assert.Equal(4321, snapshot.Ownership[0].LaunchedProcessId);
         Assert.Equal(36, snapshot.Games.Total);
         Assert.Single(snapshot.Games.Diagnostics);
+        Assert.Single(snapshot.Diagnostics);
+        Assert.Equal("streaming", snapshot.Diagnostics[0].Category);
+        Assert.Equal("av1", snapshot.Diagnostics[0].Metadata["codec"]);
     }
 
     [Fact]

@@ -251,7 +251,9 @@ public sealed class CockpitShellViewModel : ObservableObject
         }));
         Replace(Ownership, snapshot.Ownership.Select(ownership =>
             $"{ownership.AppId} process={ownership.LaunchedProcessRunning} child={ownership.ChildProcessRunning} window={ownership.OwnedWindowRemaining}"));
-        Replace(Diagnostics, snapshot.Games.Diagnostics);
+        Replace(Diagnostics, snapshot.Diagnostics
+            .Select(evt => $"[{evt.Severity}] {evt.Category}/{evt.Operation}: {evt.Message}")
+            .Concat(snapshot.Games.Diagnostics.Select(message => $"[provider] {message}")));
 
         ClientCount = snapshot.Clients.Count;
         SessionCount = snapshot.Sessions.Count;

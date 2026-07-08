@@ -610,7 +610,7 @@ Expected: streaming diagnostics checkpoint is synced.
 - Test: `tests/Beacon.Cockpit.Tests/CockpitApiClientTests.cs`
 - Test: `tests/Beacon.Cockpit.Tests/CockpitShellViewModelTests.cs`
 
-- [ ] **Step 1: Write failing cockpit tests**
+- [x] **Step 1: Write failing cockpit tests**
 
 In `CockpitApiClientTests`, extend or add a snapshot deserialization test with JSON containing:
 
@@ -671,7 +671,7 @@ public async Task RefreshRendersOperationalDiagnosticsBeforeGameProviderDiagnost
 
 Adjust helper names to match the existing test helper style.
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -681,7 +681,7 @@ dotnet test tests/Beacon.Cockpit.Tests/Beacon.Cockpit.Tests.csproj --filter "Coc
 
 Expected: compile failures for missing `CockpitDiagnosticEvent` and snapshot property.
 
-- [ ] **Step 3: Add cockpit diagnostic DTOs**
+- [x] **Step 3: Add cockpit diagnostic DTOs**
 
 In `CockpitModels.cs`, change snapshot to:
 
@@ -717,7 +717,7 @@ Update `CockpitApiClient` fallback:
 return snapshot ?? new CockpitSnapshot([], [], [], [], new CockpitGameSummary(0, []), []);
 ```
 
-- [ ] **Step 4: Render diagnostics in view model**
+- [x] **Step 4: Render diagnostics in view model**
 
 In `CockpitShellViewModel.RefreshAsync`, replace the diagnostics binding line:
 
@@ -733,7 +733,7 @@ Replace(Diagnostics, snapshot.Diagnostics
     .Concat(snapshot.Games.Diagnostics.Select(message => $"[provider] {message}")));
 ```
 
-- [ ] **Step 5: Verify green**
+- [x] **Step 5: Verify green**
 
 Run:
 
@@ -743,7 +743,7 @@ dotnet test tests/Beacon.Cockpit.Tests/Beacon.Cockpit.Tests.csproj --filter "Coc
 
 Expected: cockpit tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run:
 

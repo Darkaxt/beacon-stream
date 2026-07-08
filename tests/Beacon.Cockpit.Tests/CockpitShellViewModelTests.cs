@@ -37,7 +37,8 @@ public sealed class CockpitShellViewModelTests
                 false,
                 false,
                 [])],
-            new CockpitGameSummary(36, ["Steam library stale"])));
+            new CockpitGameSummary(36, ["Steam library stale"]),
+            []));
         var viewModel = new CockpitShellViewModel(api);
 
         await viewModel.RefreshAsync(CancellationToken.None);
@@ -59,7 +60,7 @@ public sealed class CockpitShellViewModelTests
         Assert.Contains(viewModel.Streams, stream => stream.Contains("z-fold-7 steam-shortcut:3767414131 running av1 120fps", StringComparison.Ordinal));
         Assert.Contains(viewModel.Streams, stream => stream.Contains("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", StringComparison.Ordinal));
         Assert.Contains("steam-shortcut:3767414131 process=False child=False window=False", viewModel.Ownership);
-        Assert.Contains("Steam library stale", viewModel.Diagnostics);
+        Assert.Contains(viewModel.Diagnostics, value => value.Contains("Steam library stale", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -70,7 +71,8 @@ public sealed class CockpitShellViewModelTests
             [],
             [],
             [],
-            new CockpitGameSummary(0, [])));
+            new CockpitGameSummary(0, []),
+            []));
         var viewModel = new CockpitShellViewModel(api);
         await viewModel.RefreshAsync(CancellationToken.None);
 
@@ -95,9 +97,37 @@ public sealed class CockpitShellViewModelTests
     }
 
     [Fact]
+    public async Task RefreshRendersOperationalDiagnosticsBeforeGameProviderDiagnostics()
+    {
+        var api = new FakeCockpitApi(new CockpitSnapshot(
+            [CreateZFoldClient()],
+            [],
+            [],
+            [],
+            new CockpitGameSummary(1, ["Steam library stale"]),
+            [new CockpitDiagnosticEvent(
+                "evt-1",
+                DateTimeOffset.UnixEpoch,
+                "error",
+                "streaming",
+                "preflight",
+                "External streaming manifest codec av1 is not supported.",
+                "z-fold-7",
+                "session-1",
+                "client-z-fold-7",
+                new Dictionary<string, string>())]));
+        var viewModel = new CockpitShellViewModel(api);
+
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        Assert.Contains(viewModel.Diagnostics, value => value.Contains("streaming/preflight", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(viewModel.Diagnostics, value => value.Contains("Steam library stale", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task RecoveryMethodsDelegateToServer()
     {
-        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], new CockpitGameSummary(0, [])));
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], new CockpitGameSummary(0, []), []));
         var viewModel = new CockpitShellViewModel(api) { SelectedClientId = "z-fold-7" };
 
         await viewModel.RestorePhysicalAsync(CancellationToken.None);
@@ -121,7 +151,7 @@ public sealed class CockpitShellViewModelTests
     [Fact]
     public async Task RecoverSelectedClientReportsMissingSelection()
     {
-        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], new CockpitGameSummary(0, [])));
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], new CockpitGameSummary(0, []), []));
         var viewModel = new CockpitShellViewModel(api);
 
         await viewModel.RecoverSelectedClientAsync(CancellationToken.None);
@@ -133,7 +163,7 @@ public sealed class CockpitShellViewModelTests
     [Fact]
     public void ConstructorStoresServerUrl()
     {
-        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], new CockpitGameSummary(0, [])));
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], new CockpitGameSummary(0, []), []));
         var viewModel = new CockpitShellViewModel(api, "http://127.0.0.1:5000");
 
         Assert.Equal("http://127.0.0.1:5000", viewModel.ServerUrl);
