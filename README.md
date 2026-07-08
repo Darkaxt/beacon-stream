@@ -195,7 +195,7 @@ See:
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-11-recovery-actions.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-12-persistent-pairing.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-13-cockpit-profile-editing.md`
-- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-14-selected-client-admin.md`
+- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-14-recovery-contract.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-15-telemetry-planning.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-16-android-preflight-parity.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-17-stream-connection-descriptor.md`
