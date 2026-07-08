@@ -78,7 +78,9 @@ public static class AdminEndpoints
                 result.Success
                     ? "Physical display restore requested."
                     : $"Physical display restore failed: {result.Error}"));
-            return Results.Ok(new { restoreRequested = true });
+            return result.Success
+                ? Results.Ok(new { restoreRequested = true })
+                : Results.Problem(result.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
         });
 
         admin.MapPost("/recovery/move-windows-back", async (
