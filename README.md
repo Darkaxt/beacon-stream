@@ -2,7 +2,7 @@
 
 Beacon Stream is a server-authoritative personal game-streaming orchestrator.
 
-Milestone 0/1 covers the control plane, fake backends, planner, profile ownership, phone-free testing, and source-boundary documentation. Milestone 2 adds the real Windows SudoVDA/DisplayConfig lifecycle backend and manual no-phone display probe. Milestone 3 adds the normalized game library model, Steam/Heroic/Hydra/manual providers, SteamGridDB/fallback artwork providers, server/client-lab game selection, and a read-only local game probe. Milestone 4 adds a WPF cockpit for local server administration. Milestone 5 adds the streaming backend boundary, fake no-phone stream lifecycle, and external-process adapter boundary for future Sunshine-compatible integration. Milestone 6 adds a thin Android control-plane APK shell. Milestone 7 adds the server-owned game launch and session ownership cleanup boundary. Milestone 8 adds the Windows process/window activity inspector. Milestone 9 adds explicit fake-vs-Windows server host composition. Milestone 10 adds explicit streaming backend selection and preflight before display/app side effects. Milestone 11 adds manual recovery actions for stranded windows/processes. Milestone 12 adds persistent client profiles and an explicit pairing boundary for new clients. Milestone 13 adds cockpit profile editing. Milestone 14 adds selected-client recovery/admin actions. Milestone 15 adds telemetry-driven initial planning. Milestone 16 brings Android preflight payloads up to the server planning contract. Milestone 17 adds typed stream connection descriptors. Real video decode and native input forwarding come later.
+Milestone 0/1 covers the control plane, fake backends, planner, profile ownership, phone-free testing, and source-boundary documentation. Milestone 2 adds the real Windows SudoVDA/DisplayConfig lifecycle backend and manual no-phone display probe. Milestone 3 adds the normalized game library model, Steam/Heroic/Hydra/manual providers, SteamGridDB/fallback artwork providers, server/client-lab game selection, and a read-only local game probe. Milestone 4 adds a WPF cockpit for local server administration. Milestone 5 adds the streaming backend boundary, fake no-phone stream lifecycle, and external-process adapter boundary for future Sunshine-compatible integration. Milestone 6 adds a thin Android control-plane APK shell. Milestone 7 adds the server-owned game launch and session ownership cleanup boundary. Milestone 8 adds the Windows process/window activity inspector. Milestone 9 adds explicit fake-vs-Windows server host composition. Milestone 10 adds explicit streaming backend selection and preflight before display/app side effects. Milestone 11 adds manual recovery actions for stranded windows/processes. Milestone 12 adds persistent client profiles and an explicit pairing boundary for new clients. Milestone 13 adds cockpit profile editing. Milestone 14 adds selected-client recovery/admin actions. Milestone 15 adds telemetry-driven initial planning. Milestone 16 brings Android preflight payloads up to the server planning contract. Milestone 17 adds typed stream connection descriptors. Milestone 18 adds an external-wrapper readiness manifest for capability preflight and descriptor discovery. Real video decode and native input forwarding come later.
 
 ## Server Host Mode
 
@@ -88,6 +88,8 @@ dotnet run --project src\Beacon.Server
 
 Endpoint maps are configured under `Beacon:Streaming:ExternalProcess:Connection:Endpoints:*`, for example `rtsp = rtsp://127.0.0.1:48010/beacon`.
 
+External-process mode may also read a wrapper manifest from `Beacon:Streaming:ExternalProcess:ManifestPath` or `BEACON_EXTERNAL_STREAMING_MANIFEST`. When present, Beacon validates codec, FPS, bitrate, transport, and HDR support against the manifest during streaming preflight, before display or launch side effects. Manifest connection fields can provide the stream descriptor unless explicit connection settings override them. The manifest path is also passed to the wrapper as `BEACON_WRAPPER_MANIFEST_PATH`.
+
 ## Local Probes
 
 Display lifecycle checks:
@@ -135,9 +137,10 @@ Streaming backend checks:
 dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter FakeStreamingBackendTests
 dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj --filter ExternalProcessStreamingBackend
 dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter ClientApiTests
+dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter BeaconServiceRegistrationTests
 ```
 
-Milestone 5 introduced `FakeStreamingBackend` and the command-builder boundary for future Sunshine-compatible process integration. Milestone 10 makes `ExternalProcessStreamingBackend` selectable through explicit configuration and adds preflight so a missing wrapper cannot create a display or launch a game first. No Sunshine source is copied by these milestones.
+Milestone 5 introduced `FakeStreamingBackend` and the command-builder boundary for future Sunshine-compatible process integration. Milestone 10 makes `ExternalProcessStreamingBackend` selectable through explicit configuration and adds preflight so a missing wrapper cannot create a display or launch a game first. Milestone 18 adds a Beacon-owned manifest contract so unsupported codec/FPS/bitrate/transport/HDR plans fail before display or launch side effects. No Sunshine source is copied by these milestones.
 
 Session ownership checks:
 
@@ -184,4 +187,5 @@ See:
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-15-telemetry-planning.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-16-android-preflight-parity.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-17-stream-connection-descriptor.md`
+- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-18-wrapper-readiness-manifest.md`
 - `docs/windows-display-backend.md`

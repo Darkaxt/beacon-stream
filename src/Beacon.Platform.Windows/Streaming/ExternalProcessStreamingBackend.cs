@@ -8,7 +8,29 @@ public sealed record ExternalProcessStreamingOptions(
     string? ExecutablePath,
     string? ConnectionProtocol = null,
     string? ConnectionLaunchUri = null,
-    IReadOnlyDictionary<string, string>? ConnectionEndpoints = null);
+    IReadOnlyDictionary<string, string>? ConnectionEndpoints = null,
+    string? ManifestPath = null);
+
+public sealed record ExternalStreamingManifest(
+    string? Name,
+    string? Protocol,
+    string? LaunchUri,
+    IReadOnlyDictionary<string, string>? Endpoints,
+    IReadOnlyList<string>? Codecs,
+    int? MaxFps,
+    int? MaxBitrateMbps,
+    bool Hdr10,
+    IReadOnlyList<string>? Transports,
+    IReadOnlyList<string>? Encoders,
+    IReadOnlyList<string>? Capture,
+    IReadOnlyList<string>? Diagnostics);
+
+public sealed record ExternalStreamingManifestReadResult(bool Success, ExternalStreamingManifest? Manifest, string? Error)
+{
+    public static ExternalStreamingManifestReadResult Ok(ExternalStreamingManifest manifest) => new(true, manifest, null);
+
+    public static ExternalStreamingManifestReadResult Fail(string error) => new(false, null, error);
+}
 
 public sealed record ExternalStreamingCommand(
     string FileName,
@@ -33,13 +55,36 @@ public interface IExternalStreamingProcessRunner
     ExternalStreamingProcessStopResult Stop(ExternalStreamingProcess process);
 }
 
+public interface IExternalStreamingManifestReader
+{
+    bool FileExists(string path);
+
+    ExternalStreamingManifestReadResult Read(string path);
+}
+
 public sealed class ExternalProcessStreamingBackend(
     ExternalProcessStreamingOptions options,
-    IExternalStreamingProcessRunner runner) : IStreamingBackend
+    IExternalStreamingProcessRunner runner,
+    IExternalStreamingManifestReader? manifestReader = null) : IStreamingBackend
 {
+    private static readonly ExternalStreamingManifest EmptyManifest = new(
+        null,
+        null,
+        null,
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+        [],
+        null,
+        null,
+        Hdr10: false,
+        [],
+        [],
+        [],
+        []);
+
     private readonly Lock gate = new();
     private readonly Dictionary<string, StreamingSessionState> sessions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ExternalStreamingProcess> processes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly IExternalStreamingManifestReader manifestReader = manifestReader ?? NoExternalStreamingManifestReader.Instance;
 
     public Task<StreamingPreflightResult> CheckReadinessAsync(SessionPlan plan, CancellationToken cancellationToken)
     {
@@ -56,6 +101,21 @@ public sealed class ExternalProcessStreamingBackend(
                 $"External streaming executable '{options.ExecutablePath}' does not exist."));
         }
 
+        ExternalStreamingManifestReadResult manifest = ReadManifestIfConfigured();
+        if (!manifest.Success)
+        {
+            return Task.FromResult(StreamingPreflightResult.Fail(manifest.Error ?? "External streaming manifest is invalid."));
+        }
+
+        if (manifest.Manifest is not null)
+        {
+            string? compatibilityError = ValidateManifest(plan, manifest.Manifest);
+            if (!string.IsNullOrWhiteSpace(compatibilityError))
+            {
+                return Task.FromResult(StreamingPreflightResult.Fail(compatibilityError));
+            }
+        }
+
         return Task.FromResult(StreamingPreflightResult.Ok());
     }
 
@@ -65,6 +125,12 @@ public sealed class ExternalProcessStreamingBackend(
         if (!preflight.Success)
         {
             return StreamingStartResult.Fail(preflight.Error ?? "External streaming backend is not ready.");
+        }
+
+        ExternalStreamingManifestReadResult manifestResult = ReadManifestIfConfigured();
+        if (!manifestResult.Success)
+        {
+            return StreamingStartResult.Fail(manifestResult.Error ?? "External streaming manifest is invalid.");
         }
 
         try
@@ -82,7 +148,7 @@ public sealed class ExternalProcessStreamingBackend(
                 plan.Stream.Transport,
                 State: "running",
                 Error: null,
-                CreateConnectionDescriptor(options));
+                CreateConnectionDescriptor(options, manifestResult.Manifest));
 
             lock (gate)
             {
@@ -206,31 +272,120 @@ public sealed class ExternalProcessStreamingBackend(
                     .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
                     .Select(pair => $"{pair.Key.Trim()}={pair.Value.Trim()}"));
         }
+
+        if (!string.IsNullOrWhiteSpace(options?.ManifestPath))
+        {
+            environment["BEACON_WRAPPER_MANIFEST_PATH"] = options.ManifestPath.Trim();
+        }
     }
 
-    private static StreamingConnectionDescriptor? CreateConnectionDescriptor(ExternalProcessStreamingOptions options)
+    private static StreamingConnectionDescriptor? CreateConnectionDescriptor(
+        ExternalProcessStreamingOptions options,
+        ExternalStreamingManifest? manifest)
     {
-        if (string.IsNullOrWhiteSpace(options.ConnectionProtocol)
-            && string.IsNullOrWhiteSpace(options.ConnectionLaunchUri)
-            && (options.ConnectionEndpoints is null || options.ConnectionEndpoints.Count == 0))
+        string? protocolSource = string.IsNullOrWhiteSpace(options.ConnectionProtocol)
+            ? manifest?.Protocol
+            : options.ConnectionProtocol;
+        string? launchUriSource = string.IsNullOrWhiteSpace(options.ConnectionLaunchUri)
+            ? manifest?.LaunchUri
+            : options.ConnectionLaunchUri;
+        IReadOnlyDictionary<string, string>? endpointSource = options.ConnectionEndpoints is { Count: > 0 }
+            ? options.ConnectionEndpoints
+            : manifest?.Endpoints;
+
+        if (string.IsNullOrWhiteSpace(protocolSource)
+            && string.IsNullOrWhiteSpace(launchUriSource)
+            && (endpointSource is null || endpointSource.Count == 0))
         {
             return null;
         }
 
-        string protocol = string.IsNullOrWhiteSpace(options.ConnectionProtocol)
+        string protocol = string.IsNullOrWhiteSpace(protocolSource)
             ? "external-process"
-            : options.ConnectionProtocol.Trim();
-        IReadOnlyList<StreamingEndpointDescriptor> endpoints = (options.ConnectionEndpoints
+            : protocolSource.Trim();
+        IReadOnlyList<StreamingEndpointDescriptor> endpoints = (endpointSource
                 ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))
             .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
             .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
             .Select(pair => new StreamingEndpointDescriptor(pair.Key.Trim(), pair.Value.Trim()))
             .ToArray();
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(options.ManifestPath))
+        {
+            metadata["manifestPath"] = options.ManifestPath.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(manifest?.Name))
+        {
+            metadata["manifestName"] = manifest.Name.Trim();
+        }
 
         return new StreamingConnectionDescriptor(
             protocol,
-            string.IsNullOrWhiteSpace(options.ConnectionLaunchUri) ? null : options.ConnectionLaunchUri.Trim(),
+            string.IsNullOrWhiteSpace(launchUriSource) ? null : launchUriSource.Trim(),
             endpoints,
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+            metadata);
+    }
+
+    private ExternalStreamingManifestReadResult ReadManifestIfConfigured()
+    {
+        if (string.IsNullOrWhiteSpace(options.ManifestPath))
+        {
+            return ExternalStreamingManifestReadResult.Ok(EmptyManifest);
+        }
+
+        string manifestPath = options.ManifestPath.Trim();
+        if (!manifestReader.FileExists(manifestPath))
+        {
+            return ExternalStreamingManifestReadResult.Fail($"External streaming manifest '{manifestPath}' does not exist.");
+        }
+
+        return manifestReader.Read(manifestPath);
+    }
+
+    private static string? ValidateManifest(SessionPlan plan, ExternalStreamingManifest manifest)
+    {
+        if (ContainsValues(manifest.Codecs) && !Contains(manifest.Codecs, plan.Stream.Codec))
+        {
+            return $"External streaming manifest codec {plan.Stream.Codec} is not supported.";
+        }
+
+        if (manifest.MaxFps is > 0 && plan.Stream.Fps > manifest.MaxFps.Value)
+        {
+            return $"External streaming manifest supports up to {manifest.MaxFps.Value} FPS, but the plan requires {plan.Stream.Fps} FPS.";
+        }
+
+        if (manifest.MaxBitrateMbps is > 0 && plan.Stream.InitialBitrateMbps > manifest.MaxBitrateMbps.Value)
+        {
+            return $"External streaming manifest supports up to {manifest.MaxBitrateMbps.Value} Mbps, but the plan requires {plan.Stream.InitialBitrateMbps} Mbps.";
+        }
+
+        if (ContainsValues(manifest.Transports) && !Contains(manifest.Transports, plan.Stream.Transport))
+        {
+            return $"External streaming manifest transport {plan.Stream.Transport} is not supported.";
+        }
+
+        if (plan.Display.HdrEnabled && !manifest.Hdr10)
+        {
+            return "External streaming manifest does not support HDR10 required by the plan.";
+        }
+
+        return null;
+    }
+
+    private static bool ContainsValues(IReadOnlyList<string>? values) =>
+        values is { Count: > 0 } && values.Any(value => !string.IsNullOrWhiteSpace(value));
+
+    private static bool Contains(IReadOnlyList<string>? values, string expected) =>
+        values?.Any(value => value.Equals(expected, StringComparison.OrdinalIgnoreCase)) == true;
+
+    private sealed class NoExternalStreamingManifestReader : IExternalStreamingManifestReader
+    {
+        public static NoExternalStreamingManifestReader Instance { get; } = new();
+
+        public bool FileExists(string path) => false;
+
+        public ExternalStreamingManifestReadResult Read(string path) =>
+            ExternalStreamingManifestReadResult.Fail($"External streaming manifest '{path}' does not exist.");
     }
 }
