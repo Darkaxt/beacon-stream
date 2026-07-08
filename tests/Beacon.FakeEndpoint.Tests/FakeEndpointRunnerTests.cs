@@ -74,10 +74,13 @@ public sealed class FakeEndpointRunnerTests
         FakeEndpointCommandLineOptions options = FakeEndpointCommandLine.Parse(
             [
                 "--require-stream-connection",
+                "true",
+                "--end-after-stream-connection",
                 "true"
             ]);
 
         Assert.True(options.Script.RequireStreamConnection);
+        Assert.True(options.Script.EndAfterStreamConnection);
     }
 
     [Fact]
@@ -209,6 +212,82 @@ public sealed class FakeEndpointRunnerTests
         Assert.True(result.Success);
         Assert.Contains("GET /clients/z-fold-7/stream", result.Operations);
         Assert.Contains("stream connection gamestream", result.Operations);
+    }
+
+    [Fact]
+    public async Task CanEndScriptAfterRequiredStreamConnection()
+    {
+        var handler = new RecordingHandler(request =>
+            request.RequestUri?.PathAndQuery == "/clients/z-fold-7/stream"
+                ? new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""
+                                                {
+                                                  "clientId": "z-fold-7",
+                                                  "stream": {
+                                                    "state": "running",
+                                                    "connection": {
+                                                      "protocol": "gamestream",
+                                                      "endpoints": [
+                                                        { "role": "rtsp", "uri": "rtsp://127.0.0.1:48010/beacon" }
+                                                      ]
+                                                    }
+                                                  }
+                                                }
+                                                """)
+                }
+                : null);
+        var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost") };
+        var runner = new FakeEndpointRunner(client);
+        FakeEndpointScript script = FakeEndpointScript.CreateZFold7Default() with
+        {
+            RequireStreamConnection = true,
+            EndAfterStreamConnection = true
+        };
+
+        FakeEndpointResult result = await runner.RunAsync(script, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Contains("stream connection gamestream", result.Operations);
+        Assert.DoesNotContain("POST /clients/z-fold-7/input", result.Operations);
+        Assert.DoesNotContain("POST /clients/z-fold-7/disconnect", result.Operations);
+    }
+
+    [Fact]
+    public async Task EndingAfterStreamConnectionImpliesConnectionVerification()
+    {
+        var handler = new RecordingHandler(request =>
+            request.RequestUri?.PathAndQuery == "/clients/z-fold-7/stream"
+                ? new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""
+                                                {
+                                                  "clientId": "z-fold-7",
+                                                  "stream": {
+                                                    "state": "running",
+                                                    "connection": {
+                                                      "protocol": "gamestream",
+                                                      "launchUri": "moonlight://beacon/probe/z-fold-7-steam-shortcut%3A3767414131"
+                                                    }
+                                                  }
+                                                }
+                                                """)
+                }
+                : null);
+        var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost") };
+        var runner = new FakeEndpointRunner(client);
+        FakeEndpointScript script = FakeEndpointScript.CreateZFold7Default() with
+        {
+            RequireStreamConnection = false,
+            EndAfterStreamConnection = true
+        };
+
+        FakeEndpointResult result = await runner.RunAsync(script, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Contains("GET /clients/z-fold-7/stream", result.Operations);
+        Assert.Contains("stream connection gamestream", result.Operations);
+        Assert.DoesNotContain("POST /clients/z-fold-7/input", result.Operations);
     }
 
     [Fact]
