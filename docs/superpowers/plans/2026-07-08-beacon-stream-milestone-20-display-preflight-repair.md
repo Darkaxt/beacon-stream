@@ -190,7 +190,7 @@ Expected: branch is pushed with the repair checkpoint.
 - Modify: `README.md`
 - Modify: `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-20-display-preflight-repair.md`
 
-- [ ] **Step 1: Update docs**
+- [x] **Step 1: Update docs**
 
 Add to `README.md` under Display lifecycle checks:
 
@@ -198,7 +198,7 @@ Add to `README.md` under Display lifecycle checks:
 Display preflight attempts one safe repair before failing: if the first virtual-display ensure fails, Beacon restores the physical primary display and retries the same requested virtual display once. If repair fails, launch still stops before app/stream side effects and the diagnostic journal records the reason.
 ```
 
-- [ ] **Step 2: Static validation**
+- [x] **Step 2: Static validation**
 
 Run:
 
@@ -209,7 +209,7 @@ dotnet build Beacon.slnx -warnaserror
 
 Expected: both commands pass.
 
-- [ ] **Step 3: Dynamic validation**
+- [x] **Step 3: Dynamic validation**
 
 Run:
 
@@ -224,7 +224,7 @@ pnpm --dir tests\Beacon.ClientLab.Playwright test
 
 Expected: all commands pass; the Gradle 9 deprecation warning remains acceptable if the command exits successfully.
 
-- [ ] **Step 4: Boundary audit**
+- [x] **Step 4: Boundary audit**
 
 Run:
 
@@ -234,7 +234,7 @@ rg "Thread\.Sleep|Task\.Delay|timeout|Timeout|CancelAfter|CancellationTokenSourc
 
 Expected: no matches; repair must not introduce timeout-based lifecycle behavior.
 
-- [ ] **Step 5: Commit and sync**
+- [x] **Step 5: Commit and sync**
 
 Run:
 
