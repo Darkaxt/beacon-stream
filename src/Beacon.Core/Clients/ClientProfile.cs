@@ -17,9 +17,12 @@ public sealed record ClientProfile(
     SessionPreferences Session)
 {
     public static ClientProfile CreateZFold7Default() =>
+        CreateDefault(new ClientId("z-fold-7"), "Z Fold 7");
+
+    public static ClientProfile CreateDefault(ClientId clientId, string name) =>
         new(
-            new ClientId("z-fold-7"),
-            "Z Fold 7",
+            clientId,
+            name,
             new DisplayPreferences(2560, 1600, 120, HdrPreference.Prefer, "virtual-primary", true, true),
             new StreamPreferences("auto", "auto", null),
             new AudioPreferences("stereo"),

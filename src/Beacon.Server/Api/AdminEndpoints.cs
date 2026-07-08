@@ -22,6 +22,7 @@ public static class AdminEndpoints
             ISessionOwnershipTracker ownership,
             GameLibraryService games,
             BeaconHostOptions hostOptions,
+            ClientPairingOptions pairingOptions,
             CancellationToken cancellationToken) =>
         {
             GameLibrarySnapshot gameSnapshot = await games.ScanAsync(cancellationToken);
@@ -46,6 +47,12 @@ public static class AdminEndpoints
                     gameLauncher = hostOptions.GameLauncherName,
                     activityInspector = hostOptions.ActivityInspectorName,
                     streamingBackend = hostOptions.StreamingBackendName
+                },
+                profiles = new
+                {
+                    store = clients.ProfileStoreKind,
+                    location = clients.ProfileStoreLocation,
+                    pairingEnabled = pairingOptions.Enabled
                 },
                 games = new
                 {

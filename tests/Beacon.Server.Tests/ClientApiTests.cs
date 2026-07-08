@@ -37,6 +37,108 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task UnknownClientHelloRequiresPairingToken()
+    {
+        HttpClient client = factory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/hello", new
+        {
+            clientId = $"unknown-{Guid.NewGuid():N}",
+            name = "Unknown Client"
+        });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        string body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("pair", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task HelloWithPairingTokenRegistersNewClient()
+    {
+        WebApplicationFactory<Program> pairedFactory = factory.WithWebHostBuilder(builder =>
+            builder.UseSetting("Beacon:Pairing:Token", "pair-me"));
+        HttpClient client = pairedFactory.CreateClient();
+        string clientId = $"windows-handheld-{Guid.NewGuid():N}";
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/hello", new
+        {
+            clientId,
+            name = "Windows Handheld",
+            pairingToken = "pair-me"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.Equal(clientId, root.GetProperty("clientId").GetString());
+        Assert.Equal("Windows Handheld", root.GetProperty("profile").GetProperty("name").GetString());
+        Assert.Equal(2560, root.GetProperty("profile").GetProperty("display").GetProperty("preferredWidth").GetInt32());
+        Assert.Equal(1600, root.GetProperty("profile").GetProperty("display").GetProperty("preferredHeight").GetInt32());
+    }
+
+    [Fact]
+    public async Task RegisteredClientProfilePersistsAcrossServerInstances()
+    {
+        string profilePath = Path.Combine(Path.GetTempPath(), $"beacon-client-profiles-{Guid.NewGuid():N}.json");
+        string clientId = $"tablet-{Guid.NewGuid():N}";
+
+        try
+        {
+            WebApplicationFactory<Program> firstFactory = factory.WithWebHostBuilder(builder =>
+            {
+                builder.UseSetting("Beacon:Profiles:Path", profilePath);
+                builder.UseSetting("Beacon:Pairing:Token", "pair-me");
+            });
+            HttpClient firstClient = firstFactory.CreateClient();
+
+            HttpResponseMessage hello = await firstClient.PostAsJsonAsync("/clients/hello", new
+            {
+                clientId,
+                name = "Gaming Tablet",
+                pairingToken = "pair-me"
+            });
+            HttpResponseMessage patch = await firstClient.PatchAsJsonAsync($"/clients/{clientId}/profile", new
+            {
+                preferredRefreshHz = 90,
+                codecPreference = "hevc",
+                bitrateCapMbps = 45
+            });
+
+            Assert.Equal(HttpStatusCode.OK, hello.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, patch.StatusCode);
+
+            WebApplicationFactory<Program> secondFactory = factory.WithWebHostBuilder(builder =>
+            {
+                builder.UseSetting("Beacon:Profiles:Path", profilePath);
+                builder.UseSetting("Beacon:Pairing:Token", "pair-me");
+            });
+            HttpClient secondClient = secondFactory.CreateClient();
+
+            HttpResponseMessage response = await secondClient.GetAsync($"/clients/{clientId}/profile");
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+            JsonElement root = document.RootElement;
+
+            Assert.Equal(clientId, root.GetProperty("clientId").GetString());
+            Assert.Equal("Gaming Tablet", root.GetProperty("name").GetString());
+            Assert.Equal(2560, root.GetProperty("display").GetProperty("preferredWidth").GetInt32());
+            Assert.Equal(1600, root.GetProperty("display").GetProperty("preferredHeight").GetInt32());
+            Assert.Equal(90, root.GetProperty("display").GetProperty("preferredRefreshHz").GetInt32());
+            Assert.Equal("hevc", root.GetProperty("stream").GetProperty("codecPreference").GetString());
+            Assert.Equal(45, root.GetProperty("stream").GetProperty("bitrateCapMbps").GetInt32());
+        }
+        finally
+        {
+            if (File.Exists(profilePath))
+            {
+                File.Delete(profilePath);
+            }
+        }
+    }
+
+    [Fact]
     public async Task PatchRejectsGlobalOrDisplayPolicyFields()
     {
         HttpClient client = factory.CreateClient();

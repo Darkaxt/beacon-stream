@@ -23,10 +23,19 @@ public sealed class FakeEndpointRunnerTests
                 "--title",
                 "Manual Game",
                 "--source",
-                "manual"
+                "manual",
+                "--client-id",
+                "handheld-1",
+                "--name",
+                "Handheld 1",
+                "--pairing-token",
+                "pair-me"
             ]);
 
         Assert.Equal(new Uri("http://127.0.0.1:5111"), options.ServerUri);
+        Assert.Equal("handheld-1", options.Script.ClientId);
+        Assert.Equal("Handheld 1", options.Script.Name);
+        Assert.Equal("pair-me", options.Script.PairingToken);
         Assert.Equal(1920, options.Script.Width);
         Assert.Equal(1200, options.Script.Height);
         Assert.Equal(60, options.Script.RefreshHz);
@@ -63,6 +72,27 @@ public sealed class FakeEndpointRunnerTests
     }
 
     [Fact]
+    public async Task SendsPairingTokenWhenConfigured()
+    {
+        var handler = new RecordingHandler();
+        var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost") };
+        var runner = new FakeEndpointRunner(client);
+        FakeEndpointScript script = FakeEndpointScript.CreateZFold7Default() with
+        {
+            ClientId = "handheld-1",
+            Name = "Handheld 1",
+            PairingToken = "pair-me"
+        };
+
+        FakeEndpointResult result = await runner.RunAsync(script, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Contains("\"clientId\":\"handheld-1\"", handler.Bodies[0], StringComparison.Ordinal);
+        Assert.Contains("\"name\":\"Handheld 1\"", handler.Bodies[0], StringComparison.Ordinal);
+        Assert.Contains("\"pairingToken\":\"pair-me\"", handler.Bodies[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RejectsZFold1440pBeforeCallingServer()
     {
         var handler = new RecordingHandler();
@@ -80,14 +110,16 @@ public sealed class FakeEndpointRunnerTests
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public List<string> Requests { get; } = [];
+        public List<string> Bodies { get; } = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests.Add($"{request.Method.Method} {request.RequestUri?.PathAndQuery}");
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            Bodies.Add(request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken));
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("{}")
-            });
+            };
         }
     }
 }

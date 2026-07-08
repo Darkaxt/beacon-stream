@@ -9,6 +9,7 @@ using Beacon.Platform.Windows.Recovery;
 using Beacon.Platform.Windows.Sessions;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.Hosting;
+using Beacon.Server.State;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -31,6 +32,8 @@ public sealed class BeaconServiceRegistrationTests
         Assert.IsType<FakeGameLauncher>(provider.GetRequiredService<IGameLauncher>());
         Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
         Assert.IsType<FakeSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
+        Assert.IsType<InMemoryClientProfileRepository>(provider.GetRequiredService<IClientProfileRepository>());
+        Assert.False(provider.GetRequiredService<ClientPairingOptions>().Enabled);
     }
 
     [Fact]
@@ -74,6 +77,24 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public void ClientProfilesPathUsesFileRepositoryAndPairingToken()
+    {
+        string profilePath = Path.Combine(Path.GetTempPath(), $"beacon-profiles-{Guid.NewGuid():N}.json");
+        using ServiceProvider provider = BuildProvider(
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ClientProfilesPathConfigurationKey, profilePath),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.PairingTokenConfigurationKey, "pair-me"));
+
+        IClientProfileRepository repository = provider.GetRequiredService<IClientProfileRepository>();
+        ClientPairingOptions pairing = provider.GetRequiredService<ClientPairingOptions>();
+
+        Assert.IsType<FileClientProfileRepository>(repository);
+        Assert.Equal(profilePath, repository.Location);
+        Assert.True(pairing.Enabled);
+        Assert.True(pairing.Allows("pair-me"));
+        Assert.False(pairing.Allows("wrong"));
+    }
+
+    [Fact]
     public void EnvironmentHostModeOverridesConfiguration()
     {
         IConfiguration configuration = CreateConfiguration(new KeyValuePair<string, string?>(
@@ -95,6 +116,17 @@ public sealed class BeaconServiceRegistrationTests
         BeaconStreamingBackendMode mode = BeaconServiceRegistration.ResolveStreamingBackendMode(configuration, "external-process");
 
         Assert.Equal(BeaconStreamingBackendMode.ExternalProcess, mode);
+    }
+
+    [Fact]
+    public void EnvironmentProfilePathAndPairingTokenOverrideConfiguration()
+    {
+        IConfiguration configuration = CreateConfiguration(
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ClientProfilesPathConfigurationKey, "config.json"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.PairingTokenConfigurationKey, "config-token"));
+
+        Assert.Equal("env.json", BeaconServiceRegistration.ResolveClientProfilesPath(configuration, "env.json"));
+        Assert.Equal("env-token", BeaconServiceRegistration.ResolvePairingToken(configuration, "env-token"));
     }
 
     [Fact]
