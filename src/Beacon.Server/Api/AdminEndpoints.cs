@@ -94,6 +94,46 @@ public static class AdminEndpoints
                 : Results.Problem(result.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
         });
 
+        admin.MapPost("/recovery/reset-topology", async (
+            IDisplayBackend displayBackend,
+            IRecoveryBackend recovery,
+            IDiagnosticEventSink diagnostics,
+            CancellationToken cancellationToken) =>
+        {
+            DisplayRestoreResult restore = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
+            if (!restore.Success)
+            {
+                diagnostics.Publish(DiagnosticEvent.Create(
+                    DiagnosticSeverity.Error,
+                    "recovery",
+                    "reset-topology",
+                    $"Reset topology failed while restoring physical primary: {restore.Error}"));
+                return Results.Problem(restore.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            RecoveryActionResult move = await recovery.MoveWindowsBackAsync(minimize: true, cancellationToken);
+            if (!move.Success)
+            {
+                diagnostics.Publish(DiagnosticEvent.Create(
+                    DiagnosticSeverity.Error,
+                    "recovery",
+                    "reset-topology",
+                    $"Reset topology failed while moving windows back: {move.Error}"));
+                return Results.Problem(move.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            var result = RecoveryActionResult.Ok(
+                "reset-topology",
+                move.AffectedCount,
+                ["physical primary restored", .. move.Diagnostics]);
+            diagnostics.Publish(DiagnosticEvent.Create(
+                DiagnosticSeverity.Information,
+                "recovery",
+                "reset-topology",
+                $"Reset topology completed; moved {move.AffectedCount} window(s)."));
+            return Results.Ok(result);
+        });
+
         admin.MapPost("/recovery/close-virtual-windows", async (
             IRecoveryBackend recovery,
             CancellationToken cancellationToken) =>

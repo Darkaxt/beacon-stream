@@ -95,6 +95,9 @@
                     <Button Content="Restore Physical Display"
                             Command="{Binding RestorePhysicalCommand}"
                             Margin="0,0,0,8" />
+                    <Button Content="Reset Topology"
+                            Command="{Binding ResetTopologyCommand}"
+                            Margin="0,0,0,8" />
                     <Button Content="Recover Client Display"
                             Command="{Binding RecoverSelectedClientCommand}"
                             Margin="0,0,0,8" />
@@ -232,6 +235,9 @@
                                   Margin="0,0,0,14" />
                         <Button Content="Restore Physical Display"
                                 Command="{Binding RestorePhysicalCommand}"
+                                Margin="0,0,0,8" />
+                        <Button Content="Reset Topology"
+                                Command="{Binding ResetTopologyCommand}"
                                 Margin="0,0,0,8" />
                         <Button Content="Recover Selected Client Display"
                                 Command="{Binding RecoverSelectedClientCommand}"

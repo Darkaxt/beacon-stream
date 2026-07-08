@@ -11,6 +11,8 @@ public interface ICockpitApi
 
     Task RestorePhysicalAsync(CancellationToken cancellationToken);
 
+    Task ResetTopologyAsync(CancellationToken cancellationToken);
+
     Task MoveWindowsBackAsync(bool minimize, CancellationToken cancellationToken);
 
     Task CloseVirtualWindowsAsync(CancellationToken cancellationToken);
@@ -41,6 +43,12 @@ public sealed class CockpitApiClient(HttpClient httpClient) : ICockpitApi
     public async Task RestorePhysicalAsync(CancellationToken cancellationToken)
     {
         using HttpResponseMessage response = await httpClient.PostAsJsonAsync("/admin/recovery/restore-physical", new { }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ResetTopologyAsync(CancellationToken cancellationToken)
+    {
+        using HttpResponseMessage response = await httpClient.PostAsJsonAsync("/admin/recovery/reset-topology", new { }, cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 

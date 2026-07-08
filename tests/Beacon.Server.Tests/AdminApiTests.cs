@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Beacon.Core.Displays;
+using Beacon.Core.Recovery;
 using Beacon.Core.Streaming;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -70,6 +71,36 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.True(terminateJson.RootElement.GetProperty("success").GetBoolean());
         Assert.Equal("terminate-virtual-processes", terminateJson.RootElement.GetProperty("action").GetString());
         Assert.True(recoverJson.RootElement.GetProperty("recovered").GetBoolean());
+    }
+
+    [Fact]
+    public async Task AdminResetTopologyRestoresPhysicalAndMovesWindowsBackMinimized()
+    {
+        var display = new FakeDisplayBackend();
+        var recovery = new FakeRecoveryBackend
+        {
+            MoveWindowsBackResult = RecoveryActionResult.Ok("move-windows-back", 2, ["moved windows"])
+        };
+        WebApplicationFactory<Program> recoveryFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.RemoveAll<IRecoveryBackend>();
+                services.AddSingleton<IDisplayBackend>(display);
+                services.AddSingleton<IRecoveryBackend>(recovery);
+            }));
+        HttpClient client = recoveryFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/admin/recovery/reset-topology", new { });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+        Assert.True(root.GetProperty("success").GetBoolean());
+        Assert.Equal("reset-topology", root.GetProperty("action").GetString());
+        Assert.Equal(2, root.GetProperty("affectedCount").GetInt32());
+        Assert.Equal(["physical-primary"], display.RestoreCalls);
+        Assert.Equal([true], recovery.MoveWindowsBackCalls);
     }
 
     [Fact]
