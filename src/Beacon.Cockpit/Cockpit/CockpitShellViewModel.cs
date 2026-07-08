@@ -7,7 +7,9 @@ public sealed class CockpitShellViewModel : ObservableObject
 {
     private readonly ICockpitApi api;
     private readonly RelayCommand recoverSelectedClientCommand;
+    private readonly RelayCommand removeSelectedClientDisplayLeaseCommand;
     private readonly RelayCommand saveSelectedClientProfileCommand;
+    private readonly RelayCommand stopSelectedClientStreamCommand;
     private IReadOnlyList<CockpitClientSummary> clientSummaries = [];
     private int clientCount;
     private int sessionCount;
@@ -48,6 +50,14 @@ public sealed class CockpitShellViewModel : ObservableObject
             () => RecoverSelectedClientAsync(CancellationToken.None),
             () => !string.IsNullOrWhiteSpace(SelectedClientId));
         RecoverSelectedClientCommand = recoverSelectedClientCommand;
+        removeSelectedClientDisplayLeaseCommand = new RelayCommand(
+            () => RemoveSelectedClientDisplayLeaseAsync(CancellationToken.None),
+            () => !string.IsNullOrWhiteSpace(SelectedClientId));
+        RemoveSelectedClientDisplayLeaseCommand = removeSelectedClientDisplayLeaseCommand;
+        stopSelectedClientStreamCommand = new RelayCommand(
+            () => StopSelectedClientStreamAsync(CancellationToken.None),
+            () => !string.IsNullOrWhiteSpace(SelectedClientId));
+        StopSelectedClientStreamCommand = stopSelectedClientStreamCommand;
     }
 
     public int ClientCount
@@ -89,7 +99,9 @@ public sealed class CockpitShellViewModel : ObservableObject
             {
                 LoadSelectedClientProfile();
                 recoverSelectedClientCommand.RaiseCanExecuteChanged();
+                removeSelectedClientDisplayLeaseCommand.RaiseCanExecuteChanged();
                 saveSelectedClientProfileCommand.RaiseCanExecuteChanged();
+                stopSelectedClientStreamCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -208,7 +220,11 @@ public sealed class CockpitShellViewModel : ObservableObject
 
     public ICommand RecoverSelectedClientCommand { get; }
 
+    public ICommand RemoveSelectedClientDisplayLeaseCommand { get; }
+
     public ICommand SaveSelectedClientProfileCommand { get; }
+
+    public ICommand StopSelectedClientStreamCommand { get; }
 
     public async Task RefreshAsync(CancellationToken cancellationToken)
     {
@@ -365,6 +381,44 @@ public sealed class CockpitShellViewModel : ObservableObject
         catch (Exception ex)
         {
             StatusMessage = $"Recovery failed: {ex.Message}";
+        }
+    }
+
+    public async Task RemoveSelectedClientDisplayLeaseAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(SelectedClientId))
+        {
+            StatusMessage = "Select a client before removing its display lease.";
+            return;
+        }
+
+        try
+        {
+            await api.RemoveClientDisplayLeaseAsync(SelectedClientId, cancellationToken);
+            StatusMessage = $"Display lease removal requested for {SelectedClientId}.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Display lease removal failed: {ex.Message}";
+        }
+    }
+
+    public async Task StopSelectedClientStreamAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(SelectedClientId))
+        {
+            StatusMessage = "Select a client before stopping its stream.";
+            return;
+        }
+
+        try
+        {
+            await api.StopClientStreamAsync(SelectedClientId, cancellationToken);
+            StatusMessage = $"Stream stop requested for {SelectedClientId}.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Stream stop failed: {ex.Message}";
         }
     }
 

@@ -114,6 +114,37 @@ public static class AdminEndpoints
                 : Results.Problem(result.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
         });
 
+        admin.MapPost("/clients/{clientId}/display/remove", async (
+            string clientId,
+            DisplayLeaseManager leases,
+            CancellationToken cancellationToken) =>
+        {
+            string displayId = DisplayLease.CreateDisplayId(new ClientId(clientId));
+            DisplayRecoveryResult result = await leases.RecoverDisplayAsync(displayId, cancellationToken);
+
+            return result.Success
+                ? Results.Ok(new { clientId, displayId, removed = true })
+                : Results.Problem(result.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+        });
+
+        admin.MapPost("/clients/{clientId}/stream/stop", async (
+            string clientId,
+            InMemorySessionStore sessions,
+            IStreamingBackend streaming,
+            CancellationToken cancellationToken) =>
+        {
+            SessionPlan? plan = sessions.Get(clientId);
+            if (plan is null)
+            {
+                return Results.NotFound(new { error = $"Client '{clientId}' has no session plan." });
+            }
+
+            StreamingStopResult stop = await streaming.StopAsync(plan.SessionId, cancellationToken);
+            return stop.Success && stop.Session is not null
+                ? Results.Ok(new { clientId, stream = stop.Session })
+                : Results.NotFound(new { error = stop.Error });
+        });
+
         admin.MapPatch("/clients/{clientId}/profile", (
             string clientId,
             ClientProfileAdminPatch patch,

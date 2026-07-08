@@ -18,6 +18,10 @@ public interface ICockpitApi
     Task TerminateVirtualProcessesAsync(CancellationToken cancellationToken);
 
     Task RecoverClientDisplayAsync(string clientId, CancellationToken cancellationToken);
+
+    Task RemoveClientDisplayLeaseAsync(string clientId, CancellationToken cancellationToken);
+
+    Task StopClientStreamAsync(string clientId, CancellationToken cancellationToken);
 }
 
 public sealed class CockpitApiClient(HttpClient httpClient) : ICockpitApi
@@ -61,6 +65,18 @@ public sealed class CockpitApiClient(HttpClient httpClient) : ICockpitApi
     public async Task RecoverClientDisplayAsync(string clientId, CancellationToken cancellationToken)
     {
         using HttpResponseMessage response = await httpClient.PostAsJsonAsync($"/admin/clients/{Uri.EscapeDataString(clientId)}/display/recover", new { }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task RemoveClientDisplayLeaseAsync(string clientId, CancellationToken cancellationToken)
+    {
+        using HttpResponseMessage response = await httpClient.PostAsJsonAsync($"/admin/clients/{Uri.EscapeDataString(clientId)}/display/remove", new { }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task StopClientStreamAsync(string clientId, CancellationToken cancellationToken)
+    {
+        using HttpResponseMessage response = await httpClient.PostAsJsonAsync($"/admin/clients/{Uri.EscapeDataString(clientId)}/stream/stop", new { }, cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 }
