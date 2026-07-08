@@ -729,18 +729,13 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
-    public async Task DisplayRecoverRunsManualRecoveryForClientLease()
+    public async Task ClientDisplayRecoverRouteIsNotAvailableBecauseDisplayRecoveryIsAdminOnly()
     {
         HttpClient client = factory.CreateClient();
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/display/recover", new { });
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
-        JsonElement root = document.RootElement;
-
-        Assert.Equal("client-z-fold-7", root.GetProperty("displayId").GetString());
-        Assert.True(root.GetProperty("recovered").GetBoolean());
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     private sealed class FakeExternalStreamingProcessRunner(IEnumerable<string>? existingFiles = null) : IExternalStreamingProcessRunner
