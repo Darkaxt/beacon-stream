@@ -73,7 +73,9 @@ public static class BeaconServiceRegistration
         services.AddSingleton<InMemorySessionStore>();
         services.AddSingleton<DisplayLeaseManager>();
         services.AddSingleton<ISessionOwnershipTracker, SessionOwnershipTracker>();
-        services.AddSingleton<IClientInputSink, NoOpClientInputSink>();
+        services.AddSingleton<NoOpClientInputSink>();
+        services.AddSingleton<IClientInputSink>(sp => sp.GetRequiredService<NoOpClientInputSink>());
+        services.AddSingleton<IClientInputHealthProvider>(sp => sp.GetRequiredService<NoOpClientInputSink>());
         services.AddSingleton<IGameLibraryProvider>(_ => new StaticGameLibraryProvider(
             "seed",
             [
@@ -180,7 +182,9 @@ public static class BeaconServiceRegistration
         services.AddSingleton<IWindowsSessionActivityApi, WindowsSessionActivityApi>();
         services.AddSingleton<ISessionActivityInspector, WindowsSessionActivityInspector>();
         services.AddSingleton<IWindowsInputApi, WindowsInputApi>();
-        services.AddSingleton<IClientInputSink, WindowsClientInputSink>();
+        services.AddSingleton<WindowsClientInputSink>();
+        services.AddSingleton<IClientInputSink>(sp => sp.GetRequiredService<WindowsClientInputSink>());
+        services.AddSingleton<IClientInputHealthProvider>(sp => sp.GetRequiredService<WindowsClientInputSink>());
         return services;
     }
 

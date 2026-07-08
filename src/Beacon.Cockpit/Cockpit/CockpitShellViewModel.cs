@@ -33,6 +33,7 @@ public sealed class CockpitShellViewModel : ObservableObject
     private bool profileAllowEmergencyRestoreFromClient;
     private string displayHealthSummary = "Display health unknown.";
     private string streamingHealthSummary = "Streaming health unknown.";
+    private string inputHealthSummary = "Input health unknown.";
     private string statusMessage = "Ready.";
 
     public CockpitShellViewModel(ICockpitApi api, string serverUrl = "http://localhost:5000")
@@ -211,6 +212,12 @@ public sealed class CockpitShellViewModel : ObservableObject
         private set => SetProperty(ref streamingHealthSummary, value);
     }
 
+    public string InputHealthSummary
+    {
+        get => inputHealthSummary;
+        private set => SetProperty(ref inputHealthSummary, value);
+    }
+
     public string ServerUrl { get; }
 
     public ObservableCollection<string> Clients { get; } = [];
@@ -270,8 +277,10 @@ public sealed class CockpitShellViewModel : ObservableObject
             $"{ownership.AppId} process={ownership.LaunchedProcessRunning} child={ownership.ChildProcessRunning} window={ownership.OwnedWindowRemaining}"));
         DisplayHealthSummary = FormatDisplayHealth(snapshot.Display);
         StreamingHealthSummary = FormatStreamingHealth(snapshot.StreamingHealth);
+        InputHealthSummary = FormatInputHealth(snapshot.InputHealth);
         Replace(Diagnostics, new[] { $"[display] {DisplayHealthSummary}" }
             .Concat(new[] { $"[streaming] {StreamingHealthSummary}" })
+            .Concat(new[] { $"[input] {InputHealthSummary}" })
             .Concat(snapshot.Diagnostics
             .Select(evt => $"[{evt.Severity}] {evt.Category}/{evt.Operation}: {evt.Message}")
             .Concat(snapshot.Games.Diagnostics.Select(message => $"[provider] {message}"))));
@@ -494,6 +503,19 @@ public sealed class CockpitShellViewModel : ObservableObject
             : "no manifest configured";
         string active = streaming.ActiveSessions == 1 ? "1 active stream" : $"{streaming.ActiveSessions} active streams";
         return $"{streaming.Backend} {state}; {executable}; {manifest}; {active}; {streaming.Diagnostic}";
+    }
+
+    private static string FormatInputHealth(CockpitInputHealth? input)
+    {
+        input ??= CockpitInputHealth.Unknown;
+        string state = input.Ready ? "ready" : "not ready";
+        string eventTypes = input.SupportedEventTypes.Count == 0
+            ? "no event types"
+            : string.Join("/", input.SupportedEventTypes);
+        string pointerActions = input.SupportedPointerActions.Count == 0
+            ? "no pointer actions"
+            : string.Join("/", input.SupportedPointerActions);
+        return $"{input.Backend} {state}; events={eventTypes}; pointer={pointerActions}; {input.Diagnostic}";
     }
 
     private void LoadSelectedClientProfile()

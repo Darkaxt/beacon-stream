@@ -39,6 +39,7 @@ public sealed class CockpitShellViewModelTests
                 [])],
             CreateHealthyDisplay(),
             CreateHealthyStreaming(),
+            CreateHealthyInput(),
             new CockpitGameSummary(36, ["Steam library stale"]),
             []));
         var viewModel = new CockpitShellViewModel(api);
@@ -66,8 +67,11 @@ public sealed class CockpitShellViewModelTests
         Assert.Contains("physical primary verified", viewModel.DisplayHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("external-process", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("1 active stream", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("windows-sendinput", viewModel.InputHealthSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("tap", viewModel.InputHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(viewModel.Diagnostics, value => value.Contains("[display]", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(viewModel.Diagnostics, value => value.Contains("[streaming]", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(viewModel.Diagnostics, value => value.Contains("[input]", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(viewModel.Diagnostics, value => value.Contains("Steam library stale", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -81,6 +85,7 @@ public sealed class CockpitShellViewModelTests
             [],
             CreateHealthyDisplay(),
             CreateHealthyStreaming(),
+            CreateHealthyInput(),
             new CockpitGameSummary(0, []),
             []));
         var viewModel = new CockpitShellViewModel(api);
@@ -116,6 +121,7 @@ public sealed class CockpitShellViewModelTests
             [],
             CreateHealthyDisplay(),
             CreateHealthyStreaming(),
+            CreateHealthyInput(),
             new CockpitGameSummary(1, ["Steam library stale"]),
             [new CockpitDiagnosticEvent(
                 "evt-1",
@@ -139,7 +145,7 @@ public sealed class CockpitShellViewModelTests
     [Fact]
     public async Task RecoveryMethodsDelegateToServer()
     {
-        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), CreateHealthyStreaming(), new CockpitGameSummary(0, []), []));
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), CreateHealthyStreaming(), CreateHealthyInput(), new CockpitGameSummary(0, []), []));
         var viewModel = new CockpitShellViewModel(api) { SelectedClientId = "z-fold-7" };
 
         await viewModel.RestorePhysicalAsync(CancellationToken.None);
@@ -165,7 +171,7 @@ public sealed class CockpitShellViewModelTests
     [Fact]
     public async Task RecoverSelectedClientReportsMissingSelection()
     {
-        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), CreateHealthyStreaming(), new CockpitGameSummary(0, []), []));
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), CreateHealthyStreaming(), CreateHealthyInput(), new CockpitGameSummary(0, []), []));
         var viewModel = new CockpitShellViewModel(api);
 
         await viewModel.RecoverSelectedClientAsync(CancellationToken.None);
@@ -177,7 +183,7 @@ public sealed class CockpitShellViewModelTests
     [Fact]
     public void ConstructorStoresServerUrl()
     {
-        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), CreateHealthyStreaming(), new CockpitGameSummary(0, []), []));
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), CreateHealthyStreaming(), CreateHealthyInput(), new CockpitGameSummary(0, []), []));
         var viewModel = new CockpitShellViewModel(api, "http://127.0.0.1:5000");
 
         Assert.Equal("http://127.0.0.1:5000", viewModel.ServerUrl);
@@ -362,4 +368,12 @@ public sealed class CockpitShellViewModelTests
             Hdr10: true,
             ActiveSessions: 1,
             Diagnostics: ["ready"]);
+
+    private static CockpitInputHealth CreateHealthyInput() =>
+        new(
+            Ready: true,
+            Backend: "windows-sendinput",
+            Diagnostic: "Windows SendInput pointer sink ready.",
+            SupportedEventTypes: ["pointer"],
+            SupportedPointerActions: ["move", "down", "up", "tap"]);
 }

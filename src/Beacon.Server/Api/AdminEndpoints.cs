@@ -2,6 +2,7 @@ using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 using Beacon.Core.Diagnostics;
 using Beacon.Core.Games;
+using Beacon.Core.Input;
 using Beacon.Core.Recovery;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
@@ -23,6 +24,7 @@ public static class AdminEndpoints
             ISessionOwnershipTracker ownership,
             GameLibraryService games,
             IDisplayBackend displayBackend,
+            IClientInputHealthProvider inputHealthProvider,
             BeaconHostOptions hostOptions,
             ClientPairingOptions pairingOptions,
             IDiagnosticEventSource diagnostics,
@@ -32,6 +34,7 @@ public static class AdminEndpoints
             IReadOnlyList<SessionOwnershipSnapshot> ownershipSnapshots = await ownership.GetSnapshotsAsync(cancellationToken);
             StreamingBackendHealth streamingHealth;
             DisplayHealth displayHealth;
+            ClientInputHealth inputHealth;
             IReadOnlyList<StreamingSessionState> streamSnapshots;
             try
             {
@@ -64,6 +67,16 @@ public static class AdminEndpoints
             {
                 displayHealth = DisplayHealth.Unknown($"Display health check failed: {ex.Message}");
             }
+
+            try
+            {
+                inputHealth = inputHealthProvider.GetHealth();
+            }
+            catch (Exception ex)
+            {
+                inputHealth = ClientInputHealth.Unknown($"Input health check failed: {ex.Message}");
+            }
+
             return Results.Ok(new
             {
                 clients = clients.GetProfiles().Select(profile => new
@@ -92,6 +105,7 @@ public static class AdminEndpoints
                     pairingEnabled = pairingOptions.Enabled
                 },
                 streamingHealth,
+                inputHealth,
                 display = displayHealth,
                 games = new
                 {

@@ -76,6 +76,13 @@ public sealed class CockpitApiClientTests
                 "activeSessions": 1,
                 "diagnostics": ["ready"]
               },
+              "inputHealth": {
+                "ready": true,
+                "backend": "windows-sendinput",
+                "diagnostic": "Windows SendInput pointer sink ready.",
+                "supportedEventTypes": ["pointer"],
+                "supportedPointerActions": ["move", "down", "up", "tap"]
+              },
               "games": { "total": 36, "diagnostics": ["Steam library 'G:\\SteamLibrary\\steamapps' does not exist."] },
               "diagnostics": [{
                 "id": "evt-1",
@@ -116,6 +123,9 @@ public sealed class CockpitApiClientTests
         Assert.Equal("external-process", snapshot.StreamingHealth.Backend);
         Assert.Equal(["av1", "hevc"], snapshot.StreamingHealth.Codecs);
         Assert.True(snapshot.StreamingHealth.Hdr10);
+        Assert.True(snapshot.InputHealth.Ready);
+        Assert.Equal("windows-sendinput", snapshot.InputHealth.Backend);
+        Assert.Equal(["move", "down", "up", "tap"], snapshot.InputHealth.SupportedPointerActions);
         Assert.Equal(36, snapshot.Games.Total);
         Assert.Single(snapshot.Games.Diagnostics);
         Assert.Single(snapshot.Diagnostics);

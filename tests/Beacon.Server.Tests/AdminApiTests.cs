@@ -39,6 +39,16 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.Equal("FakeStreamingBackend", root.GetProperty("host").GetProperty("streamingBackend").GetString());
         Assert.Equal("memory", root.GetProperty("profiles").GetProperty("store").GetString());
         Assert.False(root.GetProperty("profiles").GetProperty("pairingEnabled").GetBoolean());
+        Assert.True(root.GetProperty("inputHealth").GetProperty("ready").GetBoolean());
+        Assert.Equal("no-op", root.GetProperty("inputHealth").GetProperty("backend").GetString());
+        Assert.Contains(
+            "pointer",
+            root.GetProperty("inputHealth").GetProperty("supportedEventTypes").EnumerateArray()
+                .Select(value => value.GetString()));
+        Assert.Contains(
+            "tap",
+            root.GetProperty("inputHealth").GetProperty("supportedPointerActions").EnumerateArray()
+                .Select(value => value.GetString()));
         Assert.True(root.GetProperty("display").GetProperty("driverReady").GetBoolean());
         Assert.True(root.GetProperty("display").GetProperty("topologyAvailable").GetBoolean());
         Assert.False(root.GetProperty("display").GetProperty("mirrorMode").GetBoolean());
