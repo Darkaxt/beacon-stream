@@ -146,6 +146,24 @@ public final class BeaconApiClientTest {
         assertFalse(transport.body.contains("mode"));
     }
 
+    @Test
+    public void inputSerializesKeyboardPressToOwningClientEndpoint() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        BeaconApiClient client = new BeaconApiClient(new BeaconClientConfig("http://server", "z-fold-7"), transport);
+
+        client.sendInput(BeaconApiClient.InputBatch.keyboardPress(4, "Escape", "Escape"));
+
+        assertEquals("POST", transport.method);
+        assertEquals("/clients/z-fold-7/input", transport.path);
+        assertTrue(transport.body.contains("\"sequence\":4"));
+        assertTrue(transport.body.contains("\"type\":\"keyboard\""));
+        assertTrue(transport.body.contains("\"action\":\"press\""));
+        assertTrue(transport.body.contains("\"key\":\"Escape\""));
+        assertTrue(transport.body.contains("\"code\":\"Escape\""));
+        assertFalse(transport.body.contains("display"));
+        assertFalse(transport.body.contains("mode"));
+    }
+
     private static final class FakeTransport implements BeaconHttpTransport {
         String method;
         String path;
