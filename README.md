@@ -2,7 +2,7 @@
 
 Beacon Stream is a server-authoritative personal game-streaming orchestrator.
 
-Milestone 0/1 covers the control plane, fake backends, planner, profile ownership, phone-free testing, and source-boundary documentation. Milestone 2 adds the real Windows SudoVDA/DisplayConfig lifecycle backend and manual no-phone display probe. Milestone 3 adds the normalized game library model, Steam/Heroic/Hydra/manual providers, SteamGridDB/fallback artwork providers, server/client-lab game selection, and a read-only local game probe. Milestone 4 adds a WPF cockpit for local server administration. Milestone 5 adds the streaming backend boundary, fake no-phone stream lifecycle, and external-process adapter boundary for future Sunshine-compatible integration. Milestone 6 adds a thin Android control-plane APK shell. Milestone 7 adds the server-owned game launch and session ownership cleanup boundary. Milestone 8 adds the Windows process/window activity inspector. Milestone 9 adds explicit fake-vs-Windows server host composition. Milestone 10 adds explicit streaming backend selection and preflight before display/app side effects. Milestone 11 adds manual recovery actions for stranded windows/processes. Milestone 12 adds persistent client profiles and an explicit pairing boundary for new clients. Milestone 13 adds cockpit profile editing. Milestone 14 adds selected-client recovery/admin actions. Milestone 15 adds telemetry-driven initial planning. Milestone 16 brings Android preflight payloads up to the server planning contract. Real video decode and native input forwarding come later.
+Milestone 0/1 covers the control plane, fake backends, planner, profile ownership, phone-free testing, and source-boundary documentation. Milestone 2 adds the real Windows SudoVDA/DisplayConfig lifecycle backend and manual no-phone display probe. Milestone 3 adds the normalized game library model, Steam/Heroic/Hydra/manual providers, SteamGridDB/fallback artwork providers, server/client-lab game selection, and a read-only local game probe. Milestone 4 adds a WPF cockpit for local server administration. Milestone 5 adds the streaming backend boundary, fake no-phone stream lifecycle, and external-process adapter boundary for future Sunshine-compatible integration. Milestone 6 adds a thin Android control-plane APK shell. Milestone 7 adds the server-owned game launch and session ownership cleanup boundary. Milestone 8 adds the Windows process/window activity inspector. Milestone 9 adds explicit fake-vs-Windows server host composition. Milestone 10 adds explicit streaming backend selection and preflight before display/app side effects. Milestone 11 adds manual recovery actions for stranded windows/processes. Milestone 12 adds persistent client profiles and an explicit pairing boundary for new clients. Milestone 13 adds cockpit profile editing. Milestone 14 adds selected-client recovery/admin actions. Milestone 15 adds telemetry-driven initial planning. Milestone 16 brings Android preflight payloads up to the server planning contract. Milestone 17 adds typed stream connection descriptors. Real video decode and native input forwarding come later.
 
 ## Server Host Mode
 
@@ -77,6 +77,16 @@ dotnet run --project src\Beacon.Server
 ```
 
 The external-process backend preflights the executable path before display creation or game launch. It passes the session plan through command arguments and `BEACON_*` environment variables, records stream state, and stops only its owned wrapper process. This is a wrapper boundary; no Sunshine source is copied.
+
+Running stream state includes a `connection` descriptor. Fake mode returns a deterministic `beacon-fake://...` launch URI for no-phone validation. External-process mode can expose a configured connection protocol, launch URI, and endpoint map:
+
+```powershell
+$env:BEACON_EXTERNAL_STREAMING_CONNECTION_PROTOCOL='gamestream'
+$env:BEACON_EXTERNAL_STREAMING_CONNECTION_LAUNCH_URI='moonlight://beacon/session'
+dotnet run --project src\Beacon.Server
+```
+
+Endpoint maps are configured under `Beacon:Streaming:ExternalProcess:Connection:Endpoints:*`, for example `rtsp = rtsp://127.0.0.1:48010/beacon`.
 
 ## Local Probes
 
@@ -173,4 +183,5 @@ See:
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-14-selected-client-admin.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-15-telemetry-planning.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-16-android-preflight-parity.md`
+- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-17-stream-connection-descriptor.md`
 - `docs/windows-display-backend.md`

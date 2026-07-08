@@ -577,7 +577,7 @@ Expected: all commands pass.
 - Modify: `docs/extraction-map.md`
 - Modify: `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-17-stream-connection-descriptor.md`
 
-- [ ] **Step 1: Update docs**
+- [x] **Step 1: Update docs**
 
 Add to `README.md` under streaming backend notes:
 
@@ -587,7 +587,7 @@ Milestone 17 adds a stream connection descriptor to each running stream state. F
 
 Update the Sunshine row in `docs/extraction-map.md` to mention that Milestone 17 still uses Beacon-owned descriptor metadata only and copies no streaming protocol source.
 
-- [ ] **Step 2: Static validation**
+- [x] **Step 2: Static validation**
 
 Run:
 
@@ -598,7 +598,7 @@ dotnet build Beacon.slnx -warnaserror
 
 Expected: both commands pass.
 
-- [ ] **Step 3: Dynamic validation**
+- [x] **Step 3: Dynamic validation**
 
 Run:
 
@@ -613,7 +613,7 @@ pnpm --dir tests\Beacon.ClientLab.Playwright test
 
 Expected: all commands pass; Gradle 9 deprecation warning is acceptable if the build exits successfully.
 
-- [ ] **Step 4: Boundary audit**
+- [x] **Step 4: Boundary audit**
 
 Run:
 
@@ -624,7 +624,7 @@ rg "Thread\.Sleep|Task\.Delay|timeout|Timeout|CancelAfter|CancellationTokenSourc
 
 Expected: no copied upstream source appears under `src`; no timeout/cancellation helper is introduced.
 
-- [ ] **Step 5: Commit and sync**
+- [x] **Step 5: Commit and sync**
 
 Run:
 
