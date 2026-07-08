@@ -212,7 +212,7 @@ Expected: all fake backend tests pass.
 - Test: `tests/Beacon.Platform.Windows.Tests/Streaming/ExternalProcessStreamingBackendTests.cs`
 - Test: `tests/Beacon.Server.Tests/BeaconServiceRegistrationTests.cs`
 
-- [ ] **Step 1: Write failing external backend tests**
+- [x] **Step 1: Write failing external backend tests**
 
 Add to `ExternalProcessStreamingBackendTests`:
 
@@ -275,7 +275,7 @@ public void ExternalProcessConnectionOptionsUseConfiguration()
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -286,7 +286,7 @@ dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter Extern
 
 Expected: compile failures because the new options do not exist.
 
-- [ ] **Step 3: Extend external options**
+- [x] **Step 3: Extend external options**
 
 Change the options record in `ExternalProcessStreamingBackend.cs`:
 
@@ -329,7 +329,7 @@ private static StreamingConnectionDescriptor? CreateConnectionDescriptor(Externa
 
 Pass `CreateConnectionDescriptor(options)` as the final `StreamingSessionState` argument.
 
-- [ ] **Step 4: Pass descriptor config to wrapper environment**
+- [x] **Step 4: Pass descriptor config to wrapper environment**
 
 In `CreateStartCommand`, accept an optional `ExternalProcessStreamingOptions` parameter:
 
@@ -370,7 +370,7 @@ Change `StartAsync` to call:
 ExternalStreamingCommand command = CreateStartCommand(options.ExecutablePath!, plan, options);
 ```
 
-- [ ] **Step 5: Bind service configuration**
+- [x] **Step 5: Bind service configuration**
 
 In `BeaconServiceRegistration`, add constants:
 
@@ -408,7 +408,7 @@ private static ExternalProcessStreamingOptions CreateExternalProcessStreamingOpt
 
 In external backend registration, replace `new ExternalProcessStreamingOptions(...)` with `CreateExternalProcessStreamingOptions(...)`.
 
-- [ ] **Step 6: Verify green**
+- [x] **Step 6: Verify green**
 
 Run:
 

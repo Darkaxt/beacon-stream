@@ -77,6 +77,30 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public void ExternalProcessConnectionOptionsUseConfiguration()
+    {
+        IConfiguration configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [BeaconServiceRegistration.StreamingBackendConfigurationKey] = "external-process",
+                [BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey] = "C:\\Tools\\sunshine-wrapper.exe",
+                ["Beacon:Streaming:ExternalProcess:Connection:Protocol"] = "gamestream",
+                ["Beacon:Streaming:ExternalProcess:Connection:LaunchUri"] = "moonlight://beacon/session",
+                ["Beacon:Streaming:ExternalProcess:Connection:Endpoints:rtsp"] = "rtsp://127.0.0.1:48010/beacon"
+            })
+            .Build();
+
+        using ServiceProvider provider = new ServiceCollection()
+            .AddBeaconServices(configuration, environmentHostMode: null)
+            .BuildServiceProvider();
+
+        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
+        Assert.Equal("gamestream", options.ConnectionProtocol);
+        Assert.Equal("moonlight://beacon/session", options.ConnectionLaunchUri);
+        Assert.Equal("rtsp://127.0.0.1:48010/beacon", options.ConnectionEndpoints?["rtsp"]);
+    }
+
+    [Fact]
     public void ClientProfilesPathUsesFileRepositoryAndPairingToken()
     {
         string profilePath = Path.Combine(Path.GetTempPath(), $"beacon-profiles-{Guid.NewGuid():N}.json");
