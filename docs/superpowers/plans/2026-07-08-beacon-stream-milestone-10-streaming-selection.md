@@ -154,7 +154,7 @@ Files:
 - Modify: `docs/extraction-map.md`
 - Modify: `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-10-streaming-selection.md`
 
-- [ ] **Step 1: Document run commands**
+- [x] **Step 1: Document run commands**
 
 Document:
 
@@ -163,7 +163,7 @@ dotnet run --project src\Beacon.Server
 $env:BEACON_STREAMING_BACKEND='external-process'; $env:BEACON_EXTERNAL_STREAMING_EXECUTABLE='C:\Tools\beacon-stream-wrapper.exe'; dotnet run --project src\Beacon.Server
 ```
 
-- [ ] **Step 2: Full validation**
+- [x] **Step 2: Full validation**
 
 Run:
 
@@ -178,7 +178,7 @@ pnpm --dir tests\Beacon.ClientLab.Playwright test
 & "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.14.1-bin\baw1sv0jfoi8rxs14qo3h49cs\gradle-8.14.1\bin\gradle.bat" --no-daemon -p src\Beacon.Android test assembleDebug
 ```
 
-- [ ] **Step 3: Boundary audit**
+- [x] **Step 3: Boundary audit**
 
 Run:
 
@@ -192,7 +192,7 @@ Expected:
 - no timeout-driven cancellation behavior.
 - Sunshine/Moonlight matches only in documentation or boundary names; no copied upstream source.
 
-- [ ] **Step 4: Commit docs and validation**
+- [x] **Step 4: Commit docs and validation**
 
 ```powershell
 git add README.md docs/extraction-map.md docs/superpowers/plans/2026-07-08-beacon-stream-milestone-10-streaming-selection.md
