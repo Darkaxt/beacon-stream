@@ -124,12 +124,13 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
     });
   });
   await page.route('**/clients/z-fold-7/input', async route => {
-    inputBodies.push(route.request().postDataJSON());
+    const body = route.request().postDataJSON();
+    inputBodies.push(body);
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
         accepted: true,
-        eventCount: 1,
+        eventCount: body.events.length,
         sessionId: 'z-fold-7-steam-shortcut:3767414131'
       })
     });
@@ -179,11 +180,15 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
   expect(telemetryBodies).toHaveLength(2);
 
   await page.getByRole('button', { name: 'Send Input' }).click();
-  await expect(page.getByText('input accepted 1 event(s) z-fold-7-steam-shortcut:3767414131')).toBeVisible();
+  await expect(page.getByText('input accepted 3 event(s) z-fold-7-steam-shortcut:3767414131')).toBeVisible();
   expect(inputBodies).toEqual([
     {
       sequence: 1,
-      events: [{ type: 'pointer', action: 'tap', pointerId: 1, x: 0.5, y: 0.5, buttons: 1 }]
+      events: [
+        { type: 'pointer', action: 'down', pointerId: 1, x: 0.5, y: 0.5, buttons: 1 },
+        { type: 'pointer', action: 'move', pointerId: 1, x: 0.75, y: 0.25 },
+        { type: 'pointer', action: 'up', pointerId: 1, x: 0.75, y: 0.25, buttons: 1 }
+      ]
     }
   ]);
 

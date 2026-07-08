@@ -237,16 +237,34 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
         new
         {
             sequence = 1,
-            events = new[]
+            events = new object[]
             {
                 new
                 {
                     type = "pointer",
-                    action = "tap",
+                    action = "down",
                     pointerId = 1,
                     x = 0.5,
                     y = 0.5,
-                    buttons = 1
+                    buttons = (int?)1
+                },
+                new
+                {
+                    type = "pointer",
+                    action = "move",
+                    pointerId = 1,
+                    x = 0.75,
+                    y = 0.25,
+                    buttons = (int?)null
+                },
+                new
+                {
+                    type = "pointer",
+                    action = "up",
+                    pointerId = 1,
+                    x = 0.75,
+                    y = 0.25,
+                    buttons = (int?)1
                 }
             }
         };

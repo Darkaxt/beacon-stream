@@ -233,16 +233,31 @@ export function formatLaunchEvents(launch: LaunchResponse): string[] {
   return events;
 }
 
-export function createPointerInputPayload(sequence: number): InputPayload {
+export function createPointerGesturePayload(sequence: number): InputPayload {
   return {
     sequence,
     events: [
       {
         type: 'pointer',
-        action: 'tap',
+        action: 'down',
         pointerId: 1,
         x: 0.5,
         y: 0.5,
+        buttons: 1
+      },
+      {
+        type: 'pointer',
+        action: 'move',
+        pointerId: 1,
+        x: 0.75,
+        y: 0.25
+      },
+      {
+        type: 'pointer',
+        action: 'up',
+        pointerId: 1,
+        x: 0.75,
+        y: 0.25,
         buttons: 1
       }
     ]
