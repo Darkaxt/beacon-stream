@@ -717,6 +717,53 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task LaunchWithStreamingProbeChildProcessReportsChildExit()
+    {
+        string descriptorRoot = Path.Combine(Path.GetTempPath(), $"beacon-streaming-child-smoke-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(descriptorRoot);
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions(
+                GetStreamingProbeExecutablePath(),
+                WrapperChildExecutablePath: GetCommandPromptExecutablePath(),
+                WrapperChildArguments: "/c exit 7"),
+            new WindowsExternalStreamingProcessRunner(),
+            sessionDescriptors: new WindowsExternalStreamingSessionDescriptorStore(descriptorRoot));
+        WebApplicationFactory<Program> streamingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IStreamingBackend>(backend);
+            }));
+        HttpClient client = streamingFactory.CreateClient();
+
+        try
+        {
+            HttpResponseMessage launch = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
+            {
+                gameId = "steam-shortcut:3767414131"
+            });
+            Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+            await WaitForStreamingDescriptorAsync(descriptorRoot);
+
+            HttpResponseMessage stream = await client.GetAsync("/clients/z-fold-7/stream");
+
+            Assert.Equal(HttpStatusCode.OK, stream.StatusCode);
+            using JsonDocument streamJson = await JsonDocument.ParseAsync(await stream.Content.ReadAsStreamAsync());
+            JsonElement streamState = streamJson.RootElement.GetProperty("stream");
+            Assert.Equal("exited", streamState.GetProperty("state").GetString());
+            Assert.Contains("7", streamState.GetProperty("error").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
+            if (Directory.Exists(descriptorRoot))
+            {
+                Directory.Delete(descriptorRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task FakeEndpointScriptCompletesAgainstStreamingProbeWrapper()
     {
         string descriptorRoot = Path.Combine(Path.GetTempPath(), $"beacon-fake-endpoint-wrapper-{Guid.NewGuid():N}");
@@ -1103,6 +1150,16 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         string assemblyPath = typeof(StreamingProbeApp).Assembly.Location;
         string executablePath = Path.ChangeExtension(assemblyPath, ".exe");
         Assert.True(File.Exists(executablePath), $"Streaming probe executable was not copied to '{executablePath}'.");
+        return executablePath;
+    }
+
+    private static string GetCommandPromptExecutablePath()
+    {
+        string executablePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            "System32",
+            "cmd.exe");
+        Assert.True(File.Exists(executablePath), $"Command prompt executable was not found at '{executablePath}'.");
         return executablePath;
     }
 
