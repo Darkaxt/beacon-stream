@@ -30,7 +30,8 @@ public sealed record FakeEndpointScript(
     string AppId,
     string Title,
     string Source,
-    bool RequireStreamConnection)
+    bool RequireStreamConnection,
+    bool EndAfterStreamConnection)
 {
     public static FakeEndpointScript CreateZFold7Default() =>
         new(
@@ -60,7 +61,8 @@ public sealed record FakeEndpointScript(
             AppId: "steam-shortcut:3767414131",
             Title: "Dispatch",
             Source: "steam-shortcut",
-            RequireStreamConnection: false);
+            RequireStreamConnection: false,
+            EndAfterStreamConnection: false);
 
     public FakeEndpointScript ApplyTelemetryProfile(string profile)
     {
@@ -161,9 +163,14 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/plan", CreatePlanRequest(script), operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/launch", CreatePlanRequest(script), operations, cancellationToken);
 
-        if (ok && script.RequireStreamConnection)
+        if (ok && (script.RequireStreamConnection || script.EndAfterStreamConnection))
         {
             (ok, validationError) = await VerifyStreamConnectionAsync(script, operations, cancellationToken);
+        }
+
+        if (ok && script.EndAfterStreamConnection)
+        {
+            return new FakeEndpointResult(true, operations, null);
         }
 
         ok = ok &&

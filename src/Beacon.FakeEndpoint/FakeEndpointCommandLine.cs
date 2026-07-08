@@ -32,7 +32,8 @@ public static class FakeEndpointCommandLine
             AppId = ReadString(values, "app-id", profiled.AppId),
             Title = ReadString(values, "title", profiled.Title),
             Source = ReadString(values, "source", profiled.Source),
-            RequireStreamConnection = ReadBool(values, "require-stream-connection", profiled.RequireStreamConnection)
+            RequireStreamConnection = ReadBool(values, "require-stream-connection", profiled.RequireStreamConnection),
+            EndAfterStreamConnection = ReadBool(values, "end-after-stream-connection", profiled.EndAfterStreamConnection)
         };
 
         return new FakeEndpointCommandLineOptions(
