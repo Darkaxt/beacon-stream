@@ -590,6 +590,47 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task EmergencyRestoreRejectsClientWhenProfileDisallowsIt()
+    {
+        WebApplicationFactory<Program> policyFactory = factory.WithWebHostBuilder(_ => { });
+        HttpClient client = policyFactory.CreateClient();
+        HttpResponseMessage patch = await client.PatchAsJsonAsync("/admin/clients/z-fold-7/profile", new
+        {
+            allowEmergencyRestoreFromClient = false
+        });
+
+        HttpResponseMessage restore = await client.PostAsJsonAsync("/clients/z-fold-7/emergency-restore", new { });
+
+        Assert.Equal(HttpStatusCode.OK, patch.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, restore.StatusCode);
+        string body = await restore.Content.ReadAsStringAsync();
+        Assert.Contains("emergency restore", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task EmergencyRestoreReturnsServiceUnavailableWhenPhysicalRestoreFails()
+    {
+        var display = new FakeDisplayBackend
+        {
+            NextRestoreResult = DisplayRestoreResult.Fail("physical primary was not verified")
+        };
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.AddSingleton<IDisplayBackend>(display);
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage restore = await client.PostAsJsonAsync("/clients/z-fold-7/emergency-restore", new { });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, restore.StatusCode);
+        string body = await restore.Content.ReadAsStringAsync();
+        Assert.Contains("physical primary was not verified", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("physical-primary", Assert.Single(display.RestoreCalls));
+    }
+
+    [Fact]
     public async Task StreamStatusAndStopAreIndependentFromDisplayCleanup()
     {
         HttpClient client = factory.CreateClient();

@@ -347,10 +347,31 @@ public static class ClientEndpoints
 
         clients.MapPost("/{clientId}/emergency-restore", async (
             string clientId,
+            InMemoryClientStore clients,
             IDisplayBackend displayBackend,
             CancellationToken cancellationToken) =>
         {
-            await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
+            ClientProfile? profile = clients.GetProfile(clientId);
+            if (profile is null)
+            {
+                return Results.NotFound(new { error = $"Client '{clientId}' is not registered." });
+            }
+
+            if (!profile.Session.AllowEmergencyRestoreFromClient)
+            {
+                return Results.Problem(
+                    "Emergency restore is disabled for this client profile.",
+                    statusCode: StatusCodes.Status403Forbidden);
+            }
+
+            DisplayRestoreResult restore = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
+            if (!restore.Success)
+            {
+                return Results.Problem(
+                    restore.Error ?? "Physical primary restore failed.",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
             return Results.Ok(new { clientId, restoreRequested = true });
         });
 
