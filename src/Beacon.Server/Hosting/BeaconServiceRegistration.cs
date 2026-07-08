@@ -6,6 +6,7 @@ using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Displays;
 using Beacon.Platform.Windows.Games;
+using Beacon.Platform.Windows.Recovery;
 using Beacon.Platform.Windows.Sessions;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.State;
@@ -137,7 +138,8 @@ public static class BeaconServiceRegistration
     {
         services.AddSingleton<IWindowsDisplayApi, WindowsDisplayApi>();
         services.AddSingleton<IDisplayBackend, WindowsDisplayBackend>();
-        services.AddSingleton<IRecoveryBackend, FakeRecoveryBackend>();
+        services.AddSingleton<IWindowsRecoveryApi, WindowsRecoveryApi>();
+        services.AddSingleton<IRecoveryBackend, WindowsRecoveryBackend>();
         services.AddSingleton<IGameLauncher, WindowsGameLauncher>();
         services.AddSingleton<IWindowsSessionActivityApi, WindowsSessionActivityApi>();
         services.AddSingleton<ISessionActivityInspector, WindowsSessionActivityInspector>();

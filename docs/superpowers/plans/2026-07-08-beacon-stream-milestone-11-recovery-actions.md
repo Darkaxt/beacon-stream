@@ -91,27 +91,27 @@ Files:
 - Modify: `src/Beacon.Server/Hosting/BeaconServiceRegistration.cs`
 - Modify: `tests/Beacon.Server.Tests/BeaconServiceRegistrationTests.cs`
 
-- [ ] **Step 1: Add fakeable Windows API boundary**
+- [x] **Step 1: Add fakeable Windows API boundary**
 
 The backend must not P/Invoke directly in tests.
 
-- [ ] **Step 2: Move windows from virtual to physical display**
+- [x] **Step 2: Move windows from virtual to physical display**
 
 Use the current active topology and visible top-level windows. Move matching windows to the physical primary or first physical display and minimize them when requested.
 
-- [ ] **Step 3: Close virtual-display windows**
+- [x] **Step 3: Close virtual-display windows**
 
 Send close requests only for visible windows intersecting virtual displays.
 
-- [ ] **Step 4: Terminate virtual-display processes**
+- [x] **Step 4: Terminate virtual-display processes**
 
 Terminate distinct process ids owning visible windows on virtual displays. Do not terminate the current Beacon process.
 
-- [ ] **Step 5: Register Windows recovery in Windows host mode**
+- [x] **Step 5: Register Windows recovery in Windows host mode**
 
 Fake host mode remains fake. Windows host mode registers `WindowsRecoveryBackend`.
 
-- [ ] **Step 6: Verify focused tests and commit**
+- [x] **Step 6: Verify focused tests and commit**
 
 ```powershell
 dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj --filter WindowsRecoveryBackend
