@@ -166,6 +166,7 @@ This section is the implementation contract. If a later plan contradicts this re
 - `REQ-NET-007`: A wrapper harness that supervises a child streaming process must fail before publishing runtime descriptor evidence when the child executable is unavailable, and it must exit when the child exits before Beacon stops the wrapper.
 - `REQ-NET-008`: Server-owned external-process configuration must be able to pass a wrapper child executable and arguments into the wrapper, and missing configured child executables must fail streaming preflight before display or app side effects.
 - `REQ-NET-009`: Admin and Cockpit streaming health must expose wrapper child executable configuration, availability, path, and whether child arguments are configured so wrapper handoff mistakes are visible before launch and phone testing.
+- `REQ-NET-010`: Wrapper child arguments without a wrapper child executable path are invalid configuration. They must make health not ready, fail streaming preflight before display or app side effects, and must not be passed as orphan child environment state.
 
 ### Game Library And Launch
 

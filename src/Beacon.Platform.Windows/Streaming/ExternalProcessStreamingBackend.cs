@@ -129,6 +129,9 @@ public sealed class ExternalProcessStreamingBackend(
     IDiagnosticEventSink? diagnostics = null,
     IExternalStreamingSessionDescriptorStore? sessionDescriptors = null) : IStreamingBackend
 {
+    private const string WrapperChildArgumentsWithoutExecutableMessage =
+        "External streaming wrapper child arguments are configured without a wrapper child executable path.";
+
     private static readonly ExternalStreamingManifest EmptyManifest = new(
         null,
         null,
@@ -192,6 +195,10 @@ public sealed class ExternalProcessStreamingBackend(
                 {
                     diagnostic ??= $"External streaming wrapper child executable '{wrapperChildExecutablePath}' does not exist.";
                 }
+            }
+            else if (wrapperChildArgumentsConfigured)
+            {
+                diagnostic ??= WrapperChildArgumentsWithoutExecutableMessage;
             }
 
             if (manifestConfigured)
@@ -290,6 +297,12 @@ public sealed class ExternalProcessStreamingBackend(
         }
 
         string? wrapperChildExecutablePath = TrimOrNull(options.WrapperChildExecutablePath);
+        bool wrapperChildArgumentsConfigured = TrimOrNull(options.WrapperChildArguments) is not null;
+        if (string.IsNullOrWhiteSpace(wrapperChildExecutablePath) && wrapperChildArgumentsConfigured)
+        {
+            return PreflightFailure(plan, WrapperChildArgumentsWithoutExecutableMessage);
+        }
+
         if (!string.IsNullOrWhiteSpace(wrapperChildExecutablePath) && !runner.FileExists(wrapperChildExecutablePath))
         {
             return PreflightFailure(
@@ -587,10 +600,13 @@ public sealed class ExternalProcessStreamingBackend(
         Dictionary<string, string> environment,
         ExternalProcessStreamingOptions? options)
     {
-        if (!string.IsNullOrWhiteSpace(options?.WrapperChildExecutablePath))
+        string? childExecutablePath = TrimOrNull(options?.WrapperChildExecutablePath);
+        if (childExecutablePath is null)
         {
-            environment["BEACON_WRAPPER_CHILD_EXECUTABLE"] = options.WrapperChildExecutablePath.Trim();
+            return;
         }
+
+        environment["BEACON_WRAPPER_CHILD_EXECUTABLE"] = childExecutablePath;
 
         if (!string.IsNullOrWhiteSpace(options?.WrapperChildArguments))
         {
