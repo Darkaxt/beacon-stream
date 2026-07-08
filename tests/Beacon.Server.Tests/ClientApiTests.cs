@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
@@ -1014,6 +1015,136 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
 
         Assert.True(root.GetProperty("leaseRetained").GetBoolean());
         Assert.Equal("stopped", root.GetProperty("stream").GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task DisconnectWithoutBodyDefaultsToActiveClientAndRetainsDisplayLease()
+    {
+        HttpClient client = factory.CreateClient();
+
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/clients/z-fold-7/disconnect");
+        HttpResponseMessage disconnect = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, disconnect.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await disconnect.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.True(root.GetProperty("leaseRetained").GetBoolean());
+        Assert.False(root.GetProperty("displayRemoved").GetBoolean());
+        Assert.Equal("stopped", root.GetProperty("stream").GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task DisconnectWithInactiveClientRemovesDisplayWhenNoOwnedWorkRemains()
+    {
+        var display = new FakeDisplayBackend();
+        WebApplicationFactory<Program> displayFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.AddSingleton<IDisplayBackend>(display);
+            }));
+        HttpClient client = displayFactory.CreateClient();
+
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        HttpResponseMessage disconnect = await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { clientActive = false });
+
+        Assert.Equal(HttpStatusCode.OK, disconnect.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await disconnect.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.False(root.GetProperty("leaseRetained").GetBoolean());
+        Assert.True(root.GetProperty("displayRemoved").GetBoolean());
+        Assert.Equal("stopped", root.GetProperty("stream").GetProperty("state").GetString());
+        Assert.Equal("physical-primary", Assert.Single(display.RestoreCalls));
+        Assert.Equal("client-z-fold-7", Assert.Single(display.RemoveCalls));
+    }
+
+    [Fact]
+    public async Task DisconnectWithUnknownLengthJsonBodyParsesInactiveClient()
+    {
+        var display = new FakeDisplayBackend();
+        WebApplicationFactory<Program> displayFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.AddSingleton<IDisplayBackend>(display);
+            }));
+        HttpClient client = displayFactory.CreateClient();
+
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/clients/z-fold-7/disconnect")
+        {
+            Content = new UnknownLengthJsonContent("""{"clientActive":false}""", "application/json")
+        };
+        HttpResponseMessage disconnect = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, disconnect.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await disconnect.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.False(root.GetProperty("leaseRetained").GetBoolean());
+        Assert.True(root.GetProperty("displayRemoved").GetBoolean());
+        Assert.Equal("physical-primary", Assert.Single(display.RestoreCalls));
+        Assert.Equal("client-z-fold-7", Assert.Single(display.RemoveCalls));
+    }
+
+    [Fact]
+    public async Task DisconnectWithInactiveClientRetainsDisplayWhenServerOwnedWorkRemains()
+    {
+        var display = new FakeDisplayBackend();
+        var inspector = new FakeSessionActivityInspector();
+        var ownership = new SessionOwnershipTracker(inspector);
+        WebApplicationFactory<Program> ownedFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.RemoveAll<FakeSessionActivityInspector>();
+                services.RemoveAll<ISessionActivityInspector>();
+                services.RemoveAll<ISessionOwnershipTracker>();
+                services.AddSingleton<IDisplayBackend>(display);
+                services.AddSingleton<ISessionActivityInspector>(inspector);
+                services.AddSingleton<ISessionOwnershipTracker>(ownership);
+            }));
+        HttpClient client = ownedFactory.CreateClient();
+        const string sessionId = "z-fold-7-steam-shortcut:3767414131";
+
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        inspector.SetActivity(sessionId, new SessionActivitySnapshot(true, false, false, []));
+        HttpResponseMessage disconnect = await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { clientActive = false });
+
+        Assert.Equal(HttpStatusCode.OK, disconnect.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await disconnect.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.True(root.GetProperty("leaseRetained").GetBoolean());
+        Assert.False(root.GetProperty("displayRemoved").GetBoolean());
+        Assert.True(root.GetProperty("ownership").GetProperty("launchedProcessRunning").GetBoolean());
+        Assert.Equal("physical-primary", Assert.Single(display.RestoreCalls));
+        Assert.Empty(display.RemoveCalls);
+    }
+
+    private sealed class UnknownLengthJsonContent : HttpContent
+    {
+        private readonly byte[] content;
+
+        public UnknownLengthJsonContent(string json, string contentType)
+        {
+            content = Encoding.UTF8.GetBytes(json);
+            Headers.TryAddWithoutValidation("Content-Type", contentType);
+        }
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+        {
+            return stream.WriteAsync(content, 0, content.Length);
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = -1;
+            return false;
+        }
     }
 
     [Fact]

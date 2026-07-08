@@ -360,14 +360,18 @@ public static class ClientEndpoints
 
         clients.MapPost("/{clientId}/disconnect", async (
             string clientId,
+            HttpRequest httpRequest,
             InMemorySessionStore sessions,
             DisplayLeaseManager leases,
             IStreamingBackend streaming,
+            ISessionOwnershipTracker ownership,
             CancellationToken cancellationToken) =>
         {
+            DisconnectRequest request = await ReadDisconnectRequestAsync(httpRequest, cancellationToken);
             await leases.DisconnectAsync(DisplayLease.CreateDisplayId(new ClientId(clientId)), cancellationToken);
             SessionPlan? plan = sessions.Get(clientId);
             StreamingSessionState? stream = null;
+            SessionOwnershipSnapshot? ownershipSnapshot = null;
             if (plan is not null)
             {
                 StreamingStopResult stop = await streaming.StopAsync(plan.SessionId, cancellationToken);
@@ -377,9 +381,36 @@ public static class ClientEndpoints
                 }
 
                 stream = stop.Session;
+                if (!request.ClientActive)
+                {
+                    ownershipSnapshot = await ownership.GetSnapshotAsync(plan.SessionId, cancellationToken);
+                }
             }
 
-            return Results.Ok(new { clientId, leaseRetained = true, stream });
+            bool displayRemoved = false;
+            if (!request.ClientActive)
+            {
+                displayRemoved = await leases.CleanupIfAllowedAsync(
+                    DisplayLease.CreateDisplayId(new ClientId(clientId)),
+                    clientActive: false,
+                    ownershipSnapshot?.LaunchedProcessRunning == true || ownershipSnapshot?.ChildProcessRunning == true,
+                    ownershipSnapshot?.OwnedWindowRemaining == true,
+                    cancellationToken);
+
+                if (displayRemoved && plan is not null)
+                {
+                    await ownership.ClearAsync(plan.SessionId, cancellationToken);
+                }
+            }
+
+            return Results.Ok(new
+            {
+                clientId,
+                leaseRetained = !displayRemoved,
+                displayRemoved,
+                stream,
+                ownership = ownershipSnapshot
+            });
         });
 
         clients.MapPost("/{clientId}/reconnect", async (
@@ -549,6 +580,30 @@ public static class ClientEndpoints
             ? value.GetBoolean()
             : null;
 
+    private static async Task<DisconnectRequest> ReadDisconnectRequestAsync(
+        HttpRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request.ContentLength is <= 0 ||
+            (request.ContentLength is null && string.IsNullOrWhiteSpace(request.ContentType)))
+        {
+            return new DisconnectRequest();
+        }
+
+        try
+        {
+            DisconnectRequest? disconnect = await JsonSerializer.DeserializeAsync<DisconnectRequest>(
+                request.Body,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web),
+                cancellationToken: cancellationToken);
+            return disconnect ?? new DisconnectRequest();
+        }
+        catch (JsonException ex)
+        {
+            throw new BadHttpRequestException("Disconnect request JSON is invalid.", ex);
+        }
+    }
+
     private static string? ReadString(JsonElement body, string propertyName) =>
         body.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
@@ -605,5 +660,7 @@ internal sealed record GameResolution(GameDescriptor? Game, IResult? Error);
 public sealed record PlanRequest(string? AppId = null, string? Title = null, string? Source = null, string? GameId = null);
 
 public sealed record QuitRequest(bool ClientActive, bool? OwnedProcessRunning = null, bool? OwnedWindowRemaining = null);
+
+public sealed record DisconnectRequest(bool ClientActive = true);
 
 public sealed record ClientInputRequest(long Sequence, IReadOnlyList<ClientInputEvent> Events);
