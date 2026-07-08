@@ -26,11 +26,34 @@ public sealed record ExternalStreamingManifest(
     IReadOnlyList<string>? Capture,
     IReadOnlyList<string>? Diagnostics);
 
+public sealed record ExternalStreamingSessionDescriptor(
+    string? Protocol,
+    string? LaunchUri,
+    IReadOnlyDictionary<string, string>? Endpoints,
+    IReadOnlyDictionary<string, string>? Metadata,
+    IReadOnlyList<string>? Diagnostics);
+
 public sealed record ExternalStreamingManifestReadResult(bool Success, ExternalStreamingManifest? Manifest, string? Error)
 {
     public static ExternalStreamingManifestReadResult Ok(ExternalStreamingManifest manifest) => new(true, manifest, null);
 
     public static ExternalStreamingManifestReadResult Fail(string error) => new(false, null, error);
+}
+
+public sealed record ExternalStreamingSessionDescriptorReadResult(
+    bool Found,
+    bool Success,
+    ExternalStreamingSessionDescriptor? Descriptor,
+    string? Error)
+{
+    public static ExternalStreamingSessionDescriptorReadResult Ok(ExternalStreamingSessionDescriptor descriptor) =>
+        new(Found: true, Success: true, descriptor, Error: null);
+
+    public static ExternalStreamingSessionDescriptorReadResult NotFound() =>
+        new(Found: false, Success: true, Descriptor: null, Error: null);
+
+    public static ExternalStreamingSessionDescriptorReadResult Fail(string error) =>
+        new(Found: true, Success: false, Descriptor: null, error);
 }
 
 public sealed record ExternalStreamingCommand(
@@ -87,11 +110,21 @@ public interface IExternalStreamingManifestReader
     ExternalStreamingManifestReadResult Read(string path);
 }
 
+public interface IExternalStreamingSessionDescriptorStore
+{
+    string? PrepareDescriptorPath(string sessionId);
+
+    ExternalStreamingSessionDescriptorReadResult Read(string path);
+
+    void Delete(string path);
+}
+
 public sealed class ExternalProcessStreamingBackend(
     ExternalProcessStreamingOptions options,
     IExternalStreamingProcessRunner runner,
     IExternalStreamingManifestReader? manifestReader = null,
-    IDiagnosticEventSink? diagnostics = null) : IStreamingBackend
+    IDiagnosticEventSink? diagnostics = null,
+    IExternalStreamingSessionDescriptorStore? sessionDescriptors = null) : IStreamingBackend
 {
     private static readonly ExternalStreamingManifest EmptyManifest = new(
         null,
@@ -110,13 +143,17 @@ public sealed class ExternalProcessStreamingBackend(
     private readonly Lock gate = new();
     private readonly Dictionary<string, StreamingSessionState> sessions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ExternalStreamingProcess> processes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> sessionDescriptorPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> processDiagnostics = [];
     private readonly IExternalStreamingManifestReader manifestReader = manifestReader ?? NoExternalStreamingManifestReader.Instance;
+    private readonly IExternalStreamingSessionDescriptorStore sessionDescriptors =
+        sessionDescriptors ?? NoExternalStreamingSessionDescriptorStore.Instance;
 
     public Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ReconcileProcessStates();
+        RefreshRuntimeSessionDescriptors();
 
         string? executablePath = TrimOrNull(options.ExecutablePath);
         bool executableConfigured = executablePath is not null;
@@ -265,7 +302,8 @@ public sealed class ExternalProcessStreamingBackend(
 
         try
         {
-            ExternalStreamingCommand command = CreateStartCommand(options.ExecutablePath!, plan, options);
+            string? descriptorPath = sessionDescriptors.PrepareDescriptorPath(plan.SessionId);
+            ExternalStreamingCommand command = CreateStartCommand(options.ExecutablePath!, plan, options, descriptorPath);
             ExternalStreamingProcess process = runner.Start(command);
             var session = new StreamingSessionState(
                 plan.SessionId,
@@ -278,18 +316,27 @@ public sealed class ExternalProcessStreamingBackend(
                 plan.Stream.Transport,
                 State: "running",
                 Error: null,
-                CreateConnectionDescriptor(options, manifestResult.Manifest));
+                CreateConnectionDescriptor(options, manifestResult.Manifest, sessionDescriptorPath: descriptorPath));
+            session = RefreshRuntimeSessionDescriptor(session, descriptorPath);
 
             lock (gate)
             {
                 sessions[plan.SessionId] = session;
                 processes[plan.SessionId] = process;
+                if (!string.IsNullOrWhiteSpace(descriptorPath))
+                {
+                    sessionDescriptorPaths[plan.SessionId] = descriptorPath;
+                }
             }
 
             Publish(plan, "start", DiagnosticSeverity.Information, "External streaming process started.");
             return StreamingStartResult.Ok(session);
         }
-        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or FileNotFoundException)
+        catch (Exception ex) when (ex is InvalidOperationException
+            or System.ComponentModel.Win32Exception
+            or FileNotFoundException
+            or IOException
+            or UnauthorizedAccessException)
         {
             Publish(plan, "start", DiagnosticSeverity.Error, $"External streaming process failed to start: {ex.Message}");
             return StreamingStartResult.Fail($"External streaming process failed to start: {ex.Message}");
@@ -330,12 +377,18 @@ public sealed class ExternalProcessStreamingBackend(
         }
 
         StreamingSessionState stopped = session with { State = "stopped", Error = null };
+        string? descriptorPath = null;
         lock (gate)
         {
             sessions[sessionId] = stopped;
             processes.Remove(sessionId);
+            if (sessionDescriptorPaths.Remove(sessionId, out string? path))
+            {
+                descriptorPath = path;
+            }
         }
 
+        DeleteRuntimeDescriptor(descriptorPath);
         Publish(stopped, "stop", DiagnosticSeverity.Information, "External streaming process stopped.");
         return Task.FromResult(StreamingStopResult.Ok(stopped));
     }
@@ -344,6 +397,7 @@ public sealed class ExternalProcessStreamingBackend(
     {
         cancellationToken.ThrowIfCancellationRequested();
         ReconcileProcessStates();
+        RefreshRuntimeSessionDescriptors();
         lock (gate)
         {
             return Task.FromResult(sessions.GetValueOrDefault(sessionId));
@@ -353,6 +407,7 @@ public sealed class ExternalProcessStreamingBackend(
     public IReadOnlyList<StreamingSessionState> GetSessions()
     {
         ReconcileProcessStates();
+        RefreshRuntimeSessionDescriptors();
         lock (gate)
         {
             return sessions.Values
@@ -382,6 +437,9 @@ public sealed class ExternalProcessStreamingBackend(
                     continue;
                 }
 
+                string? descriptorPath = sessionDescriptorPaths.Remove(sessionId, out string? path)
+                    ? path
+                    : null;
                 string error = status.Diagnostic ?? $"External streaming process {process.ProcessId} exited.";
                 if (status.ExitCode.HasValue && !error.Contains(status.ExitCode.Value.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
                 {
@@ -408,6 +466,7 @@ public sealed class ExternalProcessStreamingBackend(
                 reconciledDiagnostics.Add(diagnostic);
                 reconciledDiagnostics.AddRange(status.Diagnostics.Select(value => $"{sessionId}: {value}"));
                 exitedEvents.Add((exited, error));
+                DeleteRuntimeDescriptor(descriptorPath);
             }
         }
 
@@ -422,7 +481,8 @@ public sealed class ExternalProcessStreamingBackend(
     public static ExternalStreamingCommand CreateStartCommand(
         string executablePath,
         SessionPlan plan,
-        ExternalProcessStreamingOptions? options = null)
+        ExternalProcessStreamingOptions? options = null,
+        string? streamSessionDescriptorPath = null)
     {
         var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -437,8 +497,17 @@ public sealed class ExternalProcessStreamingBackend(
         };
 
         AddConnectionEnvironment(environment, options);
+        if (!string.IsNullOrWhiteSpace(streamSessionDescriptorPath))
+        {
+            environment["BEACON_STREAM_SESSION_DESCRIPTOR_PATH"] = streamSessionDescriptorPath.Trim();
+        }
 
         string arguments = $"--session \"{plan.SessionId}\" --display \"{plan.Display.DisplayId}\"";
+        if (!string.IsNullOrWhiteSpace(streamSessionDescriptorPath))
+        {
+            arguments = $"{arguments} --stream-session-descriptor \"{streamSessionDescriptorPath.Trim()}\"";
+        }
+
         return new ExternalStreamingCommand(executablePath, arguments, environment);
     }
 
@@ -474,15 +543,23 @@ public sealed class ExternalProcessStreamingBackend(
 
     private static StreamingConnectionDescriptor? CreateConnectionDescriptor(
         ExternalProcessStreamingOptions options,
-        ExternalStreamingManifest? manifest)
+        ExternalStreamingManifest? manifest,
+        ExternalStreamingSessionDescriptor? runtimeDescriptor = null,
+        string? sessionDescriptorPath = null)
     {
-        string? protocolSource = string.IsNullOrWhiteSpace(options.ConnectionProtocol)
+        string? protocolSource = !string.IsNullOrWhiteSpace(runtimeDescriptor?.Protocol)
+            ? runtimeDescriptor.Protocol
+            : string.IsNullOrWhiteSpace(options.ConnectionProtocol)
             ? manifest?.Protocol
             : options.ConnectionProtocol;
-        string? launchUriSource = string.IsNullOrWhiteSpace(options.ConnectionLaunchUri)
+        string? launchUriSource = !string.IsNullOrWhiteSpace(runtimeDescriptor?.LaunchUri)
+            ? runtimeDescriptor.LaunchUri
+            : string.IsNullOrWhiteSpace(options.ConnectionLaunchUri)
             ? manifest?.LaunchUri
             : options.ConnectionLaunchUri;
-        IReadOnlyDictionary<string, string>? endpointSource = options.ConnectionEndpoints is { Count: > 0 }
+        IReadOnlyDictionary<string, string>? endpointSource = runtimeDescriptor?.Endpoints is { Count: > 0 }
+            ? runtimeDescriptor.Endpoints
+            : options.ConnectionEndpoints is { Count: > 0 }
             ? options.ConnectionEndpoints
             : manifest?.Endpoints;
 
@@ -511,6 +588,22 @@ public sealed class ExternalProcessStreamingBackend(
         if (!string.IsNullOrWhiteSpace(manifest?.Name))
         {
             metadata["manifestName"] = manifest.Name.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(sessionDescriptorPath))
+        {
+            metadata["sessionDescriptorPath"] = sessionDescriptorPath.Trim();
+        }
+
+        if (runtimeDescriptor?.Metadata is { Count: > 0 })
+        {
+            foreach ((string key, string value) in runtimeDescriptor.Metadata)
+            {
+                if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
+                {
+                    metadata[key.Trim()] = value.Trim();
+                }
+            }
         }
 
         return new StreamingConnectionDescriptor(
@@ -581,6 +674,89 @@ public sealed class ExternalProcessStreamingBackend(
 
     private static string? TrimOrNull(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private void RefreshRuntimeSessionDescriptors()
+    {
+        IReadOnlyList<StreamingSessionState> snapshot;
+        lock (gate)
+        {
+            snapshot = sessions.Values.ToArray();
+        }
+
+        foreach (StreamingSessionState session in snapshot)
+        {
+            string? descriptorPath;
+            lock (gate)
+            {
+                sessionDescriptorPaths.TryGetValue(session.SessionId, out descriptorPath);
+            }
+
+            RefreshRuntimeSessionDescriptor(session, descriptorPath);
+        }
+    }
+
+    private StreamingSessionState RefreshRuntimeSessionDescriptor(
+        StreamingSessionState session,
+        string? descriptorPath)
+    {
+        if (string.IsNullOrWhiteSpace(descriptorPath))
+        {
+            return session;
+        }
+
+        ExternalStreamingSessionDescriptorReadResult read = sessionDescriptors.Read(descriptorPath);
+        if (!read.Found)
+        {
+            return session;
+        }
+
+        if (!read.Success || read.Descriptor is null)
+        {
+            string error = read.Error ?? $"External streaming session descriptor '{descriptorPath}' is invalid.";
+            lock (gate)
+            {
+                processDiagnostics.Add($"{session.SessionId}: {error}");
+            }
+
+            return session with { Error = error };
+        }
+
+        StreamingConnectionDescriptor? connection = CreateConnectionDescriptor(
+            options,
+            manifest: null,
+            read.Descriptor,
+            descriptorPath);
+        StreamingSessionState refreshed = session with { Connection = connection, Error = null };
+        lock (gate)
+        {
+            if (sessions.ContainsKey(session.SessionId))
+            {
+                sessions[session.SessionId] = refreshed;
+            }
+        }
+
+        return refreshed;
+    }
+
+    private void DeleteRuntimeDescriptor(string? descriptorPath)
+    {
+        if (string.IsNullOrWhiteSpace(descriptorPath))
+        {
+            return;
+        }
+
+        try
+        {
+            sessionDescriptors.Delete(descriptorPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            lock (gate)
+            {
+                processDiagnostics.Add($"Unable to delete external streaming session descriptor '{descriptorPath}': {ex.Message}");
+            }
+        }
+    }
 
     private Task<StreamingPreflightResult> PreflightFailure(SessionPlan plan, string message)
     {
@@ -653,5 +829,19 @@ public sealed class ExternalProcessStreamingBackend(
 
         public ExternalStreamingManifestReadResult Read(string path) =>
             ExternalStreamingManifestReadResult.Fail($"External streaming manifest '{path}' does not exist.");
+    }
+
+    private sealed class NoExternalStreamingSessionDescriptorStore : IExternalStreamingSessionDescriptorStore
+    {
+        public static NoExternalStreamingSessionDescriptorStore Instance { get; } = new();
+
+        public string? PrepareDescriptorPath(string sessionId) => null;
+
+        public ExternalStreamingSessionDescriptorReadResult Read(string path) =>
+            ExternalStreamingSessionDescriptorReadResult.NotFound();
+
+        public void Delete(string path)
+        {
+        }
     }
 }

@@ -86,6 +86,7 @@ public sealed class BeaconServiceRegistrationTests
         Assert.Equal("external-process", options.StreamingBackendModeName);
         Assert.IsType<ExternalProcessStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
         Assert.IsType<WindowsExternalStreamingProcessRunner>(provider.GetRequiredService<IExternalStreamingProcessRunner>());
+        Assert.IsType<WindowsExternalStreamingSessionDescriptorStore>(provider.GetRequiredService<IExternalStreamingSessionDescriptorStore>());
         Assert.Equal(
             "C:\\Tools\\beacon-stream-wrapper.exe",
             provider.GetRequiredService<ExternalProcessStreamingOptions>().ExecutablePath);

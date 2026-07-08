@@ -331,6 +331,95 @@ public sealed class ExternalProcessStreamingBackendTests
     }
 
     [Fact]
+    public async Task StartPassesRuntimeDescriptorPathAndUsesDescriptorConnectionWhenWrapperWritesIt()
+    {
+        var descriptors = new FakeExternalStreamingSessionDescriptorStore();
+        var runner = new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]);
+        runner.OnStart = command =>
+        {
+            string descriptorPath = command.Environment["BEACON_STREAM_SESSION_DESCRIPTOR_PATH"];
+            Assert.DoesNotContain(descriptorPath, descriptors.DescriptorsByPath.Keys);
+            descriptors.DescriptorsByPath[descriptorPath] = new ExternalStreamingSessionDescriptor(
+                "gamestream",
+                "moonlight://beacon/runtime/z-fold-7-steam-shortcut:3767414131",
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["rtsp"] = "rtsp://127.0.0.1:48010/runtime",
+                    ["input"] = "udp://127.0.0.1:48000"
+                },
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["pairing"] = "already-paired"
+                },
+                ["runtime descriptor ready"]);
+        };
+        string stalePath = descriptors.PreviewDescriptorPath(CreatePlan().SessionId);
+        descriptors.DescriptorsByPath[stalePath] = new ExternalStreamingSessionDescriptor(
+            "stale",
+            "moonlight://stale",
+            new Dictionary<string, string>(),
+            new Dictionary<string, string>(),
+            []);
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions("C:\\Tools\\sunshine-wrapper.exe"),
+            runner,
+            sessionDescriptors: descriptors);
+
+        StreamingStartResult result = await backend.StartAsync(CreatePlan(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        StreamingSessionState session = Assert.IsType<StreamingSessionState>(result.Session);
+        Assert.NotNull(session.Connection);
+        Assert.Equal("gamestream", session.Connection.Protocol);
+        Assert.Equal("moonlight://beacon/runtime/z-fold-7-steam-shortcut:3767414131", session.Connection.LaunchUri);
+        Assert.Contains(session.Connection.Endpoints, endpoint => endpoint.Role == "rtsp" && endpoint.Uri == "rtsp://127.0.0.1:48010/runtime");
+        Assert.Equal("already-paired", session.Connection.Metadata["pairing"]);
+        Assert.Equal(stalePath, session.Connection.Metadata["sessionDescriptorPath"]);
+        Assert.Equal([CreatePlan().SessionId], descriptors.PreparedSessionIds);
+        Assert.Contains(stalePath, descriptors.ClearedDescriptorPaths);
+        ExternalStreamingCommand started = Assert.Single(runner.StartedCommands);
+        Assert.Equal(stalePath, started.Environment["BEACON_STREAM_SESSION_DESCRIPTOR_PATH"]);
+        Assert.Contains("--stream-session-descriptor", started.Arguments, StringComparison.Ordinal);
+        Assert.Contains(stalePath, started.Arguments, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetSessionRefreshesConnectionFromRuntimeDescriptorWrittenAfterStart()
+    {
+        var descriptors = new FakeExternalStreamingSessionDescriptorStore();
+        var runner = new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]);
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions("C:\\Tools\\sunshine-wrapper.exe"),
+            runner,
+            sessionDescriptors: descriptors);
+        SessionPlan plan = CreatePlan();
+        StreamingStartResult start = await backend.StartAsync(plan, CancellationToken.None);
+        StreamingSessionState started = Assert.IsType<StreamingSessionState>(start.Session);
+        Assert.Null(started.Connection);
+        string descriptorPath = Assert.Single(runner.StartedCommands).Environment["BEACON_STREAM_SESSION_DESCRIPTOR_PATH"];
+        descriptors.DescriptorsByPath[descriptorPath] = new ExternalStreamingSessionDescriptor(
+            "gamestream",
+            "moonlight://beacon/runtime/late",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["rtsp"] = "rtsp://127.0.0.1:48010/late"
+            },
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["source"] = "wrapper-runtime"
+            },
+            ["descriptor arrived after start"]);
+
+        StreamingSessionState? refreshed = await backend.GetSessionAsync(plan.SessionId, CancellationToken.None);
+
+        Assert.NotNull(refreshed?.Connection);
+        Assert.Equal("gamestream", refreshed.Connection.Protocol);
+        Assert.Equal("moonlight://beacon/runtime/late", refreshed.Connection.LaunchUri);
+        Assert.Contains(refreshed.Connection.Endpoints, endpoint => endpoint.Role == "rtsp" && endpoint.Uri == "rtsp://127.0.0.1:48010/late");
+        Assert.Equal("wrapper-runtime", refreshed.Connection.Metadata["source"]);
+    }
+
+    [Fact]
     public async Task StopTerminatesOwnedProcessAndMarksSessionStopped()
     {
         var runner = new FakeExternalStreamingProcessRunner();
@@ -404,11 +493,14 @@ public sealed class ExternalProcessStreamingBackendTests
 
         public string? NextStopError { get; set; }
 
+        public Action<ExternalStreamingCommand>? OnStart { get; set; }
+
         public bool FileExists(string path) => ExistingFiles.Contains(path);
 
         public ExternalStreamingProcess Start(ExternalStreamingCommand command)
         {
             StartedCommands.Add(command);
+            OnStart?.Invoke(command);
             int processId = nextProcessId++;
             ProcessStatuses[processId] = ExternalStreamingProcessStatus.Running();
             return new ExternalStreamingProcess(processId);
@@ -446,6 +538,36 @@ public sealed class ExternalProcessStreamingBackendTests
             Manifests.TryGetValue(path, out ExternalStreamingManifest? manifest)
                 ? ExternalStreamingManifestReadResult.Ok(manifest)
                 : ExternalStreamingManifestReadResult.Fail($"External streaming manifest '{path}' does not exist.");
+    }
+
+    private sealed class FakeExternalStreamingSessionDescriptorStore : IExternalStreamingSessionDescriptorStore
+    {
+        public Dictionary<string, ExternalStreamingSessionDescriptor> DescriptorsByPath { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public List<string> PreparedSessionIds { get; } = [];
+
+        public List<string> ClearedDescriptorPaths { get; } = [];
+
+        public string PreviewDescriptorPath(string sessionId) => $"C:\\Beacon\\Runtime\\{sessionId}.json";
+
+        public string? PrepareDescriptorPath(string sessionId)
+        {
+            PreparedSessionIds.Add(sessionId);
+            string path = PreviewDescriptorPath(sessionId);
+            DescriptorsByPath.Remove(path);
+            ClearedDescriptorPaths.Add(path);
+            return path;
+        }
+
+        public ExternalStreamingSessionDescriptorReadResult Read(string path) =>
+            DescriptorsByPath.TryGetValue(path, out ExternalStreamingSessionDescriptor? descriptor)
+                ? ExternalStreamingSessionDescriptorReadResult.Ok(descriptor)
+                : ExternalStreamingSessionDescriptorReadResult.NotFound();
+
+        public void Delete(string path)
+        {
+            DescriptorsByPath.Remove(path);
+        }
     }
 
     private sealed class RecordingDiagnosticSink : IDiagnosticEventSink

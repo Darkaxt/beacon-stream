@@ -211,6 +211,7 @@ public static class BeaconServiceRegistration
                     environmentExternalStreamingManifest));
                 services.AddSingleton<IExternalStreamingProcessRunner, WindowsExternalStreamingProcessRunner>();
                 services.AddSingleton<IExternalStreamingManifestReader, WindowsExternalStreamingManifestReader>();
+                services.AddSingleton<IExternalStreamingSessionDescriptorStore, WindowsExternalStreamingSessionDescriptorStore>();
                 services.AddSingleton<IStreamingBackend, ExternalProcessStreamingBackend>();
                 break;
             default:

@@ -1,0 +1,14 @@
+{
+  "protocol": "gamestream",
+  "launchUri": "moonlight://beacon/runtime/z-fold-7-steam-shortcut:3767414131",
+  "endpoints": {
+    "input": "udp://127.0.0.1:48000",
+    "rtsp": "rtsp://127.0.0.1:48010/beacon-runtime"
+  },
+  "metadata": {
+    "pairing": "already-paired"
+  },
+  "diagnostics": [
+    "runtime descriptor ready"
+  ]
+}
