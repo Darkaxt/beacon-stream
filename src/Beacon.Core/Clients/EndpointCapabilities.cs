@@ -5,4 +5,7 @@ public sealed record EndpointCapabilities(
     bool Hevc,
     bool H264,
     bool Hdr10,
-    bool VirtualDisplayHdrSupported);
+    bool VirtualDisplayHdrSupported,
+    int MaxFps = 120,
+    bool LowLatencyDecode = true,
+    string? CurrentScreenMode = null);

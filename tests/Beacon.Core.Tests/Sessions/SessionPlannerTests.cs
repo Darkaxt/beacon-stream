@@ -87,6 +87,111 @@ public sealed class SessionPlannerTests
         Assert.Equal(1600, plan.Display.Height);
         Assert.Equal(25, plan.Stream.InitialBitrateMbps);
         Assert.Equal("hevc", plan.Stream.Codec);
-        Assert.Equal("adaptive", plan.Stream.CongestionPolicy);
+        Assert.Equal("latency-protect", plan.Stream.CongestionPolicy);
+        Assert.Equal("lan-conservative", plan.Stream.Transport);
+    }
+
+    [Fact]
+    public void ExcellentLanKeepsRequested120FpsAndExplainsPlan()
+    {
+        SessionPlanResult result = SessionPlanner.CreatePlan(
+            ClientProfile.CreateZFold7Default(),
+            new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: true, VirtualDisplayHdrSupported: false, MaxFps: 120),
+            new TelemetrySnapshot(RttMs: 8, PacketLossPercent: 0, DecoderLoadPercent: 20, EstimatedBandwidthMbps: 120, WifiBand: "wifi-7"),
+            Dispatch);
+
+        SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
+        Assert.Equal(120, plan.Stream.Fps);
+        Assert.Equal(65, plan.Stream.InitialBitrateMbps);
+        Assert.Equal("av1", plan.Stream.Codec);
+        Assert.Contains("excellent LAN", plan.Stream.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void HighRttUsesConservativeTransportAndLowerFps()
+    {
+        SessionPlanResult result = SessionPlanner.CreatePlan(
+            ClientProfile.CreateZFold7Default(),
+            new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false, MaxFps: 120),
+            new TelemetrySnapshot(RttMs: 115, PacketLossPercent: 0.5, DecoderLoadPercent: 35, EstimatedBandwidthMbps: 80, WifiBand: "wifi-5"),
+            Dispatch);
+
+        SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
+        Assert.Equal(60, plan.Stream.Fps);
+        Assert.Equal(25, plan.Stream.InitialBitrateMbps);
+        Assert.Equal("latency-protect", plan.Stream.CongestionPolicy);
+        Assert.Equal("lan-conservative", plan.Stream.Transport);
+        Assert.Contains("RTT", plan.Stream.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void PacketLossKeepsResolutionButProtectsBitrate()
+    {
+        SessionPlanResult result = SessionPlanner.CreatePlan(
+            ClientProfile.CreateZFold7Default(),
+            new EndpointCapabilities(Av1: false, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false, MaxFps: 120),
+            new TelemetrySnapshot(RttMs: 22, PacketLossPercent: 3.2, DecoderLoadPercent: 40, EstimatedBandwidthMbps: 90, WifiBand: "wifi-6"),
+            Dispatch);
+
+        SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
+        Assert.Equal(2560, plan.Display.Width);
+        Assert.Equal(1600, plan.Display.Height);
+        Assert.Equal("hevc", plan.Stream.Codec);
+        Assert.Equal(35, plan.Stream.InitialBitrateMbps);
+        Assert.Equal("loss-protect", plan.Stream.CongestionPolicy);
+    }
+
+    [Fact]
+    public void BitrateCapWinsOverExcellentNetwork()
+    {
+        ClientProfile profile = ClientProfile.CreateZFold7Default() with
+        {
+            Stream = ClientProfile.CreateZFold7Default().Stream with { BitrateCapMbps = 40 }
+        };
+
+        SessionPlanResult result = SessionPlanner.CreatePlan(
+            profile,
+            new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false, MaxFps: 120),
+            new TelemetrySnapshot(RttMs: 8, PacketLossPercent: 0, DecoderLoadPercent: 20, EstimatedBandwidthMbps: 200, WifiBand: "wifi-7"),
+            Dispatch);
+
+        SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
+        Assert.Equal(40, plan.Stream.InitialBitrateMbps);
+        Assert.Contains("bitrate cap", plan.Stream.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ThermalAndBatteryConstrainedEndpointUsesPowerSave()
+    {
+        SessionPlanResult result = SessionPlanner.CreatePlan(
+            ClientProfile.CreateZFold7Default(),
+            new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false, MaxFps: 120),
+            new TelemetrySnapshot(RttMs: 12, PacketLossPercent: 0, DecoderLoadPercent: 88, EstimatedBandwidthMbps: 100, WifiBand: "wifi-6", BatteryPercent: 9, ThermalState: "hot"),
+            Dispatch);
+
+        SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
+        Assert.Equal(60, plan.Stream.Fps);
+        Assert.Equal(30, plan.Stream.InitialBitrateMbps);
+        Assert.Equal("power-save", plan.Stream.CongestionPolicy);
+        Assert.Contains("thermal", plan.Stream.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ExplicitHevcPreferenceOverridesAutoAv1WhenAvailable()
+    {
+        ClientProfile profile = ClientProfile.CreateZFold7Default() with
+        {
+            Stream = ClientProfile.CreateZFold7Default().Stream with { CodecPreference = "hevc" }
+        };
+
+        SessionPlanResult result = SessionPlanner.CreatePlan(
+            profile,
+            new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false, MaxFps: 120),
+            new TelemetrySnapshot(RttMs: 8, PacketLossPercent: 0, DecoderLoadPercent: 20, EstimatedBandwidthMbps: 120, WifiBand: "wifi-7"),
+            Dispatch);
+
+        SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
+        Assert.Equal("hevc", plan.Stream.Codec);
+        Assert.Contains("profile", plan.Stream.Reason, StringComparison.OrdinalIgnoreCase);
     }
 }

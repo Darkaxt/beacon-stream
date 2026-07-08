@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultProfile, createGamePlanRequest, formatLaunchEvents, validateProfileDraft, type LaunchResponse } from './clientLab';
+import {
+  createDefaultProfile,
+  createGamePlanRequest,
+  createTelemetryPayload,
+  formatLaunchEvents,
+  formatPlanDetails,
+  validateProfileDraft,
+  type LaunchResponse,
+  type PlanResponse
+} from './clientLab';
 
 describe('Client Lab profile validation', () => {
   it('blocks the Z Fold 7 2560x1440 collapse before a profile patch', () => {
@@ -56,5 +65,35 @@ describe('Client Lab profile validation', () => {
       'streaming client-z-fold-7',
       'running av1 120fps'
     ]);
+  });
+
+  it('builds telemetry payloads from named profiles', () => {
+    const payload = createTelemetryPayload('thermal-battery');
+
+    expect(payload).toMatchObject({
+      rttMs: 12,
+      packetLossPercent: 0,
+      decoderLoadPercent: 88,
+      estimatedBandwidthMbps: 100,
+      wifiBand: 'wifi-6',
+      batteryPercent: 9,
+      thermalState: 'hot'
+    });
+  });
+
+  it('formats plan details with reason', () => {
+    const plan: PlanResponse = {
+      display: { mode: 'virtual-primary', width: 2560, height: 1600, refreshHz: 120 },
+      stream: {
+        codec: 'av1',
+        fps: 120,
+        initialBitrateMbps: 65,
+        transport: 'lan-direct',
+        congestionPolicy: 'adaptive',
+        reason: 'Excellent LAN telemetry kept 120 FPS.'
+      }
+    };
+
+    expect(formatPlanDetails(plan)).toContain('Excellent LAN');
   });
 });

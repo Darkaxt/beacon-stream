@@ -52,6 +52,17 @@
               <span>Bitrate</span>
               <input id="bitrateInput" name="bitrate" type="number" min="1" placeholder="auto" />
             </label>
+            <label>
+              <span>Telemetry</span>
+              <select id="telemetryProfileInput" name="telemetry">
+                <option value="excellent-lan">Excellent LAN</option>
+                <option value="congested-lan">Congested LAN</option>
+                <option value="high-rtt">High RTT</option>
+                <option value="packet-loss">Packet loss</option>
+                <option value="low-bitrate-cap">Low bitrate cap</option>
+                <option value="thermal-battery">Thermal/battery</option>
+              </select>
+            </label>
             <label class="game-picker">
               <span>Game</span>
               <select id="gameSelect" name="game">

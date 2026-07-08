@@ -54,7 +54,7 @@
 
 ## Task 1: Core Planning Contract
 
-- [ ] **Step 1: Write failing core planner tests**
+- [x] **Step 1: Write failing core planner tests**
 
 Add tests to `tests/Beacon.Core.Tests/Sessions/SessionPlannerTests.cs`:
 
@@ -164,7 +164,7 @@ public void ExplicitHevcPreferenceOverridesAutoAv1WhenAvailable()
 }
 ```
 
-- [ ] **Step 2: Verify tests fail**
+- [x] **Step 2: Verify tests fail**
 
 Run:
 
@@ -174,7 +174,7 @@ dotnet test tests\Beacon.Core.Tests\Beacon.Core.Tests.csproj --filter SessionPla
 
 Expected: compile failures for new constructor properties or assertion failures for unchanged planner decisions.
 
-- [ ] **Step 3: Implement records and planner**
+- [x] **Step 3: Implement records and planner**
 
 Implementation rules:
 
@@ -185,7 +185,7 @@ Implementation rules:
 - Apply bitrate cap last.
 - Add a concise `Reason` string to `PlannedStream`.
 
-- [ ] **Step 4: Verify core tests pass**
+- [x] **Step 4: Verify core tests pass**
 
 Run:
 
@@ -197,7 +197,7 @@ Expected: all SessionPlanner tests pass.
 
 ## Task 2: Server Plan Response Visibility
 
-- [ ] **Step 1: Write failing server tests**
+- [x] **Step 1: Write failing server tests**
 
 Modify `tests/Beacon.Server.Tests/ClientApiTests.cs` so `CapabilitiesAndTelemetryInfluencePlanWithoutChangingDisplayGeometry` posts the expanded telemetry payload and asserts:
 
@@ -209,7 +209,7 @@ Assert.Contains("RTT", root.GetProperty("stream").GetProperty("reason").GetStrin
 
 Add a new test where profile patch sets `bitrateCapMbps = 40`, excellent telemetry is posted, and `/plan` returns `initialBitrateMbps = 40` plus a reason containing `bitrate cap`.
 
-- [ ] **Step 2: Verify server tests fail before implementation**
+- [x] **Step 2: Verify server tests fail before implementation**
 
 Run:
 
@@ -219,17 +219,17 @@ dotnet test tests\Beacon.Server.Tests\Beacon.Server.Tests.csproj --filter "Capab
 
 Expected: missing or incorrect `stream.reason`, `transport`, or cap behavior.
 
-- [ ] **Step 3: Let the existing JSON response expose the richer stream record**
+- [x] **Step 3: Let the existing JSON response expose the richer stream record**
 
 No custom serializer is needed if `PlannedStream` owns the new properties. Keep `/clients/{id}/plan` and `/clients/{id}/launch` response shapes aligned by returning the same stream object.
 
-- [ ] **Step 4: Verify server tests pass**
+- [x] **Step 4: Verify server tests pass**
 
 Run the same filtered server command. Expected: pass.
 
 ## Task 3: Fake Endpoint Telemetry Profiles
 
-- [ ] **Step 1: Write failing fake endpoint tests**
+- [x] **Step 1: Write failing fake endpoint tests**
 
 Extend `tests/Beacon.FakeEndpoint.Tests/FakeEndpointRunnerTests.cs`:
 
@@ -270,7 +270,7 @@ public async Task SendsExpandedTelemetryFacts()
 }
 ```
 
-- [ ] **Step 2: Verify fake endpoint tests fail**
+- [x] **Step 2: Verify fake endpoint tests fail**
 
 Run:
 
@@ -280,7 +280,7 @@ dotnet test tests\Beacon.FakeEndpoint.Tests\Beacon.FakeEndpoint.Tests.csproj
 
 Expected: compile failures for missing script fields/profile method and CLI flags.
 
-- [ ] **Step 3: Implement named profiles**
+- [x] **Step 3: Implement named profiles**
 
 Add these profile names and facts:
 
@@ -293,7 +293,7 @@ Add these profile names and facts:
 | `low-bitrate-cap` | 8 | 0 | 35 | `wifi-6` | 30 | 75 | `nominal` |
 | `thermal-battery` | 12 | 0 | 100 | `wifi-6` | 88 | 9 | `hot` |
 
-- [ ] **Step 4: Verify fake endpoint tests pass**
+- [x] **Step 4: Verify fake endpoint tests pass**
 
 Run:
 
@@ -305,7 +305,7 @@ Expected: pass.
 
 ## Task 4: Client Lab Telemetry Simulation
 
-- [ ] **Step 1: Write failing TypeScript tests**
+- [x] **Step 1: Write failing TypeScript tests**
 
 Add Vitest assertions in `src/Beacon.ClientLab/src/clientLab.test.ts`:
 
@@ -332,7 +332,7 @@ it('formats plan details with reason', () => {
 });
 ```
 
-- [ ] **Step 2: Verify Client Lab tests fail**
+- [x] **Step 2: Verify Client Lab tests fail**
 
 Run:
 
@@ -342,7 +342,7 @@ pnpm --dir src\Beacon.ClientLab test
 
 Expected: missing exported functions/types.
 
-- [ ] **Step 3: Implement Client Lab telemetry UI and request flow**
+- [x] **Step 3: Implement Client Lab telemetry UI and request flow**
 
 Add:
 
@@ -352,7 +352,7 @@ Add:
   - `POST /clients/z-fold-7/telemetry`
 - Plan log line including codec, FPS, bitrate, transport, congestion policy, and reason.
 
-- [ ] **Step 4: Update Playwright route assertions**
+- [x] **Step 4: Update Playwright route assertions**
 
 Modify `tests/Beacon.ClientLab.Playwright/tests/client-lab.spec.ts` so it expects:
 
@@ -361,7 +361,7 @@ Modify `tests/Beacon.ClientLab.Playwright/tests/client-lab.spec.ts` so it expect
 - plan response `stream.reason`
 - visible reason text after clicking `Plan`
 
-- [ ] **Step 5: Verify Client Lab checks pass**
+- [x] **Step 5: Verify Client Lab checks pass**
 
 Run:
 
@@ -376,7 +376,7 @@ Expected: all pass.
 
 ## Task 5: Documentation, Validation, And Sync
 
-- [ ] **Step 1: Update README**
+- [x] **Step 1: Update README**
 
 Document:
 
@@ -384,7 +384,7 @@ Document:
 - `fake-endpoint --telemetry-profile excellent-lan`.
 - Planner choices are initial recommendations, not live adaptation.
 
-- [ ] **Step 2: Run static and dynamic validation**
+- [x] **Step 2: Run static and dynamic validation**
 
 Run:
 
@@ -406,7 +406,7 @@ Expected:
 - The final `rg` exits with no matches.
 - Android may still report the existing Gradle 9 deprecation warning while returning success.
 
-- [ ] **Step 3: Commit and sync**
+- [x] **Step 3: Commit and sync**
 
 Run:
 

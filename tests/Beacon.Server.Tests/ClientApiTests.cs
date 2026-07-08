@@ -222,9 +222,19 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     [Fact]
     public async Task CapabilitiesAndTelemetryInfluencePlanWithoutChangingDisplayGeometry()
     {
-        HttpClient client = factory.CreateClient();
+        WebApplicationFactory<Program> pairedFactory = factory.WithWebHostBuilder(builder =>
+            builder.UseSetting("Beacon:Pairing:Token", "pair-me"));
+        HttpClient client = pairedFactory.CreateClient();
+        string clientId = $"telemetry-plan-{Guid.NewGuid():N}";
 
-        HttpResponseMessage capabilities = await client.PostAsJsonAsync("/clients/z-fold-7/capabilities", new
+        await client.PostAsJsonAsync("/clients/hello", new
+        {
+            clientId,
+            name = "Telemetry Plan Client",
+            pairingToken = "pair-me"
+        });
+
+        HttpResponseMessage capabilities = await client.PostAsJsonAsync($"/clients/{clientId}/capabilities", new
         {
             av1 = false,
             hevc = true,
@@ -232,13 +242,15 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             hdr10 = false,
             virtualDisplayHdrSupported = false
         });
-        HttpResponseMessage telemetry = await client.PostAsJsonAsync("/clients/z-fold-7/telemetry", new
+        HttpResponseMessage telemetry = await client.PostAsJsonAsync($"/clients/{clientId}/telemetry", new
         {
             rttMs = 95,
             packetLossPercent = 3.5,
-            decoderLoadPercent = 78
+            decoderLoadPercent = 78,
+            estimatedBandwidthMbps = 80,
+            wifiBand = "wifi-5"
         });
-        HttpResponseMessage plan = await client.PostAsJsonAsync("/clients/z-fold-7/plan", new
+        HttpResponseMessage plan = await client.PostAsJsonAsync($"/clients/{clientId}/plan", new
         {
             appId = "steam-shortcut:3767414131",
             title = "Dispatch",
@@ -254,6 +266,60 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
 
         Assert.Equal("hevc", root.GetProperty("stream").GetProperty("codec").GetString());
         Assert.Equal(25, root.GetProperty("stream").GetProperty("initialBitrateMbps").GetInt32());
+        Assert.Equal("lan-conservative", root.GetProperty("stream").GetProperty("transport").GetString());
+        Assert.Equal("latency-protect", root.GetProperty("stream").GetProperty("congestionPolicy").GetString());
+        Assert.Contains("RTT", root.GetProperty("stream").GetProperty("reason").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2560, root.GetProperty("display").GetProperty("width").GetInt32());
+        Assert.Equal(1600, root.GetProperty("display").GetProperty("height").GetInt32());
+    }
+
+    [Fact]
+    public async Task PlanHonorsClientBitrateCap()
+    {
+        WebApplicationFactory<Program> pairedFactory = factory.WithWebHostBuilder(builder =>
+            builder.UseSetting("Beacon:Pairing:Token", "pair-me"));
+        HttpClient client = pairedFactory.CreateClient();
+        string clientId = $"bitrate-cap-{Guid.NewGuid():N}";
+
+        await client.PostAsJsonAsync("/clients/hello", new
+        {
+            clientId,
+            name = "Bitrate Cap Client",
+            pairingToken = "pair-me"
+        });
+        await client.PatchAsJsonAsync($"/clients/{clientId}/profile", new
+        {
+            bitrateCapMbps = 40
+        });
+        await client.PostAsJsonAsync($"/clients/{clientId}/capabilities", new
+        {
+            av1 = true,
+            hevc = true,
+            h264 = true,
+            hdr10 = false,
+            virtualDisplayHdrSupported = false,
+            maxFps = 120
+        });
+        await client.PostAsJsonAsync($"/clients/{clientId}/telemetry", new
+        {
+            rttMs = 8,
+            packetLossPercent = 0,
+            decoderLoadPercent = 20,
+            estimatedBandwidthMbps = 200,
+            wifiBand = "wifi-7"
+        });
+
+        HttpResponseMessage response = await client.PostAsJsonAsync($"/clients/{clientId}/plan", new
+        {
+            gameId = "steam-shortcut:3767414131"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.Equal(40, root.GetProperty("stream").GetProperty("initialBitrateMbps").GetInt32());
+        Assert.Contains("bitrate cap", root.GetProperty("stream").GetProperty("reason").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.Equal(2560, root.GetProperty("display").GetProperty("width").GetInt32());
         Assert.Equal(1600, root.GetProperty("display").GetProperty("height").GetInt32());
     }

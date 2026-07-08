@@ -1,8 +1,11 @@
 import './style.css';
 import {
+  createCapabilitiesPayload,
   createDefaultProfile,
-  formatLaunchEvents,
   createGamePlanRequest,
+  createTelemetryPayload,
+  formatLaunchEvents,
+  formatPlanDetails,
   getJson,
   patchJson,
   postJson,
@@ -11,8 +14,10 @@ import {
   type GameLibrarySnapshot,
   type HdrPreference,
   type LaunchResponse,
+  type PlanResponse,
   type PlanRequest,
-  type ProfileDraft
+  type ProfileDraft,
+  type TelemetryProfileName
 } from './clientLab';
 
 const clientId = 'z-fold-7';
@@ -22,6 +27,7 @@ const refreshInput = input('refreshInput');
 const hdrInput = select('hdrInput');
 const codecInput = select('codecInput');
 const bitrateInput = input('bitrateInput');
+const telemetryProfileInput = select('telemetryProfileInput');
 const gameSelect = select('gameSelect');
 const gameCover = element('gameCover');
 const gameTitle = element('gameTitle');
@@ -64,11 +70,13 @@ element('profileForm').addEventListener('submit', async event => {
 });
 
 element('planButton').addEventListener('click', async () => {
+  await submitClientFacts();
   const plan = await postJson<PlanResponse>(`/clients/${clientId}/plan`, createPlanRequest());
-  appendLog(`${plan.display.mode} ${plan.display.width}x${plan.display.height}@${plan.display.refreshHz} ${plan.stream.codec} ${plan.stream.fps}fps`);
+  appendLog(formatPlanDetails(plan));
 });
 
 element('launchButton').addEventListener('click', async () => {
+  await submitClientFacts();
   const launch = await postJson<LaunchResponse>(`/clients/${clientId}/launch`, createPlanRequest());
   for (const message of formatLaunchEvents(launch)) {
     appendLog(message);
@@ -120,6 +128,16 @@ function setDraft(profile: ProfileDraft): void {
 
 function createPlanRequest(): PlanRequest {
   return createGamePlanRequest(gameSelect.value);
+}
+
+async function submitClientFacts(): Promise<void> {
+  await postJson(`/clients/${clientId}/capabilities`, createCapabilitiesPayload());
+  await postJson(`/clients/${clientId}/telemetry`, createTelemetryPayload(readTelemetryProfile()));
+  appendLog(`facts ${telemetryProfileInput.value}`);
+}
+
+function readTelemetryProfile(): TelemetryProfileName {
+  return telemetryProfileInput.value as TelemetryProfileName;
 }
 
 async function loadGames(): Promise<void> {
@@ -193,17 +211,4 @@ function input(id: string): HTMLInputElement {
 
 function select(id: string): HTMLSelectElement {
   return element(id) as HTMLSelectElement;
-}
-
-interface PlanResponse {
-  display: {
-    mode: string;
-    width: number;
-    height: number;
-    refreshHz: number;
-  };
-  stream: {
-    codec: string;
-    fps: number;
-  };
 }
