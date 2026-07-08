@@ -133,6 +133,7 @@ This section is the implementation contract. If a later plan contradicts this re
 - `REQ-SESS-006`: Disconnect/reconnect without launching a new app must keep session state coherent and must not churn displays.
 - `REQ-SESS-007`: Launch-app, close-app, disconnect must restore the physical desktop once the owned app/window/process set is empty.
 - `REQ-SESS-008`: App launch and stream startup failures must not leave the physical display inactive or the system in mirror mode.
+- `REQ-SESS-009`: A disconnect request that explicitly reports the client is no longer active must evaluate the same server-owned cleanup gate as quit; default, empty, or no-body disconnect remains active-client and retains the display lease.
 
 ### Display Modes
 
