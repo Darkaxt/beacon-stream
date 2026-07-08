@@ -127,6 +127,12 @@ public sealed class ExternalProcessStreamingBackend(
             return StreamingStartResult.Fail(preflight.Error ?? "External streaming backend is not ready.");
         }
 
+        ExternalStreamingManifestReadResult manifestResult = ReadManifestIfConfigured();
+        if (!manifestResult.Success)
+        {
+            return StreamingStartResult.Fail(manifestResult.Error ?? "External streaming manifest is invalid.");
+        }
+
         try
         {
             ExternalStreamingCommand command = CreateStartCommand(options.ExecutablePath!, plan, options);
@@ -142,7 +148,7 @@ public sealed class ExternalProcessStreamingBackend(
                 plan.Stream.Transport,
                 State: "running",
                 Error: null,
-                CreateConnectionDescriptor(options));
+                CreateConnectionDescriptor(options, manifestResult.Manifest));
 
             lock (gate)
             {
@@ -266,32 +272,59 @@ public sealed class ExternalProcessStreamingBackend(
                     .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
                     .Select(pair => $"{pair.Key.Trim()}={pair.Value.Trim()}"));
         }
+
+        if (!string.IsNullOrWhiteSpace(options?.ManifestPath))
+        {
+            environment["BEACON_WRAPPER_MANIFEST_PATH"] = options.ManifestPath.Trim();
+        }
     }
 
-    private static StreamingConnectionDescriptor? CreateConnectionDescriptor(ExternalProcessStreamingOptions options)
+    private static StreamingConnectionDescriptor? CreateConnectionDescriptor(
+        ExternalProcessStreamingOptions options,
+        ExternalStreamingManifest? manifest)
     {
-        if (string.IsNullOrWhiteSpace(options.ConnectionProtocol)
-            && string.IsNullOrWhiteSpace(options.ConnectionLaunchUri)
-            && (options.ConnectionEndpoints is null || options.ConnectionEndpoints.Count == 0))
+        string? protocolSource = string.IsNullOrWhiteSpace(options.ConnectionProtocol)
+            ? manifest?.Protocol
+            : options.ConnectionProtocol;
+        string? launchUriSource = string.IsNullOrWhiteSpace(options.ConnectionLaunchUri)
+            ? manifest?.LaunchUri
+            : options.ConnectionLaunchUri;
+        IReadOnlyDictionary<string, string>? endpointSource = options.ConnectionEndpoints is { Count: > 0 }
+            ? options.ConnectionEndpoints
+            : manifest?.Endpoints;
+
+        if (string.IsNullOrWhiteSpace(protocolSource)
+            && string.IsNullOrWhiteSpace(launchUriSource)
+            && (endpointSource is null || endpointSource.Count == 0))
         {
             return null;
         }
 
-        string protocol = string.IsNullOrWhiteSpace(options.ConnectionProtocol)
+        string protocol = string.IsNullOrWhiteSpace(protocolSource)
             ? "external-process"
-            : options.ConnectionProtocol.Trim();
-        IReadOnlyList<StreamingEndpointDescriptor> endpoints = (options.ConnectionEndpoints
+            : protocolSource.Trim();
+        IReadOnlyList<StreamingEndpointDescriptor> endpoints = (endpointSource
                 ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))
             .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
             .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
             .Select(pair => new StreamingEndpointDescriptor(pair.Key.Trim(), pair.Value.Trim()))
             .ToArray();
+        var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(options.ManifestPath))
+        {
+            metadata["manifestPath"] = options.ManifestPath.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(manifest?.Name))
+        {
+            metadata["manifestName"] = manifest.Name.Trim();
+        }
 
         return new StreamingConnectionDescriptor(
             protocol,
-            string.IsNullOrWhiteSpace(options.ConnectionLaunchUri) ? null : options.ConnectionLaunchUri.Trim(),
+            string.IsNullOrWhiteSpace(launchUriSource) ? null : launchUriSource.Trim(),
             endpoints,
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+            metadata);
     }
 
     private ExternalStreamingManifestReadResult ReadManifestIfConfigured()

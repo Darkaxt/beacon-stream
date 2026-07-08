@@ -119,6 +119,23 @@ public sealed class ExternalProcessStreamingBackendTests
     [Fact]
     public async Task StartIncludesConfiguredConnectionDescriptor()
     {
+        var reader = new FakeExternalStreamingManifestReader();
+        reader.Manifests["C:\\Tools\\beacon-streaming.json"] = new ExternalStreamingManifest(
+            "ignored",
+            "manifest-protocol",
+            "manifest://ignored",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["ignored"] = "manifest://endpoint"
+            },
+            ["av1"],
+            120,
+            150,
+            Hdr10: false,
+            ["lan-direct"],
+            [],
+            [],
+            []);
         var runner = new FakeExternalStreamingProcessRunner();
         runner.ExistingFiles.Add("C:\\Tools\\sunshine-wrapper.exe");
         var options = new ExternalProcessStreamingOptions(
@@ -129,8 +146,9 @@ public sealed class ExternalProcessStreamingBackendTests
             {
                 ["rtsp"] = "rtsp://127.0.0.1:48010/beacon",
                 ["input"] = "udp://127.0.0.1:48000"
-            });
-        var backend = new ExternalProcessStreamingBackend(options, runner);
+            },
+            ManifestPath: "C:\\Tools\\beacon-streaming.json");
+        var backend = new ExternalProcessStreamingBackend(options, runner, reader);
 
         StreamingStartResult result = await backend.StartAsync(CreatePlan(), CancellationToken.None);
 
@@ -139,10 +157,50 @@ public sealed class ExternalProcessStreamingBackendTests
         Assert.Equal("gamestream", session.Connection.Protocol);
         Assert.Equal("moonlight://beacon/z-fold-7-steam-shortcut:3767414131", session.Connection.LaunchUri);
         Assert.Contains(session.Connection.Endpoints, endpoint => endpoint.Role == "rtsp" && endpoint.Uri == "rtsp://127.0.0.1:48010/beacon");
+        Assert.DoesNotContain(session.Connection.Endpoints, endpoint => endpoint.Role == "ignored");
         ExternalStreamingCommand command = Assert.Single(runner.StartedCommands);
         Assert.Equal("gamestream", command.Environment["BEACON_CONNECTION_PROTOCOL"]);
         Assert.Equal("moonlight://beacon/z-fold-7-steam-shortcut:3767414131", command.Environment["BEACON_CONNECTION_LAUNCH_URI"]);
         Assert.Equal("input=udp://127.0.0.1:48000;rtsp=rtsp://127.0.0.1:48010/beacon", command.Environment["BEACON_CONNECTION_ENDPOINTS"]);
+        Assert.Equal("C:\\Tools\\beacon-streaming.json", command.Environment["BEACON_WRAPPER_MANIFEST_PATH"]);
+    }
+
+    [Fact]
+    public async Task StartUsesManifestConnectionWhenExplicitConnectionIsAbsent()
+    {
+        var reader = new FakeExternalStreamingManifestReader();
+        reader.Manifests["C:\\Tools\\beacon-streaming.json"] = new ExternalStreamingManifest(
+            "Sunshine bridge",
+            "gamestream",
+            "moonlight://beacon/z-fold-7-steam-shortcut:3767414131",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["rtsp"] = "rtsp://127.0.0.1:48010/beacon"
+            },
+            ["av1", "hevc", "h264"],
+            120,
+            150,
+            Hdr10: false,
+            ["lan-direct"],
+            ["nvenc"],
+            ["dxgi"],
+            ["ready"]);
+        var runner = new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]);
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions("C:\\Tools\\sunshine-wrapper.exe", ManifestPath: "C:\\Tools\\beacon-streaming.json"),
+            runner,
+            reader);
+
+        StreamingStartResult result = await backend.StartAsync(CreatePlan(), CancellationToken.None);
+
+        StreamingSessionState session = Assert.IsType<StreamingSessionState>(result.Session);
+        Assert.NotNull(session.Connection);
+        Assert.Equal("gamestream", session.Connection.Protocol);
+        Assert.Equal("moonlight://beacon/z-fold-7-steam-shortcut:3767414131", session.Connection.LaunchUri);
+        Assert.Contains(session.Connection.Endpoints, endpoint => endpoint.Role == "rtsp" && endpoint.Uri == "rtsp://127.0.0.1:48010/beacon");
+        Assert.Equal("C:\\Tools\\beacon-streaming.json", session.Connection.Metadata["manifestPath"]);
+        ExternalStreamingCommand command = Assert.Single(runner.StartedCommands);
+        Assert.Equal("C:\\Tools\\beacon-streaming.json", command.Environment["BEACON_WRAPPER_MANIFEST_PATH"]);
     }
 
     [Fact]

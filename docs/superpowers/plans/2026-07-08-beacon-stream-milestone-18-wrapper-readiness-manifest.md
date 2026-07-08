@@ -397,7 +397,7 @@ Expected: platform streaming tests pass.
 - Modify: `src/Beacon.Platform.Windows/Streaming/ExternalProcessStreamingBackend.cs`
 - Test: `tests/Beacon.Platform.Windows.Tests/Streaming/ExternalProcessStreamingBackendTests.cs`
 
-- [ ] **Step 1: Write failing descriptor test**
+- [x] **Step 1: Write failing descriptor test**
 
 Add:
 
@@ -441,7 +441,7 @@ public async Task StartUsesManifestConnectionWhenExplicitConnectionIsAbsent()
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -451,7 +451,7 @@ dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.cs
 
 Expected: fail because manifest connection fields are not used yet.
 
-- [ ] **Step 3: Use manifest descriptor fields**
+- [x] **Step 3: Use manifest descriptor fields**
 
 Change `CreateConnectionDescriptor` to accept `ExternalStreamingManifest? manifest`:
 
@@ -492,7 +492,7 @@ if (!string.IsNullOrWhiteSpace(manifest?.Name))
 
 Pass metadata to `StreamingConnectionDescriptor`.
 
-- [ ] **Step 4: Read manifest once in start**
+- [x] **Step 4: Read manifest once in start**
 
 In `StartAsync`, after preflight success, read the manifest:
 
@@ -512,7 +512,7 @@ if (!string.IsNullOrWhiteSpace(options?.ManifestPath))
 }
 ```
 
-- [ ] **Step 5: Keep explicit connection overrides**
+- [x] **Step 5: Keep explicit connection overrides**
 
 Extend `StartIncludesConfiguredConnectionDescriptor` to set both explicit connection values and a manifest with different values, then assert explicit values win:
 
@@ -534,7 +534,7 @@ reader.Manifests["C:\\Tools\\beacon-streaming.json"] = new ExternalStreamingMani
 
 Create options with `ManifestPath: "C:\\Tools\\beacon-streaming.json"` plus the existing explicit protocol/launch/endpoints. Assert the session still uses `gamestream`, `moonlight://...`, and explicit endpoints.
 
-- [ ] **Step 6: Verify green**
+- [x] **Step 6: Verify green**
 
 Run:
 
