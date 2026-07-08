@@ -69,6 +69,18 @@ public sealed class FakeEndpointRunnerTests
     }
 
     [Fact]
+    public void ParsesRequiredStreamConnectionAssertionFromCommandLine()
+    {
+        FakeEndpointCommandLineOptions options = FakeEndpointCommandLine.Parse(
+            [
+                "--require-stream-connection",
+                "true"
+            ]);
+
+        Assert.True(options.Script.RequireStreamConnection);
+    }
+
+    [Fact]
     public async Task RunsZFoldControlPlaneScriptInOrder()
     {
         var handler = new RecordingHandler();
@@ -164,6 +176,71 @@ public sealed class FakeEndpointRunnerTests
     }
 
     [Fact]
+    public async Task VerifiesStreamConnectionWhenRequested()
+    {
+        var handler = new RecordingHandler(request =>
+            request.RequestUri?.PathAndQuery == "/clients/z-fold-7/stream"
+                ? new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""
+                                                {
+                                                  "clientId": "z-fold-7",
+                                                  "stream": {
+                                                    "state": "running",
+                                                    "connection": {
+                                                      "protocol": "gamestream",
+                                                      "launchUri": "moonlight://beacon/probe/z-fold-7-steam-shortcut%3A3767414131",
+                                                      "endpoints": [
+                                                        { "role": "rtsp", "uri": "rtsp://127.0.0.1:48010/beacon" }
+                                                      ],
+                                                      "metadata": { "wrapper": "Beacon.StreamingProbe" }
+                                                    }
+                                                  }
+                                                }
+                                                """)
+                }
+                : null);
+        var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost") };
+        var runner = new FakeEndpointRunner(client);
+        FakeEndpointScript script = FakeEndpointScript.CreateZFold7Default() with { RequireStreamConnection = true };
+
+        FakeEndpointResult result = await runner.RunAsync(script, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Contains("GET /clients/z-fold-7/stream", result.Operations);
+        Assert.Contains("stream connection gamestream", result.Operations);
+    }
+
+    [Fact]
+    public async Task FailsWhenRequiredStreamConnectionIsMissing()
+    {
+        var handler = new RecordingHandler(request =>
+            request.RequestUri?.PathAndQuery == "/clients/z-fold-7/stream"
+                ? new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""
+                                                {
+                                                  "clientId": "z-fold-7",
+                                                  "stream": {
+                                                    "state": "running",
+                                                    "connection": null
+                                                  }
+                                                }
+                                                """)
+                }
+                : null);
+        var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost") };
+        var runner = new FakeEndpointRunner(client);
+        FakeEndpointScript script = FakeEndpointScript.CreateZFold7Default() with { RequireStreamConnection = true };
+
+        FakeEndpointResult result = await runner.RunAsync(script, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("stream.connection", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("POST /clients/z-fold-7/input", result.Operations);
+    }
+
+    [Fact]
     public async Task RejectsZFold1440pBeforeCallingServer()
     {
         var handler = new RecordingHandler();
@@ -178,7 +255,7 @@ public sealed class FakeEndpointRunnerTests
         Assert.Empty(handler.Requests);
     }
 
-    private sealed class RecordingHandler : HttpMessageHandler
+    private sealed class RecordingHandler(Func<HttpRequestMessage, HttpResponseMessage?>? responseFactory = null) : HttpMessageHandler
     {
         public List<string> Requests { get; } = [];
         public List<string> Bodies { get; } = [];
@@ -187,6 +264,12 @@ public sealed class FakeEndpointRunnerTests
         {
             Requests.Add($"{request.Method.Method} {request.RequestUri?.PathAndQuery}");
             Bodies.Add(request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken));
+            HttpResponseMessage? response = responseFactory?.Invoke(request);
+            if (response is not null)
+            {
+                return response;
+            }
+
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("{}")

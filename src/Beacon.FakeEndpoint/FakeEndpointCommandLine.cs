@@ -31,7 +31,8 @@ public static class FakeEndpointCommandLine
             ThermalState = ReadOptionalString(values, "thermal-state", profiled.ThermalState),
             AppId = ReadString(values, "app-id", profiled.AppId),
             Title = ReadString(values, "title", profiled.Title),
-            Source = ReadString(values, "source", profiled.Source)
+            Source = ReadString(values, "source", profiled.Source),
+            RequireStreamConnection = ReadBool(values, "require-stream-connection", profiled.RequireStreamConnection)
         };
 
         return new FakeEndpointCommandLineOptions(
@@ -75,6 +76,11 @@ public static class FakeEndpointCommandLine
 
     private static double ReadDouble(IReadOnlyDictionary<string, string> values, string key, double fallback) =>
         values.TryGetValue(key, out string? value) && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed)
+            ? parsed
+            : fallback;
+
+    private static bool ReadBool(IReadOnlyDictionary<string, string> values, string key, bool fallback) =>
+        values.TryGetValue(key, out string? value) && bool.TryParse(value, out bool parsed)
             ? parsed
             : fallback;
 
