@@ -30,10 +30,11 @@ public sealed record ClientInputHealth(
     string Backend,
     string Diagnostic,
     IReadOnlyList<string> SupportedEventTypes,
-    IReadOnlyList<string> SupportedPointerActions)
+    IReadOnlyList<string> SupportedPointerActions,
+    IReadOnlyList<string> SupportedKeyboardActions)
 {
     public static ClientInputHealth Unknown(string diagnostic) =>
-        new(false, "unknown", diagnostic, [], []);
+        new(false, "unknown", diagnostic, [], [], []);
 }
 
 public interface IClientInputSink
@@ -48,8 +49,9 @@ public interface IClientInputHealthProvider
 
 public sealed class NoOpClientInputSink : IClientInputSink, IClientInputHealthProvider
 {
-    private static readonly string[] EventTypes = ["pointer"];
+    private static readonly string[] EventTypes = ["pointer", "keyboard"];
     private static readonly string[] PointerActions = ["move", "down", "up", "tap"];
+    private static readonly string[] KeyboardActions = ["down", "up", "press"];
 
     public Task<ClientInputResult> ForwardAsync(ClientInputBatch batch, CancellationToken cancellationToken)
     {
@@ -63,5 +65,6 @@ public sealed class NoOpClientInputSink : IClientInputSink, IClientInputHealthPr
             Backend: "no-op",
             Diagnostic: "No-op input sink active for fake host mode.",
             SupportedEventTypes: EventTypes,
-            SupportedPointerActions: PointerActions);
+            SupportedPointerActions: PointerActions,
+            SupportedKeyboardActions: KeyboardActions);
 }

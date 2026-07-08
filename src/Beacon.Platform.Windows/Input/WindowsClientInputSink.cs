@@ -7,8 +7,9 @@ public sealed class WindowsClientInputSink(
     IWindowsDisplayApi displayApi,
     IWindowsInputApi inputApi) : IClientInputSink, IClientInputHealthProvider
 {
-    private static readonly string[] EventTypes = ["pointer"];
+    private static readonly string[] EventTypes = ["pointer", "keyboard"];
     private static readonly string[] PointerActions = ["move", "down", "up", "tap"];
+    private static readonly string[] KeyboardActions = ["down", "up", "press"];
 
     public async Task<ClientInputResult> ForwardAsync(ClientInputBatch batch, CancellationToken cancellationToken)
     {
@@ -48,9 +49,10 @@ public sealed class WindowsClientInputSink(
         new(
             Ready: true,
             Backend: "windows-sendinput",
-            Diagnostic: "Windows SendInput pointer sink ready.",
+            Diagnostic: "Windows SendInput pointer and keyboard sink ready.",
             SupportedEventTypes: EventTypes,
-            SupportedPointerActions: PointerActions);
+            SupportedPointerActions: PointerActions,
+            SupportedKeyboardActions: KeyboardActions);
 
     private static bool TryAppendCommands(
         ClientInputEvent inputEvent,
@@ -58,12 +60,21 @@ public sealed class WindowsClientInputSink(
         List<WindowsInputCommand> commands,
         out string error)
     {
-        if (!string.Equals(inputEvent.Type, "pointer", StringComparison.OrdinalIgnoreCase))
+        string eventType = inputEvent.Type?.Trim().ToLowerInvariant() ?? string.Empty;
+        return eventType switch
         {
-            error = $"Unsupported input event type '{inputEvent.Type}'.";
-            return false;
-        }
+            "pointer" => TryAppendPointerCommands(inputEvent, display, commands, out error),
+            "keyboard" => TryAppendKeyboardCommands(inputEvent, commands, out error),
+            _ => UnsupportedEventType(inputEvent, out error)
+        };
+    }
 
+    private static bool TryAppendPointerCommands(
+        ClientInputEvent inputEvent,
+        DisplayPathSnapshot display,
+        List<WindowsInputCommand> commands,
+        out string error)
+    {
         if (!TryMapPointerCoordinate(inputEvent, display, out int x, out int y, out error))
         {
             return false;
@@ -107,6 +118,59 @@ public sealed class WindowsClientInputSink(
                 error = $"Unsupported input event action '{inputEvent.Action}'.";
                 return false;
         }
+    }
+
+    private static bool TryAppendKeyboardCommands(
+        ClientInputEvent inputEvent,
+        List<WindowsInputCommand> commands,
+        out string error)
+    {
+        if (!TryKeyboardIdentity(inputEvent, out string? code, out string? key, out error))
+        {
+            return false;
+        }
+
+        string action = inputEvent.Action?.Trim().ToLowerInvariant() ?? string.Empty;
+        switch (action)
+        {
+            case "down":
+                commands.Add(WindowsInputCommand.KeyboardKey(code, key, pressed: true));
+                return true;
+            case "up":
+                commands.Add(WindowsInputCommand.KeyboardKey(code, key, pressed: false));
+                return true;
+            case "press":
+                commands.Add(WindowsInputCommand.KeyboardKey(code, key, pressed: true));
+                commands.Add(WindowsInputCommand.KeyboardKey(code, key, pressed: false));
+                return true;
+            default:
+                error = $"Unsupported keyboard input action '{inputEvent.Action}'.";
+                return false;
+        }
+    }
+
+    private static bool TryKeyboardIdentity(
+        ClientInputEvent inputEvent,
+        out string? code,
+        out string? key,
+        out string error)
+    {
+        code = string.IsNullOrWhiteSpace(inputEvent.Code) ? null : inputEvent.Code.Trim();
+        key = string.IsNullOrWhiteSpace(inputEvent.Key) ? null : inputEvent.Key.Trim();
+        if (code is not null || key is not null)
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        error = "Keyboard input requires a code or key value.";
+        return false;
+    }
+
+    private static bool UnsupportedEventType(ClientInputEvent inputEvent, out string error)
+    {
+        error = $"Unsupported input event type '{inputEvent.Type}'.";
+        return false;
     }
 
     private static bool TryMapPointerCoordinate(

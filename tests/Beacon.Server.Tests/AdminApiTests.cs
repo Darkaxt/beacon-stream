@@ -46,8 +46,16 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
             root.GetProperty("inputHealth").GetProperty("supportedEventTypes").EnumerateArray()
                 .Select(value => value.GetString()));
         Assert.Contains(
+            "keyboard",
+            root.GetProperty("inputHealth").GetProperty("supportedEventTypes").EnumerateArray()
+                .Select(value => value.GetString()));
+        Assert.Contains(
             "tap",
             root.GetProperty("inputHealth").GetProperty("supportedPointerActions").EnumerateArray()
+                .Select(value => value.GetString()));
+        Assert.Contains(
+            "press",
+            root.GetProperty("inputHealth").GetProperty("supportedKeyboardActions").EnumerateArray()
                 .Select(value => value.GetString()));
         Assert.True(root.GetProperty("display").GetProperty("driverReady").GetBoolean());
         Assert.True(root.GetProperty("display").GetProperty("topologyAvailable").GetBoolean());

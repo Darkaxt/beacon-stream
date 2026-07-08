@@ -80,8 +80,9 @@ public sealed class CockpitApiClientTests
                 "ready": true,
                 "backend": "windows-sendinput",
                 "diagnostic": "Windows SendInput pointer sink ready.",
-                "supportedEventTypes": ["pointer"],
-                "supportedPointerActions": ["move", "down", "up", "tap"]
+                "supportedEventTypes": ["pointer", "keyboard"],
+                "supportedPointerActions": ["move", "down", "up", "tap"],
+                "supportedKeyboardActions": ["down", "up", "press"]
               },
               "games": { "total": 36, "diagnostics": ["Steam library 'G:\\SteamLibrary\\steamapps' does not exist."] },
               "diagnostics": [{
@@ -125,7 +126,9 @@ public sealed class CockpitApiClientTests
         Assert.True(snapshot.StreamingHealth.Hdr10);
         Assert.True(snapshot.InputHealth.Ready);
         Assert.Equal("windows-sendinput", snapshot.InputHealth.Backend);
+        Assert.Equal(["pointer", "keyboard"], snapshot.InputHealth.SupportedEventTypes);
         Assert.Equal(["move", "down", "up", "tap"], snapshot.InputHealth.SupportedPointerActions);
+        Assert.Equal(["down", "up", "press"], snapshot.InputHealth.SupportedKeyboardActions);
         Assert.Equal(36, snapshot.Games.Total);
         Assert.Single(snapshot.Games.Diagnostics);
         Assert.Single(snapshot.Diagnostics);
