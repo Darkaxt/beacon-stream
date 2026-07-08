@@ -590,7 +590,8 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal("client-z-fold-7", reconnectJson.RootElement.GetProperty("displayId").GetString());
         Assert.True(quitJson.RootElement.GetProperty("cleanupEvaluated").GetBoolean());
         Assert.True(quitJson.RootElement.GetProperty("displayRemoved").GetBoolean());
-        Assert.True(restoreJson.RootElement.GetProperty("restoreRequested").GetBoolean());
+        Assert.True(restoreJson.RootElement.GetProperty("recovered").GetBoolean());
+        Assert.Equal("client-z-fold-7", restoreJson.RootElement.GetProperty("displayId").GetString());
     }
 
     [Fact]
@@ -612,11 +613,38 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
-    public async Task EmergencyRestoreReturnsServiceUnavailableWhenPhysicalRestoreFails()
+    public async Task EmergencyRestoreUsesClientScopedRecoveryAfterInitialRestoreFailure()
+    {
+        var display = new FakeDisplayBackend();
+        display.RestoreResults.Enqueue(DisplayRestoreResult.Fail("stale virtual topology"));
+        display.RestoreResults.Enqueue(DisplayRestoreResult.Ok());
+        WebApplicationFactory<Program> recoveryFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.AddSingleton<IDisplayBackend>(display);
+            }));
+        HttpClient client = recoveryFactory.CreateClient();
+
+        HttpResponseMessage restore = await client.PostAsJsonAsync("/clients/z-fold-7/emergency-restore", new { });
+
+        Assert.Equal(HttpStatusCode.OK, restore.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await restore.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+        Assert.Equal("z-fold-7", root.GetProperty("clientId").GetString());
+        Assert.Equal("client-z-fold-7", root.GetProperty("displayId").GetString());
+        Assert.True(root.GetProperty("recovered").GetBoolean());
+        Assert.Equal(["physical-primary", "physical-primary"], display.RestoreCalls);
+        Assert.Equal("client-z-fold-7", Assert.Single(display.RemoveCalls));
+    }
+
+    [Fact]
+    public async Task EmergencyRestoreReturnsServiceUnavailableWhenClientScopedRecoveryFails()
     {
         var display = new FakeDisplayBackend
         {
-            NextRestoreResult = DisplayRestoreResult.Fail("physical primary was not verified")
+            NextRestoreResult = DisplayRestoreResult.Fail("physical primary was not verified"),
+            NextRemoveResult = DisplayRemoveResult.Fail("virtual display could not be removed")
         };
         WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
@@ -631,7 +659,9 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal(HttpStatusCode.ServiceUnavailable, restore.StatusCode);
         string body = await restore.Content.ReadAsStringAsync();
         Assert.Contains("physical primary was not verified", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("virtual display could not be removed", body, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("physical-primary", Assert.Single(display.RestoreCalls));
+        Assert.Equal("client-z-fold-7", Assert.Single(display.RemoveCalls));
     }
 
     [Fact]

@@ -127,8 +127,8 @@ element('quitButton').addEventListener('click', async () => {
 });
 
 element('restoreButton').addEventListener('click', async () => {
-  const result = await postJson<{ restoreRequested: boolean }>(`/clients/${clientId}/emergency-restore`, {});
-  appendLog(result.restoreRequested ? 'restore requested' : 'restore skipped');
+  const result = await postJson<{ displayId: string; recovered: boolean }>(`/clients/${clientId}/emergency-restore`, {});
+  appendLog(result.recovered ? `recovered ${result.displayId}` : 'recovery skipped');
 });
 
 function readDraft(): ProfileDraft {
