@@ -6,23 +6,36 @@ namespace Beacon.Core.Displays;
 
 public sealed class DisplayLeaseManager(IDisplayBackend displayBackend, IDiagnosticEventSink? diagnostics = null)
 {
+    public Task<DisplayLeaseResult> PrepareLeaseAsync(ClientProfile profile, CancellationToken cancellationToken) =>
+        EnsureLeaseCoreAsync(profile, prepareOnly: true, cancellationToken);
+
     public async Task<DisplayLeaseResult> EnsureLeaseAsync(ClientProfile profile, CancellationToken cancellationToken)
     {
+        return await EnsureLeaseCoreAsync(profile, prepareOnly: false, cancellationToken);
+    }
+
+    private async Task<DisplayLeaseResult> EnsureLeaseCoreAsync(
+        ClientProfile profile,
+        bool prepareOnly,
+        CancellationToken cancellationToken)
+    {
         string displayId = DisplayLease.CreateDisplayId(profile.ClientId);
-        DisplayEnsureResult ensureResult = await displayBackend.EnsureVirtualDisplayAsync(
+        string operation = prepareOnly ? "lease.prepare" : "lease.ensure";
+        string repairOperation = $"{operation}.repair";
+        DisplayEnsureResult ensureResult = await ApplyDisplayLeaseAsync(
+            profile,
             displayId,
-            profile.Display.PreferredWidth,
-            profile.Display.PreferredHeight,
-            profile.Display.PreferredRefreshHz,
-            profile.Display.HdrPreference,
+            prepareOnly,
             cancellationToken);
 
         if (!ensureResult.Success)
         {
             Publish(
                 DiagnosticSeverity.Error,
-                "lease.ensure",
-                $"Virtual display ensure failed: {ensureResult.Error}",
+                operation,
+                prepareOnly
+                    ? $"Virtual display prepare failed: {ensureResult.Error}"
+                    : $"Virtual display ensure failed: {ensureResult.Error}",
                 profile.ClientId.Value,
                 displayId,
                 DisplayMetadata(profile));
@@ -32,8 +45,10 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend, IDiagnos
             {
                 Publish(
                     DiagnosticSeverity.Error,
-                    "lease.ensure.repair",
-                    $"Display preflight repair failed because physical primary restore failed: {restoreResult.Error}",
+                    repairOperation,
+                    prepareOnly
+                        ? $"Display prepare repair failed because physical primary restore failed: {restoreResult.Error}"
+                        : $"Display preflight repair failed because physical primary restore failed: {restoreResult.Error}",
                     profile.ClientId.Value,
                     displayId,
                     DisplayMetadata(profile));
@@ -45,33 +60,37 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend, IDiagnos
 
             Publish(
                 DiagnosticSeverity.Information,
-                "lease.ensure.repair",
-                "Physical primary restore requested before retrying virtual display ensure.",
+                repairOperation,
+                prepareOnly
+                    ? "Physical primary restore requested before retrying virtual display prepare."
+                    : "Physical primary restore requested before retrying virtual display ensure.",
                 profile.ClientId.Value,
                 displayId,
                 DisplayMetadata(profile));
 
-            ensureResult = await displayBackend.EnsureVirtualDisplayAsync(
+            ensureResult = await ApplyDisplayLeaseAsync(
+                profile,
                 displayId,
-                profile.Display.PreferredWidth,
-                profile.Display.PreferredHeight,
-                profile.Display.PreferredRefreshHz,
-                profile.Display.HdrPreference,
+                prepareOnly,
                 cancellationToken);
 
             if (!ensureResult.Success)
             {
                 Publish(
                     DiagnosticSeverity.Error,
-                    "lease.ensure.repair",
-                    $"Virtual display ensure still failed after repair: {ensureResult.Error}",
+                    repairOperation,
+                    prepareOnly
+                        ? $"Virtual display prepare still failed after repair: {ensureResult.Error}"
+                        : $"Virtual display ensure still failed after repair: {ensureResult.Error}",
                     profile.ClientId.Value,
                     displayId,
                     DisplayMetadata(profile));
                 return new DisplayLeaseResult(
                     false,
                     null,
-                    $"After repair, virtual display ensure still failed: {ensureResult.Error}; refusing to fall back to physical display.");
+                    prepareOnly
+                        ? $"After repair, virtual display prepare still failed: {ensureResult.Error}; refusing to fall back to physical display."
+                        : $"After repair, virtual display ensure still failed: {ensureResult.Error}; refusing to fall back to physical display.");
             }
         }
 
@@ -84,14 +103,35 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend, IDiagnos
 
         Publish(
             DiagnosticSeverity.Information,
-            "lease.ensure",
-            "Virtual display lease ensured.",
+            operation,
+            prepareOnly ? "Virtual display lease prepared." : "Virtual display lease ensured.",
             profile.ClientId.Value,
             displayId,
             DisplayMetadata(profile));
 
         return new DisplayLeaseResult(true, lease, null);
     }
+
+    private Task<DisplayEnsureResult> ApplyDisplayLeaseAsync(
+        ClientProfile profile,
+        string displayId,
+        bool prepareOnly,
+        CancellationToken cancellationToken) =>
+        prepareOnly
+            ? displayBackend.PrepareVirtualDisplayAsync(
+                displayId,
+                profile.Display.PreferredWidth,
+                profile.Display.PreferredHeight,
+                profile.Display.PreferredRefreshHz,
+                profile.Display.HdrPreference,
+                cancellationToken)
+            : displayBackend.EnsureVirtualDisplayAsync(
+                displayId,
+                profile.Display.PreferredWidth,
+                profile.Display.PreferredHeight,
+                profile.Display.PreferredRefreshHz,
+                profile.Display.HdrPreference,
+                cancellationToken);
 
     public Task DisconnectAsync(string displayId, CancellationToken cancellationToken) => Task.CompletedTask;
 

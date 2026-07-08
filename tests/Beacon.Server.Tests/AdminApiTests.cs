@@ -422,6 +422,15 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         public Task<DisplayHealth> GetHealthAsync(CancellationToken cancellationToken) =>
             Task.FromException<DisplayHealth>(new InvalidOperationException(message));
 
+        public Task<DisplayEnsureResult> PrepareVirtualDisplayAsync(
+            string displayId,
+            int width,
+            int height,
+            int refreshHz,
+            HdrPreference hdrPreference,
+            CancellationToken cancellationToken) =>
+            Task.FromException<DisplayEnsureResult>(new InvalidOperationException(message));
+
         public Task<DisplayEnsureResult> EnsureVirtualDisplayAsync(
             string displayId,
             int width,

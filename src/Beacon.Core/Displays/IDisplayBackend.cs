@@ -4,6 +4,14 @@ public interface IDisplayBackend
 {
     Task<DisplayHealth> GetHealthAsync(CancellationToken cancellationToken);
 
+    Task<DisplayEnsureResult> PrepareVirtualDisplayAsync(
+        string displayId,
+        int width,
+        int height,
+        int refreshHz,
+        HdrPreference hdrPreference,
+        CancellationToken cancellationToken);
+
     Task<DisplayEnsureResult> EnsureVirtualDisplayAsync(
         string displayId,
         int width,

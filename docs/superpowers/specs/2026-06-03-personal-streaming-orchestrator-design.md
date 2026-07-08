@@ -91,7 +91,7 @@ This section is the implementation contract. If a later plan contradicts this re
 - `REQ-CTRL-011`: APK profile patches must be server-validated against an explicit allowlist.
 - `REQ-CTRL-012`: Display mode, blackout, mirror prohibition, persistence, destruction, restore, and recovery safety policies are WPF/server-admin controlled in version 1.
 - `REQ-CTRL-013`: Until the APK implements native streaming from endpoint maps, a successful launch response with endpoints but no launch URI must be surfaced as an explicit client diagnostic instead of silently doing nothing.
-- `REQ-CTRL-014`: An actively beaconing client must be able to ask the server to prepare its own display lease before app launch; an explicit inactive beacon must evaluate the server-owned display cleanup gate without timers or background watchdogs.
+- `REQ-CTRL-014`: An actively beaconing client must be able to ask the server to prepare its own display lease before app launch without making that display primary; an explicit inactive beacon must evaluate the server-owned display cleanup gate without timers or background watchdogs.
 
 ### Client Profile
 
@@ -408,7 +408,7 @@ This includes:
 
 The server must preserve the requested aspect-ratio intent. For the Z Fold 7 profile, `2560x1600` is not interchangeable with `2560x1440`. If the requested mode cannot be created, the planner must repair or fail explicitly; it must not silently collapse to a 16:9 mode or fall back to the physical display.
 
-Version 1 must not support per-game virtual desktop overrides. Games can choose internal render resolution in their own settings. The server prepares one stable virtual desktop for the client profile, and games run inside that desktop.
+Version 1 must not support per-game virtual desktop overrides. Games can choose internal render resolution in their own settings. The server prepares one stable virtual desktop for the client profile, and games run inside that desktop. Active beacon may create or verify this display as extended/non-primary; launch is the point where the server applies the session display mode such as virtual-primary.
 
 ## HDR Capability Model
 

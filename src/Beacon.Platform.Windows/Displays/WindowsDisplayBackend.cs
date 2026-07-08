@@ -123,6 +123,122 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
         return result;
     }
 
+    public async Task<DisplayEnsureResult> PrepareVirtualDisplayAsync(
+        string displayId,
+        int width,
+        int height,
+        int refreshHz,
+        HdrPreference hdrPreference,
+        CancellationToken cancellationToken)
+    {
+        DisplayDriverStatus driverStatus = api.GetDriverStatus();
+        if (!driverStatus.Ready)
+        {
+            DisplayEnsureResult fail = DisplayEnsureResult.Fail(driverStatus.Diagnostic);
+            LogPrepare(displayId, width, height, refreshHz, before: null, after: null, fail, "driver-not-ready");
+            return fail;
+        }
+
+        DisplayTopologySnapshot before = await api.QueryTopologyAsync(cancellationToken);
+        DisplayTopologySnapshot preparedTopology = before;
+        bool createdDisplay = false;
+
+        if (!before.HasDisplayMode(displayId, width, height, refreshHz))
+        {
+            DisplayApiResult createResult = await api.CreateVirtualDisplayAsync(
+                displayId,
+                width,
+                height,
+                refreshHz,
+                cancellationToken);
+            if (!createResult.Success)
+            {
+                DisplayEnsureResult fail = DisplayEnsureResult.Fail(createResult.Error ?? $"Unable to create virtual display {displayId}.");
+                LogPrepare(displayId, width, height, refreshHz, before, after: null, fail, "create-failed");
+                return fail;
+            }
+
+            createdDisplay = true;
+            preparedTopology = await api.QueryTopologyAsync(cancellationToken);
+        }
+
+        if (preparedTopology.IsMirrorMode)
+        {
+            DisplayEnsureResult fail = await FailPreparedAsync(
+                displayId,
+                $"Refusing mirror mode for virtual display {displayId}.",
+                createdDisplay,
+                cancellationToken);
+            LogPrepare(displayId, width, height, refreshHz, before, preparedTopology, fail, "mirror-mode-rejected");
+            return fail;
+        }
+
+        if (!preparedTopology.HasDisplayMode(displayId, width, height, refreshHz))
+        {
+            DisplayEnsureResult fail = await FailPreparedAsync(
+                displayId,
+                $"Virtual display {displayId} did not expose {width}x{height}@{refreshHz}.",
+                createdDisplay,
+                cancellationToken);
+            LogPrepare(displayId, width, height, refreshHz, before, preparedTopology, fail, "mode-verification-failed");
+            return fail;
+        }
+
+        if (preparedTopology.IsPrimary(displayId) || !preparedTopology.PhysicalPrimaryVerified)
+        {
+            DisplayRestoreResult restoreResult = await RestorePhysicalPrimaryAsync(cancellationToken);
+            if (!restoreResult.Success)
+            {
+                DisplayEnsureResult fail = await FailPreparedAsync(
+                    displayId,
+                    $"Physical primary restore failed after preparing virtual display {displayId}: {restoreResult.Error}",
+                    createdDisplay,
+                    cancellationToken);
+                LogPrepare(displayId, width, height, refreshHz, before, preparedTopology, fail, "physical-primary-restore-failed");
+                return fail;
+            }
+
+            preparedTopology = await api.QueryTopologyAsync(cancellationToken);
+            if (preparedTopology.IsMirrorMode)
+            {
+                DisplayEnsureResult fail = await FailPreparedAsync(
+                    displayId,
+                    $"Refusing mirror mode for virtual display {displayId} after physical primary restore.",
+                    createdDisplay,
+                    cancellationToken);
+                LogPrepare(displayId, width, height, refreshHz, before, preparedTopology, fail, "restore-left-mirror-mode");
+                return fail;
+            }
+
+            if (!preparedTopology.HasDisplayMode(displayId, width, height, refreshHz))
+            {
+                DisplayEnsureResult fail = await FailPreparedAsync(
+                    displayId,
+                    $"Virtual display {displayId} no longer exposed {width}x{height}@{refreshHz} after physical primary restore.",
+                    createdDisplay,
+                    cancellationToken);
+                LogPrepare(displayId, width, height, refreshHz, before, preparedTopology, fail, "restore-lost-mode");
+                return fail;
+            }
+
+            if (preparedTopology.IsPrimary(displayId) || !preparedTopology.PhysicalPrimaryVerified)
+            {
+                DisplayEnsureResult fail = await FailPreparedAsync(
+                    displayId,
+                    $"Virtual display {displayId} was prepared but the physical display was not verified as primary.",
+                    createdDisplay,
+                    cancellationToken);
+                LogPrepare(displayId, width, height, refreshHz, before, preparedTopology, fail, "physical-primary-not-verified");
+                return fail;
+            }
+        }
+
+        DisplayHdrCapability hdrCapability = await api.QueryHdrCapabilityAsync(displayId, cancellationToken);
+        DisplayEnsureResult result = NegotiateHdr(hdrPreference, hdrCapability);
+        LogPrepare(displayId, width, height, refreshHz, before, preparedTopology, result, "prepared extended topology verified");
+        return result;
+    }
+
     public async Task<DisplayRestoreResult> RestorePhysicalPrimaryAsync(CancellationToken cancellationToken)
     {
         var seenUnverifiedTopologies = new HashSet<string>(StringComparer.Ordinal);
@@ -198,6 +314,15 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
         return DisplayEnsureResult.Fail(error);
     }
 
+    private async Task<DisplayEnsureResult> FailPreparedAsync(
+        string displayId,
+        string error,
+        bool removeCreatedDisplay,
+        CancellationToken cancellationToken) =>
+        removeCreatedDisplay
+            ? await FailAfterCreateAsync(displayId, error, cancellationToken)
+            : DisplayEnsureResult.Fail(error);
+
     private void LogEnsure(
         string displayId,
         int width,
@@ -210,6 +335,29 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
     {
         operationLog.Add(new DisplayOperationLogEntry(
             Operation: "ensure-virtual-display",
+            DisplayId: displayId,
+            Width: width,
+            Height: height,
+            RefreshHz: refreshHz,
+            Primary: after?.IsPrimary(displayId),
+            HdrEnabled: result.HdrEnabled,
+            Reason: result.Success ? reason : $"{reason}: {result.Error}",
+            Before: before,
+            After: after));
+    }
+
+    private void LogPrepare(
+        string displayId,
+        int width,
+        int height,
+        int refreshHz,
+        DisplayTopologySnapshot? before,
+        DisplayTopologySnapshot? after,
+        DisplayEnsureResult result,
+        string reason)
+    {
+        operationLog.Add(new DisplayOperationLogEntry(
+            Operation: "prepare-virtual-display",
             DisplayId: displayId,
             Width: width,
             Height: height,

@@ -10,6 +10,8 @@ Milestone 68 adds explicit client beacon lease preparation: active beacon prepar
 
 Milestone 69 adds Client Lab active/inactive beacon controls and Playwright coverage so the browser simulator exercises the same lifecycle action without a phone.
 
+Milestone 70 splits prepared display leases from session activation: active beacon creates/verifies the per-client virtual display without making it primary, while launch remains the point that activates virtual-primary for the session.
+
 ## Server Host Mode
 
 The server defaults to deterministic fake host mode:
@@ -74,7 +76,7 @@ Supported profiles are `excellent-lan`, `congested-lan`, `high-rtt`, `packet-los
 
 `--end-after-stream-connection true` stops the fake endpoint script immediately after the required stream descriptor is validated. This is useful for no-phone wrapper handoff tests where the stream must remain running long enough for runtime descriptor evidence before an explicit disconnect.
 
-Plan display reasons include both the selected display mode policy, such as `virtual-primary` or `physical-blackout`, and the HDR/SDR decision. Client Lab renders that display reason with the stream planning reason before launch. Client Lab also has Active Beacon and Inactive Beacon controls that send only client activity state; Beacon Server owns the resulting display lease and cleanup policy.
+Plan display reasons include both the selected display mode policy, such as `virtual-primary` or `physical-blackout`, and the HDR/SDR decision. Client Lab renders that display reason with the stream planning reason before launch. Client Lab also has Active Beacon and Inactive Beacon controls that send only client activity state; Beacon Server owns the resulting display lease and cleanup policy. Active beacon prepares the client's virtual display as an extended/non-primary lease; launch activates virtual-primary for the actual session.
 
 ## Streaming Backend Mode
 
@@ -158,7 +160,7 @@ dotnet run --project src/Beacon.DisplayProbe -- ensure --client z-fold-7 --width
 dotnet run --project src/Beacon.DisplayProbe -- restore-physical
 ```
 
-Display preflight attempts one safe repair before failing: if the first virtual-display ensure fails, Beacon restores the physical primary display and retries the same requested virtual display once. If repair fails, launch still stops before app/stream side effects and the diagnostic journal records the reason.
+Display preflight attempts one safe repair before failing: if the first virtual-display prepare or activation fails, Beacon restores the physical primary display and retries the same requested virtual display once. If repair fails, launch still stops before app/stream side effects and the diagnostic journal records the reason.
 
 Physical restore is verified: Beacon queries topology after restore and treats unverified physical-primary state as a recovery failure instead of silently continuing.
 
@@ -195,7 +197,7 @@ curl.exe -X POST http://localhost:5000/admin/clients/z-fold-7/stream/stop
 In the WPF cockpit, the Recovery tab exposes the same actions. Reset topology restores the physical primary display first, then moves virtual-display windows back minimized. Display lease removal restores the physical primary display and removes the selected client's virtual display. These are explicit manual escape hatches; normal session cleanup still belongs to the server lifecycle rules.
 
 Owning-client emergency restore is profile-gated by `allowEmergencyRestoreFromClient`. Admin recovery endpoints remain broader local-admin escape hatches, including display lease recovery/removal. Admin physical restore returns `503` with the verified backend error when the laptop panel cannot be confirmed as primary.
-Stream stop returns `404` when the selected client has no session plan, and `503` when the streaming backend cannot stop an existing planned session. Client disconnect and quit use the same stop-failure contract; quit does not continue into ownership or display lease cleanup when the streaming backend refuses to stop. Empty/default disconnect represents a still-active client and retains the leased display. Explicit `clientActive: false` disconnect stops streaming, evaluates server-owned activity, restores physical primary through display cleanup, and removes the lease only when the client is inactive and no owned work remains. `POST /clients/{clientId}/beacon` lets an active client prepare its display lease before launch; `{ "active": false }` evaluates the same cleanup gate without adding a timeout or watchdog.
+Stream stop returns `404` when the selected client has no session plan, and `503` when the streaming backend cannot stop an existing planned session. Client disconnect and quit use the same stop-failure contract; quit does not continue into ownership or display lease cleanup when the streaming backend refuses to stop. Empty/default disconnect represents a still-active client and retains the leased display. Explicit `clientActive: false` disconnect stops streaming, evaluates server-owned activity, restores physical primary through display cleanup, and removes the lease only when the client is inactive and no owned work remains. `POST /clients/{clientId}/beacon` lets an active client prepare its display lease before launch without taking primary from the laptop; `{ "active": false }` evaluates the same cleanup gate without adding a timeout or watchdog.
 
 `/admin/snapshot` also returns recent operational diagnostics. These events include display lease decisions, physical-primary restore attempts, recovery actions, and streaming preflight/start/stop failures. The WPF cockpit shows them in the Diagnostics tab together with game-provider diagnostics.
 
@@ -311,6 +313,7 @@ See:
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-67-inactive-disconnect-cleanup.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-68-client-beacon-lease.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-69-client-lab-beacon.md`
+- `docs/superpowers/plans/2026-07-09-beacon-stream-milestone-70-prepared-display-lease.md`
 - `docs/external-streaming-wrapper-manifest.md`
 - `docs/source-audits/2026-07-08-windows-input-sink-upstream-audit.md`
 - `docs/windows-display-backend.md`
