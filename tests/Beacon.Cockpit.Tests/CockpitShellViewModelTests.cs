@@ -20,7 +20,15 @@ public sealed class CockpitShellViewModelTests
                 65,
                 "lan-direct",
                 "running",
-                null)],
+                null,
+                new CockpitStreamConnection(
+                    "beacon-fake",
+                    "beacon-fake://stream/z-fold-7-steam-shortcut:3767414131",
+                    [new CockpitStreamEndpoint("control", "beacon-fake://stream/z-fold-7-steam-shortcut:3767414131")],
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["displayId"] = "client-z-fold-7"
+                    }))],
             [new CockpitOwnershipSummary(
                 "z-fold-7-steam-shortcut:3767414131",
                 "steam-shortcut:3767414131",
@@ -48,7 +56,8 @@ public sealed class CockpitShellViewModelTests
         Assert.True(viewModel.ProfileRestorePhysicalDisplayOnEnd);
         Assert.True(viewModel.ProfileForbidMirrorMode);
         Assert.Contains("steam-shortcut:3767414131", viewModel.Sessions);
-        Assert.Contains("z-fold-7 steam-shortcut:3767414131 running av1 120fps", viewModel.Streams);
+        Assert.Contains(viewModel.Streams, stream => stream.Contains("z-fold-7 steam-shortcut:3767414131 running av1 120fps", StringComparison.Ordinal));
+        Assert.Contains(viewModel.Streams, stream => stream.Contains("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", StringComparison.Ordinal));
         Assert.Contains("steam-shortcut:3767414131 process=False child=False window=False", viewModel.Ownership);
         Assert.Contains("Steam library stale", viewModel.Diagnostics);
     }

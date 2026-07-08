@@ -432,7 +432,7 @@ Expected: all tests pass.
 - Modify: `src/Beacon.ClientLab/src/clientLab.test.ts`
 - Modify: `tests/Beacon.ClientLab.Playwright/tests/client-lab.spec.ts`
 
-- [ ] **Step 1: Write failing server response assertions**
+- [x] **Step 1: Write failing server response assertions**
 
 In `ClientApiTests.LaunchStartsStreamingBackendWithSessionPlan`, add:
 
@@ -445,7 +445,7 @@ Assert.Equal("control", connection.GetProperty("endpoints")[0].GetProperty("role
 
 In `StreamStatusAndStopAreIndependentFromDisplayCleanup`, add the same assertion against `statusJson.RootElement.GetProperty("stream").GetProperty("connection")`.
 
-- [ ] **Step 2: Write failing cockpit model assertions**
+- [x] **Step 2: Write failing cockpit model assertions**
 
 Add records to `CockpitModels.cs`:
 
@@ -485,7 +485,7 @@ Update `CockpitShellViewModelTests` to pass the same `CockpitStreamConnection` a
 Assert.Contains("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", viewModel.Streams);
 ```
 
-- [ ] **Step 3: Verify red**
+- [x] **Step 3: Verify red**
 
 Run:
 
@@ -496,7 +496,7 @@ dotnet test tests/Beacon.Cockpit.Tests/Beacon.Cockpit.Tests.csproj
 
 Expected: failures until stream/cockpit DTOs expose the connection property.
 
-- [ ] **Step 4: Implement cockpit projection**
+- [x] **Step 4: Implement cockpit projection**
 
 In `CockpitShellViewModel.RefreshAsync`, render:
 
@@ -510,7 +510,7 @@ Replace(Streams, snapshot.Streams.Select(stream =>
 }));
 ```
 
-- [ ] **Step 5: Add Client Lab types and assertions**
+- [x] **Step 5: Add Client Lab types and assertions**
 
 In `src/Beacon.ClientLab/src/clientLab.ts`, add:
 
@@ -555,7 +555,7 @@ In the Playwright test, add:
 await expect(page.locator('#log')).toContainText('beacon-fake://stream/z-fold-7-steam-shortcut:3767414131');
 ```
 
-- [ ] **Step 6: Verify green**
+- [x] **Step 6: Verify green**
 
 Run:
 

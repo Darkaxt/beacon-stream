@@ -57,14 +57,23 @@ describe('Client Lab profile validation', () => {
         initialBitrateMbps: 65,
         transport: 'lan-direct',
         state: 'running',
-        error: null
+        error: null,
+        connection: {
+          protocol: 'beacon-fake',
+          launchUri: 'beacon-fake://stream/z-fold-7-steam-shortcut:3767414131',
+          endpoints: [{ role: 'control', uri: 'beacon-fake://stream/z-fold-7-steam-shortcut:3767414131' }],
+          metadata: { displayId: 'client-z-fold-7' }
+        }
       }
     };
 
     expect(formatLaunchEvents(launch)).toEqual([
       'streaming client-z-fold-7',
-      'running av1 120fps'
+      'running av1 120fps',
+      'beacon-fake://stream/z-fold-7-steam-shortcut:3767414131'
     ]);
+    expect(launch.stream?.connection?.protocol).toBe('beacon-fake');
+    expect(launch.stream?.connection?.launchUri).toBe('beacon-fake://stream/z-fold-7-steam-shortcut:3767414131');
   });
 
   it('builds telemetry payloads from named profiles', () => {
