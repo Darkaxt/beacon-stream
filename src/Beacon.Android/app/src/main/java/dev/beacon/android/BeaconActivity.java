@@ -1,13 +1,15 @@
 package dev.beacon.android;
 
 import android.app.Activity;
-import android.graphics.Color;
+import android.content.res.Configuration;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -21,12 +23,21 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class BeaconActivity extends Activity {
+    private static final String[] LOCAL_THEME_VALUES = new String[] { "system", "dark", "light" };
+
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final List<BeaconGameCatalog.GameEntry> gameEntries = new ArrayList<>();
     private final BeaconTouchInputMapper touchInputMapper = new BeaconTouchInputMapper();
 
+    private BeaconLocalSettingsStore localSettingsStore;
+    private BeaconLocalSettings localSettings;
+    private BeaconLocalSettingsUiState uiState;
+    private LinearLayout rootLayout;
     private EditText serverUrl;
     private EditText clientId;
+    private Spinner localTheme;
+    private CheckBox wakeLockEnabled;
+    private CheckBox decoderDebugOverlayEnabled;
     private EditText width;
     private EditText height;
     private EditText refreshHz;
@@ -45,11 +56,18 @@ public final class BeaconActivity extends Activity {
     private EditText wifiBand;
     private EditText batteryPercent;
     private EditText thermalState;
+    private TextView decoderDebugOverlay;
+    private TextView touchSurfaceView;
     private TextView status;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        localSettingsStore = new BeaconLocalSettingsStore(
+            new SharedPreferencesLocalSettingsStorage(getSharedPreferences("beacon", MODE_PRIVATE)));
+        localSettings = localSettingsStore.load();
+        uiState = BeaconLocalSettingsUiState.from(localSettings, systemDarkTheme());
+        applyWindowFlags(uiState);
         setContentView(createContent());
     }
 
@@ -62,13 +80,16 @@ public final class BeaconActivity extends Activity {
     private View createContent() {
         ScrollView scrollView = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
+        rootLayout = root;
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(28, 28, 28, 28);
-        root.setBackgroundColor(Color.rgb(16, 20, 24));
+        root.setBackgroundColor(uiState.backgroundColor());
         scrollView.addView(root);
 
         TextView title = text("Beacon", 28, true);
         root.addView(title);
+
+        addLocalSettingsControls(root);
 
         serverUrl = input("Server URL", "http://10.0.2.2:5000");
         clientId = input("Client ID", "z-fold-7");
@@ -112,6 +133,9 @@ public final class BeaconActivity extends Activity {
         root.addView(wifiBand);
         root.addView(batteryPercent);
         root.addView(thermalState);
+        decoderDebugOverlay = text("", 12, false);
+        root.addView(decoderDebugOverlay);
+        updateDecoderDebugOverlay();
 
         root.addView(button("Hello / Refresh", model -> model.refresh()));
         root.addView(button("Load Games", model -> {
@@ -146,11 +170,26 @@ public final class BeaconActivity extends Activity {
         return scrollView;
     }
 
+    private void addLocalSettingsControls(LinearLayout root) {
+        localTheme = new Spinner(this);
+        ArrayAdapter<String> themeAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, LOCAL_THEME_VALUES);
+        themeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        localTheme.setAdapter(themeAdapter);
+        localTheme.setSelection(localThemeIndex(localSettings.localTheme));
+        wakeLockEnabled = checkbox("Keep screen awake", localSettings.wakeLockEnabled);
+        decoderDebugOverlayEnabled = checkbox("Show decoder debug overlay", localSettings.decoderDebugOverlayEnabled);
+        root.addView(localTheme);
+        root.addView(wakeLockEnabled);
+        root.addView(decoderDebugOverlayEnabled);
+        root.addView(localButton("Save Local Settings", this::saveLocalSettings));
+    }
+
     private View touchSurface() {
         TextView surface = text("Touch input surface", 18, false);
+        touchSurfaceView = surface;
         surface.setGravity(Gravity.CENTER);
         surface.setMinHeight(360);
-        surface.setBackgroundColor(Color.rgb(32, 42, 52));
+        surface.setBackgroundColor(uiState.surfaceColor());
         surface.setOnTouchListener((view, event) -> {
             String action = pointerAction(event);
             if (action.isEmpty()) {
@@ -176,8 +215,8 @@ public final class BeaconActivity extends Activity {
         editText.setHint(hint);
         editText.setText(value);
         editText.setSingleLine(true);
-        editText.setTextColor(Color.WHITE);
-        editText.setHintTextColor(Color.rgb(160, 170, 180));
+        editText.setTextColor(uiState.textColor());
+        editText.setHintTextColor(uiState.hintColor());
         return editText;
     }
 
@@ -185,9 +224,17 @@ public final class BeaconActivity extends Activity {
         TextView textView = new TextView(this);
         textView.setText(value);
         textView.setTextSize(sizeSp);
-        textView.setTextColor(Color.WHITE);
+        textView.setTextColor(uiState.textColor());
         textView.setPadding(0, title ? 0 : 12, 0, 12);
         return textView;
+    }
+
+    private CheckBox checkbox(String label, boolean checked) {
+        CheckBox checkBox = new CheckBox(this);
+        checkBox.setText(label);
+        checkBox.setTextColor(uiState.textColor());
+        checkBox.setChecked(checked);
+        return checkBox;
     }
 
     private Button button(String label, BeaconAction action) {
@@ -195,6 +242,14 @@ public final class BeaconActivity extends Activity {
         button.setText(label);
         button.setAllCaps(false);
         button.setOnClickListener(view -> runAction(label, action));
+        return button;
+    }
+
+    private Button localButton(String label, Runnable action) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setAllCaps(false);
+        button.setOnClickListener(view -> action.run());
         return button;
     }
 
@@ -231,6 +286,68 @@ public final class BeaconActivity extends Activity {
 
     private void setStatus(String value) {
         runOnUiThread(() -> status.setText(value));
+    }
+
+    private void saveLocalSettings() {
+        localSettings = BeaconLocalSettingsForm.update(
+            localSettings,
+            selectedLocalTheme(),
+            wakeLockEnabled.isChecked(),
+            decoderDebugOverlayEnabled.isChecked());
+        localSettingsStore.save(localSettings);
+        uiState = BeaconLocalSettingsUiState.from(localSettings, systemDarkTheme());
+        applyWindowFlags(uiState);
+        applyTheme(rootLayout);
+        updateDecoderDebugOverlay();
+        status.setText("Local settings saved");
+    }
+
+    private void applyWindowFlags(BeaconLocalSettingsUiState state) {
+        if (state.keepScreenAwake()) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        } else {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
+    }
+
+    private void applyTheme(View view) {
+        if (view == null) {
+            return;
+        }
+
+        if (view == rootLayout) {
+            view.setBackgroundColor(uiState.backgroundColor());
+        }
+
+        if (view == touchSurfaceView) {
+            view.setBackgroundColor(uiState.surfaceColor());
+        }
+
+        if (view instanceof TextView textView) {
+            textView.setTextColor(uiState.textColor());
+        }
+
+        if (view instanceof EditText editText) {
+            editText.setHintTextColor(uiState.hintColor());
+        }
+
+        if (view instanceof LinearLayout linearLayout) {
+            for (int i = 0; i < linearLayout.getChildCount(); i++) {
+                applyTheme(linearLayout.getChildAt(i));
+            }
+        }
+    }
+
+    private void updateDecoderDebugOverlay() {
+        if (decoderDebugOverlay == null) {
+            return;
+        }
+
+        decoderDebugOverlay.setVisibility(uiState.debugOverlayVisible() ? View.VISIBLE : View.GONE);
+        decoderDebugOverlay.setText(
+            "Decoder load " + textValue(decoderLoadPercent) +
+                "% | bandwidth " + textValue(estimatedBandwidthMbps) +
+                " Mbps | thermal " + textValue(thermalState));
     }
 
     private void setGameEntries(List<BeaconGameCatalog.GameEntry> entries) {
@@ -309,6 +426,26 @@ public final class BeaconActivity extends Activity {
 
     private String readScreenMode() {
         return readRequiredInteger(width) + "x" + readRequiredInteger(height) + "@" + readRequiredInteger(refreshHz);
+    }
+
+    private String selectedLocalTheme() {
+        Object selected = localTheme.getSelectedItem();
+        return selected == null ? "system" : selected.toString();
+    }
+
+    private int localThemeIndex(String value) {
+        for (int i = 0; i < LOCAL_THEME_VALUES.length; i++) {
+            if (LOCAL_THEME_VALUES[i].equalsIgnoreCase(value)) {
+                return i;
+            }
+        }
+
+        return 0;
+    }
+
+    private boolean systemDarkTheme() {
+        int nightMode = getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
+        return nightMode == Configuration.UI_MODE_NIGHT_YES;
     }
 
     private Integer readInteger(EditText editText) {
