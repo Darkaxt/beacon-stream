@@ -34,6 +34,30 @@ public sealed class ExternalStreamingManifestContractTests
         Assert.Contains("ready", manifest.Diagnostics);
     }
 
+    [Fact]
+    public void DocumentedRuntimeSessionDescriptorMatchesWindowsReaderContract()
+    {
+        string root = FindRepositoryRoot();
+        string descriptorPath = Path.Combine(root, "docs", "examples", "external-streaming-runtime-session.example.json");
+        var store = new WindowsExternalStreamingSessionDescriptorStore(Path.GetDirectoryName(descriptorPath)!);
+
+        Assert.True(File.Exists(descriptorPath), $"Missing documented runtime session descriptor example at {descriptorPath}.");
+
+        ExternalStreamingSessionDescriptorReadResult result = store.Read(descriptorPath);
+
+        Assert.True(result.Success, result.Error);
+        ExternalStreamingSessionDescriptor descriptor = Assert.IsType<ExternalStreamingSessionDescriptor>(result.Descriptor);
+        Assert.Equal("gamestream", descriptor.Protocol);
+        Assert.Equal("moonlight://beacon/runtime/z-fold-7-steam-shortcut:3767414131", descriptor.LaunchUri);
+        Assert.NotNull(descriptor.Endpoints);
+        Assert.Equal("rtsp://127.0.0.1:48010/beacon-runtime", descriptor.Endpoints["rtsp"]);
+        Assert.Equal("udp://127.0.0.1:48000", descriptor.Endpoints["input"]);
+        Assert.NotNull(descriptor.Metadata);
+        Assert.Equal("already-paired", descriptor.Metadata["pairing"]);
+        Assert.NotNull(descriptor.Diagnostics);
+        Assert.Contains("runtime descriptor ready", descriptor.Diagnostics);
+    }
+
     private static string FindRepositoryRoot()
     {
         DirectoryInfo? current = new(AppContext.BaseDirectory);
