@@ -57,4 +57,41 @@ public sealed class WindowsDisplayDiagnosticsTests
         Assert.True(capability.Enabled);
         Assert.Contains("HDR and WCG are not distinguished", capability.Reason);
     }
+
+    [Fact]
+    public void VerifyPhysicalRestoreFailsWhenApplySucceedsButPhysicalPrimaryIsMissing()
+    {
+        DisplayTopologySnapshot topology = DisplayTopologySnapshot.Extended(
+            physicalDisplayId: "physical-laptop-panel",
+            virtualDisplayId: "client-z-fold-7",
+            width: 2560,
+            height: 1600,
+            refreshHz: 120,
+            virtualPrimary: true);
+
+        DisplayApiResult result = WindowsDisplayDiagnostics.VerifyPhysicalRestore(
+            "physical-laptop-panel",
+            topology);
+
+        Assert.False(result.Success);
+        Assert.Contains("physical-laptop-panel", result.Error ?? string.Empty);
+        Assert.Contains("not verified", result.Error ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("client-z-fold-7", result.Error ?? string.Empty);
+    }
+
+    [Fact]
+    public void VerifyPhysicalRestoreSucceedsWhenPhysicalPrimaryIsPresent()
+    {
+        DisplayTopologySnapshot topology = DisplayTopologySnapshot.PhysicalOnly(
+            physicalDisplayId: "physical-laptop-panel",
+            width: 2560,
+            height: 1600,
+            refreshHz: 120);
+
+        DisplayApiResult result = WindowsDisplayDiagnostics.VerifyPhysicalRestore(
+            "physical-laptop-panel",
+            topology);
+
+        Assert.True(result.Success, result.Error);
+    }
 }

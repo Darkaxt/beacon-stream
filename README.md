@@ -102,6 +102,8 @@ dotnet run --project src/Beacon.DisplayProbe -- restore-physical
 
 Display preflight attempts one safe repair before failing: if the first virtual-display ensure fails, Beacon restores the physical primary display and retries the same requested virtual display once. If repair fails, launch still stops before app/stream side effects and the diagnostic journal records the reason.
 
+Physical restore is verified: Beacon queries topology after restore and treats unverified physical-primary state as a recovery failure instead of silently continuing.
+
 Game library checks:
 
 ```powershell

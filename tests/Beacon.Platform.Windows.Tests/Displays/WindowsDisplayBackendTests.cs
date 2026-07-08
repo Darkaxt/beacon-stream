@@ -195,6 +195,37 @@ public sealed class WindowsDisplayBackendTests
     }
 
     [Fact]
+    public async Task RestorePhysicalPrimaryAsync_WhenTopologyRepeatsWithoutPhysicalPrimary_FailsWithDiagnostic()
+    {
+        var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
+        api.RestoreTopologies.Enqueue(DisplayTopologySnapshot.Extended(
+            physicalDisplayId: "physical-laptop-panel",
+            virtualDisplayId: "client-z-fold-7",
+            width: 2560,
+            height: 1600,
+            refreshHz: 120,
+            virtualPrimary: true));
+        api.RestoreTopologies.Enqueue(DisplayTopologySnapshot.Extended(
+            physicalDisplayId: "physical-laptop-panel",
+            virtualDisplayId: "client-z-fold-7",
+            width: 2560,
+            height: 1600,
+            refreshHz: 120,
+            virtualPrimary: true));
+        var backend = new WindowsDisplayBackend(api);
+
+        DisplayRestoreResult result = await backend.RestorePhysicalPrimaryAsync(CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("not verified", result.Error ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("physical-laptop-panel", result.Error ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, api.RestoreRequests.Count);
+        DisplayOperationLogEntry entry = Assert.Single(backend.OperationLog);
+        Assert.False(entry.Primary);
+        Assert.Contains("restore-verification-failed", entry.Reason);
+    }
+
+    [Fact]
     public async Task RestorePhysicalPrimaryAsync_WritesTopologyDecisionLog()
     {
         var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();

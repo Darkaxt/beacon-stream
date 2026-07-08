@@ -32,6 +32,20 @@ public sealed class DisplayTopologySnapshotTests
         Assert.True(topology.IsMirrorMode);
     }
 
+    [Fact]
+    public void PhysicalPrimaryVerifiedRequiresPhysicalDisplayAtPrimary()
+    {
+        DisplayTopologySnapshot topology = DisplayTopologySnapshot.Extended(
+            physicalDisplayId: "physical-laptop-panel",
+            virtualDisplayId: "client-z-fold-7",
+            width: 2560,
+            height: 1600,
+            refreshHz: 120,
+            virtualPrimary: true);
+
+        Assert.False(topology.PhysicalPrimaryVerified);
+    }
+
     [Theory]
     [InlineData("SudoMaker Virtual Display Adapter", "ROOT\\SUDOMAKER\\SUDOVDA", DisplayPathKind.Virtual)]
     [InlineData("Generic PnP Monitor", "MONITOR\\BOE0BCA", DisplayPathKind.Physical)]
