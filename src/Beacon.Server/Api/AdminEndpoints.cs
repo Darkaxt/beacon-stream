@@ -114,6 +114,29 @@ public static class AdminEndpoints
                 : Results.Problem(result.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
         });
 
+        admin.MapPatch("/clients/{clientId}/profile", (
+            string clientId,
+            ClientProfileAdminPatch patch,
+            InMemoryClientStore clients) =>
+        {
+            ClientProfile? profile = clients.GetProfile(clientId);
+            if (profile is null)
+            {
+                return Results.NotFound(new { error = $"Client '{clientId}' is not registered." });
+            }
+
+            try
+            {
+                ClientProfile updated = ClientProfilePatcher.ApplyAdminPatch(profile, patch);
+                clients.SaveProfile(updated);
+                return Results.Ok(updated);
+            }
+            catch (InvalidClientProfilePatchException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
         return endpoints;
     }
 }

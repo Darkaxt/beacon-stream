@@ -67,4 +67,49 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.Equal("terminate-virtual-processes", terminateJson.RootElement.GetProperty("action").GetString());
         Assert.True(recoverJson.RootElement.GetProperty("recovered").GetBoolean());
     }
+
+    [Fact]
+    public async Task AdminCanPatchClientProfilePolicyFields()
+    {
+        HttpClient client = factory.CreateClient();
+
+        HttpResponseMessage response = await client.PatchAsJsonAsync("/admin/clients/z-fold-7/profile", new
+        {
+            preferredRefreshHz = 90,
+            mode = "physical-blackout",
+            restorePhysicalDisplayOnEnd = false,
+            forbidMirrorMode = false,
+            keepAppRunningOnDisconnect = true,
+            allowEmergencyRestoreFromClient = false
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.Equal(2560, root.GetProperty("display").GetProperty("preferredWidth").GetInt32());
+        Assert.Equal(1600, root.GetProperty("display").GetProperty("preferredHeight").GetInt32());
+        Assert.Equal(90, root.GetProperty("display").GetProperty("preferredRefreshHz").GetInt32());
+        Assert.Equal("physical-blackout", root.GetProperty("display").GetProperty("mode").GetString());
+        Assert.False(root.GetProperty("display").GetProperty("restorePhysicalDisplayOnEnd").GetBoolean());
+        Assert.False(root.GetProperty("display").GetProperty("forbidMirrorMode").GetBoolean());
+        Assert.True(root.GetProperty("session").GetProperty("keepAppRunningOnDisconnect").GetBoolean());
+        Assert.False(root.GetProperty("session").GetProperty("allowEmergencyRestoreFromClient").GetBoolean());
+    }
+
+    [Fact]
+    public async Task AdminProfilePatchRejectsZFold1440PCollapse()
+    {
+        HttpClient client = factory.CreateClient();
+
+        HttpResponseMessage response = await client.PatchAsJsonAsync("/admin/clients/z-fold-7/profile", new
+        {
+            preferredWidth = 2560,
+            preferredHeight = 1440
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        string body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("2560x1440", body, StringComparison.Ordinal);
+    }
 }

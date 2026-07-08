@@ -7,6 +7,8 @@ public interface ICockpitApi
 {
     Task<CockpitSnapshot> GetSnapshotAsync(CancellationToken cancellationToken);
 
+    Task PatchClientProfileAsync(string clientId, CockpitClientProfilePatch patch, CancellationToken cancellationToken);
+
     Task RestorePhysicalAsync(CancellationToken cancellationToken);
 
     Task MoveWindowsBackAsync(bool minimize, CancellationToken cancellationToken);
@@ -24,6 +26,12 @@ public sealed class CockpitApiClient(HttpClient httpClient) : ICockpitApi
     {
         CockpitSnapshot? snapshot = await httpClient.GetFromJsonAsync<CockpitSnapshot>("/admin/snapshot", cancellationToken);
         return snapshot ?? new CockpitSnapshot([], [], [], [], new CockpitGameSummary(0, []));
+    }
+
+    public async Task PatchClientProfileAsync(string clientId, CockpitClientProfilePatch patch, CancellationToken cancellationToken)
+    {
+        using HttpResponseMessage response = await httpClient.PatchAsJsonAsync($"/admin/clients/{Uri.EscapeDataString(clientId)}/profile", patch, cancellationToken);
+        response.EnsureSuccessStatusCode();
     }
 
     public async Task RestorePhysicalAsync(CancellationToken cancellationToken)
