@@ -552,7 +552,7 @@ Expected: all external process streaming tests pass.
 - Modify: `src/Beacon.Server/appsettings.Development.json`
 - Test: `tests/Beacon.Server.Tests/BeaconServiceRegistrationTests.cs`
 
-- [ ] **Step 1: Write failing registration test**
+- [x] **Step 1: Write failing registration test**
 
 Add:
 
@@ -572,7 +572,7 @@ public void ExternalProcessManifestPathUsesConfiguration()
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -582,7 +582,7 @@ dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter Extern
 
 Expected: compile failure for missing configuration constant or manifest reader registration.
 
-- [ ] **Step 3: Add config/env constants**
+- [x] **Step 3: Add config/env constants**
 
 In `BeaconServiceRegistration`, add:
 
@@ -595,7 +595,7 @@ Pass `Environment.GetEnvironmentVariable(ExternalStreamingManifestEnvironmentVar
 
 Add `string? environmentExternalStreamingManifest = null` to the internal overload and `AddStreamingBackend`.
 
-- [ ] **Step 4: Bind manifest path into options**
+- [x] **Step 4: Bind manifest path into options**
 
 Update `CreateExternalProcessStreamingOptions` signature to include `environmentExternalStreamingManifest` and resolve:
 
@@ -622,7 +622,7 @@ Register:
 services.AddSingleton<IExternalStreamingManifestReader, WindowsExternalStreamingManifestReader>();
 ```
 
-- [ ] **Step 5: Add appsettings keys**
+- [x] **Step 5: Add appsettings keys**
 
 In both `src/Beacon.Server/appsettings.json` and `src/Beacon.Server/appsettings.Development.json`, add:
 
@@ -632,7 +632,7 @@ In both `src/Beacon.Server/appsettings.json` and `src/Beacon.Server/appsettings.
 
 under `Beacon.Streaming.ExternalProcess`.
 
-- [ ] **Step 6: Verify green**
+- [x] **Step 6: Verify green**
 
 Run:
 

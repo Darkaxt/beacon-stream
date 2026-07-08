@@ -21,6 +21,8 @@ public static class BeaconServiceRegistration
     public const string StreamingBackendEnvironmentVariable = "BEACON_STREAMING_BACKEND";
     public const string ExternalStreamingExecutableConfigurationKey = "Beacon:Streaming:ExternalProcess:ExecutablePath";
     public const string ExternalStreamingExecutableEnvironmentVariable = "BEACON_EXTERNAL_STREAMING_EXECUTABLE";
+    public const string ExternalStreamingManifestConfigurationKey = "Beacon:Streaming:ExternalProcess:ManifestPath";
+    public const string ExternalStreamingManifestEnvironmentVariable = "BEACON_EXTERNAL_STREAMING_MANIFEST";
     public const string ExternalStreamingConnectionProtocolConfigurationKey = "Beacon:Streaming:ExternalProcess:Connection:Protocol";
     public const string ExternalStreamingConnectionLaunchUriConfigurationKey = "Beacon:Streaming:ExternalProcess:Connection:LaunchUri";
     public const string ExternalStreamingConnectionProtocolEnvironmentVariable = "BEACON_EXTERNAL_STREAMING_CONNECTION_PROTOCOL";
@@ -40,6 +42,7 @@ public static class BeaconServiceRegistration
             Environment.GetEnvironmentVariable(ExternalStreamingExecutableEnvironmentVariable),
             Environment.GetEnvironmentVariable(ExternalStreamingConnectionProtocolEnvironmentVariable),
             Environment.GetEnvironmentVariable(ExternalStreamingConnectionLaunchUriEnvironmentVariable),
+            Environment.GetEnvironmentVariable(ExternalStreamingManifestEnvironmentVariable),
             Environment.GetEnvironmentVariable(ClientProfilesPathEnvironmentVariable),
             Environment.GetEnvironmentVariable(PairingTokenEnvironmentVariable));
 
@@ -51,6 +54,7 @@ public static class BeaconServiceRegistration
         string? environmentExternalStreamingExecutable = null,
         string? environmentExternalStreamingConnectionProtocol = null,
         string? environmentExternalStreamingConnectionLaunchUri = null,
+        string? environmentExternalStreamingManifest = null,
         string? environmentClientProfilesPath = null,
         string? environmentPairingToken = null)
     {
@@ -87,7 +91,8 @@ public static class BeaconServiceRegistration
             streamingBackendMode,
             environmentExternalStreamingExecutable,
             environmentExternalStreamingConnectionProtocol,
-            environmentExternalStreamingConnectionLaunchUri);
+            environmentExternalStreamingConnectionLaunchUri,
+            environmentExternalStreamingManifest);
         return services;
     }
 
@@ -176,7 +181,8 @@ public static class BeaconServiceRegistration
         BeaconStreamingBackendMode mode,
         string? environmentExternalStreamingExecutable,
         string? environmentExternalStreamingConnectionProtocol,
-        string? environmentExternalStreamingConnectionLaunchUri)
+        string? environmentExternalStreamingConnectionLaunchUri,
+        string? environmentExternalStreamingManifest)
     {
         switch (mode)
         {
@@ -188,8 +194,10 @@ public static class BeaconServiceRegistration
                     configuration,
                     environmentExternalStreamingExecutable,
                     environmentExternalStreamingConnectionProtocol,
-                    environmentExternalStreamingConnectionLaunchUri));
+                    environmentExternalStreamingConnectionLaunchUri,
+                    environmentExternalStreamingManifest));
                 services.AddSingleton<IExternalStreamingProcessRunner, WindowsExternalStreamingProcessRunner>();
+                services.AddSingleton<IExternalStreamingManifestReader, WindowsExternalStreamingManifestReader>();
                 services.AddSingleton<IStreamingBackend, ExternalProcessStreamingBackend>();
                 break;
             default:
@@ -208,7 +216,8 @@ public static class BeaconServiceRegistration
         IConfiguration configuration,
         string? environmentExternalStreamingExecutable,
         string? environmentExternalStreamingConnectionProtocol,
-        string? environmentExternalStreamingConnectionLaunchUri)
+        string? environmentExternalStreamingConnectionLaunchUri,
+        string? environmentExternalStreamingManifest)
     {
         string? protocol = string.IsNullOrWhiteSpace(environmentExternalStreamingConnectionProtocol)
             ? configuration[ExternalStreamingConnectionProtocolConfigurationKey]
@@ -216,6 +225,9 @@ public static class BeaconServiceRegistration
         string? launchUri = string.IsNullOrWhiteSpace(environmentExternalStreamingConnectionLaunchUri)
             ? configuration[ExternalStreamingConnectionLaunchUriConfigurationKey]
             : environmentExternalStreamingConnectionLaunchUri;
+        string? manifestPath = string.IsNullOrWhiteSpace(environmentExternalStreamingManifest)
+            ? configuration[ExternalStreamingManifestConfigurationKey]
+            : environmentExternalStreamingManifest;
         Dictionary<string, string> endpoints = configuration
             .GetSection("Beacon:Streaming:ExternalProcess:Connection:Endpoints")
             .GetChildren()
@@ -226,7 +238,8 @@ public static class BeaconServiceRegistration
             ResolveExternalStreamingExecutable(configuration, environmentExternalStreamingExecutable),
             protocol,
             launchUri,
-            endpoints);
+            endpoints,
+            manifestPath);
     }
 
     private static IClientProfileRepository CreateClientProfileRepository(

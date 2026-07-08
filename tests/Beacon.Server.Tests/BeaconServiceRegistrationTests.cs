@@ -101,6 +101,20 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public void ExternalProcessManifestPathUsesConfiguration()
+    {
+        using ServiceProvider provider = BuildProvider(
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "external-process"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey, "C:\\Tools\\sunshine-wrapper.exe"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingManifestConfigurationKey, "C:\\Tools\\beacon-streaming.json"));
+
+        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
+
+        Assert.Equal("C:\\Tools\\beacon-streaming.json", options.ManifestPath);
+        Assert.IsType<WindowsExternalStreamingManifestReader>(provider.GetRequiredService<IExternalStreamingManifestReader>());
+    }
+
+    [Fact]
     public void ClientProfilesPathUsesFileRepositoryAndPairingToken()
     {
         string profilePath = Path.Combine(Path.GetTempPath(), $"beacon-profiles-{Guid.NewGuid():N}.json");
