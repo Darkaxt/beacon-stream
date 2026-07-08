@@ -515,7 +515,10 @@ public sealed class CockpitShellViewModel : ObservableObject
         string pointerActions = input.SupportedPointerActions.Count == 0
             ? "no pointer actions"
             : string.Join("/", input.SupportedPointerActions);
-        return $"{input.Backend} {state}; events={eventTypes}; pointer={pointerActions}; {input.Diagnostic}";
+        string keyboardActions = input.SupportedKeyboardActions.Count == 0
+            ? "no keyboard actions"
+            : string.Join("/", input.SupportedKeyboardActions);
+        return $"{input.Backend} {state}; events={eventTypes}; pointer={pointerActions}; keyboard={keyboardActions}; {input.Diagnostic}";
     }
 
     private void LoadSelectedClientProfile()

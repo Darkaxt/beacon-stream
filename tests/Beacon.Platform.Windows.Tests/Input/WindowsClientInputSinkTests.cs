@@ -78,6 +78,56 @@ public sealed class WindowsClientInputSinkTests
     }
 
     [Fact]
+    public async Task KeyboardPressTargetsTheActiveLeasedDisplay()
+    {
+        var displayApi = new FakeWindowsDisplayApi
+        {
+            CurrentTopology = DisplayTopologySnapshot.Extended(
+                "physical-laptop-panel",
+                "client-z-fold-7",
+                2560,
+                1600,
+                120,
+                virtualPrimary: true)
+        };
+        var inputApi = new FakeWindowsInputApi();
+        var sink = new WindowsClientInputSink(displayApi, inputApi);
+        var batch = new ClientInputBatch(
+            "z-fold-7",
+            "session-1",
+            "client-z-fold-7",
+            15,
+            [
+                new ClientInputEvent(
+                    Type: "keyboard",
+                    Action: "press",
+                    Key: "w",
+                    Code: "KeyW")
+            ]);
+
+        ClientInputResult result = await sink.ForwardAsync(batch, CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(1, result.EventCount);
+        Assert.Collection(
+            inputApi.Commands,
+            command =>
+            {
+                Assert.Equal(WindowsInputCommandKind.KeyboardKey, command.Kind);
+                Assert.Equal("KeyW", command.Code);
+                Assert.Equal("w", command.Key);
+                Assert.True(command.Pressed);
+            },
+            command =>
+            {
+                Assert.Equal(WindowsInputCommandKind.KeyboardKey, command.Kind);
+                Assert.Equal("KeyW", command.Code);
+                Assert.Equal("w", command.Key);
+                Assert.False(command.Pressed);
+            });
+    }
+
+    [Fact]
     public async Task MissingDisplayFailsWithoutSendingInput()
     {
         var displayApi = new FakeWindowsDisplayApi
@@ -124,7 +174,7 @@ public sealed class WindowsClientInputSinkTests
             "session-1",
             "client-z-fold-7",
             12,
-            [new ClientInputEvent("keyboard", "press", Key: "A", Code: "KeyA")]);
+            [new ClientInputEvent("controller", "press", Key: "A", Code: "KeyA")]);
 
         ClientInputResult result = await sink.ForwardAsync(batch, CancellationToken.None);
 

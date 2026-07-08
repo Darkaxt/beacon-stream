@@ -843,6 +843,51 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task ClientInputForwardsKeyboardEventToActiveStreamSession()
+    {
+        var input = new RecordingClientInputSink();
+        WebApplicationFactory<Program> inputFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IClientInputSink>();
+                services.AddSingleton<IClientInputSink>(input);
+            }));
+        HttpClient client = inputFactory.CreateClient();
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/input", new
+        {
+            sequence = 43,
+            events = new[]
+            {
+                new
+                {
+                    type = "keyboard",
+                    action = "press",
+                    key = "Escape",
+                    code = "Escape"
+                }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        ClientInputBatch batch = Assert.Single(input.Batches);
+        Assert.Equal("z-fold-7", batch.ClientId);
+        Assert.Equal("z-fold-7-steam-shortcut:3767414131", batch.SessionId);
+        Assert.Equal("client-z-fold-7", batch.DisplayId);
+        Assert.Equal(43, batch.Sequence);
+        ClientInputEvent inputEvent = Assert.Single(batch.Events);
+        Assert.Equal("keyboard", inputEvent.Type);
+        Assert.Equal("press", inputEvent.Action);
+        Assert.Equal("Escape", inputEvent.Key);
+        Assert.Equal("Escape", inputEvent.Code);
+
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        Assert.True(document.RootElement.GetProperty("accepted").GetBoolean());
+        Assert.Equal(1, document.RootElement.GetProperty("eventCount").GetInt32());
+    }
+
+    [Fact]
     public async Task ClientInputRequiresActiveStreamSession()
     {
         var input = new RecordingClientInputSink();

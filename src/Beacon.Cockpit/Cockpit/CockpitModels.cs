@@ -175,14 +175,16 @@ public sealed record CockpitInputHealth(
     string Backend,
     string Diagnostic,
     IReadOnlyList<string> SupportedEventTypes,
-    IReadOnlyList<string> SupportedPointerActions)
+    IReadOnlyList<string> SupportedPointerActions,
+    IReadOnlyList<string> SupportedKeyboardActions)
 {
     public static CockpitInputHealth Unknown { get; } = new(
         Ready: false,
         Backend: "unknown",
         Diagnostic: "Input health unavailable.",
         SupportedEventTypes: [],
-        SupportedPointerActions: []);
+        SupportedPointerActions: [],
+        SupportedKeyboardActions: []);
 }
 
 public sealed record CockpitGameSummary(int Total, IReadOnlyList<string> Diagnostics);

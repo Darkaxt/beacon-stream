@@ -38,6 +38,8 @@ public sealed class BeaconServiceRegistrationTests
         ClientInputHealth inputHealth = provider.GetRequiredService<IClientInputHealthProvider>().GetHealth();
         Assert.Equal("no-op", inputHealth.Backend);
         Assert.Contains("pointer", inputHealth.SupportedEventTypes);
+        Assert.Contains("keyboard", inputHealth.SupportedEventTypes);
+        Assert.Contains("press", inputHealth.SupportedKeyboardActions);
         Assert.IsType<InMemoryClientProfileRepository>(provider.GetRequiredService<IClientProfileRepository>());
         Assert.False(provider.GetRequiredService<ClientPairingOptions>().Enabled);
     }
@@ -66,6 +68,8 @@ public sealed class BeaconServiceRegistrationTests
         ClientInputHealth inputHealth = provider.GetRequiredService<IClientInputHealthProvider>().GetHealth();
         Assert.Equal("windows-sendinput", inputHealth.Backend);
         Assert.Contains("tap", inputHealth.SupportedPointerActions);
+        Assert.Contains("keyboard", inputHealth.SupportedEventTypes);
+        Assert.Contains("press", inputHealth.SupportedKeyboardActions);
         Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
     }
 

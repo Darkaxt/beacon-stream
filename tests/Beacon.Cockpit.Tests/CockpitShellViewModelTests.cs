@@ -69,6 +69,8 @@ public sealed class CockpitShellViewModelTests
         Assert.Contains("1 active stream", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("windows-sendinput", viewModel.InputHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("tap", viewModel.InputHealthSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("keyboard", viewModel.InputHealthSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("press", viewModel.InputHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(viewModel.Diagnostics, value => value.Contains("[display]", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(viewModel.Diagnostics, value => value.Contains("[streaming]", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(viewModel.Diagnostics, value => value.Contains("[input]", StringComparison.OrdinalIgnoreCase));
@@ -373,7 +375,8 @@ public sealed class CockpitShellViewModelTests
         new(
             Ready: true,
             Backend: "windows-sendinput",
-            Diagnostic: "Windows SendInput pointer sink ready.",
-            SupportedEventTypes: ["pointer"],
-            SupportedPointerActions: ["move", "down", "up", "tap"]);
+            Diagnostic: "Windows SendInput pointer and keyboard sink ready.",
+            SupportedEventTypes: ["pointer", "keyboard"],
+            SupportedPointerActions: ["move", "down", "up", "tap"],
+            SupportedKeyboardActions: ["down", "up", "press"]);
 }
