@@ -136,7 +136,7 @@ public sealed class FakeEndpointRunnerTests
     }
 
     [Fact]
-    public async Task SendsDeterministicInputSampleAfterLaunch()
+    public async Task SendsDeterministicPointerGestureAfterLaunch()
     {
         var handler = new RecordingHandler();
         var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost") };
@@ -149,9 +149,14 @@ public sealed class FakeEndpointRunnerTests
         Assert.True(inputIndex > 0);
         Assert.Contains("\"sequence\":1", handler.Bodies[inputIndex], StringComparison.Ordinal);
         Assert.Contains("\"type\":\"pointer\"", handler.Bodies[inputIndex], StringComparison.Ordinal);
-        Assert.Contains("\"action\":\"tap\"", handler.Bodies[inputIndex], StringComparison.Ordinal);
+        Assert.Contains("\"action\":\"down\"", handler.Bodies[inputIndex], StringComparison.Ordinal);
+        Assert.Contains("\"action\":\"move\"", handler.Bodies[inputIndex], StringComparison.Ordinal);
+        Assert.Contains("\"action\":\"up\"", handler.Bodies[inputIndex], StringComparison.Ordinal);
         Assert.Contains("\"x\":0.5", handler.Bodies[inputIndex], StringComparison.Ordinal);
         Assert.Contains("\"y\":0.5", handler.Bodies[inputIndex], StringComparison.Ordinal);
+        Assert.Contains("\"x\":0.75", handler.Bodies[inputIndex], StringComparison.Ordinal);
+        Assert.Contains("\"y\":0.25", handler.Bodies[inputIndex], StringComparison.Ordinal);
+        Assert.DoesNotContain("\"buttons\":null", handler.Bodies[inputIndex], StringComparison.Ordinal);
     }
 
     [Fact]

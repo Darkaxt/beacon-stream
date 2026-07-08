@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createDefaultProfile,
   createGamePlanRequest,
-  createPointerInputPayload,
+  createPointerGesturePayload,
   createTelemetryPayload,
   formatLaunchEvents,
   formatInputAccepted,
@@ -116,16 +116,31 @@ describe('Client Lab profile validation', () => {
     expect(formatPlanDetails(plan)).toContain('physical-blackout selected by server profile policy');
   });
 
-  it('creates a deterministic pointer input payload for no-phone testing', () => {
-    expect(createPointerInputPayload(7)).toEqual({
+  it('creates a deterministic pointer gesture payload for no-phone testing', () => {
+    expect(createPointerGesturePayload(7)).toEqual({
       sequence: 7,
       events: [
         {
           type: 'pointer',
-          action: 'tap',
+          action: 'down',
           pointerId: 1,
           x: 0.5,
           y: 0.5,
+          buttons: 1
+        },
+        {
+          type: 'pointer',
+          action: 'move',
+          pointerId: 1,
+          x: 0.75,
+          y: 0.25
+        },
+        {
+          type: 'pointer',
+          action: 'up',
+          pointerId: 1,
+          x: 0.75,
+          y: 0.25,
           buttons: 1
         }
       ]
@@ -133,6 +148,6 @@ describe('Client Lab profile validation', () => {
   });
 
   it('formats input acceptance summaries', () => {
-    expect(formatInputAccepted({ accepted: true, eventCount: 1, sessionId: 'session-1' })).toBe('input accepted 1 event(s) session-1');
+    expect(formatInputAccepted({ accepted: true, eventCount: 3, sessionId: 'session-1' })).toBe('input accepted 3 event(s) session-1');
   });
 });

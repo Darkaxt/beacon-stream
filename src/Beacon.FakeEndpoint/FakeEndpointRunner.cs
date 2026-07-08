@@ -239,15 +239,28 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
             sequence = 1,
             events = new[]
             {
-                new
-                {
-                    type = "pointer",
-                    action = "tap",
-                    pointerId = 1,
-                    x = 0.5,
-                    y = 0.5,
-                    buttons = 1
-                }
+                CreatePointerEvent("down", x: 0.5, y: 0.5, buttons: 1),
+                CreatePointerEvent("move", x: 0.75, y: 0.25),
+                CreatePointerEvent("up", x: 0.75, y: 0.25, buttons: 1)
             }
         };
+
+    private static Dictionary<string, object> CreatePointerEvent(string action, double x, double y, int? buttons = null)
+    {
+        var inputEvent = new Dictionary<string, object>
+        {
+            ["type"] = "pointer",
+            ["action"] = action,
+            ["pointerId"] = 1,
+            ["x"] = x,
+            ["y"] = y
+        };
+
+        if (buttons is not null)
+        {
+            inputEvent["buttons"] = buttons.Value;
+        }
+
+        return inputEvent;
+    }
 }
