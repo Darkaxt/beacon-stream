@@ -1,10 +1,12 @@
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
+using Beacon.Core.Input;
 using Beacon.Core.Recovery;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Displays;
 using Beacon.Platform.Windows.Games;
+using Beacon.Platform.Windows.Input;
 using Beacon.Platform.Windows.Recovery;
 using Beacon.Platform.Windows.Sessions;
 using Beacon.Platform.Windows.Streaming;
@@ -32,6 +34,7 @@ public sealed class BeaconServiceRegistrationTests
         Assert.IsType<FakeGameLauncher>(provider.GetRequiredService<IGameLauncher>());
         Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
         Assert.IsType<FakeSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
+        Assert.IsType<NoOpClientInputSink>(provider.GetRequiredService<IClientInputSink>());
         Assert.IsType<InMemoryClientProfileRepository>(provider.GetRequiredService<IClientProfileRepository>());
         Assert.False(provider.GetRequiredService<ClientPairingOptions>().Enabled);
     }
@@ -55,6 +58,8 @@ public sealed class BeaconServiceRegistrationTests
         Assert.IsType<WindowsGameLauncher>(provider.GetRequiredService<IGameLauncher>());
         Assert.IsType<WindowsSessionActivityApi>(provider.GetRequiredService<IWindowsSessionActivityApi>());
         Assert.IsType<WindowsSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
+        Assert.IsType<WindowsInputApi>(provider.GetRequiredService<IWindowsInputApi>());
+        Assert.IsType<WindowsClientInputSink>(provider.GetRequiredService<IClientInputSink>());
         Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
     }
 
