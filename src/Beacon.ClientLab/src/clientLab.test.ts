@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   createDefaultProfile,
   createGamePlanRequest,
+  createPointerInputPayload,
   createTelemetryPayload,
   formatLaunchEvents,
+  formatInputAccepted,
   formatPlanDetails,
   validateProfileDraft,
   type LaunchResponse,
@@ -112,5 +114,25 @@ describe('Client Lab profile validation', () => {
 
     expect(formatPlanDetails(plan)).toContain('Excellent LAN');
     expect(formatPlanDetails(plan)).toContain('physical-blackout selected by server profile policy');
+  });
+
+  it('creates a deterministic pointer input payload for no-phone testing', () => {
+    expect(createPointerInputPayload(7)).toEqual({
+      sequence: 7,
+      events: [
+        {
+          type: 'pointer',
+          action: 'tap',
+          pointerId: 1,
+          x: 0.5,
+          y: 0.5,
+          buttons: 1
+        }
+      ]
+    });
+  });
+
+  it('formats input acceptance summaries', () => {
+    expect(formatInputAccepted({ accepted: true, eventCount: 1, sessionId: 'session-1' })).toBe('input accepted 1 event(s) session-1');
   });
 });

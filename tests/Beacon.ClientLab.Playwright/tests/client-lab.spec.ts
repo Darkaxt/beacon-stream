@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and emergency restore', async ({ page }) => {
   const capabilityBodies: unknown[] = [];
   const telemetryBodies: unknown[] = [];
+  const inputBodies: unknown[] = [];
 
   await page.route('**/clients/hello', async route => {
     await route.fulfill({
@@ -122,6 +123,17 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
       })
     });
   });
+  await page.route('**/clients/z-fold-7/input', async route => {
+    inputBodies.push(route.request().postDataJSON());
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        accepted: true,
+        eventCount: 1,
+        sessionId: 'z-fold-7-steam-shortcut:3767414131'
+      })
+    });
+  });
   await page.route('**/clients/z-fold-7/disconnect', async route => {
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ leaseRetained: true }) });
   });
@@ -165,6 +177,15 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
   await expect(page.getByText('beacon-fake://stream/z-fold-7-steam-shortcut:3767414131')).toBeVisible();
   expect(capabilityBodies).toHaveLength(2);
   expect(telemetryBodies).toHaveLength(2);
+
+  await page.getByRole('button', { name: 'Send Input' }).click();
+  await expect(page.getByText('input accepted 1 event(s) z-fold-7-steam-shortcut:3767414131')).toBeVisible();
+  expect(inputBodies).toEqual([
+    {
+      sequence: 1,
+      events: [{ type: 'pointer', action: 'tap', pointerId: 1, x: 0.5, y: 0.5, buttons: 1 }]
+    }
+  ]);
 
   await page.getByRole('button', { name: 'Disconnect' }).click();
   await expect(page.getByText('lease retained')).toBeVisible();

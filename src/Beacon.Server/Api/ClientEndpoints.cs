@@ -2,6 +2,7 @@ using System.Text.Json;
 using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
+using Beacon.Core.Input;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Server.State;
@@ -258,6 +259,50 @@ public static class ClientEndpoints
                 : Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
         });
 
+        clients.MapPost("/{clientId}/input", async (
+            string clientId,
+            ClientInputRequest request,
+            InMemorySessionStore sessions,
+            IStreamingBackend streaming,
+            IClientInputSink input,
+            CancellationToken cancellationToken) =>
+        {
+            SessionPlan? plan = sessions.Get(clientId);
+            if (plan is null)
+            {
+                return Results.NotFound(new { error = $"Client '{clientId}' has no session plan." });
+            }
+
+            StreamingSessionState? stream = await streaming.GetSessionAsync(plan.SessionId, cancellationToken);
+            if (stream is null || !stream.State.Equals("running", StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.NotFound(new { error = $"Stream session '{plan.SessionId}' is not running." });
+            }
+
+            if (request.Events is not { Count: > 0 })
+            {
+                return Results.BadRequest(new { error = "Input request must include at least one event." });
+            }
+
+            var batch = new ClientInputBatch(
+                clientId,
+                plan.SessionId,
+                plan.Display.DisplayId,
+                request.Sequence,
+                request.Events);
+            ClientInputResult result = await input.ForwardAsync(batch, cancellationToken);
+            return result.Success
+                ? Results.Ok(new
+                {
+                    clientId,
+                    sessionId = plan.SessionId,
+                    displayId = plan.Display.DisplayId,
+                    accepted = true,
+                    eventCount = result.EventCount
+                })
+                : Results.Problem(result.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+        });
+
         clients.MapPost("/{clientId}/disconnect", async (
             string clientId,
             InMemorySessionStore sessions,
@@ -479,3 +524,5 @@ internal sealed record GameResolution(GameDescriptor? Game, IResult? Error);
 public sealed record PlanRequest(string? AppId = null, string? Title = null, string? Source = null, string? GameId = null);
 
 public sealed record QuitRequest(bool ClientActive, bool? OwnedProcessRunning = null, bool? OwnedWindowRemaining = null);
+
+public sealed record ClientInputRequest(long Sequence, IReadOnlyList<ClientInputEvent> Events);

@@ -87,6 +87,7 @@ public sealed class FakeEndpointRunnerTests
                 "POST /clients/z-fold-7/telemetry",
                 "POST /clients/z-fold-7/plan",
                 "POST /clients/z-fold-7/launch",
+                "POST /clients/z-fold-7/input",
                 "POST /clients/z-fold-7/disconnect",
                 "POST /clients/z-fold-7/reconnect",
                 "POST /clients/z-fold-7/plan",
@@ -132,6 +133,25 @@ public sealed class FakeEndpointRunnerTests
         string telemetryBody = handler.Bodies[4];
         Assert.Contains("\"packetLossPercent\":3.2", telemetryBody, StringComparison.Ordinal);
         Assert.Contains("\"wifiBand\":\"wifi-6\"", telemetryBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SendsDeterministicInputSampleAfterLaunch()
+    {
+        var handler = new RecordingHandler();
+        var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost") };
+        var runner = new FakeEndpointRunner(client);
+
+        FakeEndpointResult result = await runner.RunAsync(FakeEndpointScript.CreateZFold7Default(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        int inputIndex = handler.Requests.IndexOf("POST /clients/z-fold-7/input");
+        Assert.True(inputIndex > 0);
+        Assert.Contains("\"sequence\":1", handler.Bodies[inputIndex], StringComparison.Ordinal);
+        Assert.Contains("\"type\":\"pointer\"", handler.Bodies[inputIndex], StringComparison.Ordinal);
+        Assert.Contains("\"action\":\"tap\"", handler.Bodies[inputIndex], StringComparison.Ordinal);
+        Assert.Contains("\"x\":0.5", handler.Bodies[inputIndex], StringComparison.Ordinal);
+        Assert.Contains("\"y\":0.5", handler.Bodies[inputIndex], StringComparison.Ordinal);
     }
 
     [Fact]

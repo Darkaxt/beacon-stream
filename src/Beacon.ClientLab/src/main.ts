@@ -3,8 +3,10 @@ import {
   createCapabilitiesPayload,
   createDefaultProfile,
   createGamePlanRequest,
+  createPointerInputPayload,
   createTelemetryPayload,
   formatLaunchEvents,
+  formatInputAccepted,
   formatPlanDetails,
   getJson,
   patchJson,
@@ -13,6 +15,7 @@ import {
   type GameDescriptor,
   type GameLibrarySnapshot,
   type HdrPreference,
+  type InputAcceptedResponse,
   type LaunchResponse,
   type PlanResponse,
   type PlanRequest,
@@ -81,6 +84,11 @@ element('launchButton').addEventListener('click', async () => {
   for (const message of formatLaunchEvents(launch)) {
     appendLog(message);
   }
+});
+
+element('inputButton').addEventListener('click', async () => {
+  const result = await postJson<InputAcceptedResponse>(`/clients/${clientId}/input`, createPointerInputPayload(1));
+  appendLog(formatInputAccepted(result));
 });
 
 element('disconnectButton').addEventListener('click', async () => {
