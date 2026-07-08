@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Beacon.Server\Beacon.Server.csproj" />
+    <ProjectReference Include="..\..\src\Beacon.StreamingProbe\Beacon.StreamingProbe.csproj" />
   </ItemGroup>
 
 </Project>

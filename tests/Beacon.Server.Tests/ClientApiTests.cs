@@ -7,6 +7,7 @@ using Beacon.Core.Input;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Streaming;
+using Beacon.StreamingProbe;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -662,6 +663,59 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task LaunchWithStreamingProbePublishesRuntimeDescriptorAndDisconnectStopsProcess()
+    {
+        string descriptorRoot = Path.Combine(Path.GetTempPath(), $"beacon-streaming-smoke-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(descriptorRoot);
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions(GetStreamingProbeExecutablePath()),
+            new WindowsExternalStreamingProcessRunner(),
+            sessionDescriptors: new WindowsExternalStreamingSessionDescriptorStore(descriptorRoot));
+        WebApplicationFactory<Program> streamingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IStreamingBackend>(backend);
+            }));
+        HttpClient client = streamingFactory.CreateClient();
+
+        try
+        {
+            HttpResponseMessage launch = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
+            {
+                gameId = "steam-shortcut:3767414131"
+            });
+            Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+            await WaitForStreamingDescriptorAsync(descriptorRoot);
+            HttpResponseMessage stream = await client.GetAsync("/clients/z-fold-7/stream");
+            HttpResponseMessage disconnect = await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
+
+            Assert.Equal(HttpStatusCode.OK, stream.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, disconnect.StatusCode);
+
+            using JsonDocument streamJson = await JsonDocument.ParseAsync(await stream.Content.ReadAsStreamAsync());
+            JsonElement connection = streamJson.RootElement.GetProperty("stream").GetProperty("connection");
+            Assert.Equal("gamestream", connection.GetProperty("protocol").GetString());
+            Assert.Equal("Beacon.StreamingProbe", connection.GetProperty("metadata").GetProperty("wrapper").GetString());
+            Assert.Contains(
+                connection.GetProperty("endpoints").EnumerateArray(),
+                endpoint => endpoint.GetProperty("role").GetString() == "rtsp");
+
+            using JsonDocument disconnectJson = await JsonDocument.ParseAsync(await disconnect.Content.ReadAsStreamAsync());
+            Assert.Equal("stopped", disconnectJson.RootElement.GetProperty("stream").GetProperty("state").GetString());
+            Assert.Empty(Directory.EnumerateFiles(descriptorRoot));
+        }
+        finally
+        {
+            await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
+            if (Directory.Exists(descriptorRoot))
+            {
+                Directory.Delete(descriptorRoot, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task ClientStreamStopReturnsServiceUnavailableWhenBackendStopFails()
     {
         WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
@@ -920,6 +974,36 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/display/recover", new { });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    private static string GetStreamingProbeExecutablePath()
+    {
+        string assemblyPath = typeof(StreamingProbeApp).Assembly.Location;
+        string executablePath = Path.ChangeExtension(assemblyPath, ".exe");
+        Assert.True(File.Exists(executablePath), $"Streaming probe executable was not copied to '{executablePath}'.");
+        return executablePath;
+    }
+
+    private static async Task WaitForStreamingDescriptorAsync(string descriptorRoot)
+    {
+        if (Directory.EnumerateFiles(descriptorRoot, "*.json").Any())
+        {
+            return;
+        }
+
+        var descriptorWritten = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var watcher = new FileSystemWatcher(descriptorRoot, "*.json");
+        FileSystemEventHandler signal = (_, _) => descriptorWritten.TrySetResult();
+        watcher.Created += signal;
+        watcher.Changed += signal;
+        watcher.EnableRaisingEvents = true;
+
+        if (Directory.EnumerateFiles(descriptorRoot, "*.json").Any())
+        {
+            return;
+        }
+
+        await descriptorWritten.Task;
     }
 
     private sealed class FakeExternalStreamingProcessRunner(IEnumerable<string>? existingFiles = null) : IExternalStreamingProcessRunner
