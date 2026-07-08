@@ -736,7 +736,7 @@ Expected: all client API tests pass.
 - Modify: `docs/extraction-map.md`
 - Modify: `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-18-wrapper-readiness-manifest.md`
 
-- [ ] **Step 1: Update docs**
+- [x] **Step 1: Update docs**
 
 Add to `README.md` under streaming backend notes:
 
@@ -746,7 +746,7 @@ External-process mode may also read a wrapper manifest from `Beacon:Streaming:Ex
 
 Update the Sunshine row in `docs/extraction-map.md` to mention that Milestone 18 adds a Beacon-owned wrapper manifest contract and still copies no upstream streaming source.
 
-- [ ] **Step 2: Static validation**
+- [x] **Step 2: Static validation**
 
 Run:
 
@@ -757,7 +757,7 @@ dotnet build Beacon.slnx -warnaserror
 
 Expected: both commands pass.
 
-- [ ] **Step 3: Dynamic validation**
+- [x] **Step 3: Dynamic validation**
 
 Run:
 
@@ -772,7 +772,7 @@ pnpm --dir tests\Beacon.ClientLab.Playwright test
 
 Expected: all commands pass; the Gradle 9 deprecation warning remains acceptable if the command exits successfully.
 
-- [ ] **Step 4: Boundary audit**
+- [x] **Step 4: Boundary audit**
 
 Run:
 
