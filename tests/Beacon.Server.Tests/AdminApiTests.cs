@@ -155,6 +155,40 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
     }
 
     [Fact]
+    public async Task SnapshotIncludesClientInputDiagnostics()
+    {
+        HttpClient client = factory.CreateClient();
+
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        HttpResponseMessage input = await client.PostAsJsonAsync("/clients/z-fold-7/input", new
+        {
+            sequence = 42,
+            events = new[]
+            {
+                new { type = "pointer", action = "tap", pointerId = 1, x = 0.5, y = 0.5, buttons = 1 }
+            }
+        });
+        HttpResponseMessage response = await client.GetAsync("/admin/snapshot");
+
+        Assert.Equal(HttpStatusCode.OK, input.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement diagnostic = document.RootElement.GetProperty("diagnostics")
+            .EnumerateArray()
+            .First(evt => evt.GetProperty("operation").GetString() == "input.forward");
+
+        Assert.Equal("input", diagnostic.GetProperty("category").GetString());
+        Assert.Equal("information", diagnostic.GetProperty("severity").GetString());
+        Assert.Equal("z-fold-7", diagnostic.GetProperty("clientId").GetString());
+        Assert.Equal("z-fold-7-steam-shortcut:3767414131", diagnostic.GetProperty("sessionId").GetString());
+        Assert.Equal("client-z-fold-7", diagnostic.GetProperty("displayId").GetString());
+        Assert.Contains("1 input event", diagnostic.GetProperty("message").GetString(), StringComparison.OrdinalIgnoreCase);
+        JsonElement metadata = diagnostic.GetProperty("metadata");
+        Assert.Equal("42", metadata.GetProperty("sequence").GetString());
+        Assert.Equal("1", metadata.GetProperty("eventCount").GetString());
+    }
+
+    [Fact]
     public async Task SnapshotReportsDisplayUnavailableWhenHealthCheckThrows()
     {
         WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Beacon.Core.Clients;
 using Beacon.Core.Displays;
+using Beacon.Core.Diagnostics;
 using Beacon.Core.Games;
 using Beacon.Core.Input;
 using Beacon.Core.Sessions;
@@ -265,22 +266,53 @@ public static class ClientEndpoints
             InMemorySessionStore sessions,
             IStreamingBackend streaming,
             IClientInputSink input,
+            IDiagnosticEventSink diagnostics,
             CancellationToken cancellationToken) =>
         {
             SessionPlan? plan = sessions.Get(clientId);
             if (plan is null)
             {
+                PublishInputDiagnostic(
+                    diagnostics,
+                    DiagnosticSeverity.Warning,
+                    "input.reject",
+                    "Input rejected because the client has no session plan.",
+                    clientId,
+                    sessionId: null,
+                    displayId: null,
+                    request.Sequence,
+                    request.Events?.Count ?? 0);
                 return Results.NotFound(new { error = $"Client '{clientId}' has no session plan." });
             }
 
             StreamingSessionState? stream = await streaming.GetSessionAsync(plan.SessionId, cancellationToken);
             if (stream is null || !stream.State.Equals("running", StringComparison.OrdinalIgnoreCase))
             {
+                PublishInputDiagnostic(
+                    diagnostics,
+                    DiagnosticSeverity.Warning,
+                    "input.reject",
+                    $"Input rejected because stream session '{plan.SessionId}' is not running.",
+                    clientId,
+                    plan.SessionId,
+                    plan.Display.DisplayId,
+                    request.Sequence,
+                    request.Events?.Count ?? 0);
                 return Results.NotFound(new { error = $"Stream session '{plan.SessionId}' is not running." });
             }
 
             if (request.Events is not { Count: > 0 })
             {
+                PublishInputDiagnostic(
+                    diagnostics,
+                    DiagnosticSeverity.Warning,
+                    "input.reject",
+                    "Input rejected because the request did not include events.",
+                    clientId,
+                    plan.SessionId,
+                    plan.Display.DisplayId,
+                    request.Sequence,
+                    0);
                 return Results.BadRequest(new { error = "Input request must include at least one event." });
             }
 
@@ -291,16 +323,39 @@ public static class ClientEndpoints
                 request.Sequence,
                 request.Events);
             ClientInputResult result = await input.ForwardAsync(batch, cancellationToken);
-            return result.Success
-                ? Results.Ok(new
-                {
+            if (!result.Success)
+            {
+                PublishInputDiagnostic(
+                    diagnostics,
+                    DiagnosticSeverity.Error,
+                    "input.forward",
+                    $"Input forwarding failed: {result.Error}",
                     clientId,
-                    sessionId = plan.SessionId,
-                    displayId = plan.Display.DisplayId,
-                    accepted = true,
-                    eventCount = result.EventCount
-                })
-                : Results.Problem(result.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+                    plan.SessionId,
+                    plan.Display.DisplayId,
+                    request.Sequence,
+                    request.Events.Count);
+                return Results.Problem(result.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            PublishInputDiagnostic(
+                diagnostics,
+                DiagnosticSeverity.Information,
+                "input.forward",
+                $"Forwarded {result.EventCount} input event(s).",
+                clientId,
+                plan.SessionId,
+                plan.Display.DisplayId,
+                request.Sequence,
+                result.EventCount);
+            return Results.Ok(new
+            {
+                clientId,
+                sessionId = plan.SessionId,
+                displayId = plan.Display.DisplayId,
+                accepted = true,
+                eventCount = result.EventCount
+            });
         });
 
         clients.MapPost("/{clientId}/disconnect", async (
@@ -514,6 +569,32 @@ public static class ClientEndpoints
         return value.ValueKind == JsonValueKind.String && Enum.TryParse(value.GetString(), ignoreCase: true, out HdrPreference preference)
             ? preference
             : null;
+    }
+
+    private static void PublishInputDiagnostic(
+        IDiagnosticEventSink diagnostics,
+        string severity,
+        string operation,
+        string message,
+        string clientId,
+        string? sessionId,
+        string? displayId,
+        long sequence,
+        int eventCount)
+    {
+        diagnostics.Publish(DiagnosticEvent.Create(
+            severity,
+            "input",
+            operation,
+            message,
+            clientId,
+            sessionId,
+            displayId,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["sequence"] = sequence.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["eventCount"] = eventCount.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            }));
     }
 }
 
