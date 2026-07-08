@@ -502,7 +502,8 @@ public sealed class CockpitShellViewModel : ObservableObject
             ? streaming.ManifestAvailable ? "manifest available" : "manifest missing"
             : "no manifest configured";
         string active = streaming.ActiveSessions == 1 ? "1 active stream" : $"{streaming.ActiveSessions} active streams";
-        return $"{streaming.Backend} {state}; {executable}; {manifest}; {active}; {streaming.Diagnostic}";
+        string endpoints = streaming.Endpoints.Count == 1 ? "1 endpoint" : $"{streaming.Endpoints.Count} endpoints";
+        return $"{streaming.Backend} {state}; {executable}; {manifest}; {active}; {endpoints}; {streaming.Diagnostic}";
     }
 
     private static string FormatInputHealth(CockpitInputHealth? input)

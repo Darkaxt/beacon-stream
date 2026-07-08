@@ -65,6 +65,10 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.True(root.GetProperty("streamingHealth").GetProperty("ready").GetBoolean());
         Assert.Equal("fake", root.GetProperty("streamingHealth").GetProperty("backend").GetString());
         Assert.Equal(1, root.GetProperty("streamingHealth").GetProperty("activeSessions").GetInt32());
+        Assert.Contains(
+            root.GetProperty("streamingHealth").GetProperty("endpoints").EnumerateArray(),
+            endpoint => endpoint.GetProperty("role").GetString() == "control"
+                && endpoint.GetProperty("uri").GetString() == "beacon-fake://health/control");
     }
 
     [Fact]

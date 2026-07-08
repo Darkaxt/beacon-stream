@@ -66,6 +66,10 @@ public sealed class CockpitApiClientTests
                 "manifestName": "Sunshine bridge",
                 "protocol": "gamestream",
                 "launchUri": "moonlight://beacon/z-fold-7",
+                "endpoints": [
+                  { "role": "rtsp", "uri": "rtsp://127.0.0.1:48010" },
+                  { "role": "audio", "uri": "udp://127.0.0.1:48000" }
+                ],
                 "codecs": ["av1", "hevc"],
                 "transports": ["lan-direct"],
                 "encoders": ["nvenc"],
@@ -123,6 +127,7 @@ public sealed class CockpitApiClientTests
         Assert.True(snapshot.StreamingHealth.Ready);
         Assert.Equal("external-process", snapshot.StreamingHealth.Backend);
         Assert.Equal(["av1", "hevc"], snapshot.StreamingHealth.Codecs);
+        Assert.Contains(snapshot.StreamingHealth.Endpoints, endpoint => endpoint.Role == "rtsp" && endpoint.Uri == "rtsp://127.0.0.1:48010");
         Assert.True(snapshot.StreamingHealth.Hdr10);
         Assert.True(snapshot.InputHealth.Ready);
         Assert.Equal("windows-sendinput", snapshot.InputHealth.Backend);
