@@ -89,17 +89,7 @@ public final class BeaconActivity extends Activity {
         TextView title = text("Beacon", 28, true);
         root.addView(title);
 
-        localTheme = new Spinner(this);
-        ArrayAdapter<String> themeAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, LOCAL_THEME_VALUES);
-        themeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        localTheme.setAdapter(themeAdapter);
-        localTheme.setSelection(localThemeIndex(localSettings.localTheme));
-        wakeLockEnabled = checkbox("Keep screen awake", localSettings.wakeLockEnabled);
-        decoderDebugOverlayEnabled = checkbox("Show decoder debug overlay", localSettings.decoderDebugOverlayEnabled);
-        root.addView(localTheme);
-        root.addView(wakeLockEnabled);
-        root.addView(decoderDebugOverlayEnabled);
-        root.addView(localButton("Save Local Settings", this::saveLocalSettings));
+        addLocalSettingsControls(root);
 
         serverUrl = input("Server URL", "http://10.0.2.2:5000");
         clientId = input("Client ID", "z-fold-7");
@@ -178,6 +168,20 @@ public final class BeaconActivity extends Activity {
         root.addView(status);
 
         return scrollView;
+    }
+
+    private void addLocalSettingsControls(LinearLayout root) {
+        localTheme = new Spinner(this);
+        ArrayAdapter<String> themeAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, LOCAL_THEME_VALUES);
+        themeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        localTheme.setAdapter(themeAdapter);
+        localTheme.setSelection(localThemeIndex(localSettings.localTheme));
+        wakeLockEnabled = checkbox("Keep screen awake", localSettings.wakeLockEnabled);
+        decoderDebugOverlayEnabled = checkbox("Show decoder debug overlay", localSettings.decoderDebugOverlayEnabled);
+        root.addView(localTheme);
+        root.addView(wakeLockEnabled);
+        root.addView(decoderDebugOverlayEnabled);
+        root.addView(localButton("Save Local Settings", this::saveLocalSettings));
     }
 
     private View touchSurface() {
