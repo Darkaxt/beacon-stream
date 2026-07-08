@@ -100,6 +100,8 @@ dotnet run --project src/Beacon.DisplayProbe -- ensure --client z-fold-7 --width
 dotnet run --project src/Beacon.DisplayProbe -- restore-physical
 ```
 
+Display preflight attempts one safe repair before failing: if the first virtual-display ensure fails, Beacon restores the physical primary display and retries the same requested virtual display once. If repair fails, launch still stops before app/stream side effects and the diagnostic journal records the reason.
+
 Game library checks:
 
 ```powershell
