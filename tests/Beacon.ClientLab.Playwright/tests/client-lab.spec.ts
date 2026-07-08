@@ -179,7 +179,7 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
   expect(capabilityBodies).toHaveLength(2);
   expect(telemetryBodies).toHaveLength(2);
 
-  await page.getByRole('button', { name: 'Send Input' }).click();
+  await page.getByRole('button', { name: 'Send Pointer' }).click();
   await expect(page.getByText('input accepted 3 event(s) z-fold-7-steam-shortcut:3767414131')).toBeVisible();
   expect(inputBodies).toEqual([
     {
