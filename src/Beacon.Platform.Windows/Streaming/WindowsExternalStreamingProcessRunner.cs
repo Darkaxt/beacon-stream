@@ -13,20 +13,7 @@ public sealed class WindowsExternalStreamingProcessRunner : IExternalStreamingPr
 
     public ExternalStreamingProcess Start(ExternalStreamingCommand command)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = command.FileName,
-            Arguments = command.Arguments,
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-
-        foreach ((string key, string value) in command.Environment)
-        {
-            startInfo.Environment[key] = value;
-        }
-
+        ProcessStartInfo startInfo = CreateStartInfo(command);
         Process? process = Process.Start(startInfo);
         if (process is null)
         {
@@ -45,6 +32,31 @@ public sealed class WindowsExternalStreamingProcessRunner : IExternalStreamingPr
         process.BeginErrorReadLine();
 
         return new ExternalStreamingProcess(process.Id);
+    }
+
+    public static ProcessStartInfo CreateStartInfo(ExternalStreamingCommand command)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = command.FileName,
+            Arguments = command.Arguments,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+        string? workingDirectory = Path.GetDirectoryName(command.FileName);
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            startInfo.WorkingDirectory = workingDirectory;
+        }
+
+        foreach ((string key, string value) in command.Environment)
+        {
+            startInfo.Environment[key] = value;
+        }
+
+        return startInfo;
     }
 
     public ExternalStreamingProcessStatus GetStatus(ExternalStreamingProcess process)

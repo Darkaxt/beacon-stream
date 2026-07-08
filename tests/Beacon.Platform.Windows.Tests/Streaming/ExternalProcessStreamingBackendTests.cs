@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Beacon.Core.Clients;
 using Beacon.Core.Diagnostics;
 using Beacon.Core.Displays;
@@ -83,6 +84,28 @@ public sealed class ExternalProcessStreamingBackendTests
         Assert.Equal("av1", command.Environment["BEACON_STREAM_CODEC"]);
         Assert.Equal("120", command.Environment["BEACON_STREAM_FPS"]);
         Assert.Equal("65", command.Environment["BEACON_STREAM_BITRATE_MBPS"]);
+    }
+
+    [Fact]
+    public void WindowsRunnerCreatesStartInfoWithWrapperWorkingDirectory()
+    {
+        var command = new ExternalStreamingCommand(
+            "C:\\Tools\\BeaconWrapper\\beacon-wrapper.exe",
+            "--session session-1",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["BEACON_SESSION_ID"] = "session-1"
+            });
+
+        ProcessStartInfo startInfo = WindowsExternalStreamingProcessRunner.CreateStartInfo(command);
+
+        Assert.Equal("C:\\Tools\\BeaconWrapper\\beacon-wrapper.exe", startInfo.FileName);
+        Assert.Equal("C:\\Tools\\BeaconWrapper", startInfo.WorkingDirectory);
+        Assert.Equal("--session session-1", startInfo.Arguments);
+        Assert.False(startInfo.UseShellExecute);
+        Assert.True(startInfo.RedirectStandardOutput);
+        Assert.True(startInfo.RedirectStandardError);
+        Assert.Equal("session-1", startInfo.Environment["BEACON_SESSION_ID"]);
     }
 
     [Fact]
