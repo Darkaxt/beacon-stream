@@ -8,8 +8,8 @@ public sealed class StreamingProbeAppTests
     [Fact]
     public async Task RunWritesRuntimeDescriptorAndExitsWhenOnceIsSet()
     {
-        string root = CreateTempRoot();
-        string descriptorPath = Path.Combine(root, "session.json");
+        using TempDirectory temp = TempDirectory.Create();
+        string descriptorPath = Path.Combine(temp.Path, "session.json");
         var command = new StreamingProbeCommand(
             "z-fold-7-steam-shortcut:3767414131",
             "client-z-fold-7",
@@ -30,7 +30,7 @@ public sealed class StreamingProbeAppTests
         Assert.Equal(0, exitCode);
         Assert.False(lifetime.Waited);
         Assert.Contains("descriptorPath=", output.ToString(), StringComparison.Ordinal);
-        var store = new WindowsExternalStreamingSessionDescriptorStore(root);
+        var store = new WindowsExternalStreamingSessionDescriptorStore(temp.Path);
         ExternalStreamingSessionDescriptorReadResult read = store.Read(descriptorPath);
         Assert.True(read.Success, read.Error);
         ExternalStreamingSessionDescriptor descriptor = Assert.IsType<ExternalStreamingSessionDescriptor>(read.Descriptor);
@@ -48,11 +48,11 @@ public sealed class StreamingProbeAppTests
     [Fact]
     public async Task RunWaitsForStopWhenOnceIsNotSet()
     {
-        string root = CreateTempRoot();
+        using TempDirectory temp = TempDirectory.Create();
         var command = new StreamingProbeCommand(
             "session",
             "display",
-            Path.Combine(root, "session.json"),
+            Path.Combine(temp.Path, "session.json"),
             "gamestream",
             "moonlight://beacon/runtime/session",
             new Dictionary<string, string>(),
@@ -83,11 +83,31 @@ public sealed class StreamingProbeAppTests
         Assert.Contains("Missing required option --session", error.ToString(), StringComparison.Ordinal);
     }
 
-    private static string CreateTempRoot()
+    private sealed class TempDirectory : IDisposable
     {
-        string root = Path.Combine(Path.GetTempPath(), $"beacon-streaming-probe-tests-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        return root;
+        private TempDirectory(string path)
+        {
+            Path = path;
+        }
+
+        public string Path { get; }
+
+        public static TempDirectory Create()
+        {
+            string path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                $"beacon-streaming-probe-tests-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(path);
+            return new TempDirectory(path);
+        }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Path))
+            {
+                Directory.Delete(Path, recursive: true);
+            }
+        }
     }
 
     private sealed class RecordingStreamingProbeLifetime : IStreamingProbeLifetime
