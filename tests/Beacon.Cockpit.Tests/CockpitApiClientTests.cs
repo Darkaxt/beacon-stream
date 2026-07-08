@@ -24,7 +24,24 @@ public sealed class CockpitApiClientTests
                 "telemetry": {}
               }],
               "sessions": [{ "clientId": { "value": "z-fold-7" }, "appId": "steam-shortcut:3767414131" }],
-              "streams": [{ "sessionId": "z-fold-7-steam-shortcut:3767414131", "clientId": "z-fold-7", "appId": "steam-shortcut:3767414131", "displayId": "client-z-fold-7", "codec": "av1", "fps": 120, "initialBitrateMbps": 65, "transport": "lan-direct", "state": "running", "error": null }],
+              "streams": [{
+                "sessionId": "z-fold-7-steam-shortcut:3767414131",
+                "clientId": "z-fold-7",
+                "appId": "steam-shortcut:3767414131",
+                "displayId": "client-z-fold-7",
+                "codec": "av1",
+                "fps": 120,
+                "initialBitrateMbps": 65,
+                "transport": "lan-direct",
+                "state": "running",
+                "error": null,
+                "connection": {
+                  "protocol": "beacon-fake",
+                  "launchUri": "beacon-fake://stream/z-fold-7-steam-shortcut:3767414131",
+                  "endpoints": [{ "role": "control", "uri": "beacon-fake://stream/z-fold-7-steam-shortcut:3767414131" }],
+                  "metadata": { "displayId": "client-z-fold-7" }
+                }
+              }],
               "ownership": [{ "sessionId": "z-fold-7-steam-shortcut:3767414131", "appId": "steam-shortcut:3767414131", "launchedProcessId": 4321, "launchedProcessRunning": false, "childProcessRunning": false, "ownedWindowRemaining": false, "reasons": [] }],
               "games": { "total": 36, "diagnostics": ["Steam library 'G:\\SteamLibrary\\steamapps' does not exist."] }
             }
@@ -42,6 +59,8 @@ public sealed class CockpitApiClientTests
         Assert.Single(snapshot.Streams);
         Assert.Equal("running", snapshot.Streams[0].State);
         Assert.Equal("client-z-fold-7", snapshot.Streams[0].DisplayId);
+        Assert.Equal("beacon-fake", snapshot.Streams[0].Connection?.Protocol);
+        Assert.Equal("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", snapshot.Streams[0].Connection?.LaunchUri);
         Assert.Single(snapshot.Ownership);
         Assert.Equal(4321, snapshot.Ownership[0].LaunchedProcessId);
         Assert.Equal(36, snapshot.Games.Total);

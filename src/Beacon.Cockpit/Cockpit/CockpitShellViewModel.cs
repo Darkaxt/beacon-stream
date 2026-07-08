@@ -243,7 +243,12 @@ public sealed class CockpitShellViewModel : ObservableObject
         Replace(Clients, clientSummaries.Select(client => client.ClientId));
         Replace(Sessions, snapshot.Sessions.Select(session => session.AppId));
         Replace(Streams, snapshot.Streams.Select(stream =>
-            $"{stream.ClientId} {stream.AppId} {stream.State} {stream.Codec} {stream.Fps}fps"));
+        {
+            string connection = string.IsNullOrWhiteSpace(stream.Connection?.LaunchUri)
+                ? "no connection URI"
+                : stream.Connection.LaunchUri;
+            return $"{stream.ClientId} {stream.AppId} {stream.State} {stream.Codec} {stream.Fps}fps {connection}";
+        }));
         Replace(Ownership, snapshot.Ownership.Select(ownership =>
             $"{ownership.AppId} process={ownership.LaunchedProcessRunning} child={ownership.ChildProcessRunning} window={ownership.OwnedWindowRemaining}"));
         Replace(Diagnostics, snapshot.Games.Diagnostics);

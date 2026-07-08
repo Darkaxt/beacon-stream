@@ -390,6 +390,10 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal("running", root.GetProperty("stream").GetProperty("state").GetString());
         Assert.Equal("av1", root.GetProperty("stream").GetProperty("codec").GetString());
         Assert.Equal(120, root.GetProperty("stream").GetProperty("fps").GetInt32());
+        JsonElement connection = root.GetProperty("stream").GetProperty("connection");
+        Assert.Equal("beacon-fake", connection.GetProperty("protocol").GetString());
+        Assert.Equal("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", connection.GetProperty("launchUri").GetString());
+        Assert.Equal("control", connection.GetProperty("endpoints")[0].GetProperty("role").GetString());
     }
 
     [Fact]
@@ -557,6 +561,10 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         using JsonDocument quitJson = await JsonDocument.ParseAsync(await quit.Content.ReadAsStreamAsync());
 
         Assert.Equal("running", statusJson.RootElement.GetProperty("stream").GetProperty("state").GetString());
+        JsonElement connection = statusJson.RootElement.GetProperty("stream").GetProperty("connection");
+        Assert.Equal("beacon-fake", connection.GetProperty("protocol").GetString());
+        Assert.Equal("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", connection.GetProperty("launchUri").GetString());
+        Assert.Equal("control", connection.GetProperty("endpoints")[0].GetProperty("role").GetString());
         Assert.Equal("stopped", stopJson.RootElement.GetProperty("stream").GetProperty("state").GetString());
         Assert.True(quitJson.RootElement.GetProperty("displayRemoved").GetBoolean());
     }

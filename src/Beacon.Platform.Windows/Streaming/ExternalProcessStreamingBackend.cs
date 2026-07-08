@@ -4,7 +4,11 @@ using Beacon.Core.Streaming;
 
 namespace Beacon.Platform.Windows.Streaming;
 
-public sealed record ExternalProcessStreamingOptions(string? ExecutablePath);
+public sealed record ExternalProcessStreamingOptions(
+    string? ExecutablePath,
+    string? ConnectionProtocol = null,
+    string? ConnectionLaunchUri = null,
+    IReadOnlyDictionary<string, string>? ConnectionEndpoints = null);
 
 public sealed record ExternalStreamingCommand(
     string FileName,
@@ -65,7 +69,7 @@ public sealed class ExternalProcessStreamingBackend(
 
         try
         {
-            ExternalStreamingCommand command = CreateStartCommand(options.ExecutablePath!, plan);
+            ExternalStreamingCommand command = CreateStartCommand(options.ExecutablePath!, plan, options);
             ExternalStreamingProcess process = runner.Start(command);
             var session = new StreamingSessionState(
                 plan.SessionId,
@@ -77,7 +81,8 @@ public sealed class ExternalProcessStreamingBackend(
                 plan.Stream.InitialBitrateMbps,
                 plan.Stream.Transport,
                 State: "running",
-                Error: null);
+                Error: null,
+                CreateConnectionDescriptor(options));
 
             lock (gate)
             {
@@ -155,7 +160,10 @@ public sealed class ExternalProcessStreamingBackend(
         }
     }
 
-    public static ExternalStreamingCommand CreateStartCommand(string executablePath, SessionPlan plan)
+    public static ExternalStreamingCommand CreateStartCommand(
+        string executablePath,
+        SessionPlan plan,
+        ExternalProcessStreamingOptions? options = null)
     {
         var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -169,7 +177,60 @@ public sealed class ExternalProcessStreamingBackend(
             ["BEACON_STREAM_TRANSPORT"] = plan.Stream.Transport
         };
 
+        AddConnectionEnvironment(environment, options);
+
         string arguments = $"--session \"{plan.SessionId}\" --display \"{plan.Display.DisplayId}\"";
         return new ExternalStreamingCommand(executablePath, arguments, environment);
+    }
+
+    private static void AddConnectionEnvironment(
+        Dictionary<string, string> environment,
+        ExternalProcessStreamingOptions? options)
+    {
+        if (!string.IsNullOrWhiteSpace(options?.ConnectionProtocol))
+        {
+            environment["BEACON_CONNECTION_PROTOCOL"] = options.ConnectionProtocol.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(options?.ConnectionLaunchUri))
+        {
+            environment["BEACON_CONNECTION_LAUNCH_URI"] = options.ConnectionLaunchUri.Trim();
+        }
+
+        if (options?.ConnectionEndpoints is { Count: > 0 })
+        {
+            environment["BEACON_CONNECTION_ENDPOINTS"] = string.Join(
+                ';',
+                options.ConnectionEndpoints
+                    .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
+                    .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                    .Select(pair => $"{pair.Key.Trim()}={pair.Value.Trim()}"));
+        }
+    }
+
+    private static StreamingConnectionDescriptor? CreateConnectionDescriptor(ExternalProcessStreamingOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.ConnectionProtocol)
+            && string.IsNullOrWhiteSpace(options.ConnectionLaunchUri)
+            && (options.ConnectionEndpoints is null || options.ConnectionEndpoints.Count == 0))
+        {
+            return null;
+        }
+
+        string protocol = string.IsNullOrWhiteSpace(options.ConnectionProtocol)
+            ? "external-process"
+            : options.ConnectionProtocol.Trim();
+        IReadOnlyList<StreamingEndpointDescriptor> endpoints = (options.ConnectionEndpoints
+                ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase))
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
+            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(pair => new StreamingEndpointDescriptor(pair.Key.Trim(), pair.Value.Trim()))
+            .ToArray();
+
+        return new StreamingConnectionDescriptor(
+            protocol,
+            string.IsNullOrWhiteSpace(options.ConnectionLaunchUri) ? null : options.ConnectionLaunchUri.Trim(),
+            endpoints,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
     }
 }

@@ -56,6 +56,18 @@ export interface PlanRequest {
   gameId?: string;
 }
 
+export interface StreamConnectionEndpoint {
+  role: string;
+  uri: string;
+}
+
+export interface StreamConnection {
+  protocol: string;
+  launchUri: string | null;
+  endpoints: StreamConnectionEndpoint[];
+  metadata: Record<string, string>;
+}
+
 export interface StreamState {
   sessionId: string;
   clientId: string;
@@ -67,6 +79,7 @@ export interface StreamState {
   transport: string;
   state: string;
   error: string | null;
+  connection: StreamConnection | null;
 }
 
 export interface PlanResponse {
@@ -188,6 +201,9 @@ export function formatLaunchEvents(launch: LaunchResponse): string[] {
   const events = [`${launch.state} ${launch.displayId}`];
   if (launch.stream !== null) {
     events.push(`${launch.stream.state} ${launch.stream.codec} ${launch.stream.fps}fps`);
+    if (launch.stream.connection?.launchUri) {
+      events.push(launch.stream.connection.launchUri);
+    }
   }
 
   return events;

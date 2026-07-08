@@ -72,7 +72,16 @@ public sealed record CockpitStreamSummary(
     int InitialBitrateMbps,
     string Transport,
     string State,
-    string? Error);
+    string? Error,
+    CockpitStreamConnection? Connection);
+
+public sealed record CockpitStreamConnection(
+    string Protocol,
+    string? LaunchUri,
+    IReadOnlyList<CockpitStreamEndpoint> Endpoints,
+    IReadOnlyDictionary<string, string> Metadata);
+
+public sealed record CockpitStreamEndpoint(string Role, string Uri);
 
 public sealed record CockpitOwnershipSummary(
     string SessionId,

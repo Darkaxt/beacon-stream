@@ -10,4 +10,15 @@ public sealed record StreamingSessionState(
     int InitialBitrateMbps,
     string Transport,
     string State,
-    string? Error);
+    string? Error,
+    StreamingConnectionDescriptor? Connection);
+
+public sealed record StreamingConnectionDescriptor(
+    string Protocol,
+    string? LaunchUri,
+    IReadOnlyList<StreamingEndpointDescriptor> Endpoints,
+    IReadOnlyDictionary<string, string> Metadata);
+
+public sealed record StreamingEndpointDescriptor(
+    string Role,
+    string Uri);

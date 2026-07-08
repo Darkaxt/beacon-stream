@@ -30,6 +30,17 @@ public sealed class FakeStreamingBackend : IStreamingBackend
             return Task.FromResult(StreamingStartResult.Fail(error));
         }
 
+        string launchUri = $"beacon-fake://stream/{plan.SessionId}";
+        var connection = new StreamingConnectionDescriptor(
+            "beacon-fake",
+            launchUri,
+            [new StreamingEndpointDescriptor("control", launchUri)],
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["displayId"] = plan.Display.DisplayId,
+                ["transport"] = plan.Stream.Transport
+            });
+
         var session = new StreamingSessionState(
             plan.SessionId,
             plan.ClientId.Value,
@@ -40,7 +51,8 @@ public sealed class FakeStreamingBackend : IStreamingBackend
             plan.Stream.InitialBitrateMbps,
             plan.Stream.Transport,
             State: "running",
-            Error: null);
+            Error: null,
+            connection);
 
         sessions[plan.SessionId] = session;
         return Task.FromResult(StreamingStartResult.Ok(session));
