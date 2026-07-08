@@ -1,4 +1,5 @@
 using Beacon.Core.Displays;
+using Beacon.Core.Diagnostics;
 using Beacon.Core.Games;
 using Beacon.Core.Games.Artwork;
 using Beacon.Core.Recovery;
@@ -63,6 +64,9 @@ public static class BeaconServiceRegistration
         services.AddSingleton(BeaconHostOptions.Create(mode, streamingBackendMode));
         services.AddSingleton<IClientProfileRepository>(_ => CreateClientProfileRepository(configuration, environmentClientProfilesPath));
         services.AddSingleton(new ClientPairingOptions(ResolvePairingToken(configuration, environmentPairingToken)));
+        services.AddSingleton<InMemoryDiagnosticEventJournal>();
+        services.AddSingleton<IDiagnosticEventSink>(sp => sp.GetRequiredService<InMemoryDiagnosticEventJournal>());
+        services.AddSingleton<IDiagnosticEventSource>(sp => sp.GetRequiredService<InMemoryDiagnosticEventJournal>());
         services.AddSingleton<InMemoryClientStore>();
         services.AddSingleton<InMemorySessionStore>();
         services.AddSingleton<DisplayLeaseManager>();

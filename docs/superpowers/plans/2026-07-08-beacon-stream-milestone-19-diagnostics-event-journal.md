@@ -261,7 +261,7 @@ Expected: branch is pushed with the journal checkpoint.
 - Modify: `src/Beacon.Server/Api/AdminEndpoints.cs`
 - Test: `tests/Beacon.Server.Tests/AdminApiTests.cs`
 
-- [ ] **Step 1: Write failing admin snapshot test**
+- [x] **Step 1: Write failing admin snapshot test**
 
 Add to `AdminApiTests`:
 
@@ -284,7 +284,7 @@ public async Task SnapshotIncludesRecentOperationalDiagnostics()
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -294,7 +294,7 @@ dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter Snapsh
 
 Expected: fail because `/admin/snapshot` has no root `diagnostics` field and recovery actions do not publish events.
 
-- [ ] **Step 3: Register diagnostics journal**
+- [x] **Step 3: Register diagnostics journal**
 
 In `BeaconServiceRegistration.AddBeaconServices`, after session store registration, add:
 
@@ -306,7 +306,7 @@ services.AddSingleton<IDiagnosticEventSource>(sp => sp.GetRequiredService<InMemo
 
 Add `using Beacon.Core.Diagnostics;` at the top.
 
-- [ ] **Step 4: Add diagnostics to admin snapshot and recovery restore**
+- [x] **Step 4: Add diagnostics to admin snapshot and recovery restore**
 
 In `AdminEndpoints.MapGet("/snapshot", ...)`, inject `IDiagnosticEventSource diagnostics` and add this root property to the response:
 
@@ -330,7 +330,7 @@ return Results.Ok(new { restoreRequested = true });
 
 The route keeps the existing success shape for compatibility.
 
-- [ ] **Step 5: Verify green**
+- [x] **Step 5: Verify green**
 
 Run:
 
@@ -340,7 +340,7 @@ dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter AdminA
 
 Expected: all admin API tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Run:
 
