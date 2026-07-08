@@ -6,6 +6,45 @@ namespace Beacon.DisplayProbe.Tests;
 public sealed class DisplayProbeAppTests
 {
     [Fact]
+    public async Task PrepareCommandCreatesDisplayWithoutPrimaryRequest()
+    {
+        var api = new ProbeWindowsDisplayApi
+        {
+            AfterCreateTopology = DisplayTopologySnapshot.Extended(
+                physicalDisplayId: "physical-laptop-panel",
+                virtualDisplayId: "client-z-fold-7",
+                width: 2560,
+                height: 1600,
+                refreshHz: 120,
+                virtualPrimary: false)
+        };
+        using var output = new StringWriter();
+
+        int exitCode = await DisplayProbeApp.RunAsync(
+            api,
+            [
+                "prepare",
+                "--client",
+                "z-fold-7",
+                "--width",
+                "2560",
+                "--height",
+                "1600",
+                "--refresh",
+                "120",
+                "--hdr",
+                "prefer"
+            ],
+            output,
+            TextWriter.Null);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("prepare: success", output.ToString());
+        Assert.Equal(("client-z-fold-7", 2560, 1600, 120), Assert.Single(api.CreatedDisplays));
+        Assert.Equal(0, api.PrimaryCalls);
+    }
+
+    [Fact]
     public async Task RestorePhysicalCommandUsesVerifiedBackendResult()
     {
         var api = new ProbeWindowsDisplayApi
@@ -39,7 +78,13 @@ public sealed class DisplayProbeAppTests
         public DisplayTopologySnapshot CurrentTopology { get; set; } =
             DisplayTopologySnapshot.PhysicalOnly("physical-laptop-panel", 2560, 1600, 120);
 
+        public DisplayTopologySnapshot? AfterCreateTopology { get; set; }
+
         public Queue<DisplayTopologySnapshot> RestoreTopologies { get; } = new();
+
+        public List<(string DisplayId, int Width, int Height, int RefreshHz)> CreatedDisplays { get; } = [];
+
+        public int PrimaryCalls { get; private set; }
 
         public int RestoreCalls { get; private set; }
 
@@ -50,14 +95,25 @@ public sealed class DisplayProbeAppTests
             int width,
             int height,
             int refreshHz,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(DisplayApiResult.Ok());
+            CancellationToken cancellationToken)
+        {
+            CreatedDisplays.Add((displayId, width, height, refreshHz));
+            if (AfterCreateTopology is not null)
+            {
+                CurrentTopology = AfterCreateTopology;
+            }
+
+            return Task.FromResult(DisplayApiResult.Ok());
+        }
 
         public Task<DisplayTopologySnapshot> QueryTopologyAsync(CancellationToken cancellationToken) =>
             Task.FromResult(CurrentTopology);
 
-        public Task<DisplayApiResult> SetVirtualPrimaryAsync(string displayId, CancellationToken cancellationToken) =>
-            Task.FromResult(DisplayApiResult.Ok());
+        public Task<DisplayApiResult> SetVirtualPrimaryAsync(string displayId, CancellationToken cancellationToken)
+        {
+            PrimaryCalls++;
+            return Task.FromResult(DisplayApiResult.Ok());
+        }
 
         public Task<DisplayApiResult> RestorePhysicalPrimaryAsync(CancellationToken cancellationToken)
         {

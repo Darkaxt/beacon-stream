@@ -156,11 +156,12 @@ Display lifecycle checks:
 
 ```powershell
 dotnet run --project src/Beacon.DisplayProbe -- status
+dotnet run --project src/Beacon.DisplayProbe -- prepare --client z-fold-7 --width 2560 --height 1600 --refresh 120 --hdr prefer
 dotnet run --project src/Beacon.DisplayProbe -- ensure --client z-fold-7 --width 2560 --height 1600 --refresh 120 --hdr prefer
 dotnet run --project src/Beacon.DisplayProbe -- restore-physical
 ```
 
-Display preflight attempts one safe repair before failing: if the first virtual-display prepare or activation fails, Beacon restores the physical primary display and retries the same requested virtual display once. If repair fails, launch still stops before app/stream side effects and the diagnostic journal records the reason.
+`prepare` verifies the client virtual display as an extended/non-primary lease. `ensure` activates the virtual display as primary for a session. Display preflight attempts one safe repair before failing: if the first virtual-display prepare or activation fails, Beacon restores the physical primary display and retries the same requested virtual display once. If repair fails, launch still stops before app/stream side effects and the diagnostic journal records the reason.
 
 Physical restore is verified: Beacon queries topology after restore and treats unverified physical-primary state as a recovery failure instead of silently continuing.
 

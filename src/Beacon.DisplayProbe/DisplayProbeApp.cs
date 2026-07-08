@@ -23,6 +23,18 @@ public static class DisplayProbeApp
                     output.Write(DisplayProbeFormatter.FormatStatus(driverStatus, topology));
                     return 0;
 
+                case PrepareDisplayProbeCommand prepare:
+                    var prepareBackend = new WindowsDisplayBackend(api);
+                    DisplayEnsureResult prepareResult = await prepareBackend.PrepareVirtualDisplayAsync(
+                        ToDisplayId(prepare.ClientId),
+                        prepare.Width,
+                        prepare.Height,
+                        prepare.RefreshHz,
+                        ParseHdrPreference(prepare.Hdr),
+                        CancellationToken.None);
+                    output.WriteLine(DisplayProbeFormatter.FormatPrepareResult(prepareResult));
+                    return prepareResult.Success ? 0 : 2;
+
                 case EnsureDisplayProbeCommand ensure:
                     var ensureBackend = new WindowsDisplayBackend(api);
                     DisplayEnsureResult ensureResult = await ensureBackend.EnsureVirtualDisplayAsync(

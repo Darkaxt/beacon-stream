@@ -36,6 +36,15 @@ public sealed class DisplayProbeFormatterTests
     }
 
     [Fact]
+    public void FormatPrepareResultReportsHdrReason()
+    {
+        string output = DisplayProbeFormatter.FormatPrepareResult(
+            DisplayEnsureResult.Ok(hdrEnabled: false, hdrReason: "Windows Advanced Color reports SDR only."));
+
+        Assert.Equal("prepare: success hdrEnabled=False hdrReason=Windows Advanced Color reports SDR only.", output);
+    }
+
+    [Fact]
     public void FormatRestoreResultReportsVerificationFailure()
     {
         string output = DisplayProbeFormatter.FormatRestoreResult(
