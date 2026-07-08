@@ -5,18 +5,23 @@ import android.graphics.Color;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class BeaconActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final List<BeaconGameCatalog.GameEntry> gameEntries = new ArrayList<>();
 
     private EditText serverUrl;
     private EditText clientId;
@@ -29,6 +34,8 @@ public final class BeaconActivity extends Activity {
     private EditText bitrateCap;
     private EditText audioMode;
     private EditText gameId;
+    private Spinner gameSelector;
+    private ArrayAdapter<String> gameAdapter;
     private EditText rttMs;
     private EditText packetLossPercent;
     private EditText decoderLoadPercent;
@@ -72,6 +79,10 @@ public final class BeaconActivity extends Activity {
         bitrateCap = input("Bitrate cap Mbps", "");
         audioMode = input("Audio mode", "stereo");
         gameId = input("Game ID", "steam-shortcut:3767414131");
+        gameSelector = new Spinner(this);
+        gameAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<>());
+        gameAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        gameSelector.setAdapter(gameAdapter);
         rttMs = input("RTT ms", "8");
         packetLossPercent = input("Packet loss percent", "0");
         decoderLoadPercent = input("Decoder load percent", "20");
@@ -91,6 +102,7 @@ public final class BeaconActivity extends Activity {
         root.addView(bitrateCap);
         root.addView(audioMode);
         root.addView(gameId);
+        root.addView(gameSelector);
         root.addView(rttMs);
         root.addView(packetLossPercent);
         root.addView(decoderLoadPercent);
@@ -100,7 +112,10 @@ public final class BeaconActivity extends Activity {
         root.addView(thermalState);
 
         root.addView(button("Hello / Refresh", model -> model.refresh()));
-        root.addView(button("Load Games", model -> model.loadGames()));
+        root.addView(button("Load Games", model -> {
+            model.loadGames();
+            setGameEntries(model.latestGameEntries());
+        }));
         root.addView(button("Patch Profile", model -> model.patchProfile(readPatch())));
         root.addView(button("Report Capabilities", model -> model.reportCapabilities(readCapabilities())));
         root.addView(button("Report Telemetry", model -> model.reportTelemetry(readTelemetry())));
@@ -170,6 +185,22 @@ public final class BeaconActivity extends Activity {
         runOnUiThread(() -> status.setText(value));
     }
 
+    private void setGameEntries(List<BeaconGameCatalog.GameEntry> entries) {
+        runOnUiThread(() -> {
+            gameEntries.clear();
+            gameEntries.addAll(entries);
+            gameAdapter.clear();
+            for (BeaconGameCatalog.GameEntry entry : gameEntries) {
+                gameAdapter.add(entry.displayLabel());
+            }
+
+            gameAdapter.notifyDataSetChanged();
+            if (!gameEntries.isEmpty()) {
+                gameId.setText(gameEntries.get(0).id());
+            }
+        });
+    }
+
     private BeaconViewModel createModel() {
         BeaconClientConfig config = new BeaconClientConfig(serverUrl.getText().toString(), clientId.getText().toString());
         return new BeaconViewModel(
@@ -196,6 +227,11 @@ public final class BeaconActivity extends Activity {
     }
 
     private BeaconApiClient.GameSelection readGame() {
+        int index = gameSelector == null ? -1 : gameSelector.getSelectedItemPosition();
+        if (index >= 0 && index < gameEntries.size()) {
+            return BeaconApiClient.GameSelection.byGameId(gameEntries.get(index).id());
+        }
+
         return BeaconApiClient.GameSelection.byGameId(textValue(gameId));
     }
 

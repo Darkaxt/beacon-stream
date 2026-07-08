@@ -73,6 +73,21 @@ public final class BeaconViewModelTest {
     }
 
     @Test
+    public void loadGamesStoresParsedCatalogEntries() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(
+            200,
+            "{\"games\":[{\"id\":\"steam-shortcut:3767414131\",\"title\":\"Dispatch\",\"source\":\"steam-shortcut\",\"installed\":true}]}");
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
+
+        model.loadGames();
+
+        assertEquals(1, model.latestGameEntries().size());
+        assertEquals("steam-shortcut:3767414131", model.latestGameEntries().get(0).id());
+        assertEquals("Dispatch [steam-shortcut] steam-shortcut:3767414131 installed", model.latestGameEntries().get(0).displayLabel());
+    }
+
+    @Test
     public void launchRecordsServerSelectedStreamState() throws Exception {
         FakeService service = new FakeService();
         service.next = new BeaconApiClient.BeaconResult(200, "{\"state\":\"streaming\",\"stream\":{\"fps\":120}}");

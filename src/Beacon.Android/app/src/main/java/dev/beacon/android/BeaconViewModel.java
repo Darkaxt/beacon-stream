@@ -1,6 +1,8 @@
 package dev.beacon.android;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.List;
 
 public final class BeaconViewModel {
     private final BeaconService service;
@@ -13,6 +15,7 @@ public final class BeaconViewModel {
     private String latestPlan = "";
     private String latestStream = "";
     private String latestError = "";
+    private List<BeaconGameCatalog.GameEntry> latestGameEntries = Collections.emptyList();
 
     public BeaconViewModel(String clientId, String serverUrl, BeaconService service) {
         this(clientId, serverUrl, service, launchUri -> { });
@@ -49,6 +52,10 @@ public final class BeaconViewModel {
         return latestGames;
     }
 
+    public List<BeaconGameCatalog.GameEntry> latestGameEntries() {
+        return latestGameEntries;
+    }
+
     public String latestStream() {
         return latestStream;
     }
@@ -76,7 +83,13 @@ public final class BeaconViewModel {
     public void loadGames() throws IOException {
         BeaconApiClient.BeaconResult result = service.games();
         record("games", result);
-        latestGames = result.isSuccess() ? BeaconGameCatalog.summarize(result.body()) : "";
+        if (result.isSuccess()) {
+            latestGameEntries = BeaconGameCatalog.parse(result.body());
+            latestGames = BeaconGameCatalog.summarize(result.body());
+        } else {
+            latestGameEntries = Collections.emptyList();
+            latestGames = "";
+        }
     }
 
     public void preflight(
