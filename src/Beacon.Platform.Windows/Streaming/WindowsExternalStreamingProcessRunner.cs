@@ -4,8 +4,10 @@ namespace Beacon.Platform.Windows.Streaming;
 
 public sealed class WindowsExternalStreamingProcessRunner : IExternalStreamingProcessRunner
 {
+    private const int MaxCapturedOutputLines = 40;
     private readonly Lock gate = new();
     private readonly Dictionary<int, Process> processes = [];
+    private readonly Dictionary<int, Queue<string>> outputLinesByProcessId = [];
 
     public bool FileExists(string path) => File.Exists(path);
 
@@ -15,7 +17,9 @@ public sealed class WindowsExternalStreamingProcessRunner : IExternalStreamingPr
         {
             FileName = command.FileName,
             Arguments = command.Arguments,
-            UseShellExecute = false
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
 
         foreach ((string key, string value) in command.Environment)
@@ -32,7 +36,13 @@ public sealed class WindowsExternalStreamingProcessRunner : IExternalStreamingPr
         lock (gate)
         {
             processes[process.Id] = process;
+            outputLinesByProcessId[process.Id] = new Queue<string>();
         }
+
+        process.OutputDataReceived += (_, args) => AppendOutput(process.Id, "stdout", args.Data);
+        process.ErrorDataReceived += (_, args) => AppendOutput(process.Id, "stderr", args.Data);
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
 
         return new ExternalStreamingProcess(process.Id);
     }
@@ -54,15 +64,16 @@ public sealed class WindowsExternalStreamingProcessRunner : IExternalStreamingPr
         {
             if (!trackedProcess.HasExited)
             {
-                return ExternalStreamingProcessStatus.Running();
+                return ExternalStreamingProcessStatus.Running(GetOutputSnapshot(process.ProcessId));
             }
 
-            return ExternalStreamingProcessStatus.Exited(trackedProcess.ExitCode);
+            return ExternalStreamingProcessStatus.Exited(trackedProcess.ExitCode, GetOutputSnapshot(process.ProcessId));
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return ExternalStreamingProcessStatus.Unknown(
-                $"Unable to query external streaming process {process.ProcessId}: {ex.Message}");
+                $"Unable to query external streaming process {process.ProcessId}: {ex.Message}",
+                GetOutputSnapshot(process.ProcessId));
         }
     }
 
@@ -89,6 +100,7 @@ public sealed class WindowsExternalStreamingProcessRunner : IExternalStreamingPr
             lock (gate)
             {
                 processes.Remove(process.ProcessId);
+                outputLinesByProcessId.Remove(process.ProcessId);
             }
 
             trackedProcess.Dispose();
@@ -97,6 +109,38 @@ public sealed class WindowsExternalStreamingProcessRunner : IExternalStreamingPr
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return ExternalStreamingProcessStopResult.Fail($"Unable to stop external streaming process {process.ProcessId}: {ex.Message}");
+        }
+    }
+
+    private void AppendOutput(int processId, string streamName, string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        lock (gate)
+        {
+            if (!outputLinesByProcessId.TryGetValue(processId, out Queue<string>? outputLines))
+            {
+                return;
+            }
+
+            outputLines.Enqueue($"{streamName}: {value.Trim()}");
+            while (outputLines.Count > MaxCapturedOutputLines)
+            {
+                outputLines.Dequeue();
+            }
+        }
+    }
+
+    private IReadOnlyList<string> GetOutputSnapshot(int processId)
+    {
+        lock (gate)
+        {
+            return outputLinesByProcessId.TryGetValue(processId, out Queue<string>? outputLines)
+                ? outputLines.ToArray()
+                : [];
         }
     }
 }

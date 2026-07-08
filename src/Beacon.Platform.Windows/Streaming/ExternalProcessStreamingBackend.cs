@@ -40,16 +40,26 @@ public sealed record ExternalStreamingCommand(
 
 public sealed record ExternalStreamingProcess(int ProcessId);
 
-public sealed record ExternalStreamingProcessStatus(bool IsRunning, long? ExitCode, string? Diagnostic)
+public sealed record ExternalStreamingProcessStatus(
+    bool IsRunning,
+    long? ExitCode,
+    string? Diagnostic,
+    IReadOnlyList<string> Diagnostics)
 {
-    public static ExternalStreamingProcessStatus Running() => new(true, null, null);
+    public static ExternalStreamingProcessStatus Running(IReadOnlyList<string>? diagnostics = null) =>
+        new(true, null, null, diagnostics ?? []);
 
     public static ExternalStreamingProcessStatus Exited(long? exitCode) =>
+        Exited(exitCode, []);
+
+    public static ExternalStreamingProcessStatus Exited(long? exitCode, IReadOnlyList<string> diagnostics) =>
         new(false, exitCode, exitCode.HasValue
             ? $"External streaming process exited with code {exitCode.Value}."
-            : "External streaming process is not running.");
+            : "External streaming process is not running.",
+            diagnostics);
 
-    public static ExternalStreamingProcessStatus Unknown(string diagnostic) => new(false, null, diagnostic);
+    public static ExternalStreamingProcessStatus Unknown(string diagnostic, IReadOnlyList<string>? diagnostics = null) =>
+        new(false, null, diagnostic, diagnostics ?? []);
 }
 
 public sealed record ExternalStreamingProcessStopResult(bool Success, string? Error)
@@ -378,12 +388,25 @@ public sealed class ExternalProcessStreamingBackend(
                     error = $"{error} ExitCode={status.ExitCode.Value}.";
                 }
 
+                if (status.Diagnostics.Count > 0)
+                {
+                    error = $"{error} {string.Join(" ", status.Diagnostics)}";
+                }
+
+                ExternalStreamingProcessStopResult cleanup = runner.Stop(process);
+                if (!cleanup.Success)
+                {
+                    error = $"{error} Cleanup failed: {cleanup.Error}";
+                }
+
                 StreamingSessionState exited = session with { State = "exited", Error = error };
                 sessions[sessionId] = exited;
                 processes.Remove(sessionId);
                 string diagnostic = $"{sessionId}: {error}";
                 processDiagnostics.Add(diagnostic);
+                processDiagnostics.AddRange(status.Diagnostics.Select(value => $"{sessionId}: {value}"));
                 reconciledDiagnostics.Add(diagnostic);
+                reconciledDiagnostics.AddRange(status.Diagnostics.Select(value => $"{sessionId}: {value}"));
                 exitedEvents.Add((exited, error));
             }
         }

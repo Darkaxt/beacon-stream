@@ -217,6 +217,33 @@ public sealed class ExternalProcessStreamingBackendTests
     }
 
     [Fact]
+    public async Task ExitedWrapperDiagnosticsIncludeBoundedProcessOutput()
+    {
+        var runner = new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]);
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions("C:\\Tools\\sunshine-wrapper.exe"),
+            runner);
+        SessionPlan plan = CreatePlan();
+        await backend.StartAsync(plan, CancellationToken.None);
+        runner.MarkExited(
+            processId: 1001,
+            exitCode: 1,
+            diagnostics:
+            [
+                "stdout: wrapper booted",
+                "stderr: encoder failed: NVENC unavailable"
+            ]);
+
+        StreamingSessionState session = Assert.Single(backend.GetSessions());
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.Equal("exited", session.State);
+        Assert.Contains("encoder failed", session.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(health.Diagnostics, diagnostic => diagnostic.Contains("wrapper booted", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(health.Diagnostics, diagnostic => diagnostic.Contains("NVENC unavailable", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task StartIncludesConfiguredConnectionDescriptor()
     {
         var reader = new FakeExternalStreamingManifestReader();
@@ -404,6 +431,9 @@ public sealed class ExternalProcessStreamingBackendTests
 
         public void MarkExited(int processId, long exitCode) =>
             ProcessStatuses[processId] = ExternalStreamingProcessStatus.Exited(exitCode);
+
+        public void MarkExited(int processId, long exitCode, IReadOnlyList<string> diagnostics) =>
+            ProcessStatuses[processId] = ExternalStreamingProcessStatus.Exited(exitCode, diagnostics);
     }
 
     private sealed class FakeExternalStreamingManifestReader : IExternalStreamingManifestReader
