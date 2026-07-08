@@ -1,7 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Beacon.Core.Displays;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Beacon.Server.Tests;
 
@@ -66,6 +69,58 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.True(terminateJson.RootElement.GetProperty("success").GetBoolean());
         Assert.Equal("terminate-virtual-processes", terminateJson.RootElement.GetProperty("action").GetString());
         Assert.True(recoverJson.RootElement.GetProperty("recovered").GetBoolean());
+    }
+
+    [Fact]
+    public async Task AdminCanStopSelectedClientStream()
+    {
+        HttpClient client = factory.CreateClient();
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/admin/clients/z-fold-7/stream/stop", new { });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.Equal("z-fold-7", root.GetProperty("clientId").GetString());
+        Assert.Equal("stopped", root.GetProperty("stream").GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task AdminStopSelectedClientStreamReportsMissingSessionPlan()
+    {
+        HttpClient client = factory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/admin/clients/no-session-client/stream/stop", new { });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        string body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("no session plan", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task AdminCanRemoveSelectedClientDisplayLease()
+    {
+        var display = new FakeDisplayBackend();
+        WebApplicationFactory<Program> displayFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.AddSingleton<IDisplayBackend>(display);
+            }));
+        HttpClient client = displayFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/admin/clients/z-fold-7/display/remove", new { });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.Equal("client-z-fold-7", root.GetProperty("displayId").GetString());
+        Assert.True(root.GetProperty("removed").GetBoolean());
+        Assert.Equal(["physical-primary"], display.RestoreCalls);
+        Assert.Equal(["client-z-fold-7"], display.RemoveCalls);
     }
 
     [Fact]

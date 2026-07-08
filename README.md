@@ -103,9 +103,11 @@ curl.exe -X POST http://localhost:5000/admin/recovery/restore-physical
 curl.exe -X POST http://localhost:5000/admin/recovery/move-windows-back -H "Content-Type: application/json" -d "{\"minimize\":true}"
 curl.exe -X POST http://localhost:5000/admin/recovery/close-virtual-windows
 curl.exe -X POST http://localhost:5000/admin/recovery/terminate-virtual-processes
+curl.exe -X POST http://localhost:5000/admin/clients/z-fold-7/display/remove
+curl.exe -X POST http://localhost:5000/admin/clients/z-fold-7/stream/stop
 ```
 
-In the WPF cockpit, the Recovery tab exposes the same actions. These are explicit manual escape hatches; normal session cleanup still belongs to the server lifecycle rules.
+In the WPF cockpit, the Recovery tab exposes the same actions. Display lease removal restores the physical primary display and removes the selected client's virtual display. These are explicit manual escape hatches; normal session cleanup still belongs to the server lifecycle rules.
 
 Streaming backend checks:
 

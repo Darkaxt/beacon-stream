@@ -96,6 +96,8 @@ public sealed class CockpitShellViewModelTests
         await viewModel.CloseVirtualWindowsAsync(CancellationToken.None);
         await viewModel.TerminateVirtualProcessesAsync(CancellationToken.None);
         await viewModel.RecoverSelectedClientAsync(CancellationToken.None);
+        await viewModel.RemoveSelectedClientDisplayLeaseAsync(CancellationToken.None);
+        await viewModel.StopSelectedClientStreamAsync(CancellationToken.None);
 
         Assert.True(api.RestorePhysicalCalled);
         Assert.True(api.MoveWindowsBackCalled);
@@ -103,6 +105,8 @@ public sealed class CockpitShellViewModelTests
         Assert.True(api.CloseVirtualWindowsCalled);
         Assert.True(api.TerminateVirtualProcessesCalled);
         Assert.Equal("z-fold-7", api.RecoveredClientId);
+        Assert.Equal("z-fold-7", api.RemovedClientDisplayLeaseId);
+        Assert.Equal("z-fold-7", api.StoppedClientStreamId);
     }
 
     [Fact]
@@ -150,6 +154,10 @@ public sealed class CockpitShellViewModelTests
 
         public string? RecoveredClientId { get; private set; }
 
+        public string? RemovedClientDisplayLeaseId { get; private set; }
+
+        public string? StoppedClientStreamId { get; private set; }
+
         public string? PatchedClientId { get; private set; }
 
         public CockpitClientProfilePatch? LastProfilePatch { get; private set; }
@@ -193,6 +201,18 @@ public sealed class CockpitShellViewModelTests
             RecoveredClientId = clientId;
             return Task.CompletedTask;
         }
+
+        public Task RemoveClientDisplayLeaseAsync(string clientId, CancellationToken cancellationToken)
+        {
+            RemovedClientDisplayLeaseId = clientId;
+            return Task.CompletedTask;
+        }
+
+        public Task StopClientStreamAsync(string clientId, CancellationToken cancellationToken)
+        {
+            StoppedClientStreamId = clientId;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FailingCockpitApi(string message) : ICockpitApi
@@ -216,6 +236,12 @@ public sealed class CockpitShellViewModelTests
             Task.FromException(new InvalidOperationException(message));
 
         public Task RecoverClientDisplayAsync(string clientId, CancellationToken cancellationToken) =>
+            Task.FromException(new InvalidOperationException(message));
+
+        public Task RemoveClientDisplayLeaseAsync(string clientId, CancellationToken cancellationToken) =>
+            Task.FromException(new InvalidOperationException(message));
+
+        public Task StopClientStreamAsync(string clientId, CancellationToken cancellationToken) =>
             Task.FromException(new InvalidOperationException(message));
     }
 

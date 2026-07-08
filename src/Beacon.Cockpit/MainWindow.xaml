@@ -97,6 +97,12 @@
                             Margin="0,0,0,8" />
                     <Button Content="Recover Client Display"
                             Command="{Binding RecoverSelectedClientCommand}"
+                            Margin="0,0,0,8" />
+                    <Button Content="Remove Display Lease"
+                            Command="{Binding RemoveSelectedClientDisplayLeaseCommand}"
+                            Margin="0,0,0,8" />
+                    <Button Content="Stop Stream"
+                            Command="{Binding StopSelectedClientStreamCommand}"
                             Margin="0" />
                 </StackPanel>
             </Border>
@@ -229,6 +235,12 @@
                                 Margin="0,0,0,8" />
                         <Button Content="Recover Selected Client Display"
                                 Command="{Binding RecoverSelectedClientCommand}"
+                                Margin="0,0,0,8" />
+                        <Button Content="Remove Selected Display Lease"
+                                Command="{Binding RemoveSelectedClientDisplayLeaseCommand}"
+                                Margin="0,0,0,8" />
+                        <Button Content="Stop Selected Stream"
+                                Command="{Binding StopSelectedClientStreamCommand}"
                                 Margin="0,0,0,8" />
                         <Separator Margin="0,6,0,14" />
                         <Button Content="Move All Back Minimized"
