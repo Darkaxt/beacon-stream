@@ -53,6 +53,49 @@ public sealed class ExternalProcessStreamingBackendTests
     }
 
     [Fact]
+    public async Task PreflightFailsWhenConfiguredManifestIsMissing()
+    {
+        var reader = new FakeExternalStreamingManifestReader();
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions("C:\\Tools\\sunshine-wrapper.exe", ManifestPath: "C:\\Tools\\missing-manifest.json"),
+            new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]),
+            reader);
+
+        StreamingPreflightResult result = await backend.CheckReadinessAsync(CreatePlan(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("External streaming manifest 'C:\\Tools\\missing-manifest.json' does not exist", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PreflightRejectsPlanUnsupportedByManifest()
+    {
+        var reader = new FakeExternalStreamingManifestReader();
+        reader.Manifests["C:\\Tools\\beacon-streaming.json"] = new ExternalStreamingManifest(
+            "Sunshine bridge",
+            "gamestream",
+            null,
+            new Dictionary<string, string>(),
+            ["h264"],
+            60,
+            40,
+            Hdr10: false,
+            ["lan-direct"],
+            ["software"],
+            ["dxgi"],
+            ["AV1 disabled"]);
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions("C:\\Tools\\sunshine-wrapper.exe", ManifestPath: "C:\\Tools\\beacon-streaming.json"),
+            new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]),
+            reader);
+
+        StreamingPreflightResult result = await backend.CheckReadinessAsync(CreatePlan(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("codec av1 is not supported", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task StartUsesRunnerAndRecordsRunningSession()
     {
         var runner = new FakeExternalStreamingProcessRunner();
@@ -153,6 +196,19 @@ public sealed class ExternalProcessStreamingBackendTests
     {
         private int nextProcessId = 1001;
 
+        public FakeExternalStreamingProcessRunner(IEnumerable<string>? existingFiles = null)
+        {
+            if (existingFiles is null)
+            {
+                return;
+            }
+
+            foreach (string path in existingFiles)
+            {
+                ExistingFiles.Add(path);
+            }
+        }
+
         public HashSet<string> ExistingFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
 
         public List<ExternalStreamingCommand> StartedCommands { get; } = [];
@@ -179,5 +235,17 @@ public sealed class ExternalProcessStreamingBackendTests
             StoppedProcessIds.Add(process.ProcessId);
             return ExternalStreamingProcessStopResult.Ok();
         }
+    }
+
+    private sealed class FakeExternalStreamingManifestReader : IExternalStreamingManifestReader
+    {
+        public Dictionary<string, ExternalStreamingManifest> Manifests { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public bool FileExists(string path) => Manifests.ContainsKey(path);
+
+        public ExternalStreamingManifestReadResult Read(string path) =>
+            Manifests.TryGetValue(path, out ExternalStreamingManifest? manifest)
+                ? ExternalStreamingManifestReadResult.Ok(manifest)
+                : ExternalStreamingManifestReadResult.Fail($"External streaming manifest '{path}' does not exist.");
     }
 }

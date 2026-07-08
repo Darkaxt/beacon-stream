@@ -111,7 +111,7 @@ Validation rules:
 - Create: `src/Beacon.Platform.Windows/Streaming/WindowsExternalStreamingManifestReader.cs`
 - Test: `tests/Beacon.Platform.Windows.Tests/Streaming/ExternalProcessStreamingBackendTests.cs`
 
-- [ ] **Step 1: Write failing manifest reader tests**
+- [x] **Step 1: Write failing manifest reader tests**
 
 Add to `ExternalProcessStreamingBackendTests`:
 
@@ -193,7 +193,7 @@ private sealed class FakeExternalStreamingManifestReader : IExternalStreamingMan
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -203,7 +203,7 @@ dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.cs
 
 Expected: compile failures for missing manifest option, manifest records, reader interface, and backend constructor.
 
-- [ ] **Step 3: Add manifest contracts**
+- [x] **Step 3: Add manifest contracts**
 
 In `ExternalProcessStreamingBackend.cs`, change options to:
 
@@ -257,7 +257,7 @@ public sealed class ExternalProcessStreamingBackend(
     IExternalStreamingManifestReader manifestReader) : IStreamingBackend
 ```
 
-- [ ] **Step 4: Implement Windows manifest reader**
+- [x] **Step 4: Implement Windows manifest reader**
 
 Create `src/Beacon.Platform.Windows/Streaming/WindowsExternalStreamingManifestReader.cs`:
 
@@ -290,7 +290,7 @@ public sealed class WindowsExternalStreamingManifestReader : IExternalStreamingM
 }
 ```
 
-- [ ] **Step 5: Validate manifest during preflight**
+- [x] **Step 5: Validate manifest during preflight**
 
 In `CheckReadinessAsync`, after executable checks:
 
@@ -381,7 +381,7 @@ private static bool Contains(IReadOnlyList<string>? values, string expected) =>
     values?.Any(value => value.Equals(expected, StringComparison.OrdinalIgnoreCase)) == true;
 ```
 
-- [ ] **Step 6: Verify green for new preflight tests**
+- [x] **Step 6: Verify green for new preflight tests**
 
 Run:
 
