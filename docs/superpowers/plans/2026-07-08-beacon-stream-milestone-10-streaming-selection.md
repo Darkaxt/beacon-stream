@@ -200,7 +200,7 @@ git commit -m "Document streaming backend selection milestone"
 git push
 ```
 
-- [ ] **Step 5: Open PR, wait for CI, mark ready, merge**
+- [x] **Step 5: Open PR, wait for CI, mark ready, merge**
 
 ```powershell
 gh pr create --draft --base main --head codex/milestone-10-streaming-selection --title "Add explicit streaming backend selection" --body "Milestone 10 streaming backend selection and preflight implementation."
