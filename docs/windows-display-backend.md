@@ -44,6 +44,19 @@ dotnet run --project src\Beacon.Server
 
 In Windows host mode, the server registers `WindowsDisplayBackend`, `WindowsGameLauncher`, and `WindowsSessionActivityInspector`. Launch endpoints can create virtual displays and start applications. The streaming backend remains fake until a real wrapper is selected explicitly. `/admin/snapshot` exposes `host.mode` and the selected backend names so the active composition is visible before testing.
 
+## Manual Recovery Actions
+
+Windows host mode also registers `WindowsRecoveryBackend` for explicit local-admin recovery. These endpoints are manual actions:
+
+```powershell
+curl.exe -X POST http://localhost:5000/admin/recovery/restore-physical
+curl.exe -X POST http://localhost:5000/admin/recovery/move-windows-back -H "Content-Type: application/json" -d "{\"minimize\":true}"
+curl.exe -X POST http://localhost:5000/admin/recovery/close-virtual-windows
+curl.exe -X POST http://localhost:5000/admin/recovery/terminate-virtual-processes
+```
+
+`move-windows-back` targets visible windows intersecting virtual displays, moves them to the physical display, and can minimize them. `close-virtual-windows` sends close requests to those windows. `terminate-virtual-processes` terminates distinct process ids owning those windows, excluding the Beacon process itself.
+
 ## Expected Z Fold 7 Check
 
 The manual no-phone validation path is:

@@ -160,11 +160,11 @@ Files:
 - Modify: `docs/windows-display-backend.md`
 - Modify: `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-11-recovery-actions.md`
 
-- [ ] **Step 1: Document recovery actions**
+- [x] **Step 1: Document recovery actions**
 
 Document the admin endpoints and the cockpit actions.
 
-- [ ] **Step 2: Full validation**
+- [x] **Step 2: Full validation**
 
 Run:
 
@@ -179,7 +179,7 @@ pnpm --dir tests\Beacon.ClientLab.Playwright test
 & "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.14.1-bin\baw1sv0jfoi8rxs14qo3h49cs\gradle-8.14.1\bin\gradle.bat" --no-daemon -p src\Beacon.Android test assembleDebug
 ```
 
-- [ ] **Step 3: Boundary audit**
+- [x] **Step 3: Boundary audit**
 
 Run:
 
@@ -189,7 +189,7 @@ rg "Thread\.Sleep|Task\.Delay|timeout|Timeout|CancelAfter|CancellationTokenSourc
 
 Expected: no timeout-driven cancellation behavior.
 
-- [ ] **Step 4: Commit docs and validation**
+- [x] **Step 4: Commit docs and validation**
 
 ```powershell
 git add README.md docs/windows-display-backend.md docs/superpowers/plans/2026-07-08-beacon-stream-milestone-11-recovery-actions.md
