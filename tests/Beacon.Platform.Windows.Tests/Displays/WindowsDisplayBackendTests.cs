@@ -108,6 +108,72 @@ public sealed class WindowsDisplayBackendTests
     }
 
     [Fact]
+    public async Task EnsureVirtualDisplayAsync_WhenDisplayAlreadyPrepared_ActivatesWithoutCreatingAgain()
+    {
+        var api = new FakeWindowsDisplayApi
+        {
+            CurrentTopology = DisplayTopologySnapshot.Extended(
+                physicalDisplayId: "physical-laptop-panel",
+                virtualDisplayId: "client-z-fold-7",
+                width: 2560,
+                height: 1600,
+                refreshHz: 120,
+                virtualPrimary: false),
+            AfterPrimaryTopology = DisplayTopologySnapshot.Extended(
+                physicalDisplayId: "physical-laptop-panel",
+                virtualDisplayId: "client-z-fold-7",
+                width: 2560,
+                height: 1600,
+                refreshHz: 120,
+                virtualPrimary: true)
+        };
+        var backend = new WindowsDisplayBackend(api);
+
+        DisplayEnsureResult result = await backend.EnsureVirtualDisplayAsync(
+            "client-z-fold-7",
+            2560,
+            1600,
+            120,
+            HdrPreference.Prefer,
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Empty(api.CreatedDisplays);
+        Assert.Equal("client-z-fold-7", Assert.Single(api.PrimaryRequests));
+        Assert.True(api.CurrentTopology.IsPrimary("client-z-fold-7"));
+    }
+
+    [Fact]
+    public async Task EnsureVirtualDisplayAsync_WhenPreparedDisplayPrimaryApplyFails_DoesNotRemovePreparedDisplay()
+    {
+        var api = new FakeWindowsDisplayApi
+        {
+            CurrentTopology = DisplayTopologySnapshot.Extended(
+                physicalDisplayId: "physical-laptop-panel",
+                virtualDisplayId: "client-z-fold-7",
+                width: 2560,
+                height: 1600,
+                refreshHz: 120,
+                virtualPrimary: false),
+            PrimaryResult = DisplayApiResult.Fail("primary apply not available")
+        };
+        var backend = new WindowsDisplayBackend(api);
+
+        DisplayEnsureResult result = await backend.EnsureVirtualDisplayAsync(
+            "client-z-fold-7",
+            2560,
+            1600,
+            120,
+            HdrPreference.Prefer,
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("primary apply not available", result.Error ?? string.Empty);
+        Assert.Empty(api.CreatedDisplays);
+        Assert.Empty(api.RemovedDisplays);
+    }
+
+    [Fact]
     public async Task PrepareVirtualDisplayAsync_CreatesDisplayWithoutPrimaryRequest()
     {
         var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
