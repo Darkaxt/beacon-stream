@@ -11,7 +11,9 @@ public sealed record ExternalProcessStreamingOptions(
     string? ConnectionLaunchUri = null,
     IReadOnlyDictionary<string, string>? ConnectionEndpoints = null,
     string? ManifestPath = null,
-    SunshineEndpointProfile? SunshineProfile = null);
+    SunshineEndpointProfile? SunshineProfile = null,
+    string? WrapperChildExecutablePath = null,
+    string? WrapperChildArguments = null);
 
 public sealed record ExternalStreamingManifest(
     string? Name,
@@ -159,6 +161,9 @@ public sealed class ExternalProcessStreamingBackend(
         string? executablePath = TrimOrNull(options.ExecutablePath);
         bool executableConfigured = executablePath is not null;
         bool executableAvailable = false;
+        string? wrapperChildExecutablePath = TrimOrNull(options.WrapperChildExecutablePath);
+        bool wrapperChildExecutableConfigured = wrapperChildExecutablePath is not null;
+        bool wrapperChildExecutableAvailable = false;
         bool manifestConfigured = !string.IsNullOrWhiteSpace(options.ManifestPath);
         bool manifestAvailable = false;
         string? diagnostic = null;
@@ -176,6 +181,15 @@ public sealed class ExternalProcessStreamingBackend(
                 if (!executableAvailable)
                 {
                     diagnostic = $"External streaming executable '{executablePath}' does not exist.";
+                }
+            }
+
+            if (wrapperChildExecutableConfigured)
+            {
+                wrapperChildExecutableAvailable = runner.FileExists(wrapperChildExecutablePath!);
+                if (!wrapperChildExecutableAvailable)
+                {
+                    diagnostic ??= $"External streaming wrapper child executable '{wrapperChildExecutablePath}' does not exist.";
                 }
             }
 
@@ -221,6 +235,7 @@ public sealed class ExternalProcessStreamingBackend(
 
         bool ready = executableConfigured
             && executableAvailable
+            && (!wrapperChildExecutableConfigured || wrapperChildExecutableAvailable)
             && (!manifestConfigured || (manifestAvailable && manifest is not null))
             && diagnostic is null;
 
@@ -267,6 +282,14 @@ public sealed class ExternalProcessStreamingBackend(
             return PreflightFailure(
                 plan,
                 $"External streaming executable '{options.ExecutablePath}' does not exist.");
+        }
+
+        string? wrapperChildExecutablePath = TrimOrNull(options.WrapperChildExecutablePath);
+        if (!string.IsNullOrWhiteSpace(wrapperChildExecutablePath) && !runner.FileExists(wrapperChildExecutablePath))
+        {
+            return PreflightFailure(
+                plan,
+                $"External streaming wrapper child executable '{wrapperChildExecutablePath}' does not exist.");
         }
 
         ExternalStreamingManifestReadResult manifest = ReadManifestIfConfigured();
@@ -508,6 +531,7 @@ public sealed class ExternalProcessStreamingBackend(
         };
 
         AddConnectionEnvironment(environment, options);
+        AddWrapperChildEnvironment(environment, options);
         if (!string.IsNullOrWhiteSpace(streamSessionDescriptorPath))
         {
             environment["BEACON_STREAM_SESSION_DESCRIPTOR_PATH"] = streamSessionDescriptorPath.Trim();
@@ -551,6 +575,21 @@ public sealed class ExternalProcessStreamingBackend(
         if (!string.IsNullOrWhiteSpace(options?.ManifestPath))
         {
             environment["BEACON_WRAPPER_MANIFEST_PATH"] = options.ManifestPath.Trim();
+        }
+    }
+
+    private static void AddWrapperChildEnvironment(
+        Dictionary<string, string> environment,
+        ExternalProcessStreamingOptions? options)
+    {
+        if (!string.IsNullOrWhiteSpace(options?.WrapperChildExecutablePath))
+        {
+            environment["BEACON_WRAPPER_CHILD_EXECUTABLE"] = options.WrapperChildExecutablePath.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(options?.WrapperChildArguments))
+        {
+            environment["BEACON_WRAPPER_CHILD_ARGUMENTS"] = options.WrapperChildArguments.Trim();
         }
     }
 

@@ -130,6 +130,15 @@ Wrappers with stable connection details should advertise those details through e
 
 The probe passes the normalized Beacon session/display/connection environment through to the child. It starts the child before writing the runtime descriptor, so a missing child executable cannot create false runtime connection evidence. In normal mode, if the child exits before Beacon stops the wrapper, the probe exits with the child exit code. If Beacon stops the wrapper first, or if `--once` validation exits, the probe stops the child.
 
+Beacon Server can populate those wrapper child environment values from server-owned external-process configuration:
+
+- `Beacon:Streaming:ExternalProcess:Wrapper:ChildExecutablePath`
+- `Beacon:Streaming:ExternalProcess:Wrapper:ChildArguments`
+- `BEACON_EXTERNAL_STREAMING_WRAPPER_CHILD_EXECUTABLE`
+- `BEACON_EXTERNAL_STREAMING_WRAPPER_CHILD_ARGUMENTS`
+
+When `ChildExecutablePath` is configured, Beacon preflights the child executable path before display creation or app launch. This keeps missing Sunshine-compatible child binaries as readiness errors instead of letting the probe start and then fail after topology or app side effects.
+
 ## Stability Rules
 
 - Manifest validation happens during streaming preflight, before display or launch side effects.
