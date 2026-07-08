@@ -156,6 +156,7 @@ public sealed class FakeEndpointRunnerTests
         Assert.Contains("\"y\":0.5", handler.Bodies[inputIndex], StringComparison.Ordinal);
         Assert.Contains("\"x\":0.75", handler.Bodies[inputIndex], StringComparison.Ordinal);
         Assert.Contains("\"y\":0.25", handler.Bodies[inputIndex], StringComparison.Ordinal);
+        Assert.DoesNotContain("\"buttons\":null", handler.Bodies[inputIndex], StringComparison.Ordinal);
     }
 
     [Fact]
