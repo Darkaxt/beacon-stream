@@ -1,6 +1,7 @@
 using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
+using Beacon.Core.Recovery;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Server.Hosting;
@@ -62,6 +63,37 @@ public static class AdminEndpoints
             return Results.Ok(new { restoreRequested = true });
         });
 
+        admin.MapPost("/recovery/move-windows-back", async (
+            MoveWindowsBackRequest request,
+            IRecoveryBackend recovery,
+            CancellationToken cancellationToken) =>
+        {
+            RecoveryActionResult result = await recovery.MoveWindowsBackAsync(request.Minimize, cancellationToken);
+            return result.Success
+                ? Results.Ok(result)
+                : Results.Problem(result.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+        });
+
+        admin.MapPost("/recovery/close-virtual-windows", async (
+            IRecoveryBackend recovery,
+            CancellationToken cancellationToken) =>
+        {
+            RecoveryActionResult result = await recovery.CloseVirtualWindowsAsync(cancellationToken);
+            return result.Success
+                ? Results.Ok(result)
+                : Results.Problem(result.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+        });
+
+        admin.MapPost("/recovery/terminate-virtual-processes", async (
+            IRecoveryBackend recovery,
+            CancellationToken cancellationToken) =>
+        {
+            RecoveryActionResult result = await recovery.TerminateVirtualProcessesAsync(cancellationToken);
+            return result.Success
+                ? Results.Ok(result)
+                : Results.Problem(result.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+        });
+
         admin.MapPost("/clients/{clientId}/display/recover", async (
             string clientId,
             DisplayLeaseManager leases,
@@ -78,3 +110,5 @@ public static class AdminEndpoints
         return endpoints;
     }
 }
+
+public sealed record MoveWindowsBackRequest(bool Minimize = true);

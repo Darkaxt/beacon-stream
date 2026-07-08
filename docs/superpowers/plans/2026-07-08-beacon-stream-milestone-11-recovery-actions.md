@@ -31,7 +31,7 @@ Files:
 git switch -c codex/milestone-11-recovery-actions
 ```
 
-- [ ] **Step 2: Commit plan**
+- [x] **Step 2: Commit plan**
 
 ```powershell
 git add docs/superpowers/plans/2026-07-08-beacon-stream-milestone-11-recovery-actions.md
@@ -50,7 +50,7 @@ Files:
 - Modify: `src/Beacon.Server/Hosting/BeaconServiceRegistration.cs`
 - Modify: `tests/Beacon.Server.Tests/AdminApiTests.cs`
 
-- [ ] **Step 1: Add contract and fake backend**
+- [x] **Step 1: Add contract and fake backend**
 
 Support:
 
@@ -58,11 +58,11 @@ Support:
 - close virtual-display windows.
 - terminate processes with virtual-display windows.
 
-- [ ] **Step 2: Register fake recovery by default**
+- [x] **Step 2: Register fake recovery by default**
 
 Default fake host mode must use `FakeRecoveryBackend`.
 
-- [ ] **Step 3: Add admin endpoints**
+- [x] **Step 3: Add admin endpoints**
 
 Add:
 
@@ -70,7 +70,7 @@ Add:
 - `POST /admin/recovery/close-virtual-windows`
 - `POST /admin/recovery/terminate-virtual-processes`
 
-- [ ] **Step 4: Verify focused tests and commit**
+- [x] **Step 4: Verify focused tests and commit**
 
 ```powershell
 dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter FakeRecoveryBackend

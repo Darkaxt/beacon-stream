@@ -39,15 +39,30 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         HttpClient client = factory.CreateClient();
 
         HttpResponseMessage restore = await client.PostAsJsonAsync("/admin/recovery/restore-physical", new { });
+        HttpResponseMessage move = await client.PostAsJsonAsync("/admin/recovery/move-windows-back", new { minimize = true });
+        HttpResponseMessage close = await client.PostAsJsonAsync("/admin/recovery/close-virtual-windows", new { });
+        HttpResponseMessage terminate = await client.PostAsJsonAsync("/admin/recovery/terminate-virtual-processes", new { });
         HttpResponseMessage recover = await client.PostAsJsonAsync("/admin/clients/z-fold-7/display/recover", new { });
 
         Assert.Equal(HttpStatusCode.OK, restore.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, move.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, close.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, terminate.StatusCode);
         Assert.Equal(HttpStatusCode.OK, recover.StatusCode);
 
         using JsonDocument restoreJson = await JsonDocument.ParseAsync(await restore.Content.ReadAsStreamAsync());
+        using JsonDocument moveJson = await JsonDocument.ParseAsync(await move.Content.ReadAsStreamAsync());
+        using JsonDocument closeJson = await JsonDocument.ParseAsync(await close.Content.ReadAsStreamAsync());
+        using JsonDocument terminateJson = await JsonDocument.ParseAsync(await terminate.Content.ReadAsStreamAsync());
         using JsonDocument recoverJson = await JsonDocument.ParseAsync(await recover.Content.ReadAsStreamAsync());
 
         Assert.True(restoreJson.RootElement.GetProperty("restoreRequested").GetBoolean());
+        Assert.True(moveJson.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal("move-windows-back", moveJson.RootElement.GetProperty("action").GetString());
+        Assert.True(closeJson.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal("close-virtual-windows", closeJson.RootElement.GetProperty("action").GetString());
+        Assert.True(terminateJson.RootElement.GetProperty("success").GetBoolean());
+        Assert.Equal("terminate-virtual-processes", terminateJson.RootElement.GetProperty("action").GetString());
         Assert.True(recoverJson.RootElement.GetProperty("recovered").GetBoolean());
     }
 }
