@@ -26,6 +26,8 @@ or:
 
 Beacon passes the same path to the wrapper as `BEACON_WRAPPER_MANIFEST_PATH`.
 
+Beacon launches the wrapper process with the executable directory as `WorkingDirectory`. Wrapper-relative config, logs, or helper files should be resolved from there or from explicit paths passed through arguments, environment variables, or the manifest.
+
 ## Example
 
 The checked example is parsed by the Windows manifest reader test so docs and runtime deserialization cannot drift:
