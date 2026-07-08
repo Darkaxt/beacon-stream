@@ -285,6 +285,13 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             return batch;
         }
 
+        public static InputBatch keyboardPress(int sequence, String key, String code) {
+            InputBatch batch = new InputBatch();
+            batch.sequence = sequence;
+            batch.events = new InputEvent[] { InputEvent.keyboard("press", key, code) };
+            return batch;
+        }
+
         JsonObject toJson() {
             JsonObject json = new JsonObject();
             json.addProperty("sequence", sequence);
@@ -307,6 +314,8 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         public Double x;
         public Double y;
         public Integer buttons;
+        public String key;
+        public String code;
 
         static InputEvent pointer(String action, int pointerId, double x, double y, Integer buttons) {
             InputEvent event = new InputEvent();
@@ -319,6 +328,15 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             return event;
         }
 
+        static InputEvent keyboard(String action, String key, String code) {
+            InputEvent event = new InputEvent();
+            event.type = "keyboard";
+            event.action = action;
+            event.key = key;
+            event.code = code;
+            return event;
+        }
+
         JsonObject toJson() {
             JsonObject json = new JsonObject();
             add(json, "type", type);
@@ -327,6 +345,8 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             add(json, "x", x);
             add(json, "y", y);
             add(json, "buttons", buttons);
+            add(json, "key", key);
+            add(json, "code", code);
             return json;
         }
     }

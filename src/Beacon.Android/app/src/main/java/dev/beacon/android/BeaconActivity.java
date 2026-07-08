@@ -133,6 +133,7 @@ public final class BeaconActivity extends Activity {
             readGame())));
         root.addView(touchSurface());
         root.addView(button("Send Input", model -> model.sendInput(BeaconApiClient.InputBatch.pointerTap(1, 0.5, 0.5))));
+        root.addView(button("Send Escape", model -> model.sendInput(BeaconApiClient.InputBatch.keyboardPress(2, "Escape", "Escape"))));
         root.addView(button("Stop Stream", model -> model.stopStream()));
         root.addView(button("Disconnect", model -> model.disconnect()));
         root.addView(button("Quit", model -> model.quit(new BeaconApiClient.QuitState(false))));
