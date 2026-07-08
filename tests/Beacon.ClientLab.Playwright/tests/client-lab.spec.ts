@@ -1,6 +1,9 @@
 import { expect, test } from '@playwright/test';
 
 test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and emergency restore', async ({ page }) => {
+  const capabilityBodies: unknown[] = [];
+  const telemetryBodies: unknown[] = [];
+
   await page.route('**/clients/hello', async route => {
     await route.fulfill({
       contentType: 'application/json',
@@ -54,6 +57,14 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
 
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({}) });
   });
+  await page.route('**/clients/z-fold-7/capabilities', async route => {
+    capabilityBodies.push(route.request().postDataJSON());
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ accepted: true }) });
+  });
+  await page.route('**/clients/z-fold-7/telemetry', async route => {
+    telemetryBodies.push(route.request().postDataJSON());
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ accepted: true }) });
+  });
   await page.route('**/clients/z-fold-7/plan', async route => {
     expect(route.request().postDataJSON()).toEqual({ gameId: 'steam-shortcut:3767414131' });
     await route.fulfill({
@@ -62,7 +73,14 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
         clientId: 'z-fold-7',
         appId: 'steam-shortcut:3767414131',
         display: { displayId: 'client-z-fold-7', width: 2560, height: 1600, refreshHz: 120, mode: 'virtual-primary' },
-        stream: { fps: 120, codec: 'av1', initialBitrateMbps: 65 },
+        stream: {
+          fps: 120,
+          codec: 'av1',
+          initialBitrateMbps: 65,
+          transport: 'lan-direct',
+          congestionPolicy: 'adaptive',
+          reason: 'Excellent LAN telemetry kept 120 FPS.'
+        },
         recovery: { restorePhysicalDisplayOnEnd: true, allowClientAbort: true }
       })
     });
@@ -120,10 +138,17 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
   await page.getByLabel('Height').fill('1600');
   await page.getByRole('button', { name: 'Plan' }).click();
   await expect(page.getByText('virtual-primary')).toBeVisible();
+  await expect(page.getByText('Excellent LAN telemetry kept 120 FPS.')).toBeVisible();
+  expect(capabilityBodies).toHaveLength(1);
+  expect(telemetryBodies).toHaveLength(1);
+  expect(capabilityBodies[0]).toMatchObject({ maxFps: 120, currentScreenMode: '2560x1600@120' });
+  expect(telemetryBodies[0]).toMatchObject({ rttMs: 8, wifiBand: 'wifi-7' });
 
   await page.getByRole('button', { name: 'Launch' }).click();
   await expect(page.getByText('streaming client-z-fold-7')).toBeVisible();
   await expect(page.getByText('running av1 120fps')).toBeVisible();
+  expect(capabilityBodies).toHaveLength(2);
+  expect(telemetryBodies).toHaveLength(2);
 
   await page.getByRole('button', { name: 'Disconnect' }).click();
   await expect(page.getByText('lease retained')).toBeVisible();

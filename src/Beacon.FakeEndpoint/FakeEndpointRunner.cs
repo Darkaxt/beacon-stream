@@ -9,14 +9,23 @@ public sealed record FakeEndpointScript(
     int Width,
     int Height,
     int RefreshHz,
+    int? BitrateCapMbps,
     bool Av1,
     bool Hevc,
     bool H264,
     bool Hdr10,
     bool VirtualDisplayHdrSupported,
+    int MaxFps,
+    bool LowLatencyDecode,
+    string? CurrentScreenMode,
+    string TelemetryProfile,
     int RttMs,
     double PacketLossPercent,
     int? DecoderLoadPercent,
+    int? EstimatedBandwidthMbps,
+    string? WifiBand,
+    int? BatteryPercent,
+    string? ThermalState,
     string AppId,
     string Title,
     string Source)
@@ -29,17 +38,101 @@ public sealed record FakeEndpointScript(
             Width: 2560,
             Height: 1600,
             RefreshHz: 120,
+            BitrateCapMbps: null,
             Av1: true,
             Hevc: true,
             H264: true,
             Hdr10: true,
             VirtualDisplayHdrSupported: false,
+            MaxFps: 120,
+            LowLatencyDecode: true,
+            CurrentScreenMode: "2560x1600@120",
+            TelemetryProfile: "excellent-lan",
             RttMs: 8,
             PacketLossPercent: 0,
-            DecoderLoadPercent: null,
+            DecoderLoadPercent: 20,
+            EstimatedBandwidthMbps: 120,
+            WifiBand: "wifi-7",
+            BatteryPercent: 80,
+            ThermalState: "nominal",
             AppId: "steam-shortcut:3767414131",
             Title: "Dispatch",
             Source: "steam-shortcut");
+
+    public FakeEndpointScript ApplyTelemetryProfile(string profile)
+    {
+        string normalized = profile.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "congested-lan" => this with
+            {
+                TelemetryProfile = "congested-lan",
+                RttMs = 55,
+                PacketLossPercent = 1.5,
+                DecoderLoadPercent = 55,
+                EstimatedBandwidthMbps = 45,
+                WifiBand = "wifi-6",
+                BatteryPercent = 60,
+                ThermalState = "nominal"
+            },
+            "high-rtt" => this with
+            {
+                TelemetryProfile = "high-rtt",
+                RttMs = 115,
+                PacketLossPercent = 0.5,
+                DecoderLoadPercent = 35,
+                EstimatedBandwidthMbps = 80,
+                WifiBand = "wifi-5",
+                BatteryPercent = 70,
+                ThermalState = "nominal"
+            },
+            "packet-loss" => this with
+            {
+                TelemetryProfile = "packet-loss",
+                RttMs = 22,
+                PacketLossPercent = 3.2,
+                DecoderLoadPercent = 40,
+                EstimatedBandwidthMbps = 90,
+                WifiBand = "wifi-6",
+                BatteryPercent = 70,
+                ThermalState = "nominal"
+            },
+            "low-bitrate-cap" => this with
+            {
+                TelemetryProfile = "low-bitrate-cap",
+                RttMs = 8,
+                PacketLossPercent = 0,
+                DecoderLoadPercent = 30,
+                EstimatedBandwidthMbps = 35,
+                WifiBand = "wifi-6",
+                BatteryPercent = 75,
+                ThermalState = "nominal",
+                BitrateCapMbps = 35
+            },
+            "thermal-battery" => this with
+            {
+                TelemetryProfile = "thermal-battery",
+                RttMs = 12,
+                PacketLossPercent = 0,
+                DecoderLoadPercent = 88,
+                EstimatedBandwidthMbps = 100,
+                WifiBand = "wifi-6",
+                BatteryPercent = 9,
+                ThermalState = "hot"
+            },
+            _ => this with
+            {
+                TelemetryProfile = "excellent-lan",
+                RttMs = 8,
+                PacketLossPercent = 0,
+                DecoderLoadPercent = 20,
+                EstimatedBandwidthMbps = 120,
+                WifiBand = "wifi-7",
+                BatteryPercent = 80,
+                ThermalState = "nominal"
+            }
+        };
+    }
 }
 
 public sealed record FakeEndpointResult(bool Success, IReadOnlyList<string> Operations, string? Error);
@@ -94,7 +187,8 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
         {
             preferredWidth = script.Width,
             preferredHeight = script.Height,
-            preferredRefreshHz = script.RefreshHz
+            preferredRefreshHz = script.RefreshHz,
+            bitrateCapMbps = script.BitrateCapMbps
         };
 
     private static object CreateCapabilities(FakeEndpointScript script) =>
@@ -104,7 +198,10 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
             hevc = script.Hevc,
             h264 = script.H264,
             hdr10 = script.Hdr10,
-            virtualDisplayHdrSupported = script.VirtualDisplayHdrSupported
+            virtualDisplayHdrSupported = script.VirtualDisplayHdrSupported,
+            maxFps = script.MaxFps,
+            lowLatencyDecode = script.LowLatencyDecode,
+            currentScreenMode = script.CurrentScreenMode
         };
 
     private static object CreateTelemetry(FakeEndpointScript script) =>
@@ -112,7 +209,11 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
         {
             rttMs = script.RttMs,
             packetLossPercent = script.PacketLossPercent,
-            decoderLoadPercent = script.DecoderLoadPercent
+            decoderLoadPercent = script.DecoderLoadPercent,
+            estimatedBandwidthMbps = script.EstimatedBandwidthMbps,
+            wifiBand = script.WifiBand,
+            batteryPercent = script.BatteryPercent,
+            thermalState = script.ThermalState
         };
 
     private static object CreatePlanRequest(FakeEndpointScript script) =>

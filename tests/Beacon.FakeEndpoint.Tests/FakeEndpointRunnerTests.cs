@@ -45,6 +45,30 @@ public sealed class FakeEndpointRunnerTests
     }
 
     [Fact]
+    public void ParsesTelemetryProfileAndTelemetryOverridesFromCommandLine()
+    {
+        FakeEndpointCommandLineOptions options = FakeEndpointCommandLine.Parse(
+            [
+                "--telemetry-profile",
+                "thermal-battery",
+                "--rtt-ms",
+                "44",
+                "--packet-loss",
+                "1.25",
+                "--estimated-bandwidth",
+                "70",
+                "--wifi-band",
+                "wifi-6"
+            ]);
+
+        Assert.Equal("thermal-battery", options.Script.TelemetryProfile);
+        Assert.Equal(44, options.Script.RttMs);
+        Assert.Equal(1.25, options.Script.PacketLossPercent);
+        Assert.Equal(70, options.Script.EstimatedBandwidthMbps);
+        Assert.Equal("wifi-6", options.Script.WifiBand);
+    }
+
+    [Fact]
     public async Task RunsZFoldControlPlaneScriptInOrder()
     {
         var handler = new RecordingHandler();
@@ -90,6 +114,22 @@ public sealed class FakeEndpointRunnerTests
         Assert.Contains("\"clientId\":\"handheld-1\"", handler.Bodies[0], StringComparison.Ordinal);
         Assert.Contains("\"name\":\"Handheld 1\"", handler.Bodies[0], StringComparison.Ordinal);
         Assert.Contains("\"pairingToken\":\"pair-me\"", handler.Bodies[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SendsExpandedTelemetryFacts()
+    {
+        var handler = new RecordingHandler();
+        var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost") };
+        var runner = new FakeEndpointRunner(client);
+        FakeEndpointScript script = FakeEndpointScript.CreateZFold7Default().ApplyTelemetryProfile("packet-loss");
+
+        FakeEndpointResult result = await runner.RunAsync(script, CancellationToken.None);
+
+        Assert.True(result.Success);
+        string telemetryBody = handler.Bodies[4];
+        Assert.Contains("\"packetLossPercent\":3.2", telemetryBody, StringComparison.Ordinal);
+        Assert.Contains("\"wifiBand\":\"wifi-6\"", telemetryBody, StringComparison.Ordinal);
     }
 
     [Fact]

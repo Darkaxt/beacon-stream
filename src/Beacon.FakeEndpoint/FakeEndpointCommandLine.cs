@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Beacon.FakeEndpoint;
 
 public sealed record FakeEndpointCommandLineOptions(Uri ServerUri, FakeEndpointScript Script);
@@ -8,18 +10,28 @@ public static class FakeEndpointCommandLine
     {
         Dictionary<string, string> values = ParsePairs(args);
         FakeEndpointScript defaults = FakeEndpointScript.CreateZFold7Default();
+        FakeEndpointScript profiled = defaults.ApplyTelemetryProfile(ReadString(values, "telemetry-profile", defaults.TelemetryProfile));
 
-        var script = defaults with
+        var script = profiled with
         {
-            ClientId = ReadString(values, "client-id", defaults.ClientId),
-            Name = ReadString(values, "name", defaults.Name),
-            PairingToken = ReadOptionalString(values, "pairing-token", defaults.PairingToken),
-            Width = ReadInt(values, "width", defaults.Width),
-            Height = ReadInt(values, "height", defaults.Height),
-            RefreshHz = ReadInt(values, "refresh", defaults.RefreshHz),
-            AppId = ReadString(values, "app-id", defaults.AppId),
-            Title = ReadString(values, "title", defaults.Title),
-            Source = ReadString(values, "source", defaults.Source)
+            ClientId = ReadString(values, "client-id", profiled.ClientId),
+            Name = ReadString(values, "name", profiled.Name),
+            PairingToken = ReadOptionalString(values, "pairing-token", profiled.PairingToken),
+            Width = ReadInt(values, "width", profiled.Width),
+            Height = ReadInt(values, "height", profiled.Height),
+            RefreshHz = ReadInt(values, "refresh", profiled.RefreshHz),
+            BitrateCapMbps = ReadOptionalInt(values, "bitrate-cap", profiled.BitrateCapMbps),
+            MaxFps = ReadInt(values, "max-fps", profiled.MaxFps),
+            RttMs = ReadInt(values, "rtt-ms", profiled.RttMs),
+            PacketLossPercent = ReadDouble(values, "packet-loss", profiled.PacketLossPercent),
+            DecoderLoadPercent = ReadOptionalInt(values, "decoder-load", profiled.DecoderLoadPercent),
+            EstimatedBandwidthMbps = ReadOptionalInt(values, "estimated-bandwidth", profiled.EstimatedBandwidthMbps),
+            WifiBand = ReadOptionalString(values, "wifi-band", profiled.WifiBand),
+            BatteryPercent = ReadOptionalInt(values, "battery", profiled.BatteryPercent),
+            ThermalState = ReadOptionalString(values, "thermal-state", profiled.ThermalState),
+            AppId = ReadString(values, "app-id", profiled.AppId),
+            Title = ReadString(values, "title", profiled.Title),
+            Source = ReadString(values, "source", profiled.Source)
         };
 
         return new FakeEndpointCommandLineOptions(
@@ -53,6 +65,16 @@ public static class FakeEndpointCommandLine
 
     private static int ReadInt(IReadOnlyDictionary<string, string> values, string key, int fallback) =>
         values.TryGetValue(key, out string? value) && int.TryParse(value, out int parsed)
+            ? parsed
+            : fallback;
+
+    private static int? ReadOptionalInt(IReadOnlyDictionary<string, string> values, string key, int? fallback) =>
+        values.TryGetValue(key, out string? value) && int.TryParse(value, out int parsed)
+            ? parsed
+            : fallback;
+
+    private static double ReadDouble(IReadOnlyDictionary<string, string> values, string key, double fallback) =>
+        values.TryGetValue(key, out string? value) && double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed)
             ? parsed
             : fallback;
 

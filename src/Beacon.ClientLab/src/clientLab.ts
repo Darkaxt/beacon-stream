@@ -1,4 +1,14 @@
 export type HdrPreference = 'Off' | 'Prefer' | 'Require';
+export type TelemetryProfileName = 'excellent-lan' | 'congested-lan' | 'high-rtt' | 'packet-loss' | 'low-bitrate-cap' | 'thermal-battery';
+
+export const telemetryProfileNames: TelemetryProfileName[] = [
+  'excellent-lan',
+  'congested-lan',
+  'high-rtt',
+  'packet-loss',
+  'low-bitrate-cap',
+  'thermal-battery'
+];
 
 export interface ProfileDraft {
   clientId: string;
@@ -59,11 +69,49 @@ export interface StreamState {
   error: string | null;
 }
 
+export interface PlanResponse {
+  display: {
+    mode: string;
+    width: number;
+    height: number;
+    refreshHz: number;
+  };
+  stream: {
+    codec: string;
+    fps: number;
+    initialBitrateMbps: number;
+    transport: string;
+    congestionPolicy: string;
+    reason: string;
+  };
+}
+
 export interface LaunchResponse {
   clientId: string;
   displayId: string;
   state: string;
   stream: StreamState | null;
+}
+
+export interface CapabilitiesPayload {
+  av1: boolean;
+  hevc: boolean;
+  h264: boolean;
+  hdr10: boolean;
+  virtualDisplayHdrSupported: boolean;
+  maxFps: number;
+  lowLatencyDecode: boolean;
+  currentScreenMode: string;
+}
+
+export interface TelemetryPayload {
+  rttMs: number;
+  packetLossPercent: number;
+  decoderLoadPercent: number;
+  estimatedBandwidthMbps: number;
+  wifiBand: string;
+  batteryPercent: number;
+  thermalState: string;
 }
 
 export function createDefaultProfile(): ProfileDraft {
@@ -102,6 +150,40 @@ export function createGamePlanRequest(selectedGameId: string): PlanRequest {
   };
 }
 
+export function createCapabilitiesPayload(): CapabilitiesPayload {
+  return {
+    av1: true,
+    hevc: true,
+    h264: true,
+    hdr10: true,
+    virtualDisplayHdrSupported: false,
+    maxFps: 120,
+    lowLatencyDecode: true,
+    currentScreenMode: '2560x1600@120'
+  };
+}
+
+export function createTelemetryPayload(profile: TelemetryProfileName): TelemetryPayload {
+  switch (profile) {
+    case 'congested-lan':
+      return createTelemetry(55, 1.5, 55, 45, 'wifi-6', 60, 'nominal');
+    case 'high-rtt':
+      return createTelemetry(115, 0.5, 35, 80, 'wifi-5', 70, 'nominal');
+    case 'packet-loss':
+      return createTelemetry(22, 3.2, 40, 90, 'wifi-6', 70, 'nominal');
+    case 'low-bitrate-cap':
+      return createTelemetry(8, 0, 30, 35, 'wifi-6', 75, 'nominal');
+    case 'thermal-battery':
+      return createTelemetry(12, 0, 88, 100, 'wifi-6', 9, 'hot');
+    case 'excellent-lan':
+      return createTelemetry(8, 0, 20, 120, 'wifi-7', 80, 'nominal');
+  }
+}
+
+export function formatPlanDetails(plan: PlanResponse): string {
+  return `${plan.display.mode} ${plan.display.width}x${plan.display.height}@${plan.display.refreshHz} ${plan.stream.codec} ${plan.stream.fps}fps ${plan.stream.initialBitrateMbps}Mbps ${plan.stream.transport}/${plan.stream.congestionPolicy} - ${plan.stream.reason}`;
+}
+
 export function formatLaunchEvents(launch: LaunchResponse): string[] {
   const events = [`${launch.state} ${launch.displayId}`];
   if (launch.stream !== null) {
@@ -109,6 +191,26 @@ export function formatLaunchEvents(launch: LaunchResponse): string[] {
   }
 
   return events;
+}
+
+function createTelemetry(
+  rttMs: number,
+  packetLossPercent: number,
+  decoderLoadPercent: number,
+  estimatedBandwidthMbps: number,
+  wifiBand: string,
+  batteryPercent: number,
+  thermalState: string
+): TelemetryPayload {
+  return {
+    rttMs,
+    packetLossPercent,
+    decoderLoadPercent,
+    estimatedBandwidthMbps,
+    wifiBand,
+    batteryPercent,
+    thermalState
+  };
 }
 
 export async function getJson<T>(path: string): Promise<T> {

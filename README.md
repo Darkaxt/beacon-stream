@@ -50,6 +50,16 @@ The fake endpoint can simulate a paired non-phone client:
 dotnet run --project src\Beacon.FakeEndpoint -- --server http://localhost:5000 --client-id handheld-1 --name "Handheld 1" --pairing-token pair-me
 ```
 
+It can also simulate named telemetry profiles before plan and launch requests:
+
+```powershell
+dotnet run --project src\Beacon.FakeEndpoint -- --server http://localhost:5000 --telemetry-profile excellent-lan
+dotnet run --project src\Beacon.FakeEndpoint -- --server http://localhost:5000 --telemetry-profile high-rtt
+dotnet run --project src\Beacon.FakeEndpoint -- --server http://localhost:5000 --telemetry-profile thermal-battery
+```
+
+Supported profiles are `excellent-lan`, `congested-lan`, `high-rtt`, `packet-loss`, `low-bitrate-cap`, and `thermal-battery`. These drive the initial server-computed codec, FPS, bitrate, transport, congestion policy, and reason. This is not a live adaptive bitrate loop.
+
 ## Streaming Backend Mode
 
 The streaming backend defaults to fake mode:
