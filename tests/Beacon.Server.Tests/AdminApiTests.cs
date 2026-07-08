@@ -72,6 +72,29 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
     }
 
     [Fact]
+    public async Task AdminPhysicalRestoreReturnsServiceUnavailableWhenRestoreFails()
+    {
+        var display = new FakeDisplayBackend
+        {
+            NextRestoreResult = DisplayRestoreResult.Fail("physical primary was not verified")
+        };
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.AddSingleton<IDisplayBackend>(display);
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage restore = await client.PostAsJsonAsync("/admin/recovery/restore-physical", new { });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, restore.StatusCode);
+        string body = await restore.Content.ReadAsStringAsync();
+        Assert.Contains("physical primary was not verified", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("physical-primary", Assert.Single(display.RestoreCalls));
+    }
+
+    [Fact]
     public async Task SnapshotIncludesRecentOperationalDiagnostics()
     {
         HttpClient client = factory.CreateClient();
