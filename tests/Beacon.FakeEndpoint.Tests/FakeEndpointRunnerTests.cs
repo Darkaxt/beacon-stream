@@ -136,7 +136,7 @@ public sealed class FakeEndpointRunnerTests
     }
 
     [Fact]
-    public async Task SendsDeterministicPointerGestureAfterLaunch()
+    public async Task SendsDeterministicPointerGestureAndKeyboardPressAfterLaunch()
     {
         var handler = new RecordingHandler();
         var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost") };
@@ -152,6 +152,10 @@ public sealed class FakeEndpointRunnerTests
         Assert.Contains("\"action\":\"down\"", handler.Bodies[inputIndex], StringComparison.Ordinal);
         Assert.Contains("\"action\":\"move\"", handler.Bodies[inputIndex], StringComparison.Ordinal);
         Assert.Contains("\"action\":\"up\"", handler.Bodies[inputIndex], StringComparison.Ordinal);
+        Assert.Contains("\"type\":\"keyboard\"", handler.Bodies[inputIndex], StringComparison.Ordinal);
+        Assert.Contains("\"action\":\"press\"", handler.Bodies[inputIndex], StringComparison.Ordinal);
+        Assert.Contains("\"key\":\"Escape\"", handler.Bodies[inputIndex], StringComparison.Ordinal);
+        Assert.Contains("\"code\":\"Escape\"", handler.Bodies[inputIndex], StringComparison.Ordinal);
         Assert.Contains("\"x\":0.5", handler.Bodies[inputIndex], StringComparison.Ordinal);
         Assert.Contains("\"y\":0.5", handler.Bodies[inputIndex], StringComparison.Ordinal);
         Assert.Contains("\"x\":0.75", handler.Bodies[inputIndex], StringComparison.Ordinal);

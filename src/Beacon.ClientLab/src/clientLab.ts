@@ -264,6 +264,20 @@ export function createPointerGesturePayload(sequence: number): InputPayload {
   };
 }
 
+export function createKeyboardInputPayload(sequence: number): InputPayload {
+  return {
+    sequence,
+    events: [
+      {
+        type: 'keyboard',
+        action: 'press',
+        key: 'Escape',
+        code: 'Escape'
+      }
+    ]
+  };
+}
+
 export function formatInputAccepted(response: InputAcceptedResponse): string {
   return `input ${response.accepted ? 'accepted' : 'rejected'} ${response.eventCount} event(s) ${response.sessionId}`;
 }

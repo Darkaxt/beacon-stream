@@ -179,7 +179,7 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
   expect(capabilityBodies).toHaveLength(2);
   expect(telemetryBodies).toHaveLength(2);
 
-  await page.getByRole('button', { name: 'Send Input' }).click();
+  await page.getByRole('button', { name: 'Send Pointer' }).click();
   await expect(page.getByText('input accepted 3 event(s) z-fold-7-steam-shortcut:3767414131')).toBeVisible();
   expect(inputBodies).toEqual([
     {
@@ -189,6 +189,23 @@ test('simulates hello, profile patch, plan, disconnect, reconnect, quit, and eme
         { type: 'pointer', action: 'move', pointerId: 1, x: 0.75, y: 0.25 },
         { type: 'pointer', action: 'up', pointerId: 1, x: 0.75, y: 0.25, buttons: 1 }
       ]
+    }
+  ]);
+
+  await page.getByRole('button', { name: 'Send Keyboard' }).click();
+  await expect(page.getByText('input accepted 1 event(s) z-fold-7-steam-shortcut:3767414131')).toBeVisible();
+  expect(inputBodies).toEqual([
+    {
+      sequence: 1,
+      events: [
+        { type: 'pointer', action: 'down', pointerId: 1, x: 0.5, y: 0.5, buttons: 1 },
+        { type: 'pointer', action: 'move', pointerId: 1, x: 0.75, y: 0.25 },
+        { type: 'pointer', action: 'up', pointerId: 1, x: 0.75, y: 0.25, buttons: 1 }
+      ]
+    },
+    {
+      sequence: 2,
+      events: [{ type: 'keyboard', action: 'press', key: 'Escape', code: 'Escape' }]
     }
   ]);
 
