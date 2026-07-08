@@ -62,6 +62,36 @@ Explicit Beacon connection settings win over manifest connection fields:
 
 When those settings are absent, `protocol`, `launchUri`, and `endpoints` from the manifest become the session connection descriptor.
 
+Beacon also supports a Sunshine/GameStream endpoint profile for wrappers that expose the standard Sunshine port family:
+
+```powershell
+$env:BEACON_EXTERNAL_STREAMING_SUNSHINE_HOST='127.0.0.1'
+$env:BEACON_EXTERNAL_STREAMING_SUNSHINE_BASE_PORT='47989'
+```
+
+or:
+
+```json
+{
+  "Beacon": {
+    "Streaming": {
+      "ExternalProcess": {
+        "Connection": {
+          "Sunshine": {
+            "Host": "127.0.0.1",
+            "BasePort": 47989
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+When configured, the profile advertises `gamestream` if no explicit protocol is set and derives these endpoint roles from the Sunshine base port: `https`, `http`, `web`, `rtsp`, `video`, `control`, `audio`, and `mic`. Per-role explicit `Connection:Endpoints:*` entries override derived endpoints. Runtime session descriptors still take precedence once a wrapper writes actual running-session connection evidence.
+
+The profile is endpoint metadata only. Beacon intentionally does not generate a Moonlight launch URI from host and port because launch URI shape belongs to the wrapper, explicit configuration, or runtime descriptor.
+
 ## Runtime Session Descriptor
 
 The manifest describes wrapper capability before any side effects. A started wrapper can also publish actual per-session connection data by writing JSON to the path Beacon passes as:

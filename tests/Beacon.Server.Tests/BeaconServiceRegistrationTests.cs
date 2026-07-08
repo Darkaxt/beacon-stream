@@ -117,6 +117,54 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public void ExternalProcessSunshineEndpointProfileUsesConfiguration()
+    {
+        IConfiguration configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [BeaconServiceRegistration.StreamingBackendConfigurationKey] = "external-process",
+                [BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey] = "C:\\Tools\\sunshine-wrapper.exe",
+                [BeaconServiceRegistration.ExternalStreamingConnectionSunshineHostConfigurationKey] = "192.168.1.50",
+                [BeaconServiceRegistration.ExternalStreamingConnectionSunshineBasePortConfigurationKey] = "48000"
+            })
+            .Build();
+
+        using ServiceProvider provider = new ServiceCollection()
+            .AddBeaconServices(configuration, environmentHostMode: null)
+            .BuildServiceProvider();
+
+        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
+        Assert.Equal("192.168.1.50", options.SunshineProfile?.Host);
+        Assert.Equal(48000, options.SunshineProfile?.BasePort);
+    }
+
+    [Fact]
+    public void ExternalProcessSunshineEndpointProfileUsesEnvironmentOverrides()
+    {
+        IConfiguration configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [BeaconServiceRegistration.StreamingBackendConfigurationKey] = "external-process",
+                [BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey] = "C:\\Tools\\sunshine-wrapper.exe",
+                [BeaconServiceRegistration.ExternalStreamingConnectionSunshineHostConfigurationKey] = "192.168.1.50",
+                [BeaconServiceRegistration.ExternalStreamingConnectionSunshineBasePortConfigurationKey] = "48000"
+            })
+            .Build();
+
+        using ServiceProvider provider = new ServiceCollection()
+            .AddBeaconServices(
+                configuration,
+                environmentHostMode: null,
+                environmentExternalStreamingConnectionSunshineHost: "10.0.0.20",
+                environmentExternalStreamingConnectionSunshineBasePort: "49000")
+            .BuildServiceProvider();
+
+        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
+        Assert.Equal("10.0.0.20", options.SunshineProfile?.Host);
+        Assert.Equal(49000, options.SunshineProfile?.BasePort);
+    }
+
+    [Fact]
     public void ExternalProcessManifestPathUsesConfiguration()
     {
         using ServiceProvider provider = BuildProvider(

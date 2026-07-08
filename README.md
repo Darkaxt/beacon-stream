@@ -104,6 +104,16 @@ dotnet run --project src\Beacon.Server
 
 Endpoint maps are configured under `Beacon:Streaming:ExternalProcess:Connection:Endpoints:*`, for example `rtsp = rtsp://127.0.0.1:48010/beacon`.
 
+For Sunshine/GameStream-compatible wrappers with standard port layout, Beacon can derive the endpoint map from a host and Sunshine base port:
+
+```powershell
+$env:BEACON_EXTERNAL_STREAMING_SUNSHINE_HOST='127.0.0.1'
+$env:BEACON_EXTERNAL_STREAMING_SUNSHINE_BASE_PORT='47989'
+dotnet run --project src\Beacon.Server
+```
+
+This advertises `gamestream` and derives the documented Sunshine HTTPS, HTTP, web, RTSP, video, control, audio, and mic endpoints. Explicit `Connection:Endpoints:*` entries override the derived endpoint for the same role. Beacon does not invent a Moonlight launch URI from this profile; use explicit connection config, manifest fields, or the runtime descriptor for launch URI handoff.
+
 External-process mode may also read a wrapper manifest from `Beacon:Streaming:ExternalProcess:ManifestPath` or `BEACON_EXTERNAL_STREAMING_MANIFEST`. When present, Beacon validates codec, FPS, bitrate, transport, and HDR support against the manifest during streaming preflight, before display or launch side effects. Manifest connection fields can provide the stream descriptor unless explicit connection settings override them. The manifest path is also passed to the wrapper as `BEACON_WRAPPER_MANIFEST_PATH`. The documented contract and checked example live in `docs/external-streaming-wrapper-manifest.md` and `docs/examples/external-streaming-manifest.example.json`.
 
 When external-process streaming starts, Beacon prepares a fresh per-session runtime descriptor path, deleting any stale descriptor for the same session id before launching the wrapper. The path is passed as `BEACON_STREAM_SESSION_DESCRIPTOR_PATH` and `--stream-session-descriptor`. If the wrapper writes a runtime descriptor there, Beacon uses it as the running session's connection descriptor and refreshes it on demand when session state or health is read. Static manifest or explicit connection settings provide the immediate client handoff; runtime descriptors are evidence from the started wrapper and take precedence once present. The checked example lives in `docs/examples/external-streaming-runtime-session.example.json`.
@@ -171,6 +181,7 @@ Streaming backend checks:
 dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter FakeStreamingBackendTests
 dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj --filter ExternalProcessStreamingBackend
 dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj --filter WindowsRunnerCreatesStartInfoWithWrapperWorkingDirectory
+dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj --filter SunshineEndpointProfile
 dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter ClientApiTests
 dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter FakeEndpointScriptCompletesAgainstStreamingProbeWrapper
 dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter BeaconServiceRegistrationTests
@@ -257,6 +268,7 @@ See:
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-55-fake-endpoint-stream-assertion.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-56-fake-endpoint-wrapper-integration.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-57-wrapper-working-directory.md`
+- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-58-sunshine-port-profile.md`
 - `docs/external-streaming-wrapper-manifest.md`
 - `docs/source-audits/2026-07-08-windows-input-sink-upstream-audit.md`
 - `docs/windows-display-backend.md`

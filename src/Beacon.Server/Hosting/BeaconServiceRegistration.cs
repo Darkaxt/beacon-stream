@@ -13,6 +13,7 @@ using Beacon.Platform.Windows.Recovery;
 using Beacon.Platform.Windows.Sessions;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.State;
+using System.Globalization;
 
 namespace Beacon.Server.Hosting;
 
@@ -28,8 +29,12 @@ public static class BeaconServiceRegistration
     public const string ExternalStreamingManifestEnvironmentVariable = "BEACON_EXTERNAL_STREAMING_MANIFEST";
     public const string ExternalStreamingConnectionProtocolConfigurationKey = "Beacon:Streaming:ExternalProcess:Connection:Protocol";
     public const string ExternalStreamingConnectionLaunchUriConfigurationKey = "Beacon:Streaming:ExternalProcess:Connection:LaunchUri";
+    public const string ExternalStreamingConnectionSunshineHostConfigurationKey = "Beacon:Streaming:ExternalProcess:Connection:Sunshine:Host";
+    public const string ExternalStreamingConnectionSunshineBasePortConfigurationKey = "Beacon:Streaming:ExternalProcess:Connection:Sunshine:BasePort";
     public const string ExternalStreamingConnectionProtocolEnvironmentVariable = "BEACON_EXTERNAL_STREAMING_CONNECTION_PROTOCOL";
     public const string ExternalStreamingConnectionLaunchUriEnvironmentVariable = "BEACON_EXTERNAL_STREAMING_CONNECTION_LAUNCH_URI";
+    public const string ExternalStreamingConnectionSunshineHostEnvironmentVariable = "BEACON_EXTERNAL_STREAMING_SUNSHINE_HOST";
+    public const string ExternalStreamingConnectionSunshineBasePortEnvironmentVariable = "BEACON_EXTERNAL_STREAMING_SUNSHINE_BASE_PORT";
     public const string ClientProfilesPathConfigurationKey = "Beacon:Profiles:Path";
     public const string ClientProfilesPathEnvironmentVariable = "BEACON_CLIENT_PROFILES_PATH";
     public const string PairingTokenConfigurationKey = "Beacon:Pairing:Token";
@@ -45,6 +50,8 @@ public static class BeaconServiceRegistration
             Environment.GetEnvironmentVariable(ExternalStreamingExecutableEnvironmentVariable),
             Environment.GetEnvironmentVariable(ExternalStreamingConnectionProtocolEnvironmentVariable),
             Environment.GetEnvironmentVariable(ExternalStreamingConnectionLaunchUriEnvironmentVariable),
+            Environment.GetEnvironmentVariable(ExternalStreamingConnectionSunshineHostEnvironmentVariable),
+            Environment.GetEnvironmentVariable(ExternalStreamingConnectionSunshineBasePortEnvironmentVariable),
             Environment.GetEnvironmentVariable(ExternalStreamingManifestEnvironmentVariable),
             Environment.GetEnvironmentVariable(ClientProfilesPathEnvironmentVariable),
             Environment.GetEnvironmentVariable(PairingTokenEnvironmentVariable));
@@ -57,6 +64,8 @@ public static class BeaconServiceRegistration
         string? environmentExternalStreamingExecutable = null,
         string? environmentExternalStreamingConnectionProtocol = null,
         string? environmentExternalStreamingConnectionLaunchUri = null,
+        string? environmentExternalStreamingConnectionSunshineHost = null,
+        string? environmentExternalStreamingConnectionSunshineBasePort = null,
         string? environmentExternalStreamingManifest = null,
         string? environmentClientProfilesPath = null,
         string? environmentPairingToken = null)
@@ -101,6 +110,8 @@ public static class BeaconServiceRegistration
             environmentExternalStreamingExecutable,
             environmentExternalStreamingConnectionProtocol,
             environmentExternalStreamingConnectionLaunchUri,
+            environmentExternalStreamingConnectionSunshineHost,
+            environmentExternalStreamingConnectionSunshineBasePort,
             environmentExternalStreamingManifest);
         return services;
     }
@@ -195,6 +206,8 @@ public static class BeaconServiceRegistration
         string? environmentExternalStreamingExecutable,
         string? environmentExternalStreamingConnectionProtocol,
         string? environmentExternalStreamingConnectionLaunchUri,
+        string? environmentExternalStreamingConnectionSunshineHost,
+        string? environmentExternalStreamingConnectionSunshineBasePort,
         string? environmentExternalStreamingManifest)
     {
         switch (mode)
@@ -208,6 +221,8 @@ public static class BeaconServiceRegistration
                     environmentExternalStreamingExecutable,
                     environmentExternalStreamingConnectionProtocol,
                     environmentExternalStreamingConnectionLaunchUri,
+                    environmentExternalStreamingConnectionSunshineHost,
+                    environmentExternalStreamingConnectionSunshineBasePort,
                     environmentExternalStreamingManifest));
                 services.AddSingleton<IExternalStreamingProcessRunner, WindowsExternalStreamingProcessRunner>();
                 services.AddSingleton<IExternalStreamingManifestReader, WindowsExternalStreamingManifestReader>();
@@ -231,6 +246,8 @@ public static class BeaconServiceRegistration
         string? environmentExternalStreamingExecutable,
         string? environmentExternalStreamingConnectionProtocol,
         string? environmentExternalStreamingConnectionLaunchUri,
+        string? environmentExternalStreamingConnectionSunshineHost,
+        string? environmentExternalStreamingConnectionSunshineBasePort,
         string? environmentExternalStreamingManifest)
     {
         string? protocol = string.IsNullOrWhiteSpace(environmentExternalStreamingConnectionProtocol)
@@ -247,13 +264,50 @@ public static class BeaconServiceRegistration
             .GetChildren()
             .Where(child => !string.IsNullOrWhiteSpace(child.Key) && !string.IsNullOrWhiteSpace(child.Value))
             .ToDictionary(child => child.Key, child => child.Value!, StringComparer.OrdinalIgnoreCase);
+        SunshineEndpointProfile? sunshineProfile = CreateSunshineEndpointProfile(
+            configuration,
+            environmentExternalStreamingConnectionSunshineHost,
+            environmentExternalStreamingConnectionSunshineBasePort);
 
         return new ExternalProcessStreamingOptions(
-            ResolveExternalStreamingExecutable(configuration, environmentExternalStreamingExecutable),
-            protocol,
-            launchUri,
-            endpoints,
-            manifestPath);
+            ExecutablePath: ResolveExternalStreamingExecutable(configuration, environmentExternalStreamingExecutable),
+            ConnectionProtocol: protocol,
+            ConnectionLaunchUri: launchUri,
+            ConnectionEndpoints: endpoints,
+            ManifestPath: manifestPath,
+            SunshineProfile: sunshineProfile);
+    }
+
+    private static SunshineEndpointProfile? CreateSunshineEndpointProfile(
+        IConfiguration configuration,
+        string? environmentExternalStreamingConnectionSunshineHost,
+        string? environmentExternalStreamingConnectionSunshineBasePort)
+    {
+        string? configuredHost = string.IsNullOrWhiteSpace(environmentExternalStreamingConnectionSunshineHost)
+            ? configuration[ExternalStreamingConnectionSunshineHostConfigurationKey]
+            : environmentExternalStreamingConnectionSunshineHost;
+        string? configuredBasePort = string.IsNullOrWhiteSpace(environmentExternalStreamingConnectionSunshineBasePort)
+            ? configuration[ExternalStreamingConnectionSunshineBasePortConfigurationKey]
+            : environmentExternalStreamingConnectionSunshineBasePort;
+
+        if (string.IsNullOrWhiteSpace(configuredHost) && string.IsNullOrWhiteSpace(configuredBasePort))
+        {
+            return null;
+        }
+
+        string host = string.IsNullOrWhiteSpace(configuredHost)
+            ? "127.0.0.1"
+            : configuredHost.Trim();
+        int basePort = SunshineEndpointProfile.DefaultBasePort;
+        if (!string.IsNullOrWhiteSpace(configuredBasePort)
+            && (!int.TryParse(configuredBasePort.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out basePort)
+                || basePort is < SunshineEndpointProfile.MinimumBasePort or > SunshineEndpointProfile.MaximumBasePort))
+        {
+            throw new InvalidOperationException(
+                $"Invalid Sunshine base port '{configuredBasePort}'. Set {ExternalStreamingConnectionSunshineBasePortConfigurationKey} or {ExternalStreamingConnectionSunshineBasePortEnvironmentVariable} to a value between {SunshineEndpointProfile.MinimumBasePort.ToString(CultureInfo.InvariantCulture)} and {SunshineEndpointProfile.MaximumBasePort.ToString(CultureInfo.InvariantCulture)}.");
+        }
+
+        return new SunshineEndpointProfile(host, basePort);
     }
 
     private static IClientProfileRepository CreateClientProfileRepository(
