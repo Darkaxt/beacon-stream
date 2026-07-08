@@ -155,7 +155,9 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/capabilities", CreateCapabilities(script), operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/telemetry", CreateTelemetry(script), operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/plan", CreatePlanRequest(script), operations, cancellationToken) &&
+            await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/launch", CreatePlanRequest(script), operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/disconnect", new { }, operations, cancellationToken) &&
+            await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/reconnect", new { }, operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/plan", CreatePlanRequest(script), operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/quit", CreateQuitRequest(), operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/emergency-restore", new { }, operations, cancellationToken);
