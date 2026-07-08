@@ -540,7 +540,7 @@ public static class ClientEndpoints
         clients.MapPost("/{clientId}/emergency-restore", async (
             string clientId,
             InMemoryClientStore clients,
-            IDisplayBackend displayBackend,
+            DisplayLeaseManager leases,
             CancellationToken cancellationToken) =>
         {
             ClientProfile? profile = clients.GetProfile(clientId);
@@ -556,15 +556,16 @@ public static class ClientEndpoints
                     statusCode: StatusCodes.Status403Forbidden);
             }
 
-            DisplayRestoreResult restore = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
-            if (!restore.Success)
+            string displayId = DisplayLease.CreateDisplayId(new ClientId(clientId));
+            DisplayRecoveryResult recovery = await leases.RecoverDisplayAsync(displayId, cancellationToken);
+            if (!recovery.Success)
             {
                 return Results.Problem(
-                    restore.Error ?? "Physical primary restore failed.",
+                    recovery.Error ?? "Client-scoped emergency display recovery failed.",
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
-            return Results.Ok(new { clientId, restoreRequested = true });
+            return Results.Ok(new { clientId, displayId, recovered = true });
         });
 
         return endpoints;

@@ -159,7 +159,10 @@ test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit,
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ cleanupEvaluated: true, displayRemoved: true }) });
   });
   await page.route('**/clients/z-fold-7/emergency-restore', async route => {
-    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ restoreRequested: true }) });
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ clientId: 'z-fold-7', displayId: 'client-z-fold-7', recovered: true })
+    });
   });
 
   await page.goto('/');
@@ -241,5 +244,5 @@ test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit,
   expect(beaconBodies).toEqual([{ active: true }, { active: false }]);
 
   await page.getByRole('button', { name: 'Restore' }).click();
-  await expect(page.getByText('restore requested')).toBeVisible();
+  await expect(page.getByText('recovered client-z-fold-7')).toBeVisible();
 });
