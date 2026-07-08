@@ -53,9 +53,16 @@ public sealed class CockpitShellViewModelTests
         var viewModel = new CockpitShellViewModel(api) { SelectedClientId = "z-fold-7" };
 
         await viewModel.RestorePhysicalAsync(CancellationToken.None);
+        await viewModel.MoveWindowsBackAsync(CancellationToken.None);
+        await viewModel.CloseVirtualWindowsAsync(CancellationToken.None);
+        await viewModel.TerminateVirtualProcessesAsync(CancellationToken.None);
         await viewModel.RecoverSelectedClientAsync(CancellationToken.None);
 
         Assert.True(api.RestorePhysicalCalled);
+        Assert.True(api.MoveWindowsBackCalled);
+        Assert.True(api.MoveWindowsBackMinimized);
+        Assert.True(api.CloseVirtualWindowsCalled);
+        Assert.True(api.TerminateVirtualProcessesCalled);
         Assert.Equal("z-fold-7", api.RecoveredClientId);
     }
 
@@ -94,6 +101,14 @@ public sealed class CockpitShellViewModelTests
     {
         public bool RestorePhysicalCalled { get; private set; }
 
+        public bool MoveWindowsBackCalled { get; private set; }
+
+        public bool MoveWindowsBackMinimized { get; private set; }
+
+        public bool CloseVirtualWindowsCalled { get; private set; }
+
+        public bool TerminateVirtualProcessesCalled { get; private set; }
+
         public string? RecoveredClientId { get; private set; }
 
         public Task<CockpitSnapshot> GetSnapshotAsync(CancellationToken cancellationToken) => Task.FromResult(snapshot);
@@ -101,6 +116,25 @@ public sealed class CockpitShellViewModelTests
         public Task RestorePhysicalAsync(CancellationToken cancellationToken)
         {
             RestorePhysicalCalled = true;
+            return Task.CompletedTask;
+        }
+
+        public Task MoveWindowsBackAsync(bool minimize, CancellationToken cancellationToken)
+        {
+            MoveWindowsBackCalled = true;
+            MoveWindowsBackMinimized = minimize;
+            return Task.CompletedTask;
+        }
+
+        public Task CloseVirtualWindowsAsync(CancellationToken cancellationToken)
+        {
+            CloseVirtualWindowsCalled = true;
+            return Task.CompletedTask;
+        }
+
+        public Task TerminateVirtualProcessesAsync(CancellationToken cancellationToken)
+        {
+            TerminateVirtualProcessesCalled = true;
             return Task.CompletedTask;
         }
 
@@ -117,6 +151,15 @@ public sealed class CockpitShellViewModelTests
             Task.FromException<CockpitSnapshot>(new InvalidOperationException(message));
 
         public Task RestorePhysicalAsync(CancellationToken cancellationToken) =>
+            Task.FromException(new InvalidOperationException(message));
+
+        public Task MoveWindowsBackAsync(bool minimize, CancellationToken cancellationToken) =>
+            Task.FromException(new InvalidOperationException(message));
+
+        public Task CloseVirtualWindowsAsync(CancellationToken cancellationToken) =>
+            Task.FromException(new InvalidOperationException(message));
+
+        public Task TerminateVirtualProcessesAsync(CancellationToken cancellationToken) =>
             Task.FromException(new InvalidOperationException(message));
 
         public Task RecoverClientDisplayAsync(string clientId, CancellationToken cancellationToken) =>

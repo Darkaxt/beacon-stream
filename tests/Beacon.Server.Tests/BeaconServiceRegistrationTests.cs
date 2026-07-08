@@ -1,9 +1,11 @@
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
+using Beacon.Core.Recovery;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Displays;
 using Beacon.Platform.Windows.Games;
+using Beacon.Platform.Windows.Recovery;
 using Beacon.Platform.Windows.Sessions;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.Hosting;
@@ -45,6 +47,8 @@ public sealed class BeaconServiceRegistrationTests
         Assert.Equal("windows", options.ModeName);
         Assert.IsType<WindowsDisplayApi>(provider.GetRequiredService<IWindowsDisplayApi>());
         Assert.IsType<WindowsDisplayBackend>(provider.GetRequiredService<IDisplayBackend>());
+        Assert.IsType<WindowsRecoveryApi>(provider.GetRequiredService<IWindowsRecoveryApi>());
+        Assert.IsType<WindowsRecoveryBackend>(provider.GetRequiredService<IRecoveryBackend>());
         Assert.IsType<WindowsGameLauncher>(provider.GetRequiredService<IGameLauncher>());
         Assert.IsType<WindowsSessionActivityApi>(provider.GetRequiredService<IWindowsSessionActivityApi>());
         Assert.IsType<WindowsSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());

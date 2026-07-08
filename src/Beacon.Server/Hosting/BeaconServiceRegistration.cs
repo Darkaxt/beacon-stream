@@ -1,10 +1,12 @@
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
 using Beacon.Core.Games.Artwork;
+using Beacon.Core.Recovery;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Displays;
 using Beacon.Platform.Windows.Games;
+using Beacon.Platform.Windows.Recovery;
 using Beacon.Platform.Windows.Sessions;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.State;
@@ -125,6 +127,7 @@ public static class BeaconServiceRegistration
     private static IServiceCollection AddFakeHostBoundaries(this IServiceCollection services)
     {
         services.AddSingleton<IDisplayBackend, FakeDisplayBackend>();
+        services.AddSingleton<IRecoveryBackend, FakeRecoveryBackend>();
         services.AddSingleton<IGameLauncher, FakeGameLauncher>();
         services.AddSingleton<FakeSessionActivityInspector>();
         services.AddSingleton<ISessionActivityInspector>(sp => sp.GetRequiredService<FakeSessionActivityInspector>());
@@ -135,6 +138,8 @@ public static class BeaconServiceRegistration
     {
         services.AddSingleton<IWindowsDisplayApi, WindowsDisplayApi>();
         services.AddSingleton<IDisplayBackend, WindowsDisplayBackend>();
+        services.AddSingleton<IWindowsRecoveryApi, WindowsRecoveryApi>();
+        services.AddSingleton<IRecoveryBackend, WindowsRecoveryBackend>();
         services.AddSingleton<IGameLauncher, WindowsGameLauncher>();
         services.AddSingleton<IWindowsSessionActivityApi, WindowsSessionActivityApi>();
         services.AddSingleton<ISessionActivityInspector, WindowsSessionActivityInspector>();

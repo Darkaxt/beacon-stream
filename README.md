@@ -2,7 +2,7 @@
 
 Beacon Stream is a server-authoritative personal game-streaming orchestrator.
 
-Milestone 0/1 covers the control plane, fake backends, planner, profile ownership, phone-free testing, and source-boundary documentation. Milestone 2 adds the real Windows SudoVDA/DisplayConfig lifecycle backend and manual no-phone display probe. Milestone 3 adds the normalized game library model, Steam/Heroic/Hydra/manual providers, SteamGridDB/fallback artwork providers, server/client-lab game selection, and a read-only local game probe. Milestone 4 adds a WPF cockpit for local server administration. Milestone 5 adds the streaming backend boundary, fake no-phone stream lifecycle, and external-process adapter boundary for future Sunshine-compatible integration. Milestone 6 adds a thin Android control-plane APK shell. Milestone 7 adds the server-owned game launch and session ownership cleanup boundary. Milestone 8 adds the Windows process/window activity inspector. Milestone 9 adds explicit fake-vs-Windows server host composition. Milestone 10 adds explicit streaming backend selection and preflight before display/app side effects. Real video decode and native input forwarding come later.
+Milestone 0/1 covers the control plane, fake backends, planner, profile ownership, phone-free testing, and source-boundary documentation. Milestone 2 adds the real Windows SudoVDA/DisplayConfig lifecycle backend and manual no-phone display probe. Milestone 3 adds the normalized game library model, Steam/Heroic/Hydra/manual providers, SteamGridDB/fallback artwork providers, server/client-lab game selection, and a read-only local game probe. Milestone 4 adds a WPF cockpit for local server administration. Milestone 5 adds the streaming backend boundary, fake no-phone stream lifecycle, and external-process adapter boundary for future Sunshine-compatible integration. Milestone 6 adds a thin Android control-plane APK shell. Milestone 7 adds the server-owned game launch and session ownership cleanup boundary. Milestone 8 adds the Windows process/window activity inspector. Milestone 9 adds explicit fake-vs-Windows server host composition. Milestone 10 adds explicit streaming backend selection and preflight before display/app side effects. Milestone 11 adds manual recovery actions for stranded windows/processes. Real video decode and native input forwarding come later.
 
 ## Server Host Mode
 
@@ -67,6 +67,17 @@ dotnet run --project src/Beacon.Cockpit -- --server http://localhost:5000
 
 `Beacon.Cockpit` is a thin local admin UI over the server `/admin` endpoints. It does not call display drivers, parse Steam/Heroic/Hydra data, or duplicate lifecycle policy; recovery actions are delegated back to Beacon Server.
 
+Recovery actions:
+
+```powershell
+curl.exe -X POST http://localhost:5000/admin/recovery/restore-physical
+curl.exe -X POST http://localhost:5000/admin/recovery/move-windows-back -H "Content-Type: application/json" -d "{\"minimize\":true}"
+curl.exe -X POST http://localhost:5000/admin/recovery/close-virtual-windows
+curl.exe -X POST http://localhost:5000/admin/recovery/terminate-virtual-processes
+```
+
+In the WPF cockpit, the Recovery tab exposes the same actions. These are explicit manual escape hatches; normal session cleanup still belongs to the server lifecycle rules.
+
 Streaming backend checks:
 
 ```powershell
@@ -115,4 +126,5 @@ See:
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-8-windows-activity-inspector.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-9-windows-host-composition.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-10-streaming-selection.md`
+- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-11-recovery-actions.md`
 - `docs/windows-display-backend.md`

@@ -21,6 +21,9 @@ public sealed class CockpitShellViewModel : ObservableObject
         ServerUrl = serverUrl;
         RefreshCommand = new RelayCommand(() => RefreshAsync(CancellationToken.None));
         RestorePhysicalCommand = new RelayCommand(() => RestorePhysicalAsync(CancellationToken.None));
+        MoveWindowsBackCommand = new RelayCommand(() => MoveWindowsBackAsync(CancellationToken.None));
+        CloseVirtualWindowsCommand = new RelayCommand(() => CloseVirtualWindowsAsync(CancellationToken.None));
+        TerminateVirtualProcessesCommand = new RelayCommand(() => TerminateVirtualProcessesAsync(CancellationToken.None));
         recoverSelectedClientCommand = new RelayCommand(
             () => RecoverSelectedClientAsync(CancellationToken.None),
             () => !string.IsNullOrWhiteSpace(SelectedClientId));
@@ -91,6 +94,12 @@ public sealed class CockpitShellViewModel : ObservableObject
 
     public ICommand RestorePhysicalCommand { get; }
 
+    public ICommand MoveWindowsBackCommand { get; }
+
+    public ICommand CloseVirtualWindowsCommand { get; }
+
+    public ICommand TerminateVirtualProcessesCommand { get; }
+
     public ICommand RecoverSelectedClientCommand { get; }
 
     public async Task RefreshAsync(CancellationToken cancellationToken)
@@ -138,6 +147,45 @@ public sealed class CockpitShellViewModel : ObservableObject
         catch (Exception ex)
         {
             StatusMessage = $"Restore failed: {ex.Message}";
+        }
+    }
+
+    public async Task MoveWindowsBackAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await api.MoveWindowsBackAsync(minimize: true, cancellationToken);
+            StatusMessage = "Virtual-display windows moved back and minimized.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Move windows failed: {ex.Message}";
+        }
+    }
+
+    public async Task CloseVirtualWindowsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await api.CloseVirtualWindowsAsync(cancellationToken);
+            StatusMessage = "Close requested for virtual-display windows.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Close windows failed: {ex.Message}";
+        }
+    }
+
+    public async Task TerminateVirtualProcessesAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await api.TerminateVirtualProcessesAsync(cancellationToken);
+            StatusMessage = "Terminate requested for virtual-display processes.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Terminate processes failed: {ex.Message}";
         }
     }
 
