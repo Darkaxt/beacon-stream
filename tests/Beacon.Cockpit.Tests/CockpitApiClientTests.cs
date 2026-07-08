@@ -79,7 +79,7 @@ public sealed class CockpitApiClientTests
               "inputHealth": {
                 "ready": true,
                 "backend": "windows-sendinput",
-                "diagnostic": "Windows SendInput pointer sink ready.",
+                "diagnostic": "Windows SendInput pointer and keyboard sink ready.",
                 "supportedEventTypes": ["pointer", "keyboard"],
                 "supportedPointerActions": ["move", "down", "up", "tap"],
                 "supportedKeyboardActions": ["down", "up", "press"]

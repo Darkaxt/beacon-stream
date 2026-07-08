@@ -375,7 +375,7 @@ public sealed class CockpitShellViewModelTests
         new(
             Ready: true,
             Backend: "windows-sendinput",
-            Diagnostic: "Windows SendInput pointer sink ready.",
+            Diagnostic: "Windows SendInput pointer and keyboard sink ready.",
             SupportedEventTypes: ["pointer", "keyboard"],
             SupportedPointerActions: ["move", "down", "up", "tap"],
             SupportedKeyboardActions: ["down", "up", "press"]);
