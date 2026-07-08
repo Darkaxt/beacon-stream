@@ -164,6 +164,7 @@ This section is the implementation contract. If a later plan contradicts this re
 - `REQ-NET-005`: The plan must make 120 FPS explicit when requested and supported.
 - `REQ-NET-006`: Sunshine/GameStream-compatible endpoint metadata may be derived from a server-owned host plus base-port profile. Explicit per-role endpoint settings and runtime wrapper descriptors must override derived metadata, and Beacon must not generate a client launch URI from the profile unless a wrapper contract explicitly provides one.
 - `REQ-NET-007`: A wrapper harness that supervises a child streaming process must fail before publishing runtime descriptor evidence when the child executable is unavailable, and it must exit when the child exits before Beacon stops the wrapper.
+- `REQ-NET-008`: Server-owned external-process configuration must be able to pass a wrapper child executable and arguments into the wrapper, and missing configured child executables must fail streaming preflight before display or app side effects.
 
 ### Game Library And Launch
 

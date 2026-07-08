@@ -179,6 +179,44 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public void ExternalProcessWrapperChildOptionsUseConfiguration()
+    {
+        using ServiceProvider provider = BuildProvider(
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "external-process"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey, "C:\\Tools\\beacon-streaming-probe.exe"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingWrapperChildExecutableConfigurationKey, "C:\\Tools\\sunshine.exe"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingWrapperChildArgumentsConfigurationKey, "--config sunshine.json"));
+
+        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
+
+        Assert.Equal("C:\\Tools\\sunshine.exe", options.WrapperChildExecutablePath);
+        Assert.Equal("--config sunshine.json", options.WrapperChildArguments);
+    }
+
+    [Fact]
+    public void ExternalProcessWrapperChildOptionsUseEnvironmentOverrides()
+    {
+        IConfiguration configuration = CreateConfiguration(
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "external-process"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey, "C:\\Tools\\beacon-streaming-probe.exe"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingWrapperChildExecutableConfigurationKey, "C:\\Tools\\configured-sunshine.exe"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingWrapperChildArgumentsConfigurationKey, "--configured"));
+
+        using ServiceProvider provider = new ServiceCollection()
+            .AddBeaconServices(
+                configuration,
+                environmentHostMode: null,
+                environmentExternalStreamingWrapperChildExecutable: "C:\\Tools\\env-sunshine.exe",
+                environmentExternalStreamingWrapperChildArguments: "--env")
+            .BuildServiceProvider();
+
+        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
+
+        Assert.Equal("C:\\Tools\\env-sunshine.exe", options.WrapperChildExecutablePath);
+        Assert.Equal("--env", options.WrapperChildArguments);
+    }
+
+    [Fact]
     public void ClientProfilesPathUsesFileRepositoryAndPairingToken()
     {
         string profilePath = Path.Combine(Path.GetTempPath(), $"beacon-profiles-{Guid.NewGuid():N}.json");
