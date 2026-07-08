@@ -10,7 +10,8 @@ public sealed record ExternalProcessStreamingOptions(
     string? ConnectionProtocol = null,
     string? ConnectionLaunchUri = null,
     IReadOnlyDictionary<string, string>? ConnectionEndpoints = null,
-    string? ManifestPath = null);
+    string? ManifestPath = null,
+    SunshineEndpointProfile? SunshineProfile = null);
 
 public sealed record ExternalStreamingManifest(
     string? Name,
@@ -234,7 +235,7 @@ public sealed class ExternalProcessStreamingBackend(
             ManifestAvailable: manifestAvailable,
             ManifestPath: TrimOrNull(options.ManifestPath),
             ManifestName: TrimOrNull(manifest?.Name),
-            Protocol: TrimOrNull(options.ConnectionProtocol) ?? TrimOrNull(manifest?.Protocol),
+            Protocol: ResolveConfiguredConnectionProtocol(options) ?? TrimOrNull(manifest?.Protocol),
             LaunchUri: TrimOrNull(options.ConnectionLaunchUri) ?? TrimOrNull(manifest?.LaunchUri),
             Codecs: NormalizeList(manifest?.Codecs),
             Transports: NormalizeList(manifest?.Transports),
@@ -524,9 +525,10 @@ public sealed class ExternalProcessStreamingBackend(
         Dictionary<string, string> environment,
         ExternalProcessStreamingOptions? options)
     {
-        if (!string.IsNullOrWhiteSpace(options?.ConnectionProtocol))
+        string? protocol = ResolveConfiguredConnectionProtocol(options);
+        if (!string.IsNullOrWhiteSpace(protocol))
         {
-            environment["BEACON_CONNECTION_PROTOCOL"] = options.ConnectionProtocol.Trim();
+            environment["BEACON_CONNECTION_PROTOCOL"] = protocol;
         }
 
         if (!string.IsNullOrWhiteSpace(options?.ConnectionLaunchUri))
@@ -534,11 +536,12 @@ public sealed class ExternalProcessStreamingBackend(
             environment["BEACON_CONNECTION_LAUNCH_URI"] = options.ConnectionLaunchUri.Trim();
         }
 
-        if (options?.ConnectionEndpoints is { Count: > 0 })
+        IReadOnlyDictionary<string, string>? endpoints = ResolveConfiguredConnectionEndpoints(options);
+        if (endpoints is { Count: > 0 })
         {
             environment["BEACON_CONNECTION_ENDPOINTS"] = string.Join(
                 ';',
-                options.ConnectionEndpoints
+                endpoints
                     .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
                     .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
                     .Select(pair => $"{pair.Key.Trim()}={pair.Value.Trim()}"));
@@ -558,18 +561,19 @@ public sealed class ExternalProcessStreamingBackend(
     {
         string? protocolSource = !string.IsNullOrWhiteSpace(runtimeDescriptor?.Protocol)
             ? runtimeDescriptor.Protocol
-            : string.IsNullOrWhiteSpace(options.ConnectionProtocol)
+            : ResolveConfiguredConnectionProtocol(options) is not { } configuredProtocol
             ? manifest?.Protocol
-            : options.ConnectionProtocol;
+            : configuredProtocol;
         string? launchUriSource = !string.IsNullOrWhiteSpace(runtimeDescriptor?.LaunchUri)
             ? runtimeDescriptor.LaunchUri
             : string.IsNullOrWhiteSpace(options.ConnectionLaunchUri)
             ? manifest?.LaunchUri
             : options.ConnectionLaunchUri;
+        IReadOnlyDictionary<string, string>? configuredEndpoints = ResolveConfiguredConnectionEndpoints(options);
         IReadOnlyDictionary<string, string>? endpointSource = runtimeDescriptor?.Endpoints is { Count: > 0 }
             ? runtimeDescriptor.Endpoints
-            : options.ConnectionEndpoints is { Count: > 0 }
-            ? options.ConnectionEndpoints
+            : configuredEndpoints is { Count: > 0 }
+            ? configuredEndpoints
             : manifest?.Endpoints;
 
         if (string.IsNullOrWhiteSpace(protocolSource)
@@ -599,6 +603,12 @@ public sealed class ExternalProcessStreamingBackend(
             metadata["manifestName"] = manifest.Name.Trim();
         }
 
+        if (options.SunshineProfile is not null)
+        {
+            metadata["sunshineHost"] = options.SunshineProfile.Host.Trim();
+            metadata["sunshineBasePort"] = options.SunshineProfile.BasePort.ToString(CultureInfo.InvariantCulture);
+        }
+
         if (!string.IsNullOrWhiteSpace(sessionDescriptorPath))
         {
             metadata["sessionDescriptorPath"] = sessionDescriptorPath.Trim();
@@ -620,6 +630,46 @@ public sealed class ExternalProcessStreamingBackend(
             string.IsNullOrWhiteSpace(launchUriSource) ? null : launchUriSource.Trim(),
             endpoints,
             metadata);
+    }
+
+    private static string? ResolveConfiguredConnectionProtocol(ExternalProcessStreamingOptions? options)
+    {
+        if (!string.IsNullOrWhiteSpace(options?.ConnectionProtocol))
+        {
+            return options.ConnectionProtocol.Trim();
+        }
+
+        return options?.SunshineProfile is null ? null : "gamestream";
+    }
+
+    private static IReadOnlyDictionary<string, string>? ResolveConfiguredConnectionEndpoints(ExternalProcessStreamingOptions? options)
+    {
+        if (options is null)
+        {
+            return null;
+        }
+
+        var endpoints = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (options.SunshineProfile is not null)
+        {
+            foreach ((string key, string value) in options.SunshineProfile.CreateEndpoints())
+            {
+                endpoints[key] = value;
+            }
+        }
+
+        if (options.ConnectionEndpoints is { Count: > 0 })
+        {
+            foreach ((string key, string value) in options.ConnectionEndpoints)
+            {
+                if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
+                {
+                    endpoints[key.Trim()] = value.Trim();
+                }
+            }
+        }
+
+        return endpoints.Count == 0 ? null : endpoints;
     }
 
     private ExternalStreamingManifestReadResult ReadManifestIfConfigured()

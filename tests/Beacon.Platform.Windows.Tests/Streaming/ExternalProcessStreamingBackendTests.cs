@@ -109,6 +109,23 @@ public sealed class ExternalProcessStreamingBackendTests
     }
 
     [Fact]
+    public void SunshineEndpointProfileUsesDocumentedPortOffsets()
+    {
+        var profile = new SunshineEndpointProfile("127.0.0.1", 47989);
+
+        IReadOnlyDictionary<string, string> endpoints = profile.CreateEndpoints();
+
+        Assert.Equal("https://127.0.0.1:47984", endpoints["https"]);
+        Assert.Equal("http://127.0.0.1:47989", endpoints["http"]);
+        Assert.Equal("https://127.0.0.1:47990", endpoints["web"]);
+        Assert.Equal("rtsp://127.0.0.1:48010", endpoints["rtsp"]);
+        Assert.Equal("udp://127.0.0.1:47998", endpoints["video"]);
+        Assert.Equal("udp://127.0.0.1:47999", endpoints["control"]);
+        Assert.Equal("udp://127.0.0.1:48000", endpoints["audio"]);
+        Assert.Equal("udp://127.0.0.1:48002", endpoints["mic"]);
+    }
+
+    [Fact]
     public async Task PreflightFailsWhenExecutablePathIsMissing()
     {
         var backend = new ExternalProcessStreamingBackend(
@@ -313,6 +330,73 @@ public sealed class ExternalProcessStreamingBackendTests
         Assert.Equal("moonlight://beacon/z-fold-7-steam-shortcut:3767414131", command.Environment["BEACON_CONNECTION_LAUNCH_URI"]);
         Assert.Equal("input=udp://127.0.0.1:48000;rtsp=rtsp://127.0.0.1:48010/beacon", command.Environment["BEACON_CONNECTION_ENDPOINTS"]);
         Assert.Equal("C:\\Tools\\beacon-streaming.json", command.Environment["BEACON_WRAPPER_MANIFEST_PATH"]);
+    }
+
+    [Fact]
+    public async Task StartIncludesSunshineEndpointProfileWhenExplicitEndpointsAreAbsent()
+    {
+        var reader = new FakeExternalStreamingManifestReader();
+        reader.Manifests["C:\\Tools\\beacon-streaming.json"] = new ExternalStreamingManifest(
+            "ignored",
+            "manifest-protocol",
+            "manifest://ignored",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["ignored"] = "manifest://endpoint"
+            },
+            ["av1"],
+            120,
+            150,
+            Hdr10: false,
+            ["lan-direct"],
+            [],
+            [],
+            []);
+        var runner = new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]);
+        var options = new ExternalProcessStreamingOptions(
+            "C:\\Tools\\sunshine-wrapper.exe",
+            ManifestPath: "C:\\Tools\\beacon-streaming.json",
+            SunshineProfile: new SunshineEndpointProfile("127.0.0.1", 47989));
+        var backend = new ExternalProcessStreamingBackend(options, runner, reader);
+
+        StreamingStartResult result = await backend.StartAsync(CreatePlan(), CancellationToken.None);
+
+        StreamingSessionState session = Assert.IsType<StreamingSessionState>(result.Session);
+        Assert.NotNull(session.Connection);
+        Assert.Equal("gamestream", session.Connection.Protocol);
+        Assert.Contains(session.Connection.Endpoints, endpoint => endpoint.Role == "rtsp" && endpoint.Uri == "rtsp://127.0.0.1:48010");
+        Assert.Contains(session.Connection.Endpoints, endpoint => endpoint.Role == "video" && endpoint.Uri == "udp://127.0.0.1:47998");
+        Assert.DoesNotContain(session.Connection.Endpoints, endpoint => endpoint.Role == "ignored");
+        ExternalStreamingCommand command = Assert.Single(runner.StartedCommands);
+        Assert.Equal("gamestream", command.Environment["BEACON_CONNECTION_PROTOCOL"]);
+        Assert.Equal(
+            "audio=udp://127.0.0.1:48000;control=udp://127.0.0.1:47999;http=http://127.0.0.1:47989;https=https://127.0.0.1:47984;mic=udp://127.0.0.1:48002;rtsp=rtsp://127.0.0.1:48010;video=udp://127.0.0.1:47998;web=https://127.0.0.1:47990",
+            command.Environment["BEACON_CONNECTION_ENDPOINTS"]);
+    }
+
+    [Fact]
+    public async Task ExplicitEndpointsOverrideSunshineEndpointProfile()
+    {
+        var runner = new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]);
+        var options = new ExternalProcessStreamingOptions(
+            "C:\\Tools\\sunshine-wrapper.exe",
+            ConnectionEndpoints: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["rtsp"] = "rtsp://10.0.0.10:49010/session"
+            },
+            SunshineProfile: new SunshineEndpointProfile("127.0.0.1", 47989));
+        var backend = new ExternalProcessStreamingBackend(options, runner);
+
+        StreamingStartResult result = await backend.StartAsync(CreatePlan(), CancellationToken.None);
+
+        StreamingSessionState session = Assert.IsType<StreamingSessionState>(result.Session);
+        Assert.NotNull(session.Connection);
+        Assert.Equal("gamestream", session.Connection.Protocol);
+        Assert.Contains(session.Connection.Endpoints, endpoint => endpoint.Role == "rtsp" && endpoint.Uri == "rtsp://10.0.0.10:49010/session");
+        Assert.Contains(session.Connection.Endpoints, endpoint => endpoint.Role == "audio" && endpoint.Uri == "udp://127.0.0.1:48000");
+        ExternalStreamingCommand command = Assert.Single(runner.StartedCommands);
+        Assert.Contains("rtsp=rtsp://10.0.0.10:49010/session", command.Environment["BEACON_CONNECTION_ENDPOINTS"], StringComparison.Ordinal);
+        Assert.DoesNotContain("rtsp=rtsp://127.0.0.1:48010", command.Environment["BEACON_CONNECTION_ENDPOINTS"], StringComparison.Ordinal);
     }
 
     [Fact]

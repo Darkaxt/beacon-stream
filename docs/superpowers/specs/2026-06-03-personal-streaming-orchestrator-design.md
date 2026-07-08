@@ -161,6 +161,7 @@ This section is the implementation contract. If a later plan contradicts this re
 - `REQ-NET-003`: The server must choose codec, FPS, bitrate, transport, and congestion policy from client profile plus live telemetry.
 - `REQ-NET-004`: Version 1 does not need full live network adaptation to prove the architecture, but the planner must be testable with fake telemetry profiles.
 - `REQ-NET-005`: The plan must make 120 FPS explicit when requested and supported.
+- `REQ-NET-006`: Sunshine/GameStream-compatible endpoint metadata may be derived from a server-owned host plus base-port profile. Explicit per-role endpoint settings and runtime wrapper descriptors must override derived metadata, and Beacon must not generate a client launch URI from the profile unless a wrapper contract explicitly provides one.
 
 ### Game Library And Launch
 
