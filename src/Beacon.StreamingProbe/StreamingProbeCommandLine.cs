@@ -7,7 +7,10 @@ public sealed record StreamingProbeCommand(
     string Protocol,
     string LaunchUri,
     IReadOnlyDictionary<string, string> Endpoints,
-    bool Once);
+    bool Once,
+    string? ChildExecutable = null,
+    string? ChildArguments = null,
+    IReadOnlyDictionary<string, string>? ChildEnvironment = null);
 
 public static class StreamingProbeCommandLine
 {
@@ -34,6 +37,8 @@ public static class StreamingProbeCommandLine
             ?? $"moonlight://beacon/probe/{Uri.EscapeDataString(sessionId)}";
         IReadOnlyDictionary<string, string> endpoints = ParseEndpoints(
             ReadOptionalValue(args, startIndex, environment, "--endpoints", "BEACON_CONNECTION_ENDPOINTS"));
+        string? childExecutable = ReadOptionalValue(args, startIndex, environment, "--child-executable", "BEACON_WRAPPER_CHILD_EXECUTABLE");
+        string? childArguments = ReadOptionalValue(args, startIndex, environment, "--child-arguments", "BEACON_WRAPPER_CHILD_ARGUMENTS");
 
         return new StreamingProbeCommand(
             sessionId,
@@ -42,7 +47,10 @@ public static class StreamingProbeCommandLine
             protocol,
             launchUri,
             endpoints,
-            HasFlag(args, startIndex, "--once"));
+            HasFlag(args, startIndex, "--once"),
+            childExecutable,
+            childArguments,
+            CreateChildEnvironment(environment, sessionId, displayId, descriptorPath, protocol, launchUri, endpoints, childExecutable, childArguments));
     }
 
     private static string ReadRequiredValue(
@@ -110,4 +118,46 @@ public static class StreamingProbeCommandLine
 
         return endpoints;
     }
+
+    private static IReadOnlyDictionary<string, string> CreateChildEnvironment(
+        IReadOnlyDictionary<string, string> environment,
+        string sessionId,
+        string displayId,
+        string descriptorPath,
+        string protocol,
+        string launchUri,
+        IReadOnlyDictionary<string, string> endpoints,
+        string? childExecutable,
+        string? childArguments)
+    {
+        var childEnvironment = new Dictionary<string, string>(environment, StringComparer.OrdinalIgnoreCase)
+        {
+            ["BEACON_SESSION_ID"] = sessionId,
+            ["BEACON_DISPLAY_ID"] = displayId,
+            ["BEACON_STREAM_SESSION_DESCRIPTOR_PATH"] = descriptorPath,
+            ["BEACON_CONNECTION_PROTOCOL"] = protocol,
+            ["BEACON_CONNECTION_LAUNCH_URI"] = launchUri,
+            ["BEACON_CONNECTION_ENDPOINTS"] = FormatEndpoints(endpoints)
+        };
+
+        if (!string.IsNullOrWhiteSpace(childExecutable))
+        {
+            childEnvironment["BEACON_WRAPPER_CHILD_EXECUTABLE"] = childExecutable.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(childArguments))
+        {
+            childEnvironment["BEACON_WRAPPER_CHILD_ARGUMENTS"] = childArguments.Trim();
+        }
+
+        return childEnvironment;
+    }
+
+    private static string FormatEndpoints(IReadOnlyDictionary<string, string> endpoints) =>
+        string.Join(
+            ';',
+            endpoints
+                .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
+                .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(pair => $"{pair.Key.Trim()}={pair.Value.Trim()}"));
 }
