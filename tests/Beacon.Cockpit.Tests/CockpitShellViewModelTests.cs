@@ -38,6 +38,7 @@ public sealed class CockpitShellViewModelTests
                 false,
                 [])],
             CreateHealthyDisplay(),
+            CreateHealthyStreaming(),
             new CockpitGameSummary(36, ["Steam library stale"]),
             []));
         var viewModel = new CockpitShellViewModel(api);
@@ -63,7 +64,10 @@ public sealed class CockpitShellViewModelTests
         Assert.Contains("steam-shortcut:3767414131 process=False child=False window=False", viewModel.Ownership);
         Assert.Contains("ready", viewModel.DisplayHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("physical primary verified", viewModel.DisplayHealthSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("external-process", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("1 active stream", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(viewModel.Diagnostics, value => value.Contains("[display]", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(viewModel.Diagnostics, value => value.Contains("[streaming]", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(viewModel.Diagnostics, value => value.Contains("Steam library stale", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -76,6 +80,7 @@ public sealed class CockpitShellViewModelTests
             [],
             [],
             CreateHealthyDisplay(),
+            CreateHealthyStreaming(),
             new CockpitGameSummary(0, []),
             []));
         var viewModel = new CockpitShellViewModel(api);
@@ -110,6 +115,7 @@ public sealed class CockpitShellViewModelTests
             [],
             [],
             CreateHealthyDisplay(),
+            CreateHealthyStreaming(),
             new CockpitGameSummary(1, ["Steam library stale"]),
             [new CockpitDiagnosticEvent(
                 "evt-1",
@@ -133,7 +139,7 @@ public sealed class CockpitShellViewModelTests
     [Fact]
     public async Task RecoveryMethodsDelegateToServer()
     {
-        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), new CockpitGameSummary(0, []), []));
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), CreateHealthyStreaming(), new CockpitGameSummary(0, []), []));
         var viewModel = new CockpitShellViewModel(api) { SelectedClientId = "z-fold-7" };
 
         await viewModel.RestorePhysicalAsync(CancellationToken.None);
@@ -159,7 +165,7 @@ public sealed class CockpitShellViewModelTests
     [Fact]
     public async Task RecoverSelectedClientReportsMissingSelection()
     {
-        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), new CockpitGameSummary(0, []), []));
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), CreateHealthyStreaming(), new CockpitGameSummary(0, []), []));
         var viewModel = new CockpitShellViewModel(api);
 
         await viewModel.RecoverSelectedClientAsync(CancellationToken.None);
@@ -171,7 +177,7 @@ public sealed class CockpitShellViewModelTests
     [Fact]
     public void ConstructorStoresServerUrl()
     {
-        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), new CockpitGameSummary(0, []), []));
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), CreateHealthyStreaming(), new CockpitGameSummary(0, []), []));
         var viewModel = new CockpitShellViewModel(api, "http://127.0.0.1:5000");
 
         Assert.Equal("http://127.0.0.1:5000", viewModel.ServerUrl);
@@ -332,4 +338,28 @@ public sealed class CockpitShellViewModelTests
                     X: 0,
                     Y: 0)
             ]);
+
+    private static CockpitStreamingHealth CreateHealthyStreaming() =>
+        new(
+            Ready: true,
+            Backend: "external-process",
+            Diagnostic: "External streaming backend ready.",
+            ExecutableConfigured: true,
+            ExecutableAvailable: true,
+            ExecutablePath: "C:\\Tools\\sunshine-wrapper.exe",
+            ManifestConfigured: true,
+            ManifestAvailable: true,
+            ManifestPath: "C:\\Tools\\beacon-streaming.json",
+            ManifestName: "Sunshine bridge",
+            Protocol: "gamestream",
+            LaunchUri: "moonlight://beacon/z-fold-7",
+            Codecs: ["av1", "hevc"],
+            Transports: ["lan-direct"],
+            Encoders: ["nvenc"],
+            Capture: ["dxgi"],
+            MaxFps: 120,
+            MaxBitrateMbps: 150,
+            Hdr10: true,
+            ActiveSessions: 1,
+            Diagnostics: ["ready"]);
 }

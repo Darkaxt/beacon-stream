@@ -14,6 +14,32 @@ public sealed class FakeStreamingBackend : IStreamingBackend
 
     public List<string> StopCalls { get; } = [];
 
+    public Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(new StreamingBackendHealth(
+            Ready: string.IsNullOrWhiteSpace(NextPreflightError),
+            Backend: "fake",
+            Diagnostic: string.IsNullOrWhiteSpace(NextPreflightError)
+                ? "Fake streaming backend ready."
+                : NextPreflightError,
+            ExecutableConfigured: false,
+            ExecutableAvailable: false,
+            ExecutablePath: null,
+            ManifestConfigured: false,
+            ManifestAvailable: false,
+            ManifestPath: null,
+            ManifestName: null,
+            Protocol: "beacon-fake",
+            LaunchUri: null,
+            Codecs: ["h264", "hevc", "av1"],
+            Transports: ["lan-direct", "relay"],
+            Encoders: ["fake"],
+            Capture: ["fake"],
+            MaxFps: 120,
+            MaxBitrateMbps: null,
+            Hdr10: false,
+            ActiveSessions: sessions.Count,
+            Diagnostics: []));
+
     public Task<StreamingPreflightResult> CheckReadinessAsync(SessionPlan plan, CancellationToken cancellationToken) =>
         Task.FromResult(string.IsNullOrWhiteSpace(NextPreflightError)
             ? StreamingPreflightResult.Ok()

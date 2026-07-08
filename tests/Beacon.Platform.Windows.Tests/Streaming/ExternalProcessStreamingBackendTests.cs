@@ -10,6 +10,64 @@ namespace Beacon.Platform.Windows.Tests.Streaming;
 public sealed class ExternalProcessStreamingBackendTests
 {
     [Fact]
+    public async Task GetHealthAsyncReportsExecutableAndManifestCapabilitiesWithoutStartingProcess()
+    {
+        var reader = new FakeExternalStreamingManifestReader();
+        reader.Manifests["C:\\Tools\\beacon-streaming.json"] = new ExternalStreamingManifest(
+            "Sunshine bridge",
+            "gamestream",
+            "moonlight://beacon/z-fold-7",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["rtsp"] = "rtsp://127.0.0.1:48010/beacon"
+            },
+            ["av1", "hevc"],
+            120,
+            150,
+            Hdr10: true,
+            ["lan-direct"],
+            ["nvenc"],
+            ["dxgi"],
+            ["ready"]);
+        var runner = new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]);
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions("C:\\Tools\\sunshine-wrapper.exe", ManifestPath: "C:\\Tools\\beacon-streaming.json"),
+            runner,
+            reader);
+
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.True(health.Ready);
+        Assert.Equal("external-process", health.Backend);
+        Assert.True(health.ExecutableConfigured);
+        Assert.True(health.ExecutableAvailable);
+        Assert.True(health.ManifestConfigured);
+        Assert.True(health.ManifestAvailable);
+        Assert.Equal("Sunshine bridge", health.ManifestName);
+        Assert.True(health.Hdr10);
+        Assert.Equal(["av1", "hevc"], health.Codecs);
+        Assert.Equal(["lan-direct"], health.Transports);
+        Assert.Equal(0, health.ActiveSessions);
+        Assert.Empty(runner.StartedCommands);
+        Assert.Empty(runner.StoppedProcessIds);
+    }
+
+    [Fact]
+    public async Task GetHealthAsyncReportsMissingExecutableAsNotReady()
+    {
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions("C:\\Tools\\missing-wrapper.exe"),
+            new FakeExternalStreamingProcessRunner());
+
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.False(health.Ready);
+        Assert.True(health.ExecutableConfigured);
+        Assert.False(health.ExecutableAvailable);
+        Assert.Contains("does not exist", health.Diagnostic, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void CreateStartInfoPassesSessionPlanAsArgumentsAndEnvironment()
     {
         SessionPlan plan = CreatePlan();

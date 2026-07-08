@@ -30,7 +30,32 @@ public static class AdminEndpoints
         {
             GameLibrarySnapshot gameSnapshot = await games.ScanAsync(cancellationToken);
             IReadOnlyList<SessionOwnershipSnapshot> ownershipSnapshots = await ownership.GetSnapshotsAsync(cancellationToken);
+            StreamingBackendHealth streamingHealth;
             DisplayHealth displayHealth;
+            IReadOnlyList<StreamingSessionState> streamSnapshots;
+            try
+            {
+                streamingHealth = await streaming.GetHealthAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                streamingHealth = StreamingBackendHealth.Unknown($"Streaming health check failed: {ex.Message}");
+            }
+
+            try
+            {
+                streamSnapshots = streaming.GetSessions();
+            }
+            catch (Exception ex)
+            {
+                streamSnapshots = [];
+                streamingHealth = streamingHealth with
+                {
+                    Ready = false,
+                    Diagnostic = $"Streaming session snapshot failed: {ex.Message}"
+                };
+            }
+
             try
             {
                 displayHealth = await displayBackend.GetHealthAsync(cancellationToken);
@@ -49,7 +74,7 @@ public static class AdminEndpoints
                     telemetry = clients.GetTelemetry(profile.ClientId.Value)
                 }),
                 sessions = sessions.GetAll(),
-                streams = streaming.GetSessions(),
+                streams = streamSnapshots,
                 ownership = ownershipSnapshots,
                 host = new
                 {
@@ -66,6 +91,7 @@ public static class AdminEndpoints
                     location = clients.ProfileStoreLocation,
                     pairingEnabled = pairingOptions.Enabled
                 },
+                streamingHealth,
                 display = displayHealth,
                 games = new
                 {

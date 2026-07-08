@@ -88,6 +88,101 @@ public sealed class ExternalProcessStreamingBackend(
     private readonly Dictionary<string, ExternalStreamingProcess> processes = new(StringComparer.OrdinalIgnoreCase);
     private readonly IExternalStreamingManifestReader manifestReader = manifestReader ?? NoExternalStreamingManifestReader.Instance;
 
+    public Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        string? executablePath = TrimOrNull(options.ExecutablePath);
+        bool executableConfigured = executablePath is not null;
+        bool executableAvailable = false;
+        bool manifestConfigured = !string.IsNullOrWhiteSpace(options.ManifestPath);
+        bool manifestAvailable = false;
+        string? diagnostic = null;
+        ExternalStreamingManifest? manifest = null;
+
+        try
+        {
+            if (!executableConfigured)
+            {
+                diagnostic = "External streaming executable path is not configured. Set Beacon:Streaming:ExternalProcess:ExecutablePath or BEACON_EXTERNAL_STREAMING_EXECUTABLE.";
+            }
+            else
+            {
+                executableAvailable = runner.FileExists(executablePath!);
+                if (!executableAvailable)
+                {
+                    diagnostic = $"External streaming executable '{executablePath}' does not exist.";
+                }
+            }
+
+            if (manifestConfigured)
+            {
+                string manifestPath = options.ManifestPath!.Trim();
+                manifestAvailable = manifestReader.FileExists(manifestPath);
+                if (!manifestAvailable)
+                {
+                    diagnostic ??= $"External streaming manifest '{manifestPath}' does not exist.";
+                }
+                else
+                {
+                    ExternalStreamingManifestReadResult read = manifestReader.Read(manifestPath);
+                    if (!read.Success)
+                    {
+                        diagnostic ??= read.Error ?? "External streaming manifest is invalid.";
+                    }
+                    else
+                    {
+                        manifest = read.Manifest;
+                        if (manifest is null)
+                        {
+                            diagnostic ??= "External streaming manifest is empty.";
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            diagnostic = $"External streaming health check failed: {ex.Message}";
+        }
+
+        int activeSessions;
+        lock (gate)
+        {
+            activeSessions = sessions.Values.Count(session =>
+                session.State.Equals("running", StringComparison.OrdinalIgnoreCase));
+        }
+
+        bool ready = executableConfigured
+            && executableAvailable
+            && (!manifestConfigured || (manifestAvailable && manifest is not null))
+            && diagnostic is null;
+
+        StreamingBackendHealth health = new(
+            Ready: ready,
+            Backend: "external-process",
+            Diagnostic: diagnostic ?? "External streaming backend ready.",
+            ExecutableConfigured: executableConfigured,
+            ExecutableAvailable: executableAvailable,
+            ExecutablePath: executablePath,
+            ManifestConfigured: manifestConfigured,
+            ManifestAvailable: manifestAvailable,
+            ManifestPath: TrimOrNull(options.ManifestPath),
+            ManifestName: TrimOrNull(manifest?.Name),
+            Protocol: TrimOrNull(options.ConnectionProtocol) ?? TrimOrNull(manifest?.Protocol),
+            LaunchUri: TrimOrNull(options.ConnectionLaunchUri) ?? TrimOrNull(manifest?.LaunchUri),
+            Codecs: NormalizeList(manifest?.Codecs),
+            Transports: NormalizeList(manifest?.Transports),
+            Encoders: NormalizeList(manifest?.Encoders),
+            Capture: NormalizeList(manifest?.Capture),
+            MaxFps: manifest?.MaxFps,
+            MaxBitrateMbps: manifest?.MaxBitrateMbps,
+            Hdr10: manifest?.Hdr10 == true,
+            ActiveSessions: activeSessions,
+            Diagnostics: NormalizeList(manifest?.Diagnostics));
+        return Task.FromResult(health);
+    }
+
     public Task<StreamingPreflightResult> CheckReadinessAsync(SessionPlan plan, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -387,6 +482,16 @@ public sealed class ExternalProcessStreamingBackend(
 
     private static bool Contains(IReadOnlyList<string>? values, string expected) =>
         values?.Any(value => value.Equals(expected, StringComparison.OrdinalIgnoreCase)) == true;
+
+    private static IReadOnlyList<string> NormalizeList(IReadOnlyList<string>? values) =>
+        values?
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .ToArray()
+        ?? [];
+
+    private static string? TrimOrNull(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private Task<StreamingPreflightResult> PreflightFailure(SessionPlan plan, string message)
     {

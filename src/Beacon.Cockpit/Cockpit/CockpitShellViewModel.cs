@@ -32,6 +32,7 @@ public sealed class CockpitShellViewModel : ObservableObject
     private bool profileKeepAppRunningOnDisconnect;
     private bool profileAllowEmergencyRestoreFromClient;
     private string displayHealthSummary = "Display health unknown.";
+    private string streamingHealthSummary = "Streaming health unknown.";
     private string statusMessage = "Ready.";
 
     public CockpitShellViewModel(ICockpitApi api, string serverUrl = "http://localhost:5000")
@@ -204,6 +205,12 @@ public sealed class CockpitShellViewModel : ObservableObject
         private set => SetProperty(ref displayHealthSummary, value);
     }
 
+    public string StreamingHealthSummary
+    {
+        get => streamingHealthSummary;
+        private set => SetProperty(ref streamingHealthSummary, value);
+    }
+
     public string ServerUrl { get; }
 
     public ObservableCollection<string> Clients { get; } = [];
@@ -262,7 +269,9 @@ public sealed class CockpitShellViewModel : ObservableObject
         Replace(Ownership, snapshot.Ownership.Select(ownership =>
             $"{ownership.AppId} process={ownership.LaunchedProcessRunning} child={ownership.ChildProcessRunning} window={ownership.OwnedWindowRemaining}"));
         DisplayHealthSummary = FormatDisplayHealth(snapshot.Display);
+        StreamingHealthSummary = FormatStreamingHealth(snapshot.StreamingHealth);
         Replace(Diagnostics, new[] { $"[display] {DisplayHealthSummary}" }
+            .Concat(new[] { $"[streaming] {StreamingHealthSummary}" })
             .Concat(snapshot.Diagnostics
             .Select(evt => $"[{evt.Severity}] {evt.Category}/{evt.Operation}: {evt.Message}")
             .Concat(snapshot.Games.Diagnostics.Select(message => $"[provider] {message}"))));
@@ -471,6 +480,20 @@ public sealed class CockpitShellViewModel : ObservableObject
         string primary = display.PhysicalPrimaryVerified ? "physical primary verified" : "physical primary not verified";
         string mirror = display.MirrorMode ? "mirror mode" : "extended/no mirror";
         return $"{driver}; {topology}; {primary}; {mirror}; {display.Paths.Count} display path(s); {display.Diagnostic}";
+    }
+
+    private static string FormatStreamingHealth(CockpitStreamingHealth? streaming)
+    {
+        streaming ??= CockpitStreamingHealth.Unknown;
+        string state = streaming.Ready ? "ready" : "not ready";
+        string executable = streaming.ExecutableConfigured
+            ? streaming.ExecutableAvailable ? "executable available" : "executable missing"
+            : "no executable configured";
+        string manifest = streaming.ManifestConfigured
+            ? streaming.ManifestAvailable ? "manifest available" : "manifest missing"
+            : "no manifest configured";
+        string active = streaming.ActiveSessions == 1 ? "1 active stream" : $"{streaming.ActiveSessions} active streams";
+        return $"{streaming.Backend} {state}; {executable}; {manifest}; {active}; {streaming.Diagnostic}";
     }
 
     private void LoadSelectedClientProfile()

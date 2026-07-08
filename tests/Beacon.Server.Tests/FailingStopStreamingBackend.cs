@@ -7,6 +7,9 @@ internal sealed class FailingStopStreamingBackend(string stopError) : IStreaming
 {
     private readonly FakeStreamingBackend inner = new();
 
+    public Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken) =>
+        inner.GetHealthAsync(cancellationToken);
+
     public Task<StreamingPreflightResult> CheckReadinessAsync(SessionPlan plan, CancellationToken cancellationToken) =>
         inner.CheckReadinessAsync(plan, cancellationToken);
 

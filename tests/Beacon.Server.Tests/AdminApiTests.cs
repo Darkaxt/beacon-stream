@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Beacon.Core.Displays;
 using Beacon.Core.Recovery;
+using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -43,6 +44,9 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.False(root.GetProperty("display").GetProperty("mirrorMode").GetBoolean());
         Assert.True(root.GetProperty("display").GetProperty("physicalPrimaryVerified").GetBoolean());
         Assert.True(root.GetProperty("display").GetProperty("paths").GetArrayLength() > 0);
+        Assert.True(root.GetProperty("streamingHealth").GetProperty("ready").GetBoolean());
+        Assert.Equal("fake", root.GetProperty("streamingHealth").GetProperty("backend").GetString());
+        Assert.Equal(1, root.GetProperty("streamingHealth").GetProperty("activeSessions").GetInt32());
     }
 
     [Fact]
@@ -169,6 +173,26 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.False(display.GetProperty("driverReady").GetBoolean());
         Assert.False(display.GetProperty("topologyAvailable").GetBoolean());
         Assert.Contains("display api exploded", display.GetProperty("diagnostic").GetString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SnapshotReportsStreamingUnavailableWhenHealthCheckThrows()
+    {
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IStreamingBackend>(new ThrowingStreamingBackend("stream api exploded"));
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage response = await client.GetAsync("/admin/snapshot");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement streaming = document.RootElement.GetProperty("streamingHealth");
+        Assert.False(streaming.GetProperty("ready").GetBoolean());
+        Assert.Contains("stream api exploded", streaming.GetProperty("diagnostic").GetString(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -307,5 +331,26 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
 
         public Task<DisplayRemoveResult> RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken) =>
             Task.FromException<DisplayRemoveResult>(new InvalidOperationException(message));
+    }
+
+    private sealed class ThrowingStreamingBackend(string message) : IStreamingBackend
+    {
+        public Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken) =>
+            Task.FromException<StreamingBackendHealth>(new InvalidOperationException(message));
+
+        public Task<StreamingPreflightResult> CheckReadinessAsync(SessionPlan plan, CancellationToken cancellationToken) =>
+            Task.FromException<StreamingPreflightResult>(new InvalidOperationException(message));
+
+        public Task<StreamingStartResult> StartAsync(SessionPlan plan, CancellationToken cancellationToken) =>
+            Task.FromException<StreamingStartResult>(new InvalidOperationException(message));
+
+        public Task<StreamingStopResult> StopAsync(string sessionId, CancellationToken cancellationToken) =>
+            Task.FromException<StreamingStopResult>(new InvalidOperationException(message));
+
+        public Task<StreamingSessionState?> GetSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+            Task.FromException<StreamingSessionState?>(new InvalidOperationException(message));
+
+        public IReadOnlyList<StreamingSessionState> GetSessions() =>
+            throw new InvalidOperationException(message);
     }
 }

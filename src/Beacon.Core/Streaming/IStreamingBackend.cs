@@ -4,6 +4,8 @@ namespace Beacon.Core.Streaming;
 
 public interface IStreamingBackend
 {
+    Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken);
+
     Task<StreamingPreflightResult> CheckReadinessAsync(SessionPlan plan, CancellationToken cancellationToken);
 
     Task<StreamingStartResult> StartAsync(SessionPlan plan, CancellationToken cancellationToken);
@@ -13,6 +15,54 @@ public interface IStreamingBackend
     Task<StreamingSessionState?> GetSessionAsync(string sessionId, CancellationToken cancellationToken);
 
     IReadOnlyList<StreamingSessionState> GetSessions();
+}
+
+public sealed record StreamingBackendHealth(
+    bool Ready,
+    string Backend,
+    string Diagnostic,
+    bool ExecutableConfigured,
+    bool ExecutableAvailable,
+    string? ExecutablePath,
+    bool ManifestConfigured,
+    bool ManifestAvailable,
+    string? ManifestPath,
+    string? ManifestName,
+    string? Protocol,
+    string? LaunchUri,
+    IReadOnlyList<string> Codecs,
+    IReadOnlyList<string> Transports,
+    IReadOnlyList<string> Encoders,
+    IReadOnlyList<string> Capture,
+    int? MaxFps,
+    int? MaxBitrateMbps,
+    bool Hdr10,
+    int ActiveSessions,
+    IReadOnlyList<string> Diagnostics)
+{
+    public static StreamingBackendHealth Unknown(string diagnostic) =>
+        new(
+            Ready: false,
+            Backend: "unknown",
+            Diagnostic: diagnostic,
+            ExecutableConfigured: false,
+            ExecutableAvailable: false,
+            ExecutablePath: null,
+            ManifestConfigured: false,
+            ManifestAvailable: false,
+            ManifestPath: null,
+            ManifestName: null,
+            Protocol: null,
+            LaunchUri: null,
+            Codecs: [],
+            Transports: [],
+            Encoders: [],
+            Capture: [],
+            MaxFps: null,
+            MaxBitrateMbps: null,
+            Hdr10: false,
+            ActiveSessions: 0,
+            Diagnostics: []);
 }
 
 public sealed record StreamingPreflightResult(bool Success, string? Error)
