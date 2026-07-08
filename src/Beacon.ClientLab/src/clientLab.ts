@@ -151,6 +151,13 @@ export interface InputAcceptedResponse {
   sessionId: string;
 }
 
+export interface BeaconResponse {
+  state: string;
+  displayId: string;
+  leasePrepared: boolean;
+  displayRemoved: boolean;
+}
+
 export function createDefaultProfile(): ProfileDraft {
   return {
     clientId: 'z-fold-7',
@@ -280,6 +287,14 @@ export function createKeyboardInputPayload(sequence: number): InputPayload {
 
 export function formatInputAccepted(response: InputAcceptedResponse): string {
   return `input ${response.accepted ? 'accepted' : 'rejected'} ${response.eventCount} event(s) ${response.sessionId}`;
+}
+
+export function formatBeaconState(response: BeaconResponse): string {
+  if (response.state === 'active') {
+    return `beacon active ${response.displayId} ${response.leasePrepared ? 'prepared' : 'not prepared'}`;
+  }
+
+  return `beacon inactive ${response.displayId} ${response.displayRemoved ? 'removed' : 'retained'}`;
 }
 
 function createTelemetry(

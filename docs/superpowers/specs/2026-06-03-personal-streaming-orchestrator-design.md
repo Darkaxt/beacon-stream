@@ -200,7 +200,7 @@ This section is the implementation contract. If a later plan contradicts this re
 
 - `REQ-TEST-001`: Most development and validation must not require the real phone.
 - `REQ-TEST-002`: Build a Client Lab web app that simulates a remote client control plane.
-- `REQ-TEST-003`: Client Lab must simulate hello, profile fetch, allowed profile patch, capability report, telemetry report, plan request, launch request, disconnect, reconnect, quit, and emergency restore.
+- `REQ-TEST-003`: Client Lab must simulate hello, profile fetch, allowed profile patch, capability report, telemetry report, active and inactive beacon, plan request, launch request, disconnect, reconnect, quit, and emergency restore.
 - `REQ-TEST-004`: Client Lab must include a Z Fold 7 profile with `2560x1600` and `120 Hz`.
 - `REQ-TEST-005`: Client Lab must be browser-testable with Playwright.
 - `REQ-TEST-006`: A CLI fake endpoint must exist for automated tests and scripted sequences.
@@ -658,6 +658,7 @@ Both simulator surfaces must support:
 - Patch allowed client profile fields.
 - Submit capabilities.
 - Submit telemetry samples.
+- Report active and inactive beacon.
 - Request session plan.
 - Request launch.
 - Request disconnect.

@@ -6,6 +6,7 @@ import {
   createKeyboardInputPayload,
   createPointerGesturePayload,
   createTelemetryPayload,
+  formatBeaconState,
   formatLaunchEvents,
   formatInputAccepted,
   formatPlanDetails,
@@ -15,6 +16,7 @@ import {
   validateProfileDraft,
   type GameDescriptor,
   type GameLibrarySnapshot,
+  type BeaconResponse,
   type HdrPreference,
   type InputAcceptedResponse,
   type LaunchResponse,
@@ -95,6 +97,16 @@ element('inputButton').addEventListener('click', async () => {
 element('keyboardButton').addEventListener('click', async () => {
   const result = await postJson<InputAcceptedResponse>(`/clients/${clientId}/input`, createKeyboardInputPayload(2));
   appendLog(formatInputAccepted(result));
+});
+
+element('activeBeaconButton').addEventListener('click', async () => {
+  const result = await postJson<BeaconResponse>(`/clients/${clientId}/beacon`, { active: true });
+  appendLog(formatBeaconState(result));
+});
+
+element('inactiveBeaconButton').addEventListener('click', async () => {
+  const result = await postJson<BeaconResponse>(`/clients/${clientId}/beacon`, { active: false });
+  appendLog(formatBeaconState(result));
 });
 
 element('disconnectButton').addEventListener('click', async () => {

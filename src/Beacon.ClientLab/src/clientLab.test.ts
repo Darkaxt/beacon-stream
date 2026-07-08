@@ -5,6 +5,7 @@ import {
   createKeyboardInputPayload,
   createPointerGesturePayload,
   createTelemetryPayload,
+  formatBeaconState,
   formatLaunchEvents,
   formatInputAccepted,
   formatPlanDetails,
@@ -164,5 +165,25 @@ describe('Client Lab profile validation', () => {
 
   it('formats input acceptance summaries', () => {
     expect(formatInputAccepted({ accepted: true, eventCount: 3, sessionId: 'session-1' })).toBe('input accepted 3 event(s) session-1');
+  });
+
+  it('formats active and inactive beacon states', () => {
+    expect(
+      formatBeaconState({
+        state: 'active',
+        displayId: 'client-z-fold-7',
+        leasePrepared: true,
+        displayRemoved: false
+      })
+    ).toBe('beacon active client-z-fold-7 prepared');
+
+    expect(
+      formatBeaconState({
+        state: 'inactive',
+        displayId: 'client-z-fold-7',
+        leasePrepared: false,
+        displayRemoved: true
+      })
+    ).toBe('beacon inactive client-z-fold-7 removed');
   });
 });
