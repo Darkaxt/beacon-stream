@@ -35,6 +35,9 @@ public sealed class BeaconServiceRegistrationTests
         Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
         Assert.IsType<FakeSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
         Assert.IsType<NoOpClientInputSink>(provider.GetRequiredService<IClientInputSink>());
+        ClientInputHealth inputHealth = provider.GetRequiredService<IClientInputHealthProvider>().GetHealth();
+        Assert.Equal("no-op", inputHealth.Backend);
+        Assert.Contains("pointer", inputHealth.SupportedEventTypes);
         Assert.IsType<InMemoryClientProfileRepository>(provider.GetRequiredService<IClientProfileRepository>());
         Assert.False(provider.GetRequiredService<ClientPairingOptions>().Enabled);
     }
@@ -60,6 +63,9 @@ public sealed class BeaconServiceRegistrationTests
         Assert.IsType<WindowsSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
         Assert.IsType<WindowsInputApi>(provider.GetRequiredService<IWindowsInputApi>());
         Assert.IsType<WindowsClientInputSink>(provider.GetRequiredService<IClientInputSink>());
+        ClientInputHealth inputHealth = provider.GetRequiredService<IClientInputHealthProvider>().GetHealth();
+        Assert.Equal("windows-sendinput", inputHealth.Backend);
+        Assert.Contains("tap", inputHealth.SupportedPointerActions);
         Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
     }
 

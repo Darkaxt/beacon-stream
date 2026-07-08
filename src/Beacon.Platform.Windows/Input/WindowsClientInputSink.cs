@@ -5,8 +5,11 @@ namespace Beacon.Platform.Windows.Input;
 
 public sealed class WindowsClientInputSink(
     IWindowsDisplayApi displayApi,
-    IWindowsInputApi inputApi) : IClientInputSink
+    IWindowsInputApi inputApi) : IClientInputSink, IClientInputHealthProvider
 {
+    private static readonly string[] EventTypes = ["pointer"];
+    private static readonly string[] PointerActions = ["move", "down", "up", "tap"];
+
     public async Task<ClientInputResult> ForwardAsync(ClientInputBatch batch, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -40,6 +43,14 @@ public sealed class WindowsClientInputSink(
             ? ClientInputResult.Ok(batch.Events.Count)
             : ClientInputResult.Fail(send.Error ?? "Windows input dispatch failed.");
     }
+
+    public ClientInputHealth GetHealth() =>
+        new(
+            Ready: true,
+            Backend: "windows-sendinput",
+            Diagnostic: "Windows SendInput pointer sink ready.",
+            SupportedEventTypes: EventTypes,
+            SupportedPointerActions: PointerActions);
 
     private static bool TryAppendCommands(
         ClientInputEvent inputEvent,

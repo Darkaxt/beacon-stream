@@ -7,6 +7,7 @@ public sealed record CockpitSnapshot(
     IReadOnlyList<CockpitOwnershipSummary> Ownership,
     CockpitDisplayHealth Display,
     CockpitStreamingHealth StreamingHealth,
+    CockpitInputHealth InputHealth,
     CockpitGameSummary Games,
     IReadOnlyList<CockpitDiagnosticEvent> Diagnostics);
 
@@ -167,6 +168,21 @@ public sealed record CockpitStreamingHealth(
         Hdr10: false,
         ActiveSessions: 0,
         Diagnostics: []);
+}
+
+public sealed record CockpitInputHealth(
+    bool Ready,
+    string Backend,
+    string Diagnostic,
+    IReadOnlyList<string> SupportedEventTypes,
+    IReadOnlyList<string> SupportedPointerActions)
+{
+    public static CockpitInputHealth Unknown { get; } = new(
+        Ready: false,
+        Backend: "unknown",
+        Diagnostic: "Input health unavailable.",
+        SupportedEventTypes: [],
+        SupportedPointerActions: []);
 }
 
 public sealed record CockpitGameSummary(int Total, IReadOnlyList<string> Diagnostics);

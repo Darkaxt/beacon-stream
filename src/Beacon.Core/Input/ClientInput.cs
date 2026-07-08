@@ -25,16 +25,43 @@ public sealed record ClientInputResult(bool Success, int EventCount, string? Err
     public static ClientInputResult Fail(string error) => new(false, 0, error);
 }
 
+public sealed record ClientInputHealth(
+    bool Ready,
+    string Backend,
+    string Diagnostic,
+    IReadOnlyList<string> SupportedEventTypes,
+    IReadOnlyList<string> SupportedPointerActions)
+{
+    public static ClientInputHealth Unknown(string diagnostic) =>
+        new(false, "unknown", diagnostic, [], []);
+}
+
 public interface IClientInputSink
 {
     Task<ClientInputResult> ForwardAsync(ClientInputBatch batch, CancellationToken cancellationToken);
 }
 
-public sealed class NoOpClientInputSink : IClientInputSink
+public interface IClientInputHealthProvider
 {
+    ClientInputHealth GetHealth();
+}
+
+public sealed class NoOpClientInputSink : IClientInputSink, IClientInputHealthProvider
+{
+    private static readonly string[] EventTypes = ["pointer"];
+    private static readonly string[] PointerActions = ["move", "down", "up", "tap"];
+
     public Task<ClientInputResult> ForwardAsync(ClientInputBatch batch, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(ClientInputResult.Ok(batch.Events.Count));
     }
+
+    public ClientInputHealth GetHealth() =>
+        new(
+            Ready: true,
+            Backend: "no-op",
+            Diagnostic: "No-op input sink active for fake host mode.",
+            SupportedEventTypes: EventTypes,
+            SupportedPointerActions: PointerActions);
 }
