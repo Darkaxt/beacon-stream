@@ -134,19 +134,33 @@ public sealed class DisplayLeaseManagerTests
     }
 
     [Fact]
-    public async Task RecoverDisplayAsyncWhenRestoreFailsDoesNotRemoveVirtualDisplay()
+    public async Task RecoverDisplayAsyncWhenInitialRestoreFailsRemovesVirtualDisplayAndVerifiesAfterRemove()
     {
-        var backend = new FakeDisplayBackend
-        {
-            NextRestoreResult = DisplayRestoreResult.Fail("physical primary could not be verified")
-        };
+        var backend = new FakeDisplayBackend();
+        backend.RestoreResults.Enqueue(DisplayRestoreResult.Fail("physical primary could not be verified"));
+        backend.RestoreResults.Enqueue(DisplayRestoreResult.Ok());
         var manager = new DisplayLeaseManager(backend);
 
         DisplayRecoveryResult result = await manager.RecoverDisplayAsync("client-z-fold-7", CancellationToken.None);
 
-        Assert.False(result.Success);
-        Assert.Contains("physical primary could not be verified", result.Error ?? string.Empty);
-        Assert.Empty(backend.RemoveCalls);
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(["physical-primary", "physical-primary"], backend.RestoreCalls);
+        Assert.Equal("client-z-fold-7", Assert.Single(backend.RemoveCalls));
+    }
+
+    [Fact]
+    public async Task RecoverDisplayAsyncWhenFinalRestoreFailsButHealthVerifiesPhysicalPrimarySucceeds()
+    {
+        var backend = new FakeDisplayBackend();
+        backend.RestoreResults.Enqueue(DisplayRestoreResult.Fail("stale virtual topology before remove"));
+        backend.RestoreResults.Enqueue(DisplayRestoreResult.Fail("stale virtual topology after remove"));
+        var manager = new DisplayLeaseManager(backend);
+
+        DisplayRecoveryResult result = await manager.RecoverDisplayAsync("client-z-fold-7", CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(["physical-primary", "physical-primary"], backend.RestoreCalls);
+        Assert.Equal("client-z-fold-7", Assert.Single(backend.RemoveCalls));
     }
 
     [Fact]

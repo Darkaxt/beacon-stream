@@ -60,6 +60,15 @@ public static class DisplayProbeApp
                     output.WriteLine(DisplayProbeFormatter.FormatRestoreResult(restoreResult));
                     return restoreResult.Success ? 0 : 2;
 
+                case RecoverDisplayProbeCommand recover:
+                    var recoveryBackend = new WindowsDisplayBackend(api);
+                    var leases = new DisplayLeaseManager(recoveryBackend);
+                    DisplayRecoveryResult recoveryResult = await leases.RecoverDisplayAsync(
+                        ToDisplayId(recover.ClientId),
+                        CancellationToken.None);
+                    output.WriteLine(DisplayProbeFormatter.FormatRecoveryResult(recoveryResult));
+                    return recoveryResult.Success ? 0 : 2;
+
                 case RemoveDisplayProbeCommand remove:
                     DisplayApiResult removeResult = await api.RemoveVirtualDisplayAsync(
                         ToDisplayId(remove.ClientId),

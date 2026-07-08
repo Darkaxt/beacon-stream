@@ -200,30 +200,64 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend, IDiagnos
             Publish(
                 DiagnosticSeverity.Error,
                 "lease.recover",
-                $"Physical primary restore failed during display recovery: {restoreResult.Error}",
+                $"Initial physical primary restore failed during display recovery; removing virtual display before final verification: {restoreResult.Error}",
                 clientId: null,
                 displayId,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
-            return DisplayRecoveryResult.Fail(restoreResult.Error ?? "Physical primary restore failed.");
         }
 
         DisplayRemoveResult removeResult = await displayBackend.RemoveVirtualDisplayAsync(displayId, cancellationToken);
         if (!removeResult.Success)
         {
+            string initialRestoreContext = restoreResult.Success
+                ? string.Empty
+                : $"Initial physical primary restore failed: {restoreResult.Error}; ";
             Publish(
                 DiagnosticSeverity.Error,
                 "lease.recover",
-                $"Virtual display removal failed during display recovery: {removeResult.Error}",
+                $"{initialRestoreContext}Virtual display removal failed during display recovery: {removeResult.Error}",
                 clientId: null,
                 displayId,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
-            return DisplayRecoveryResult.Fail(removeResult.Error ?? $"Virtual display {displayId} removal failed.");
+            return DisplayRecoveryResult.Fail($"{initialRestoreContext}{removeResult.Error ?? $"Virtual display {displayId} removal failed."}");
+        }
+
+        if (!restoreResult.Success)
+        {
+            DisplayRestoreResult finalRestoreResult = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
+            if (!finalRestoreResult.Success)
+            {
+                DisplayHealth health = await displayBackend.GetHealthAsync(cancellationToken);
+                if (health.PhysicalPrimaryVerified)
+                {
+                    Publish(
+                        DiagnosticSeverity.Information,
+                        "lease.recover",
+                        "Display recovery removed the virtual display and display health verified the physical primary after a stale restore result.",
+                        clientId: null,
+                        displayId,
+                        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+                    return DisplayRecoveryResult.Ok();
+                }
+
+                string error = $"Initial physical primary restore failed: {restoreResult.Error}; virtual display was removed, but physical primary verification after removal failed: {finalRestoreResult.Error}";
+                Publish(
+                    DiagnosticSeverity.Error,
+                    "lease.recover",
+                    error,
+                    clientId: null,
+                    displayId,
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+                return DisplayRecoveryResult.Fail(error);
+            }
         }
 
         Publish(
             DiagnosticSeverity.Information,
             "lease.recover",
-            "Display recovery restored the physical primary and removed the virtual display.",
+            restoreResult.Success
+                ? "Display recovery restored the physical primary and removed the virtual display."
+                : "Display recovery removed the virtual display after initial restore failed and verified the physical primary.",
             clientId: null,
             displayId,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));

@@ -22,6 +22,8 @@ public sealed record PrimaryDisplayProbeCommand(string ClientId) : DisplayProbeC
 
 public sealed record RestorePhysicalDisplayProbeCommand : DisplayProbeCommand;
 
+public sealed record RecoverDisplayProbeCommand(string ClientId) : DisplayProbeCommand;
+
 public sealed record RemoveDisplayProbeCommand(string ClientId) : DisplayProbeCommand;
 
 public static class DisplayProbeCommandLine
@@ -40,6 +42,7 @@ public static class DisplayProbeCommandLine
             "ensure" => ParseEnsure(args),
             "primary" => new PrimaryDisplayProbeCommand(ReadRequiredOption(args, "--client")),
             "restore-physical" => new RestorePhysicalDisplayProbeCommand(),
+            "recover" => new RecoverDisplayProbeCommand(ReadRequiredOption(args, "--client")),
             "remove" => new RemoveDisplayProbeCommand(ReadRequiredOption(args, "--client")),
             _ => throw new ArgumentException($"Unknown display probe command '{args[0]}'.", nameof(args))
         };

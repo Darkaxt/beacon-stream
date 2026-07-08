@@ -63,4 +63,13 @@ public sealed class DisplayProbeCommandLineTests
 
         Assert.IsType<RestorePhysicalDisplayProbeCommand>(command);
     }
+
+    [Fact]
+    public void ParseRecoverCommandRequiresClient()
+    {
+        DisplayProbeCommand command = DisplayProbeCommandLine.Parse(["recover", "--client", "z-fold-7"]);
+
+        var recover = Assert.IsType<RecoverDisplayProbeCommand>(command);
+        Assert.Equal("z-fold-7", recover.ClientId);
+    }
 }

@@ -31,6 +31,8 @@ public sealed class FakeDisplayBackend : IDisplayBackend
 
     public Queue<DisplayEnsureResult> PrepareResults { get; } = [];
 
+    public Queue<DisplayRestoreResult> RestoreResults { get; } = [];
+
     public List<string> PrepareCalls { get; } = [];
 
     public List<string> EnsureCalls { get; } = [];
@@ -83,6 +85,11 @@ public sealed class FakeDisplayBackend : IDisplayBackend
     public Task<DisplayRestoreResult> RestorePhysicalPrimaryAsync(CancellationToken cancellationToken)
     {
         RestoreCalls.Add("physical-primary");
+        if (RestoreResults.Count > 0)
+        {
+            return Task.FromResult(RestoreResults.Dequeue());
+        }
+
         return Task.FromResult(NextRestoreResult);
     }
 

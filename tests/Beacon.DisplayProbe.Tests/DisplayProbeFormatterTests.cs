@@ -53,4 +53,12 @@ public sealed class DisplayProbeFormatterTests
         Assert.Contains("restore-physical: failed", output);
         Assert.Contains("physical primary was not verified", output);
     }
+
+    [Fact]
+    public void FormatRecoveryResultReportsSuccess()
+    {
+        string output = DisplayProbeFormatter.FormatRecoveryResult(DisplayRecoveryResult.Ok());
+
+        Assert.Equal("recover: success", output);
+    }
 }
