@@ -47,8 +47,17 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
     private const byte ExpectedProtocolMinor = 2;
     private const int EnumCurrentSettings = -1;
     private static readonly Guid SudoVdaInterfaceGuid = new("e5bcc234-1e0c-418a-a0d4-ef8b7501414d");
-    private readonly Lock displayMapLock = new();
-    private readonly Dictionary<string, string> displayNameByDisplayId = new(StringComparer.Ordinal);
+    private readonly WindowsDisplayNameMap displayNameMap;
+
+    public WindowsDisplayApi()
+        : this(new WindowsDisplayNameMap(WindowsDisplayNameMapStore.Default))
+    {
+    }
+
+    public WindowsDisplayApi(WindowsDisplayNameMap displayNameMap)
+    {
+        this.displayNameMap = displayNameMap;
+    }
 
     public DisplayDriverStatus GetDriverStatus()
     {
@@ -321,14 +330,16 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
                 continue;
             }
 
-            string displayId = displayIdByDisplayName is not null &&
+            DisplayPathKind kind = ClassifyDisplayKind(device.DeviceString, device.DeviceId);
+            string displayId = kind == DisplayPathKind.Virtual &&
+                displayIdByDisplayName is not null &&
                 displayIdByDisplayName.TryGetValue(device.DeviceName, out string? mappedDisplayId)
                     ? mappedDisplayId
                     : device.DeviceName;
 
             paths.Add(new DisplayPathSnapshot(
                 displayId,
-                ClassifyDisplayKind(device.DeviceString, device.DeviceId),
+                kind,
                 checked((int)mode.PelsWidth),
                 checked((int)mode.PelsHeight),
                 checked((int)mode.DisplayFrequency),
@@ -919,10 +930,7 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
             return true;
         }
 
-        lock (displayMapLock)
-        {
-            return displayNameByDisplayId.TryGetValue(displayId, out displayName);
-        }
+        return displayNameMap.TryResolveDisplayName(displayId, out displayName);
     }
 
     private static bool ContainsOrdinalIgnoreCase(string value, string fragment) =>
@@ -930,29 +938,17 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
 
     private void RememberDisplayName(string displayId, string displayName)
     {
-        lock (displayMapLock)
-        {
-            displayNameByDisplayId[displayId] = displayName;
-        }
+        displayNameMap.Remember(displayId, displayName);
     }
 
     private void ForgetDisplayName(string displayId)
     {
-        lock (displayMapLock)
-        {
-            displayNameByDisplayId.Remove(displayId);
-        }
+        displayNameMap.Forget(displayId);
     }
 
     private Dictionary<string, string> CreateDisplayIdByDisplayNameSnapshot()
     {
-        lock (displayMapLock)
-        {
-            return displayNameByDisplayId.ToDictionary(
-                pair => pair.Value,
-                pair => pair.Key,
-                StringComparer.OrdinalIgnoreCase);
-        }
+        return displayNameMap.CreateDisplayIdByDisplayNameSnapshot();
     }
 
     private static SafeFileHandle? OpenSudoVdaDevice(out string diagnostic)
