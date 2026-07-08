@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.res.Configuration;
 import android.os.Bundle;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
@@ -24,6 +25,8 @@ import java.util.concurrent.Executors;
 
 public final class BeaconActivity extends Activity {
     private static final String[] LOCAL_THEME_VALUES = new String[] { "system", "dark", "light" };
+    private static final String[] TOUCH_LAYOUT_VALUES = new String[] { "default", "compact", "edge" };
+    private static final String[] UI_DENSITY_VALUES = new String[] { "comfortable", "dense", "large" };
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final List<BeaconGameCatalog.GameEntry> gameEntries = new ArrayList<>();
@@ -35,7 +38,12 @@ public final class BeaconActivity extends Activity {
     private LinearLayout rootLayout;
     private EditText serverUrl;
     private EditText clientId;
+    private Spinner touchLayout;
+    private Spinner uiDensity;
     private Spinner localTheme;
+    private CheckBox multitouchEnabled;
+    private CheckBox controllerOverlayEnabled;
+    private CheckBox hapticsEnabled;
     private CheckBox wakeLockEnabled;
     private CheckBox decoderDebugOverlayEnabled;
     private EditText width;
@@ -57,6 +65,7 @@ public final class BeaconActivity extends Activity {
     private EditText batteryPercent;
     private EditText thermalState;
     private TextView decoderDebugOverlay;
+    private TextView controllerOverlayMarker;
     private TextView touchSurfaceView;
     private TextView status;
 
@@ -82,11 +91,15 @@ public final class BeaconActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         rootLayout = root;
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(28, 28, 28, 28);
+        root.setPadding(
+            uiState.contentPaddingPx(),
+            uiState.contentPaddingPx(),
+            uiState.contentPaddingPx(),
+            uiState.contentPaddingPx());
         root.setBackgroundColor(uiState.backgroundColor());
         scrollView.addView(root);
 
-        TextView title = text("Beacon", 28, true);
+        TextView title = text("Beacon", uiState.titleTextSizeSp(), true);
         root.addView(title);
 
         addLocalSettingsControls(root);
@@ -136,6 +149,9 @@ public final class BeaconActivity extends Activity {
         decoderDebugOverlay = text("", 12, false);
         root.addView(decoderDebugOverlay);
         updateDecoderDebugOverlay();
+        controllerOverlayMarker = text("Controller overlay enabled", uiState.bodyTextSizeSp(), false);
+        root.addView(controllerOverlayMarker);
+        updateControllerOverlay();
 
         root.addView(button("Hello / Refresh", model -> model.refresh()));
         root.addView(button("Load Games", model -> {
@@ -165,7 +181,7 @@ public final class BeaconActivity extends Activity {
         root.addView(button("Quit", model -> model.quit(new BeaconApiClient.QuitState(false))));
         root.addView(button("Emergency Restore", model -> model.emergencyRestore()));
 
-        status = text("Idle", 14, false);
+        status = text("Idle", uiState.bodyTextSizeSp(), false);
         status.setGravity(Gravity.START);
         root.addView(status);
 
@@ -173,29 +189,42 @@ public final class BeaconActivity extends Activity {
     }
 
     private void addLocalSettingsControls(LinearLayout root) {
-        localTheme = new Spinner(this);
-        ArrayAdapter<String> themeAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, LOCAL_THEME_VALUES);
-        themeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        localTheme.setAdapter(themeAdapter);
-        localTheme.setSelection(localThemeIndex(localSettings.localTheme));
+        touchLayout = spinner(TOUCH_LAYOUT_VALUES, valueIndex(TOUCH_LAYOUT_VALUES, localSettings.touchLayout));
+        uiDensity = spinner(UI_DENSITY_VALUES, valueIndex(UI_DENSITY_VALUES, localSettings.uiDensity));
+        localTheme = spinner(LOCAL_THEME_VALUES, valueIndex(LOCAL_THEME_VALUES, localSettings.localTheme));
+        multitouchEnabled = checkbox("Enable multitouch", localSettings.multitouchEnabled);
+        controllerOverlayEnabled = checkbox("Show controller overlay", localSettings.controllerOverlayEnabled);
+        hapticsEnabled = checkbox("Enable haptics", localSettings.hapticsEnabled);
         wakeLockEnabled = checkbox("Keep screen awake", localSettings.wakeLockEnabled);
         decoderDebugOverlayEnabled = checkbox("Show decoder debug overlay", localSettings.decoderDebugOverlayEnabled);
+        root.addView(text("Touch layout", uiState.bodyTextSizeSp(), false));
+        root.addView(touchLayout);
+        root.addView(text("UI density", uiState.bodyTextSizeSp(), false));
+        root.addView(uiDensity);
+        root.addView(text("Theme", uiState.bodyTextSizeSp(), false));
         root.addView(localTheme);
+        root.addView(multitouchEnabled);
+        root.addView(controllerOverlayEnabled);
+        root.addView(hapticsEnabled);
         root.addView(wakeLockEnabled);
         root.addView(decoderDebugOverlayEnabled);
         root.addView(localButton("Save Local Settings", this::saveLocalSettings));
     }
 
     private View touchSurface() {
-        TextView surface = text("Touch input surface", 18, false);
+        TextView surface = text("Touch input surface", uiState.bodyTextSizeSp(), false);
         touchSurfaceView = surface;
         surface.setGravity(Gravity.CENTER);
-        surface.setMinHeight(360);
+        surface.setMinHeight(uiState.touchSurfaceMinHeightPx());
         surface.setBackgroundColor(uiState.surfaceColor());
         surface.setOnTouchListener((view, event) -> {
             BeaconApiClient.InputBatch batch = mapTouchEvent(event, view.getWidth(), view.getHeight());
             if (batch == null) {
                 return false;
+            }
+
+            if (uiState.hapticsEnabled() && pointerDown(event)) {
+                view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
             }
 
             runAction("Touch Input", model -> model.sendInput(batch));
@@ -208,6 +237,17 @@ public final class BeaconActivity extends Activity {
         String action = pointerAction(event);
         if (action.isEmpty()) {
             return null;
+        }
+
+        if (!uiState.multitouchEnabled() && event.getPointerCount() > 1) {
+            int pointerIndex = Math.min(event.getActionIndex(), event.getPointerCount() - 1);
+            return touchInputMapper.map(
+                action,
+                event.getPointerId(pointerIndex),
+                event.getX(pointerIndex),
+                event.getY(pointerIndex),
+                surfaceWidth,
+                surfaceHeight);
         }
 
         if (event.getActionMasked() == MotionEvent.ACTION_MOVE ||
@@ -270,6 +310,15 @@ public final class BeaconActivity extends Activity {
         return checkBox;
     }
 
+    private Spinner spinner(String[] values, int selectedIndex) {
+        Spinner spinner = new Spinner(this);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, values);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinner.setAdapter(adapter);
+        spinner.setSelection(selectedIndex);
+        return spinner;
+    }
+
     private Button button(String label, BeaconAction action) {
         Button button = new Button(this);
         button.setText(label);
@@ -302,6 +351,11 @@ public final class BeaconActivity extends Activity {
         }
     }
 
+    private static boolean pointerDown(MotionEvent event) {
+        return event.getActionMasked() == MotionEvent.ACTION_DOWN ||
+            event.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN;
+    }
+
     private void runAction(String label, BeaconAction action) {
         status.setText(label + "...");
         BeaconViewModel model = createModel();
@@ -323,6 +377,11 @@ public final class BeaconActivity extends Activity {
     private void saveLocalSettings() {
         localSettings = BeaconLocalSettingsForm.update(
             localSettings,
+            selectedValue(touchLayout, "default"),
+            multitouchEnabled.isChecked(),
+            controllerOverlayEnabled.isChecked(),
+            hapticsEnabled.isChecked(),
+            selectedValue(uiDensity, "comfortable"),
             selectedLocalTheme(),
             wakeLockEnabled.isChecked(),
             decoderDebugOverlayEnabled.isChecked());
@@ -331,6 +390,7 @@ public final class BeaconActivity extends Activity {
         applyWindowFlags(uiState);
         applyTheme(rootLayout);
         updateDecoderDebugOverlay();
+        updateControllerOverlay();
         status.setText("Local settings saved");
     }
 
@@ -349,10 +409,16 @@ public final class BeaconActivity extends Activity {
 
         if (view == rootLayout) {
             view.setBackgroundColor(uiState.backgroundColor());
+            view.setPadding(
+                uiState.contentPaddingPx(),
+                uiState.contentPaddingPx(),
+                uiState.contentPaddingPx(),
+                uiState.contentPaddingPx());
         }
 
         if (view == touchSurfaceView) {
             view.setBackgroundColor(uiState.surfaceColor());
+            view.setMinimumHeight(uiState.touchSurfaceMinHeightPx());
         }
 
         if (view instanceof TextView textView) {
@@ -380,6 +446,14 @@ public final class BeaconActivity extends Activity {
             "Decoder load " + textValue(decoderLoadPercent) +
                 "% | bandwidth " + textValue(estimatedBandwidthMbps) +
                 " Mbps | thermal " + textValue(thermalState));
+    }
+
+    private void updateControllerOverlay() {
+        if (controllerOverlayMarker == null) {
+            return;
+        }
+
+        controllerOverlayMarker.setVisibility(uiState.controllerOverlayEnabled() ? View.VISIBLE : View.GONE);
     }
 
     private void setGameEntries(List<BeaconGameCatalog.GameEntry> entries) {
@@ -461,13 +535,17 @@ public final class BeaconActivity extends Activity {
     }
 
     private String selectedLocalTheme() {
-        Object selected = localTheme.getSelectedItem();
-        return selected == null ? "system" : selected.toString();
+        return selectedValue(localTheme, "system");
     }
 
-    private int localThemeIndex(String value) {
-        for (int i = 0; i < LOCAL_THEME_VALUES.length; i++) {
-            if (LOCAL_THEME_VALUES[i].equalsIgnoreCase(value)) {
+    private String selectedValue(Spinner spinner, String fallback) {
+        Object selected = spinner.getSelectedItem();
+        return selected == null ? fallback : selected.toString();
+    }
+
+    private int valueIndex(String[] values, String value) {
+        for (int i = 0; i < values.length; i++) {
+            if (values[i].equalsIgnoreCase(value)) {
                 return i;
             }
         }

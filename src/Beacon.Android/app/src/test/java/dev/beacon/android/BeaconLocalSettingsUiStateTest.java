@@ -8,6 +8,45 @@ import static org.junit.Assert.assertTrue;
 
 public final class BeaconLocalSettingsUiStateTest {
     @Test
+    public void localInputFlagsAndDenseLayoutAreExposed() {
+        BeaconLocalSettings settings = new BeaconLocalSettings();
+        settings.touchLayout = "edge";
+        settings.multitouchEnabled = false;
+        settings.controllerOverlayEnabled = false;
+        settings.hapticsEnabled = false;
+        settings.uiDensity = "dense";
+
+        BeaconLocalSettingsUiState state = BeaconLocalSettingsUiState.from(settings, false);
+        BeaconLocalSettingsUiState defaultState = BeaconLocalSettingsUiState.from(new BeaconLocalSettings(), false);
+
+        assertEquals("edge", state.touchLayout());
+        assertEquals("dense", state.uiDensity());
+        assertFalse(state.multitouchEnabled());
+        assertFalse(state.controllerOverlayEnabled());
+        assertFalse(state.hapticsEnabled());
+        assertTrue(state.contentPaddingPx() < defaultState.contentPaddingPx());
+        assertTrue(state.titleTextSizeSp() < defaultState.titleTextSizeSp());
+        assertTrue(state.bodyTextSizeSp() < defaultState.bodyTextSizeSp());
+        assertTrue(state.touchSurfaceMinHeightPx() < defaultState.touchSurfaceMinHeightPx());
+    }
+
+    @Test
+    public void largeDensityUsesLargerMetricsThanDense() {
+        BeaconLocalSettings denseSettings = new BeaconLocalSettings();
+        denseSettings.uiDensity = "dense";
+        BeaconLocalSettings largeSettings = new BeaconLocalSettings();
+        largeSettings.uiDensity = "large";
+
+        BeaconLocalSettingsUiState dense = BeaconLocalSettingsUiState.from(denseSettings, false);
+        BeaconLocalSettingsUiState large = BeaconLocalSettingsUiState.from(largeSettings, false);
+
+        assertTrue(large.contentPaddingPx() > dense.contentPaddingPx());
+        assertTrue(large.titleTextSizeSp() > dense.titleTextSizeSp());
+        assertTrue(large.bodyTextSizeSp() > dense.bodyTextSizeSp());
+        assertTrue(large.touchSurfaceMinHeightPx() > dense.touchSurfaceMinHeightPx());
+    }
+
+    @Test
     public void darkSettingsEnableWakeLockDebugOverlayAndDarkPalette() {
         BeaconLocalSettings settings = new BeaconLocalSettings();
         settings.localTheme = "dark";
