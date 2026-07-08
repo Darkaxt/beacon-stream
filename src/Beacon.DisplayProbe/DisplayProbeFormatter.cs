@@ -31,6 +31,11 @@ public static class DisplayProbeFormatter
             ? $"ensure: success hdrEnabled={result.HdrEnabled} hdrReason={result.HdrReason}"
             : $"ensure: failed: {result.Error}";
 
+    public static string FormatPrepareResult(DisplayEnsureResult result) =>
+        result.Success
+            ? $"prepare: success hdrEnabled={result.HdrEnabled} hdrReason={result.HdrReason}"
+            : $"prepare: failed: {result.Error}";
+
     public static string FormatRestoreResult(DisplayRestoreResult result) =>
         result.Success
             ? "restore-physical: success verified=True"

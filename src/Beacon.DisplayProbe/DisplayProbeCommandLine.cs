@@ -4,6 +4,13 @@ public abstract record DisplayProbeCommand;
 
 public sealed record StatusDisplayProbeCommand : DisplayProbeCommand;
 
+public sealed record PrepareDisplayProbeCommand(
+    string ClientId,
+    int Width,
+    int Height,
+    int RefreshHz,
+    string Hdr) : DisplayProbeCommand;
+
 public sealed record EnsureDisplayProbeCommand(
     string ClientId,
     int Width,
@@ -29,6 +36,7 @@ public static class DisplayProbeCommandLine
         return args[0].ToLowerInvariant() switch
         {
             "status" => new StatusDisplayProbeCommand(),
+            "prepare" => ParsePrepare(args),
             "ensure" => ParseEnsure(args),
             "primary" => new PrimaryDisplayProbeCommand(ReadRequiredOption(args, "--client")),
             "restore-physical" => new RestorePhysicalDisplayProbeCommand(),
@@ -37,15 +45,38 @@ public static class DisplayProbeCommandLine
         };
     }
 
+    private static PrepareDisplayProbeCommand ParsePrepare(IReadOnlyList<string> args)
+    {
+        DisplayProbeModeOptions options = ParseModeOptions(args);
+        return new PrepareDisplayProbeCommand(
+            options.ClientId,
+            options.Width,
+            options.Height,
+            options.RefreshHz,
+            options.Hdr);
+    }
+
     private static EnsureDisplayProbeCommand ParseEnsure(IReadOnlyList<string> args)
+    {
+        DisplayProbeModeOptions options = ParseModeOptions(args);
+
+        return new EnsureDisplayProbeCommand(
+            options.ClientId,
+            options.Width,
+            options.Height,
+            options.RefreshHz,
+            options.Hdr);
+    }
+
+    private static DisplayProbeModeOptions ParseModeOptions(IReadOnlyList<string> args)
     {
         string clientId = ReadRequiredOption(args, "--client");
         int width = ReadRequiredInt(args, "--width");
         int height = ReadRequiredInt(args, "--height");
-        int refresh = ReadRequiredInt(args, "--refresh");
+        int refreshHz = ReadRequiredInt(args, "--refresh");
         string hdr = ReadOptionalOption(args, "--hdr") ?? "prefer";
 
-        return new EnsureDisplayProbeCommand(clientId, width, height, refresh, hdr);
+        return new DisplayProbeModeOptions(clientId, width, height, refreshHz, hdr);
     }
 
     private static int ReadRequiredInt(IReadOnlyList<string> args, string optionName)
@@ -72,4 +103,11 @@ public static class DisplayProbeCommandLine
 
         return null;
     }
+
+    private sealed record DisplayProbeModeOptions(
+        string ClientId,
+        int Width,
+        int Height,
+        int RefreshHz,
+        string Hdr);
 }
