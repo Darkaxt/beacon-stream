@@ -421,6 +421,7 @@ public sealed class ExternalProcessStreamingBackend(
     {
         var reconciledDiagnostics = new List<string>();
         var exitedEvents = new List<(StreamingSessionState Session, string Error)>();
+        var descriptorPathsToDelete = new List<string>();
         lock (gate)
         {
             foreach ((string sessionId, ExternalStreamingProcess process) in processes.ToArray())
@@ -466,8 +467,16 @@ public sealed class ExternalProcessStreamingBackend(
                 reconciledDiagnostics.Add(diagnostic);
                 reconciledDiagnostics.AddRange(status.Diagnostics.Select(value => $"{sessionId}: {value}"));
                 exitedEvents.Add((exited, error));
-                DeleteRuntimeDescriptor(descriptorPath);
+                if (!string.IsNullOrWhiteSpace(descriptorPath))
+                {
+                    descriptorPathsToDelete.Add(descriptorPath);
+                }
             }
+        }
+
+        foreach (string descriptorPath in descriptorPathsToDelete)
+        {
+            DeleteRuntimeDescriptor(descriptorPath);
         }
 
         foreach ((StreamingSessionState session, string error) in exitedEvents)
@@ -713,12 +722,17 @@ public sealed class ExternalProcessStreamingBackend(
         if (!read.Success || read.Descriptor is null)
         {
             string error = read.Error ?? $"External streaming session descriptor '{descriptorPath}' is invalid.";
+            StreamingSessionState failed = session with { Error = error };
             lock (gate)
             {
                 processDiagnostics.Add($"{session.SessionId}: {error}");
+                if (sessions.ContainsKey(session.SessionId))
+                {
+                    sessions[session.SessionId] = failed;
+                }
             }
 
-            return session with { Error = error };
+            return failed;
         }
 
         StreamingConnectionDescriptor? connection = CreateConnectionDescriptor(

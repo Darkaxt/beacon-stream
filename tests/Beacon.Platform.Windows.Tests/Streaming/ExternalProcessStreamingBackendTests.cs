@@ -420,6 +420,27 @@ public sealed class ExternalProcessStreamingBackendTests
     }
 
     [Fact]
+    public async Task RuntimeDescriptorReadFailureIsRecordedOnSessionAndHealth()
+    {
+        var descriptors = new FakeExternalStreamingSessionDescriptorStore();
+        var runner = new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]);
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions("C:\\Tools\\sunshine-wrapper.exe"),
+            runner,
+            sessionDescriptors: descriptors);
+        SessionPlan plan = CreatePlan();
+        await backend.StartAsync(plan, CancellationToken.None);
+        string descriptorPath = Assert.Single(runner.StartedCommands).Environment["BEACON_STREAM_SESSION_DESCRIPTOR_PATH"];
+        descriptors.FailuresByPath[descriptorPath] = "runtime descriptor JSON is malformed";
+
+        StreamingSessionState? session = await backend.GetSessionAsync(plan.SessionId, CancellationToken.None);
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.Equal("runtime descriptor JSON is malformed", session?.Error);
+        Assert.Contains(health.Diagnostics, diagnostic => diagnostic.Contains("runtime descriptor JSON is malformed", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task StopTerminatesOwnedProcessAndMarksSessionStopped()
     {
         var runner = new FakeExternalStreamingProcessRunner();
@@ -544,6 +565,8 @@ public sealed class ExternalProcessStreamingBackendTests
     {
         public Dictionary<string, ExternalStreamingSessionDescriptor> DescriptorsByPath { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+        public Dictionary<string, string> FailuresByPath { get; } = new(StringComparer.OrdinalIgnoreCase);
+
         public List<string> PreparedSessionIds { get; } = [];
 
         public List<string> ClearedDescriptorPaths { get; } = [];
@@ -560,7 +583,9 @@ public sealed class ExternalProcessStreamingBackendTests
         }
 
         public ExternalStreamingSessionDescriptorReadResult Read(string path) =>
-            DescriptorsByPath.TryGetValue(path, out ExternalStreamingSessionDescriptor? descriptor)
+            FailuresByPath.TryGetValue(path, out string? failure)
+                ? ExternalStreamingSessionDescriptorReadResult.Fail(failure)
+                : DescriptorsByPath.TryGetValue(path, out ExternalStreamingSessionDescriptor? descriptor)
                 ? ExternalStreamingSessionDescriptorReadResult.Ok(descriptor)
                 : ExternalStreamingSessionDescriptorReadResult.NotFound();
 
