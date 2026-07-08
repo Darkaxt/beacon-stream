@@ -81,6 +81,8 @@ Runtime descriptor fields:
 
 Once present, the runtime session descriptor is treated as evidence from the started wrapper and takes precedence over static manifest connection fields. Explicit Beacon connection settings remain the fallback when no runtime descriptor has been written.
 
+`Beacon.StreamingProbe` is the checked no-phone producer for this format. It writes the descriptor and can either exit with `--once` for standalone validation or stay alive until Beacon stops the wrapper process.
+
 ## Stability Rules
 
 - Manifest validation happens during streaming preflight, before display or launch side effects.
