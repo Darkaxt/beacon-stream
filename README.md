@@ -2,7 +2,7 @@
 
 Beacon Stream is a server-authoritative personal game-streaming orchestrator.
 
-Milestone 0/1 covers the control plane, fake backends, planner, profile ownership, phone-free testing, and source-boundary documentation. Milestone 2 adds the real Windows SudoVDA/DisplayConfig lifecycle backend and manual no-phone display probe. Milestone 3 adds the normalized game library model, Steam/Heroic/Hydra/manual providers, SteamGridDB/fallback artwork providers, server/client-lab game selection, and a read-only local game probe. Milestone 4 adds a WPF cockpit for local server administration. Milestone 5 adds the streaming backend boundary, fake no-phone stream lifecycle, and external-process adapter boundary for future Sunshine-compatible integration. Milestone 6 adds a thin Android control-plane APK shell. Milestone 7 adds the server-owned game launch and session ownership cleanup boundary. Milestone 8 adds the Windows process/window activity inspector. Milestone 9 adds explicit fake-vs-Windows server host composition. Milestone 10 adds explicit streaming backend selection and preflight before display/app side effects. Milestone 11 adds manual recovery actions for stranded windows/processes. Real video decode and native input forwarding come later.
+Milestone 0/1 covers the control plane, fake backends, planner, profile ownership, phone-free testing, and source-boundary documentation. Milestone 2 adds the real Windows SudoVDA/DisplayConfig lifecycle backend and manual no-phone display probe. Milestone 3 adds the normalized game library model, Steam/Heroic/Hydra/manual providers, SteamGridDB/fallback artwork providers, server/client-lab game selection, and a read-only local game probe. Milestone 4 adds a WPF cockpit for local server administration. Milestone 5 adds the streaming backend boundary, fake no-phone stream lifecycle, and external-process adapter boundary for future Sunshine-compatible integration. Milestone 6 adds a thin Android control-plane APK shell. Milestone 7 adds the server-owned game launch and session ownership cleanup boundary. Milestone 8 adds the Windows process/window activity inspector. Milestone 9 adds explicit fake-vs-Windows server host composition. Milestone 10 adds explicit streaming backend selection and preflight before display/app side effects. Milestone 11 adds manual recovery actions for stranded windows/processes. Milestone 12 adds persistent client profiles and an explicit pairing boundary for new clients. Real video decode and native input forwarding come later.
 
 ## Server Host Mode
 
@@ -20,6 +20,30 @@ dotnet run --project src\Beacon.Server
 ```
 
 Windows mode can create virtual displays and launch applications. The streaming backend is still fake until a real streaming wrapper is selected explicitly. `/admin/snapshot` reports the selected host mode and backend names under `host`.
+
+## Client Profiles And Pairing
+
+The Z Fold 7 profile is seeded as the first known client and keeps the `2560x1600@120` default. Known clients may call `/clients/hello` without pairing. Unknown clients must provide a valid pairing token before the server creates a profile:
+
+```powershell
+$env:BEACON_PAIRING_TOKEN='pair-me'
+dotnet run --project src\Beacon.Server
+```
+
+Profile persistence is enabled by setting a file path:
+
+```powershell
+$env:BEACON_CLIENT_PROFILES_PATH="$env:LOCALAPPDATA\BeaconStream\client-profiles.json"
+dotnet run --project src\Beacon.Server
+```
+
+If no profile path is configured, profiles use an in-memory repository for deterministic development and tests. `/admin/snapshot` reports `profiles.store`, `profiles.location`, and `profiles.pairingEnabled`; it never returns the pairing token.
+
+The fake endpoint can simulate a paired non-phone client:
+
+```powershell
+dotnet run --project src\Beacon.FakeEndpoint -- --server http://localhost:5000 --client-id handheld-1 --name "Handheld 1" --pairing-token pair-me
+```
 
 ## Streaming Backend Mode
 
@@ -127,4 +151,5 @@ See:
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-9-windows-host-composition.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-10-streaming-selection.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-11-recovery-actions.md`
+- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-12-persistent-pairing.md`
 - `docs/windows-display-backend.md`

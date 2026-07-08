@@ -31,6 +31,8 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.Equal("fake", root.GetProperty("host").GetProperty("streamingBackendMode").GetString());
         Assert.Equal("FakeDisplayBackend", root.GetProperty("host").GetProperty("displayBackend").GetString());
         Assert.Equal("FakeStreamingBackend", root.GetProperty("host").GetProperty("streamingBackend").GetString());
+        Assert.Equal("memory", root.GetProperty("profiles").GetProperty("store").GetString());
+        Assert.False(root.GetProperty("profiles").GetProperty("pairingEnabled").GetBoolean());
     }
 
     [Fact]

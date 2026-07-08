@@ -11,6 +11,9 @@ public static class FakeEndpointCommandLine
 
         var script = defaults with
         {
+            ClientId = ReadString(values, "client-id", defaults.ClientId),
+            Name = ReadString(values, "name", defaults.Name),
+            PairingToken = ReadOptionalString(values, "pairing-token", defaults.PairingToken),
             Width = ReadInt(values, "width", defaults.Width),
             Height = ReadInt(values, "height", defaults.Height),
             RefreshHz = ReadInt(values, "refresh", defaults.RefreshHz),
@@ -54,5 +57,8 @@ public static class FakeEndpointCommandLine
             : fallback;
 
     private static string ReadString(IReadOnlyDictionary<string, string> values, string key, string fallback) =>
+        values.GetValueOrDefault(key) ?? fallback;
+
+    private static string? ReadOptionalString(IReadOnlyDictionary<string, string> values, string key, string? fallback) =>
         values.GetValueOrDefault(key) ?? fallback;
 }

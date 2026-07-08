@@ -29,10 +29,17 @@ public static class ClientEndpoints
     {
         RouteGroupBuilder clients = endpoints.MapGroup("/clients");
 
-        clients.MapPost("/hello", (ClientHelloRequest request, InMemoryClientStore store) =>
+        clients.MapPost("/hello", (ClientHelloRequest request, InMemoryClientStore store, ClientPairingOptions pairing) =>
         {
-            ClientProfile profile = store.GetProfile(request.ClientId) ?? ClientProfile.CreateZFold7Default();
-            store.SaveProfile(profile);
+            ClientProfile? existingProfile = store.GetProfile(request.ClientId);
+            if (existingProfile is null && !pairing.Allows(request.PairingToken))
+            {
+                return Results.Json(
+                    new { error = $"Client '{request.ClientId}' is not registered. Pairing is required before this client can connect." },
+                    statusCode: StatusCodes.Status403Forbidden);
+            }
+
+            ClientProfile profile = existingProfile ?? store.RegisterProfile(request.ClientId, request.Name);
 
             return Results.Ok(new
             {
@@ -447,7 +454,7 @@ public static class ClientEndpoints
     }
 }
 
-public sealed record ClientHelloRequest(string ClientId, string? Name);
+public sealed record ClientHelloRequest(string ClientId, string? Name, string? PairingToken = null);
 
 internal sealed record GameResolution(GameDescriptor? Game, IResult? Error);
 

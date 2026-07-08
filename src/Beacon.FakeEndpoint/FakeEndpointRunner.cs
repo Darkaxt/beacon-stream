@@ -5,6 +5,7 @@ namespace Beacon.FakeEndpoint;
 public sealed record FakeEndpointScript(
     string ClientId,
     string Name,
+    string? PairingToken,
     int Width,
     int Height,
     int RefreshHz,
@@ -24,6 +25,7 @@ public sealed record FakeEndpointScript(
         new(
             ClientId: "z-fold-7",
             Name: "Z Fold 7",
+            PairingToken: null,
             Width: 2560,
             Height: 1600,
             RefreshHz: 120,
@@ -54,7 +56,7 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
         var operations = new List<string>();
 
         bool ok =
-            await SendAsync(HttpMethod.Post, "/clients/hello", new { clientId = script.ClientId, name = script.Name }, operations, cancellationToken) &&
+            await SendAsync(HttpMethod.Post, "/clients/hello", new { clientId = script.ClientId, name = script.Name, pairingToken = script.PairingToken }, operations, cancellationToken) &&
             await SendAsync(HttpMethod.Get, $"/clients/{script.ClientId}/profile", null, operations, cancellationToken) &&
             await SendAsync(HttpMethod.Patch, $"/clients/{script.ClientId}/profile", CreateProfilePatch(script), operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/capabilities", CreateCapabilities(script), operations, cancellationToken) &&

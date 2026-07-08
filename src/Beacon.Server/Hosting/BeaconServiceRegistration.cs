@@ -21,6 +21,10 @@ public static class BeaconServiceRegistration
     public const string StreamingBackendEnvironmentVariable = "BEACON_STREAMING_BACKEND";
     public const string ExternalStreamingExecutableConfigurationKey = "Beacon:Streaming:ExternalProcess:ExecutablePath";
     public const string ExternalStreamingExecutableEnvironmentVariable = "BEACON_EXTERNAL_STREAMING_EXECUTABLE";
+    public const string ClientProfilesPathConfigurationKey = "Beacon:Profiles:Path";
+    public const string ClientProfilesPathEnvironmentVariable = "BEACON_CLIENT_PROFILES_PATH";
+    public const string PairingTokenConfigurationKey = "Beacon:Pairing:Token";
+    public const string PairingTokenEnvironmentVariable = "BEACON_PAIRING_TOKEN";
 
     public static IServiceCollection AddBeaconServices(
         this IServiceCollection services,
@@ -29,18 +33,24 @@ public static class BeaconServiceRegistration
             configuration,
             Environment.GetEnvironmentVariable(HostModeEnvironmentVariable),
             Environment.GetEnvironmentVariable(StreamingBackendEnvironmentVariable),
-            Environment.GetEnvironmentVariable(ExternalStreamingExecutableEnvironmentVariable));
+            Environment.GetEnvironmentVariable(ExternalStreamingExecutableEnvironmentVariable),
+            Environment.GetEnvironmentVariable(ClientProfilesPathEnvironmentVariable),
+            Environment.GetEnvironmentVariable(PairingTokenEnvironmentVariable));
 
     public static IServiceCollection AddBeaconServices(
         this IServiceCollection services,
         IConfiguration configuration,
         string? environmentHostMode,
         string? environmentStreamingBackend = null,
-        string? environmentExternalStreamingExecutable = null)
+        string? environmentExternalStreamingExecutable = null,
+        string? environmentClientProfilesPath = null,
+        string? environmentPairingToken = null)
     {
         BeaconHostMode mode = ResolveHostMode(configuration, environmentHostMode);
         BeaconStreamingBackendMode streamingBackendMode = ResolveStreamingBackendMode(configuration, environmentStreamingBackend);
         services.AddSingleton(BeaconHostOptions.Create(mode, streamingBackendMode));
+        services.AddSingleton<IClientProfileRepository>(_ => CreateClientProfileRepository(configuration, environmentClientProfilesPath));
+        services.AddSingleton(new ClientPairingOptions(ResolvePairingToken(configuration, environmentPairingToken)));
         services.AddSingleton<InMemoryClientStore>();
         services.AddSingleton<InMemorySessionStore>();
         services.AddSingleton<DisplayLeaseManager>();
@@ -175,4 +185,28 @@ public static class BeaconServiceRegistration
         string.IsNullOrWhiteSpace(environmentExternalStreamingExecutable)
             ? configuration[ExternalStreamingExecutableConfigurationKey]
             : environmentExternalStreamingExecutable;
+
+    private static IClientProfileRepository CreateClientProfileRepository(
+        IConfiguration configuration,
+        string? environmentClientProfilesPath)
+    {
+        string? path = ResolveClientProfilesPath(configuration, environmentClientProfilesPath);
+        return string.IsNullOrWhiteSpace(path)
+            ? new InMemoryClientProfileRepository()
+            : new FileClientProfileRepository(path);
+    }
+
+    public static string? ResolveClientProfilesPath(
+        IConfiguration configuration,
+        string? environmentClientProfilesPath) =>
+        string.IsNullOrWhiteSpace(environmentClientProfilesPath)
+            ? configuration[ClientProfilesPathConfigurationKey]
+            : environmentClientProfilesPath;
+
+    public static string? ResolvePairingToken(
+        IConfiguration configuration,
+        string? environmentPairingToken) =>
+        string.IsNullOrWhiteSpace(environmentPairingToken)
+            ? configuration[PairingTokenConfigurationKey]
+            : environmentPairingToken;
 }
