@@ -175,7 +175,9 @@ public final class BeaconActivity extends Activity {
             config.clientId(),
             config.serverUrl(),
             new BeaconApiClient(config),
-            new AndroidIntentStreamConnectionLauncher(this));
+            new DispatchingStreamConnectionLauncher(
+                new AndroidMainThreadDispatcher(this),
+                new AndroidIntentStreamConnectionLauncher(this)));
     }
 
     private BeaconApiClient.ProfilePatch readPatch() {

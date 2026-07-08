@@ -2,6 +2,9 @@ package dev.beacon.android;
 
 import org.junit.Test;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import static org.junit.Assert.assertEquals;
 
 public final class StreamConnectionLaunchUriTest {
@@ -21,5 +24,69 @@ public final class StreamConnectionLaunchUriTest {
     @Test
     public void extractReturnsEmptyWhenLaunchUriIsBlank() {
         assertEquals("", StreamConnectionLaunchUri.extract("{\"stream\":{\"connection\":{\"launchUri\":\"\"}}}"));
+    }
+
+    @Test
+    public void dispatchingLauncherPostsLaunchToDispatcher() {
+        RecordingDispatcher dispatcher = new RecordingDispatcher();
+        RecordingLauncher inner = new RecordingLauncher();
+        DispatchingStreamConnectionLauncher launcher = new DispatchingStreamConnectionLauncher(dispatcher, inner);
+
+        launcher.launch("moonlight://stream/z-fold-7");
+
+        assertEquals("", inner.launchedUri);
+        assertEquals(1, dispatcher.pendingCount());
+
+        dispatcher.runPending();
+
+        assertEquals("moonlight://stream/z-fold-7", inner.launchedUri);
+    }
+
+    @Test
+    public void dispatchingLauncherPreservesLaunchOrder() {
+        RecordingDispatcher dispatcher = new RecordingDispatcher();
+        RecordingLauncher inner = new RecordingLauncher();
+        DispatchingStreamConnectionLauncher launcher = new DispatchingStreamConnectionLauncher(dispatcher, inner);
+
+        launcher.launch("moonlight://one");
+        launcher.launch("moonlight://two");
+        dispatcher.runPending();
+
+        assertEquals("moonlight://one,moonlight://two", inner.launchedUris());
+    }
+
+    private static final class RecordingDispatcher implements MainThreadDispatcher {
+        private final List<Runnable> pending = new ArrayList<>();
+
+        @Override
+        public void dispatch(Runnable action) {
+            pending.add(action);
+        }
+
+        int pendingCount() {
+            return pending.size();
+        }
+
+        void runPending() {
+            for (Runnable action : pending) {
+                action.run();
+            }
+            pending.clear();
+        }
+    }
+
+    private static final class RecordingLauncher implements StreamConnectionLauncher {
+        private final List<String> launchedUris = new ArrayList<>();
+        String launchedUri = "";
+
+        @Override
+        public void launch(String launchUri) {
+            launchedUri = launchUri;
+            launchedUris.add(launchUri);
+        }
+
+        String launchedUris() {
+            return String.join(",", launchedUris);
+        }
     }
 }
