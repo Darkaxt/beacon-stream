@@ -21,6 +21,7 @@ public static class SessionPlanner
 
         bool hdrEnabled = profile.Display.HdrPreference == HdrPreference.Prefer && hdrBlocker is null;
         string hdrReason = CreateHdrReason(profile.Display.HdrPreference, hdrEnabled, hdrBlocker);
+        string displayReason = $"{CreateDisplayModeReason(profile.Display.Mode)} {hdrReason}";
 
         var display = new PlannedDisplay(
             DisplayId: DisplayLease.CreateDisplayId(profile.ClientId),
@@ -31,7 +32,7 @@ public static class SessionPlanner
             HdrPreference: profile.Display.HdrPreference,
             HdrEnabled: hdrEnabled,
             HdrMode: hdrEnabled ? "hdr10" : "sdr",
-            Reason: hdrReason);
+            Reason: displayReason);
 
         var stream = new PlannedStream(
             Codec: SelectCodec(profile.Stream.CodecPreference, capabilities, out string codecReason),
@@ -75,6 +76,19 @@ public static class SessionPlanner
             HdrPreference.Require => "HDR required and available.",
             _ => "HDR mode resolved."
         };
+
+    private static string CreateDisplayModeReason(string mode)
+    {
+        string normalized = mode.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "physical-blackout" => "Display mode physical-blackout selected by server profile policy; physical display recovery remains available.",
+            "extended" => "Display mode extended selected by server profile policy.",
+            "virtual-primary" => "Display mode virtual-primary selected by server profile policy.",
+            "" => "Display mode virtual-primary selected by default server policy.",
+            _ => $"Display mode {mode} selected by server profile policy."
+        };
+    }
 
     private static string SelectCodec(string preference, EndpointCapabilities capabilities, out string reason)
     {

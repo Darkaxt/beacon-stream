@@ -92,7 +92,14 @@ describe('Client Lab profile validation', () => {
 
   it('formats plan details with reason', () => {
     const plan: PlanResponse = {
-      display: { mode: 'virtual-primary', width: 2560, height: 1600, refreshHz: 120 },
+      display: {
+        mode: 'physical-blackout',
+        width: 2560,
+        height: 1600,
+        refreshHz: 120,
+        reason:
+          'Display mode physical-blackout selected by server profile policy; physical display recovery remains available. HDR disabled because virtual display does not report HDR capability.'
+      },
       stream: {
         codec: 'av1',
         fps: 120,
@@ -104,5 +111,6 @@ describe('Client Lab profile validation', () => {
     };
 
     expect(formatPlanDetails(plan)).toContain('Excellent LAN');
+    expect(formatPlanDetails(plan)).toContain('physical-blackout selected by server profile policy');
   });
 });
