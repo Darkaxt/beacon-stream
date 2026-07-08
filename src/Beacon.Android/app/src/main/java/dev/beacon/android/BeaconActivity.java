@@ -100,6 +100,7 @@ public final class BeaconActivity extends Activity {
         root.addView(thermalState);
 
         root.addView(button("Hello / Refresh", model -> model.refresh()));
+        root.addView(button("Load Games", model -> model.loadGames()));
         root.addView(button("Patch Profile", model -> model.patchProfile(readPatch())));
         root.addView(button("Report Capabilities", model -> model.reportCapabilities(readCapabilities())));
         root.addView(button("Report Telemetry", model -> model.reportTelemetry(readTelemetry())));
@@ -158,7 +159,7 @@ public final class BeaconActivity extends Activity {
         executor.execute(() -> {
             try {
                 action.run(model);
-                setStatus(model.status() + "\nPlan: " + model.latestPlan() + "\nStream: " + model.latestStream());
+                setStatus(model.status() + "\nGames: " + model.latestGames() + "\nPlan: " + model.latestPlan() + "\nStream: " + model.latestStream());
             } catch (IOException | RuntimeException ex) {
                 setStatus(label + " failed: " + ex.getMessage());
             }
