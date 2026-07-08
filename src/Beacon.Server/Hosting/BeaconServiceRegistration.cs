@@ -8,6 +8,7 @@ using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Displays;
 using Beacon.Platform.Windows.Games;
+using Beacon.Platform.Windows.Input;
 using Beacon.Platform.Windows.Recovery;
 using Beacon.Platform.Windows.Sessions;
 using Beacon.Platform.Windows.Streaming;
@@ -178,6 +179,8 @@ public static class BeaconServiceRegistration
         services.AddSingleton<IGameLauncher, WindowsGameLauncher>();
         services.AddSingleton<IWindowsSessionActivityApi, WindowsSessionActivityApi>();
         services.AddSingleton<ISessionActivityInspector, WindowsSessionActivityInspector>();
+        services.AddSingleton<IWindowsInputApi, WindowsInputApi>();
+        services.AddSingleton<IClientInputSink, WindowsClientInputSink>();
         return services;
     }
 
