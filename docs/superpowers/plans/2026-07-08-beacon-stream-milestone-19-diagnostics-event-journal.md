@@ -59,7 +59,7 @@
 - Create: `src/Beacon.Core/Diagnostics/DiagnosticEvent.cs`
 - Test: `tests/Beacon.Core.Tests/Diagnostics/DiagnosticEventJournalTests.cs`
 
-- [ ] **Step 1: Write failing journal tests**
+- [x] **Step 1: Write failing journal tests**
 
 Create `tests/Beacon.Core.Tests/Diagnostics/DiagnosticEventJournalTests.cs`:
 
@@ -127,7 +127,7 @@ public sealed class DiagnosticEventJournalTests
 }
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -137,7 +137,7 @@ dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter Diagnostic
 
 Expected: compile failures for missing diagnostics namespace/types.
 
-- [ ] **Step 3: Add diagnostics core model**
+- [x] **Step 3: Add diagnostics core model**
 
 Create `src/Beacon.Core/Diagnostics/DiagnosticEvent.cs`:
 
@@ -232,7 +232,7 @@ public sealed class InMemoryDiagnosticEventJournal : IDiagnosticEventSink, IDiag
 }
 ```
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run:
 
@@ -242,7 +242,7 @@ dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter Diagnostic
 
 Expected: diagnostic journal tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run:
 
