@@ -1,5 +1,6 @@
 package dev.beacon.android;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
 import java.io.IOException;
@@ -53,6 +54,11 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
     @Override
     public BeaconResult launch(GameSelection game) throws IOException {
         return post("/clients/" + config.clientId() + "/launch", game.toJson());
+    }
+
+    @Override
+    public BeaconResult sendInput(InputBatch input) throws IOException {
+        return post("/clients/" + config.clientId() + "/input", input.toJson());
     }
 
     @Override
@@ -268,6 +274,63 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         }
     }
 
+    public static final class InputBatch {
+        public int sequence;
+        public InputEvent[] events;
+
+        public static InputBatch pointerTap(int sequence, double x, double y) {
+            InputBatch batch = new InputBatch();
+            batch.sequence = sequence;
+            batch.events = new InputEvent[] { InputEvent.pointer("tap", 1, x, y, 1) };
+            return batch;
+        }
+
+        JsonObject toJson() {
+            JsonObject json = new JsonObject();
+            json.addProperty("sequence", sequence);
+            JsonArray array = new JsonArray();
+            if (events != null) {
+                for (InputEvent event : events) {
+                    array.add(event.toJson());
+                }
+            }
+
+            json.add("events", array);
+            return json;
+        }
+    }
+
+    public static final class InputEvent {
+        public String type;
+        public String action;
+        public Integer pointerId;
+        public Double x;
+        public Double y;
+        public Integer buttons;
+
+        static InputEvent pointer(String action, int pointerId, double x, double y, int buttons) {
+            InputEvent event = new InputEvent();
+            event.type = "pointer";
+            event.action = action;
+            event.pointerId = pointerId;
+            event.x = x;
+            event.y = y;
+            event.buttons = buttons;
+            return event;
+        }
+
+        JsonObject toJson() {
+            JsonObject json = new JsonObject();
+            add(json, "type", type);
+            add(json, "action", action);
+            add(json, "pointerId", pointerId);
+            add(json, "x", x);
+            add(json, "y", y);
+            add(json, "buttons", buttons);
+            return json;
+        }
+    }
+
     public static final class QuitState {
         public final boolean clientActive;
 
@@ -289,6 +352,12 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
     }
 
     private static void add(JsonObject json, String name, Integer value) {
+        if (value != null) {
+            json.addProperty(name, value);
+        }
+    }
+
+    private static void add(JsonObject json, String name, Double value) {
         if (value != null) {
             json.addProperty(name, value);
         }

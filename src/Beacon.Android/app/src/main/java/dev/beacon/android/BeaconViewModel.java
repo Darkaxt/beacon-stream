@@ -128,6 +128,10 @@ public final class BeaconViewModel {
         }
     }
 
+    public void sendInput(BeaconApiClient.InputBatch input) throws IOException {
+        record("input", service.sendInput(input));
+    }
+
     public void preflightAndLaunch(
         BeaconApiClient.ProfilePatch patch,
         BeaconApiClient.ClientCapabilities capabilities,
@@ -174,6 +178,8 @@ public final class BeaconViewModel {
         BeaconApiClient.BeaconResult requestPlan(BeaconApiClient.GameSelection game) throws IOException;
 
         BeaconApiClient.BeaconResult launch(BeaconApiClient.GameSelection game) throws IOException;
+
+        BeaconApiClient.BeaconResult sendInput(BeaconApiClient.InputBatch input) throws IOException;
 
         BeaconApiClient.BeaconResult stopStream() throws IOException;
 

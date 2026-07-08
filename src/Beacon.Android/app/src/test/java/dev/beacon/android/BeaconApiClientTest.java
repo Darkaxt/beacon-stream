@@ -127,6 +127,25 @@ public final class BeaconApiClientTest {
         assertTrue(result.body().contains("\"state\":\"streaming\""));
     }
 
+    @Test
+    public void inputSerializesPointerEventToOwningClientEndpoint() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        BeaconApiClient client = new BeaconApiClient(new BeaconClientConfig("http://server", "z-fold-7"), transport);
+
+        client.sendInput(BeaconApiClient.InputBatch.pointerTap(3, 0.5, 0.25));
+
+        assertEquals("POST", transport.method);
+        assertEquals("/clients/z-fold-7/input", transport.path);
+        assertTrue(transport.body.contains("\"sequence\":3"));
+        assertTrue(transport.body.contains("\"type\":\"pointer\""));
+        assertTrue(transport.body.contains("\"action\":\"tap\""));
+        assertTrue(transport.body.contains("\"pointerId\":1"));
+        assertTrue(transport.body.contains("\"x\":0.5"));
+        assertTrue(transport.body.contains("\"y\":0.25"));
+        assertFalse(transport.body.contains("display"));
+        assertFalse(transport.body.contains("mode"));
+    }
+
     private static final class FakeTransport implements BeaconHttpTransport {
         String method;
         String path;

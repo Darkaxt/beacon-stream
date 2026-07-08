@@ -140,6 +140,17 @@ public final class BeaconViewModelTest {
     }
 
     @Test
+    public void sendInputCallsOwningClientInputRoute() throws Exception {
+        FakeService service = new FakeService();
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
+
+        model.sendInput(BeaconApiClient.InputBatch.pointerTap(4, 0.5, 0.5));
+
+        assertEquals("input", service.lastAction);
+        assertEquals("input: 200", model.status());
+    }
+
+    @Test
     public void preflightAndPlanPatchesProfileThenReportsFactsThenRequestsPlan() throws Exception {
         FakeService service = new FakeService();
         BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
@@ -244,6 +255,12 @@ public final class BeaconViewModelTest {
         @Override
         public BeaconApiClient.BeaconResult launch(BeaconApiClient.GameSelection game) throws IOException {
             record("launch");
+            return next;
+        }
+
+        @Override
+        public BeaconApiClient.BeaconResult sendInput(BeaconApiClient.InputBatch input) throws IOException {
+            record("input");
             return next;
         }
 

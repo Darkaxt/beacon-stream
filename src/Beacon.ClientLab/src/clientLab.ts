@@ -128,6 +128,29 @@ export interface TelemetryPayload {
   thermalState: string;
 }
 
+export interface InputPayload {
+  sequence: number;
+  events: InputEventPayload[];
+}
+
+export interface InputEventPayload {
+  type: string;
+  action: string;
+  pointerId?: number;
+  x?: number;
+  y?: number;
+  buttons?: number;
+  key?: string;
+  code?: string;
+  value?: number;
+}
+
+export interface InputAcceptedResponse {
+  accepted: boolean;
+  eventCount: number;
+  sessionId: string;
+}
+
 export function createDefaultProfile(): ProfileDraft {
   return {
     clientId: 'z-fold-7',
@@ -208,6 +231,26 @@ export function formatLaunchEvents(launch: LaunchResponse): string[] {
   }
 
   return events;
+}
+
+export function createPointerInputPayload(sequence: number): InputPayload {
+  return {
+    sequence,
+    events: [
+      {
+        type: 'pointer',
+        action: 'tap',
+        pointerId: 1,
+        x: 0.5,
+        y: 0.5,
+        buttons: 1
+      }
+    ]
+  };
+}
+
+export function formatInputAccepted(response: InputAcceptedResponse): string {
+  return `input ${response.accepted ? 'accepted' : 'rejected'} ${response.eventCount} event(s) ${response.sessionId}`;
 }
 
 function createTelemetry(

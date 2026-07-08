@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
+using Beacon.Core.Input;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Streaming;
@@ -793,6 +794,80 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task ClientInputForwardsToActiveStreamSession()
+    {
+        var input = new RecordingClientInputSink();
+        WebApplicationFactory<Program> inputFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IClientInputSink>();
+                services.AddSingleton<IClientInputSink>(input);
+            }));
+        HttpClient client = inputFactory.CreateClient();
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/input", new
+        {
+            sequence = 42,
+            events = new[]
+            {
+                new
+                {
+                    type = "pointer",
+                    action = "move",
+                    pointerId = 1,
+                    x = 0.5,
+                    y = 0.25,
+                    buttons = 1
+                }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        ClientInputBatch batch = Assert.Single(input.Batches);
+        Assert.Equal("z-fold-7", batch.ClientId);
+        Assert.Equal("z-fold-7-steam-shortcut:3767414131", batch.SessionId);
+        Assert.Equal("client-z-fold-7", batch.DisplayId);
+        Assert.Equal(42, batch.Sequence);
+        ClientInputEvent inputEvent = Assert.Single(batch.Events);
+        Assert.Equal("pointer", inputEvent.Type);
+        Assert.Equal("move", inputEvent.Action);
+        Assert.Equal(1, inputEvent.PointerId);
+        Assert.Equal(0.5, inputEvent.X);
+        Assert.Equal(0.25, inputEvent.Y);
+        Assert.Equal(1, inputEvent.Buttons);
+
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        Assert.True(document.RootElement.GetProperty("accepted").GetBoolean());
+        Assert.Equal(1, document.RootElement.GetProperty("eventCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task ClientInputRequiresActiveStreamSession()
+    {
+        var input = new RecordingClientInputSink();
+        WebApplicationFactory<Program> inputFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IClientInputSink>();
+                services.AddSingleton<IClientInputSink>(input);
+            }));
+        HttpClient client = inputFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/input", new
+        {
+            sequence = 1,
+            events = new[]
+            {
+                new { type = "pointer", action = "tap", pointerId = 1, x = 0.5, y = 0.5 }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Empty(input.Batches);
+    }
+
+    [Fact]
     public async Task ClientDisplayRecoverRouteIsNotAvailableBecauseDisplayRecoveryIsAdminOnly()
     {
         HttpClient client = factory.CreateClient();
@@ -835,5 +910,16 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             Manifests.TryGetValue(path, out ExternalStreamingManifest? manifest)
                 ? ExternalStreamingManifestReadResult.Ok(manifest)
                 : ExternalStreamingManifestReadResult.Fail($"External streaming manifest '{path}' does not exist.");
+    }
+
+    private sealed class RecordingClientInputSink : IClientInputSink
+    {
+        public List<ClientInputBatch> Batches { get; } = [];
+
+        public Task<ClientInputResult> ForwardAsync(ClientInputBatch batch, CancellationToken cancellationToken)
+        {
+            Batches.Add(batch);
+            return Task.FromResult(ClientInputResult.Ok(batch.Events.Count));
+        }
     }
 }

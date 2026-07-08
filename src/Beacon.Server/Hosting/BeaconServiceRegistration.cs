@@ -2,6 +2,7 @@ using Beacon.Core.Displays;
 using Beacon.Core.Diagnostics;
 using Beacon.Core.Games;
 using Beacon.Core.Games.Artwork;
+using Beacon.Core.Input;
 using Beacon.Core.Recovery;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
@@ -71,6 +72,7 @@ public static class BeaconServiceRegistration
         services.AddSingleton<InMemorySessionStore>();
         services.AddSingleton<DisplayLeaseManager>();
         services.AddSingleton<ISessionOwnershipTracker, SessionOwnershipTracker>();
+        services.AddSingleton<IClientInputSink, NoOpClientInputSink>();
         services.AddSingleton<IGameLibraryProvider>(_ => new StaticGameLibraryProvider(
             "seed",
             [

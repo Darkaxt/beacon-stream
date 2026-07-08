@@ -156,6 +156,7 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/telemetry", CreateTelemetry(script), operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/plan", CreatePlanRequest(script), operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/launch", CreatePlanRequest(script), operations, cancellationToken) &&
+            await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/input", CreateInputSample(), operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/disconnect", new { }, operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/reconnect", new { }, operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/plan", CreatePlanRequest(script), operations, cancellationToken) &&
@@ -230,5 +231,23 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
         new
         {
             clientActive = false
+        };
+
+    private static object CreateInputSample() =>
+        new
+        {
+            sequence = 1,
+            events = new[]
+            {
+                new
+                {
+                    type = "pointer",
+                    action = "tap",
+                    pointerId = 1,
+                    x = 0.5,
+                    y = 0.5,
+                    buttons = 1
+                }
+            }
         };
 }
