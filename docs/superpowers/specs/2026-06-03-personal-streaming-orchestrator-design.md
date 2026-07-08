@@ -90,6 +90,7 @@ This section is the implementation contract. If a later plan contradicts this re
 - `REQ-CTRL-010`: The WPF cockpit may edit server-global settings, client profiles, recovery actions, and diagnostics because it is a local server-admin surface.
 - `REQ-CTRL-011`: APK profile patches must be server-validated against an explicit allowlist.
 - `REQ-CTRL-012`: Display mode, blackout, mirror prohibition, persistence, destruction, restore, and recovery safety policies are WPF/server-admin controlled in version 1.
+- `REQ-CTRL-013`: Until the APK implements native streaming from endpoint maps, a successful launch response with endpoints but no launch URI must be surfaced as an explicit client diagnostic instead of silently doing nothing.
 
 ### Client Profile
 

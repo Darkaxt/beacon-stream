@@ -140,6 +140,23 @@ public final class BeaconViewModelTest {
     }
 
     @Test
+    public void launchReportsEndpointOnlyConnectionWhenLaunchUriIsMissing() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(
+            200,
+            "{\"state\":\"streaming\",\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"endpoints\":[{\"role\":\"rtsp\",\"uri\":\"rtsp://127.0.0.1:48010\"}]}}}");
+        RecordingStreamConnectionLauncher launcher = new RecordingStreamConnectionLauncher();
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service, launcher);
+
+        model.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+
+        assertEquals("", launcher.launchedUri);
+        assertEquals(
+            "Stream connection did not include a launch URI. protocol=gamestream endpoints=rtsp=rtsp://127.0.0.1:48010",
+            model.latestError());
+    }
+
+    @Test
     public void sendInputCallsOwningClientInputRoute() throws Exception {
         FakeService service = new FakeService();
         BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);

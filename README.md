@@ -216,6 +216,8 @@ Android client checks:
 
 `Beacon.Android` is a thin Java APK shell for the client control plane. It can identify the device, patch only APK-allowed client profile fields, fetch and show the server-owned game catalog, report expanded capability and telemetry facts, request/launch a server plan, delegate the server-provided `stream.connection.launchUri` through Android `ACTION_VIEW` on the Activity UI thread, stop/disconnect/quit, forward pointer input including batched multi-pointer touch events, send a simple Escape keyboard press, manage APK-local theme/wake-lock/debug-overlay controls, and call owning-client emergency restore. Plan and launch actions send the profile patch, capabilities, and telemetry first so the server can compute the stream plan from the current client facts. Display behavior policy still belongs to Beacon Server, not the APK. It does not implement real video decode, Moonlight/Sunshine protocol handling, controller, or native touch/gesture protocol support yet.
 
+If the server returns a stream connection with endpoints but no `launchUri`, the APK records a visible diagnostic instead of silently doing nothing. Endpoint-only native streaming is a future client capability, not something the current thin APK fakes.
+
 Client input uses `POST /clients/{clientId}/input`. The server resolves the active session plan and running stream before forwarding a typed input batch to `IClientInputSink`, so the client never supplies display topology or session ownership. The default fake-host sink is a no-op for phone-free testing. In Windows host mode, `WindowsClientInputSink` resolves the active display topology, targets the leased display id, and sends pointer `move`, `down`, `up`, and `tap` commands plus keyboard `down`, `up`, and `press` commands through a fakeable Win32 `SendInput` boundary. Keyboard support is a conservative virtual-key subset for common gaming/navigation keys such as letters, digits, arrows, Escape, Space, Enter, modifiers, and F1-F12; text composition, IME, controller, and GameStream-native input are still future work. The Android shell has a simple touch surface that maps Android pointer down/up plus batched multi-pointer move/cancel events into normalized pointer batches; this is still not a native touch or gesture protocol. Client Lab sends separate deterministic pointer gesture and Escape keyboard press batches, while the CLI fake endpoint includes both in its no-phone scripted input validation. Accepted, rejected, and failed input batches publish `input` diagnostics into `/admin/snapshot`; `inputHealth` reports whether the active sink is `no-op`, `windows-sendinput`, or unknown, including supported pointer and keyboard actions.
 
 See:
@@ -273,6 +275,7 @@ See:
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-58-sunshine-port-profile.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-59-sunshine-profile-wrapper-integration.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-60-streaming-health-endpoints.md`
+- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-61-android-connection-diagnostics.md`
 - `docs/external-streaming-wrapper-manifest.md`
 - `docs/source-audits/2026-07-08-windows-input-sink-upstream-audit.md`
 - `docs/windows-display-backend.md`
