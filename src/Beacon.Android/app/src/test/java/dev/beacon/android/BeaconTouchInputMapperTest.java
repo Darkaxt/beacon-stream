@@ -28,6 +28,41 @@ public final class BeaconTouchInputMapperTest {
     }
 
     @Test
+    public void mapsMultipleTouchPointsIntoOnePointerBatch() {
+        BeaconTouchInputMapper mapper = new BeaconTouchInputMapper();
+
+        BeaconApiClient.InputBatch batch = mapper.mapPointers(
+            "move",
+            new int[] { 7, 9 },
+            new float[] { 1280f, 2560f },
+            new float[] { 800f, 0f },
+            2560,
+            1600);
+
+        assertEquals(1, batch.sequence);
+        assertEquals(2, batch.events.length);
+        assertEvent(batch.events[0], "move", 7, 0.5, 0.5, null);
+        assertEvent(batch.events[1], "move", 9, 1.0, 0.0, null);
+    }
+
+    @Test
+    public void rejectsMismatchedPointerArrays() {
+        BeaconTouchInputMapper mapper = new BeaconTouchInputMapper();
+
+        IllegalArgumentException exception = org.junit.Assert.assertThrows(
+            IllegalArgumentException.class,
+            () -> mapper.mapPointers(
+                "move",
+                new int[] { 1, 2 },
+                new float[] { 10f },
+                new float[] { 20f, 30f },
+                2560,
+                1600));
+
+        assertEquals("Pointer id and coordinate arrays must be the same non-zero length.", exception.getMessage());
+    }
+
+    @Test
     public void rejectsInvalidSurfaceGeometry() {
         BeaconTouchInputMapper mapper = new BeaconTouchInputMapper();
 
@@ -48,7 +83,16 @@ public final class BeaconTouchInputMapperTest {
         Integer buttons) {
         assertEquals(sequence, batch.sequence);
         assertEquals(1, batch.events.length);
-        BeaconApiClient.InputEvent event = batch.events[0];
+        assertEvent(batch.events[0], action, pointerId, x, y, buttons);
+    }
+
+    private static void assertEvent(
+        BeaconApiClient.InputEvent event,
+        String action,
+        int pointerId,
+        double x,
+        double y,
+        Integer buttons) {
         assertEquals("pointer", event.type);
         assertEquals(action, event.action);
         assertEquals(pointerId, event.pointerId.intValue());
