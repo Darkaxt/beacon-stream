@@ -131,6 +131,7 @@ public sealed class CockpitShellViewModelTests
         var viewModel = new CockpitShellViewModel(api) { SelectedClientId = "z-fold-7" };
 
         await viewModel.RestorePhysicalAsync(CancellationToken.None);
+        await viewModel.ResetTopologyAsync(CancellationToken.None);
         await viewModel.MoveWindowsBackAsync(CancellationToken.None);
         await viewModel.CloseVirtualWindowsAsync(CancellationToken.None);
         await viewModel.TerminateVirtualProcessesAsync(CancellationToken.None);
@@ -139,6 +140,7 @@ public sealed class CockpitShellViewModelTests
         await viewModel.StopSelectedClientStreamAsync(CancellationToken.None);
 
         Assert.True(api.RestorePhysicalCalled);
+        Assert.True(api.ResetTopologyCalled);
         Assert.True(api.MoveWindowsBackCalled);
         Assert.True(api.MoveWindowsBackMinimized);
         Assert.True(api.CloseVirtualWindowsCalled);
@@ -183,6 +185,8 @@ public sealed class CockpitShellViewModelTests
     {
         public bool RestorePhysicalCalled { get; private set; }
 
+        public bool ResetTopologyCalled { get; private set; }
+
         public bool MoveWindowsBackCalled { get; private set; }
 
         public bool MoveWindowsBackMinimized { get; private set; }
@@ -213,6 +217,12 @@ public sealed class CockpitShellViewModelTests
         public Task RestorePhysicalAsync(CancellationToken cancellationToken)
         {
             RestorePhysicalCalled = true;
+            return Task.CompletedTask;
+        }
+
+        public Task ResetTopologyAsync(CancellationToken cancellationToken)
+        {
+            ResetTopologyCalled = true;
             return Task.CompletedTask;
         }
 
@@ -263,6 +273,9 @@ public sealed class CockpitShellViewModelTests
             Task.FromException(new InvalidOperationException(message));
 
         public Task RestorePhysicalAsync(CancellationToken cancellationToken) =>
+            Task.FromException(new InvalidOperationException(message));
+
+        public Task ResetTopologyAsync(CancellationToken cancellationToken) =>
             Task.FromException(new InvalidOperationException(message));
 
         public Task MoveWindowsBackAsync(bool minimize, CancellationToken cancellationToken) =>

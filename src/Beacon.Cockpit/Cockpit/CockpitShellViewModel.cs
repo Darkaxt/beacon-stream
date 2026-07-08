@@ -39,6 +39,7 @@ public sealed class CockpitShellViewModel : ObservableObject
         ServerUrl = serverUrl;
         RefreshCommand = new RelayCommand(() => RefreshAsync(CancellationToken.None));
         RestorePhysicalCommand = new RelayCommand(() => RestorePhysicalAsync(CancellationToken.None));
+        ResetTopologyCommand = new RelayCommand(() => ResetTopologyAsync(CancellationToken.None));
         MoveWindowsBackCommand = new RelayCommand(() => MoveWindowsBackAsync(CancellationToken.None));
         CloseVirtualWindowsCommand = new RelayCommand(() => CloseVirtualWindowsAsync(CancellationToken.None));
         TerminateVirtualProcessesCommand = new RelayCommand(() => TerminateVirtualProcessesAsync(CancellationToken.None));
@@ -212,6 +213,8 @@ public sealed class CockpitShellViewModel : ObservableObject
 
     public ICommand RestorePhysicalCommand { get; }
 
+    public ICommand ResetTopologyCommand { get; }
+
     public ICommand MoveWindowsBackCommand { get; }
 
     public ICommand CloseVirtualWindowsCommand { get; }
@@ -330,6 +333,19 @@ public sealed class CockpitShellViewModel : ObservableObject
         catch (Exception ex)
         {
             StatusMessage = $"Restore failed: {ex.Message}";
+        }
+    }
+
+    public async Task ResetTopologyAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await api.ResetTopologyAsync(cancellationToken);
+            StatusMessage = "Topology reset requested.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Reset topology failed: {ex.Message}";
         }
     }
 

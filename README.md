@@ -126,6 +126,7 @@ Recovery actions:
 
 ```powershell
 curl.exe -X POST http://localhost:5000/admin/recovery/restore-physical
+curl.exe -X POST http://localhost:5000/admin/recovery/reset-topology
 curl.exe -X POST http://localhost:5000/admin/recovery/move-windows-back -H "Content-Type: application/json" -d "{\"minimize\":true}"
 curl.exe -X POST http://localhost:5000/admin/recovery/close-virtual-windows
 curl.exe -X POST http://localhost:5000/admin/recovery/terminate-virtual-processes
@@ -133,7 +134,7 @@ curl.exe -X POST http://localhost:5000/admin/clients/z-fold-7/display/remove
 curl.exe -X POST http://localhost:5000/admin/clients/z-fold-7/stream/stop
 ```
 
-In the WPF cockpit, the Recovery tab exposes the same actions. Display lease removal restores the physical primary display and removes the selected client's virtual display. These are explicit manual escape hatches; normal session cleanup still belongs to the server lifecycle rules.
+In the WPF cockpit, the Recovery tab exposes the same actions. Reset topology restores the physical primary display first, then moves virtual-display windows back minimized. Display lease removal restores the physical primary display and removes the selected client's virtual display. These are explicit manual escape hatches; normal session cleanup still belongs to the server lifecycle rules.
 
 Owning-client emergency restore is profile-gated by `allowEmergencyRestoreFromClient`. Admin recovery endpoints remain broader local-admin escape hatches, including display lease recovery/removal. Admin physical restore returns `503` with the verified backend error when the laptop panel cannot be confirmed as primary.
 Stream stop returns `404` when the selected client has no session plan, and `503` when the streaming backend cannot stop an existing planned session. Client disconnect and quit use the same stop-failure contract; quit does not continue into ownership or display lease cleanup when the streaming backend refuses to stop.
@@ -198,4 +199,5 @@ See:
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-17-stream-connection-descriptor.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-18-wrapper-readiness-manifest.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-27-disconnect-quit-stop-failures.md`
+- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-28-reset-topology-action.md`
 - `docs/windows-display-backend.md`
