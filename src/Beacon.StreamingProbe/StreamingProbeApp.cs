@@ -20,12 +20,13 @@ public static class StreamingProbeApp
         IReadOnlyDictionary<string, string> environment,
         TextWriter output,
         TextWriter error,
-        IStreamingProbeLifetime lifetime)
+        IStreamingProbeLifetime lifetime,
+        IStreamingProbeChildProcessRunner? childRunner = null)
     {
         try
         {
             StreamingProbeCommand command = StreamingProbeCommandLine.Parse(args, environment);
-            return RunAsync(command, output, error, lifetime);
+            return RunAsync(command, output, error, lifetime, childRunner);
         }
         catch (ArgumentException ex)
         {
@@ -38,25 +39,76 @@ public static class StreamingProbeApp
         StreamingProbeCommand command,
         TextWriter output,
         TextWriter error,
-        IStreamingProbeLifetime lifetime)
+        IStreamingProbeLifetime lifetime,
+        IStreamingProbeChildProcessRunner? childRunner = null)
     {
+        childRunner ??= new WindowsStreamingProbeChildProcessRunner();
+        StreamingProbeChildProcess? childProcess = null;
         try
         {
+            Task<int?>? childExitTask = null;
+            if (!string.IsNullOrWhiteSpace(command.ChildExecutable))
+            {
+                string childExecutable = command.ChildExecutable.Trim();
+                if (!childRunner.FileExists(childExecutable))
+                {
+                    error.WriteLine($"Streaming probe failed: child executable '{childExecutable}' does not exist.");
+                    return 2;
+                }
+
+                var childCommand = new StreamingProbeChildCommand(
+                    childExecutable,
+                    string.IsNullOrWhiteSpace(command.ChildArguments) ? string.Empty : command.ChildArguments.Trim(),
+                    command.ChildEnvironment ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+                childProcess = childRunner.Start(childCommand);
+                childExitTask = childRunner.WaitForExitAsync(childProcess);
+                output.WriteLine($"childProcessId={childProcess.ProcessId}");
+            }
+
             WriteDescriptor(command);
             output.WriteLine($"descriptorPath={command.DescriptorPath}");
             output.WriteLine($"launchUri={command.LaunchUri}");
 
             if (!command.Once)
             {
-                await lifetime.WaitForStopAsync();
+                if (childExitTask is null)
+                {
+                    await lifetime.WaitForStopAsync();
+                }
+                else
+                {
+                    Task stopTask = lifetime.WaitForStopAsync();
+                    Task completed = await Task.WhenAny(childExitTask, stopTask);
+                    if (ReferenceEquals(completed, childExitTask))
+                    {
+                        int? childExitCode = await childExitTask;
+                        output.WriteLine(childExitCode.HasValue
+                            ? $"childExitCode={childExitCode.Value}"
+                            : "childExitCode=");
+                        childProcess = null;
+                        return childExitCode.GetValueOrDefault(0);
+                    }
+                }
             }
 
             return 0;
         }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception ex) when (ex is ArgumentException
+            or IOException
+            or UnauthorizedAccessException
+            or JsonException
+            or InvalidOperationException
+            or System.ComponentModel.Win32Exception)
         {
             error.WriteLine($"Streaming probe failed: {ex.Message}");
             return 2;
+        }
+        finally
+        {
+            if (childProcess is not null)
+            {
+                StopChildProcess(childRunner, childProcess, error);
+            }
         }
     }
 
@@ -82,11 +134,26 @@ public static class StreamingProbeApp
         string json = JsonSerializer.Serialize(descriptor, JsonOptions);
         File.WriteAllText(command.DescriptorPath, json);
     }
+
+    private static void StopChildProcess(
+        IStreamingProbeChildProcessRunner childRunner,
+        StreamingProbeChildProcess childProcess,
+        TextWriter error)
+    {
+        try
+        {
+            childRunner.Stop(childProcess);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            error.WriteLine($"Streaming probe failed to stop child process {childProcess.ProcessId}: {ex.Message}");
+        }
+    }
 }
 
 public sealed class ConsoleStreamingProbeLifetime : IStreamingProbeLifetime, IDisposable
 {
-    private readonly ManualResetEventSlim stop = new();
+    private readonly TaskCompletionSource stop = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public ConsoleStreamingProbeLifetime()
     {
@@ -94,27 +161,22 @@ public sealed class ConsoleStreamingProbeLifetime : IStreamingProbeLifetime, IDi
         AppDomain.CurrentDomain.ProcessExit += OnProcessExit;
     }
 
-    public Task WaitForStopAsync()
-    {
-        stop.Wait();
-        return Task.CompletedTask;
-    }
+    public Task WaitForStopAsync() => stop.Task;
 
     public void Dispose()
     {
         Console.CancelKeyPress -= OnCancelKeyPress;
         AppDomain.CurrentDomain.ProcessExit -= OnProcessExit;
-        stop.Dispose();
     }
 
     private void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs args)
     {
         args.Cancel = true;
-        stop.Set();
+        stop.TrySetResult();
     }
 
     private void OnProcessExit(object? sender, EventArgs args)
     {
-        stop.Set();
+        stop.TrySetResult();
     }
 }

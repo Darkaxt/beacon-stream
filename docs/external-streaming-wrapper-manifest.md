@@ -119,6 +119,17 @@ Wrappers with stable connection details should advertise those details through e
 
 `Beacon.StreamingProbe` is the checked no-phone producer for this format. It writes the descriptor and can either exit with `--once` for standalone validation or stay alive until Beacon stops the wrapper process.
 
+## Probe Child Process Harness
+
+`Beacon.StreamingProbe` can supervise a child executable before a real Sunshine-compatible wrapper exists:
+
+- argument: `--child-executable "<path>"`
+- environment: `BEACON_WRAPPER_CHILD_EXECUTABLE`
+- optional argument string: `--child-arguments "<args>"`
+- optional environment argument string: `BEACON_WRAPPER_CHILD_ARGUMENTS`
+
+The probe passes the normalized Beacon session/display/connection environment through to the child. It starts the child before writing the runtime descriptor, so a missing child executable cannot create false runtime connection evidence. In normal mode, if the child exits before Beacon stops the wrapper, the probe exits with the child exit code. If Beacon stops the wrapper first, or if `--once` validation exits, the probe stops the child.
+
 ## Stability Rules
 
 - Manifest validation happens during streaming preflight, before display or launch side effects.

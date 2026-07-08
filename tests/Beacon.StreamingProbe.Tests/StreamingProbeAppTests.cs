@@ -46,6 +46,104 @@ public sealed class StreamingProbeAppTests
     }
 
     [Fact]
+    public async Task RunStartsConfiguredChildProcessAndStopsItWhenLifetimeEnds()
+    {
+        using TempDirectory temp = TempDirectory.Create();
+        string descriptorPath = Path.Combine(temp.Path, "session.json");
+        var command = new StreamingProbeCommand(
+            "z-fold-7-steam-shortcut:3767414131",
+            "client-z-fold-7",
+            descriptorPath,
+            "gamestream",
+            "moonlight://beacon/runtime/session",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["rtsp"] = "rtsp://127.0.0.1:48010/beacon"
+            },
+            Once: false,
+            ChildExecutable: "C:\\Tools\\sunshine.exe",
+            ChildArguments: "--config sunshine.json",
+            ChildEnvironment: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["BEACON_SESSION_ID"] = "z-fold-7-steam-shortcut:3767414131",
+                ["BEACON_DISPLAY_ID"] = "client-z-fold-7",
+                ["BEACON_STREAM_SESSION_DESCRIPTOR_PATH"] = descriptorPath
+            });
+        var lifetime = new RecordingStreamingProbeLifetime();
+        var childRunner = new RecordingStreamingProbeChildProcessRunner(["C:\\Tools\\sunshine.exe"]);
+        using var output = new StringWriter();
+
+        int exitCode = await StreamingProbeApp.RunAsync(command, output, TextWriter.Null, lifetime, childRunner);
+
+        Assert.Equal(0, exitCode);
+        Assert.True(lifetime.Waited);
+        StreamingProbeChildCommand childCommand = Assert.Single(childRunner.StartedCommands);
+        Assert.Equal("C:\\Tools\\sunshine.exe", childCommand.FileName);
+        Assert.Equal("--config sunshine.json", childCommand.Arguments);
+        Assert.Equal("client-z-fold-7", childCommand.Environment["BEACON_DISPLAY_ID"]);
+        Assert.Equal([2001], childRunner.StoppedProcessIds);
+        Assert.Contains("childProcessId=2001", output.ToString(), StringComparison.Ordinal);
+        Assert.True(File.Exists(descriptorPath));
+    }
+
+    [Fact]
+    public async Task RunDoesNotWriteRuntimeDescriptorWhenConfiguredChildProcessIsMissing()
+    {
+        using TempDirectory temp = TempDirectory.Create();
+        string descriptorPath = Path.Combine(temp.Path, "session.json");
+        var command = new StreamingProbeCommand(
+            "session",
+            "display",
+            descriptorPath,
+            "gamestream",
+            "moonlight://beacon/runtime/session",
+            new Dictionary<string, string>(),
+            Once: false,
+            ChildExecutable: "C:\\Tools\\missing-sunshine.exe",
+            ChildArguments: "--config sunshine.json");
+        var lifetime = new RecordingStreamingProbeLifetime();
+        var childRunner = new RecordingStreamingProbeChildProcessRunner();
+        using var error = new StringWriter();
+
+        int exitCode = await StreamingProbeApp.RunAsync(command, TextWriter.Null, error, lifetime, childRunner);
+
+        Assert.Equal(2, exitCode);
+        Assert.False(lifetime.Waited);
+        Assert.Empty(childRunner.StartedCommands);
+        Assert.False(File.Exists(descriptorPath));
+        Assert.Contains("child executable 'C:\\Tools\\missing-sunshine.exe' does not exist", error.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RunReturnsChildExitCodeWhenChildProcessExitsBeforeStop()
+    {
+        using TempDirectory temp = TempDirectory.Create();
+        string descriptorPath = Path.Combine(temp.Path, "session.json");
+        var command = new StreamingProbeCommand(
+            "session",
+            "display",
+            descriptorPath,
+            "gamestream",
+            "moonlight://beacon/runtime/session",
+            new Dictionary<string, string>(),
+            Once: false,
+            ChildExecutable: "C:\\Tools\\sunshine.exe");
+        var lifetime = new PendingStreamingProbeLifetime();
+        var childRunner = new RecordingStreamingProbeChildProcessRunner(["C:\\Tools\\sunshine.exe"])
+        {
+            ExitCode = 17
+        };
+        using var output = new StringWriter();
+
+        int exitCode = await StreamingProbeApp.RunAsync(command, output, TextWriter.Null, lifetime, childRunner);
+
+        Assert.Equal(17, exitCode);
+        Assert.True(lifetime.Waited);
+        Assert.Empty(childRunner.StoppedProcessIds);
+        Assert.Contains("childExitCode=17", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RunWaitsForStopWhenOnceIsNotSet()
     {
         using TempDirectory temp = TempDirectory.Create();
@@ -118,6 +216,70 @@ public sealed class StreamingProbeAppTests
         {
             Waited = true;
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class PendingStreamingProbeLifetime : IStreamingProbeLifetime
+    {
+        public bool Waited { get; private set; }
+
+        public Task WaitForStopAsync()
+        {
+            Waited = true;
+            return TaskCompletionSourceProvider.Never<object?>();
+        }
+    }
+
+    private sealed class RecordingStreamingProbeChildProcessRunner : IStreamingProbeChildProcessRunner
+    {
+        private int nextProcessId = 2001;
+
+        public RecordingStreamingProbeChildProcessRunner(IEnumerable<string>? existingFiles = null)
+        {
+            if (existingFiles is null)
+            {
+                return;
+            }
+
+            foreach (string path in existingFiles)
+            {
+                ExistingFiles.Add(path);
+            }
+        }
+
+        public HashSet<string> ExistingFiles { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public List<StreamingProbeChildCommand> StartedCommands { get; } = [];
+
+        public List<int> StoppedProcessIds { get; } = [];
+
+        public int? ExitCode { get; set; }
+
+        public bool FileExists(string path) => ExistingFiles.Contains(path);
+
+        public StreamingProbeChildProcess Start(StreamingProbeChildCommand command)
+        {
+            StartedCommands.Add(command);
+            return new StreamingProbeChildProcess(nextProcessId++);
+        }
+
+        public Task<int?> WaitForExitAsync(StreamingProbeChildProcess process) =>
+            ExitCode.HasValue
+                ? Task.FromResult<int?>(ExitCode.Value)
+                : TaskCompletionSourceProvider.Never<int?>();
+
+        public void Stop(StreamingProbeChildProcess process)
+        {
+            StoppedProcessIds.Add(process.ProcessId);
+        }
+    }
+
+    private static class TaskCompletionSourceProvider
+    {
+        public static Task<T> Never<T>()
+        {
+            var source = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+            return source.Task;
         }
     }
 }
