@@ -23,6 +23,13 @@ public sealed class FakeStreamingBackendTests
         Assert.Equal("av1", session.Codec);
         Assert.Equal(120, session.Fps);
         Assert.Equal("running", session.State);
+        Assert.NotNull(session.Connection);
+        Assert.Equal("beacon-fake", session.Connection.Protocol);
+        Assert.Equal("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", session.Connection.LaunchUri);
+        StreamingEndpointDescriptor endpoint = Assert.Single(session.Connection.Endpoints);
+        Assert.Equal("control", endpoint.Role);
+        Assert.Equal("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", endpoint.Uri);
+        Assert.Equal("client-z-fold-7", session.Connection.Metadata["displayId"]);
         Assert.Single(backend.GetSessions());
     }
 

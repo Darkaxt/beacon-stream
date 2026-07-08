@@ -77,7 +77,8 @@ public sealed class ExternalProcessStreamingBackend(
                 plan.Stream.InitialBitrateMbps,
                 plan.Stream.Transport,
                 State: "running",
-                Error: null);
+                Error: null,
+                Connection: null);
 
             lock (gate)
             {

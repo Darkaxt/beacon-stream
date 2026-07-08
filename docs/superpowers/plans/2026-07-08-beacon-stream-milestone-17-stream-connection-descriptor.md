@@ -102,7 +102,7 @@ public sealed record StreamingSessionState(
 - Modify: `src/Beacon.Core/Streaming/FakeStreamingBackend.cs`
 - Test: `tests/Beacon.Core.Tests/Streaming/FakeStreamingBackendTests.cs`
 
-- [ ] **Step 1: Write failing fake backend descriptor test**
+- [x] **Step 1: Write failing fake backend descriptor test**
 
 Add to `StartCreatesRunningSessionFromPlan`:
 
@@ -116,7 +116,7 @@ Assert.Equal("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", endpoint
 Assert.Equal("client-z-fold-7", session.Connection.Metadata["displayId"]);
 ```
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 Run:
 
@@ -126,7 +126,7 @@ dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter FakeStream
 
 Expected: compile failure because `StreamingSessionState.Connection` does not exist.
 
-- [ ] **Step 3: Add descriptor records and session property**
+- [x] **Step 3: Add descriptor records and session property**
 
 Replace `src/Beacon.Core/Streaming/StreamingSessionState.cs` with:
 
@@ -157,7 +157,7 @@ public sealed record StreamingEndpointDescriptor(
     string Uri);
 ```
 
-- [ ] **Step 4: Populate fake descriptor**
+- [x] **Step 4: Populate fake descriptor**
 
 In `FakeStreamingBackend.StartAsync`, build the descriptor before constructing `StreamingSessionState`:
 
@@ -182,7 +182,7 @@ In `StopAsync`, keep the existing connection by using:
 StreamingSessionState stopped = session with { State = "stopped" };
 ```
 
-- [ ] **Step 5: Update other constructor calls**
+- [x] **Step 5: Update other constructor calls**
 
 Update every `new StreamingSessionState(...)` call to pass either a descriptor or `Connection: null`.
 
@@ -194,7 +194,7 @@ rg "new StreamingSessionState" src tests -n
 
 Expected: each call has the new `Connection` argument.
 
-- [ ] **Step 6: Verify green**
+- [x] **Step 6: Verify green**
 
 Run:
 
