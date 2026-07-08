@@ -2,7 +2,7 @@
 
 | Source | Planned Use | Copy Source Now | Boundary |
 | --- | --- | --- | --- |
-| Sunshine | Streaming protocol, capture, encode, audio, input reference; Milestone 10/17/18 external process boundary, Beacon-owned connection metadata, and wrapper readiness manifest only | No | `src/Beacon.Platform.Windows/Streaming/ExternalProcessStreamingBackend.cs` passes Beacon plans, optional connection descriptors, and a Beacon-owned manifest path to a configured wrapper without copying Sunshine source |
+| Sunshine | Streaming protocol, capture, encode, audio, input reference; Milestone 10/17/18/40 external process boundary, Beacon-owned connection metadata, and wrapper readiness manifest only | No | `src/Beacon.Platform.Windows/Streaming/ExternalProcessStreamingBackend.cs` passes Beacon plans, optional connection descriptors, and a Beacon-owned manifest path to a configured wrapper without copying Sunshine source; `docs/external-streaming-wrapper-manifest.md` documents the adapter contract without copying Sunshine source |
 | Moonlight/Artemis Android clients | Android client behavior reference for local-vs-server ownership | No | `src/Beacon.Android` is original Java code for Beacon's control plane only; no client streaming source is copied |
 | Apollo | SudoVDA integration, display lifecycle lessons, dynamic app discovery reference | No | Milestone 2/3 only after focused source audit |
 | Apollo `third-party/sudovda/sudovda-ioctl.h` | SudoVDA interface GUID, protocol version, and IOCTL contract constants for C# driver boundary | Adapted protocol facts | `src/Beacon.Platform.Windows/Displays/WindowsDisplayApi.cs` |
