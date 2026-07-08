@@ -36,13 +36,15 @@ public sealed class CockpitApiClient(HttpClient httpClient) : ICockpitApi
             return EmptySnapshot();
         }
 
-        return snapshot.Display is null
-            ? snapshot with { Display = CockpitDisplayHealth.Unknown }
-            : snapshot;
+        return snapshot with
+        {
+            Display = snapshot.Display ?? CockpitDisplayHealth.Unknown,
+            StreamingHealth = snapshot.StreamingHealth ?? CockpitStreamingHealth.Unknown
+        };
     }
 
     private static CockpitSnapshot EmptySnapshot() =>
-        new([], [], [], [], CockpitDisplayHealth.Unknown, new CockpitGameSummary(0, []), []);
+        new([], [], [], [], CockpitDisplayHealth.Unknown, CockpitStreamingHealth.Unknown, new CockpitGameSummary(0, []), []);
 
     public async Task PatchClientProfileAsync(string clientId, CockpitClientProfilePatch patch, CancellationToken cancellationToken)
     {

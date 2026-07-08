@@ -53,6 +53,29 @@ public sealed class CockpitApiClientTests
                   { "displayId": "\\\\.\\DISPLAY5", "kind": "Physical", "width": 2560, "height": 1600, "refreshHz": 240, "isPrimary": true, "x": 0, "y": 0 }
                 ]
               },
+              "streamingHealth": {
+                "ready": true,
+                "backend": "external-process",
+                "diagnostic": "External streaming backend ready.",
+                "executableConfigured": true,
+                "executableAvailable": true,
+                "executablePath": "C:\\Tools\\sunshine-wrapper.exe",
+                "manifestConfigured": true,
+                "manifestAvailable": true,
+                "manifestPath": "C:\\Tools\\beacon-streaming.json",
+                "manifestName": "Sunshine bridge",
+                "protocol": "gamestream",
+                "launchUri": "moonlight://beacon/z-fold-7",
+                "codecs": ["av1", "hevc"],
+                "transports": ["lan-direct"],
+                "encoders": ["nvenc"],
+                "capture": ["dxgi"],
+                "maxFps": 120,
+                "maxBitrateMbps": 150,
+                "hdr10": true,
+                "activeSessions": 1,
+                "diagnostics": ["ready"]
+              },
               "games": { "total": 36, "diagnostics": ["Steam library 'G:\\SteamLibrary\\steamapps' does not exist."] },
               "diagnostics": [{
                 "id": "evt-1",
@@ -89,6 +112,10 @@ public sealed class CockpitApiClientTests
         Assert.True(snapshot.Display.PhysicalPrimaryVerified);
         Assert.Single(snapshot.Display.Paths);
         Assert.Equal(@"\\.\DISPLAY5", snapshot.Display.Paths[0].DisplayId);
+        Assert.True(snapshot.StreamingHealth.Ready);
+        Assert.Equal("external-process", snapshot.StreamingHealth.Backend);
+        Assert.Equal(["av1", "hevc"], snapshot.StreamingHealth.Codecs);
+        Assert.True(snapshot.StreamingHealth.Hdr10);
         Assert.Equal(36, snapshot.Games.Total);
         Assert.Single(snapshot.Games.Diagnostics);
         Assert.Single(snapshot.Diagnostics);
