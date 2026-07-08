@@ -648,7 +648,7 @@ Expected: all service registration tests pass.
 - Modify: `tests/Beacon.Server.Tests/ClientApiTests.cs`
 - Modify: `src/Beacon.Platform.Windows/Streaming/ExternalProcessStreamingBackend.cs`
 
-- [ ] **Step 1: Write failing launch preflight test**
+- [x] **Step 1: Write failing launch preflight test**
 
 Add to `ClientApiTests`:
 
@@ -705,7 +705,7 @@ public async Task LaunchStopsBeforeDisplayLeaseWhenExternalManifestRejectsPlan()
 
 Add local fake reader/runner helpers or move existing test fakes into shared test files only if duplication becomes noisy.
 
-- [ ] **Step 2: Verify red or green**
+- [x] **Step 2: Verify red or green**
 
 Run:
 
@@ -715,11 +715,11 @@ dotnet test tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj --filter Launch
 
 Expected: pass if Task 1 already made `CheckReadinessAsync` authoritative, otherwise fail because launch reaches display/launcher.
 
-- [ ] **Step 3: Fix launch preflight if needed**
+- [x] **Step 3: Fix launch preflight if needed**
 
 If the test fails, ensure `ClientEndpoints` still calls `streaming.CheckReadinessAsync(planResult.Plan, cancellationToken)` before `leases.EnsureLeaseAsync(...)` and returns a `503` problem on failure.
 
-- [ ] **Step 4: Verify green**
+- [x] **Step 4: Verify green**
 
 Run:
 

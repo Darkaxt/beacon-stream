@@ -5,6 +5,7 @@ using Beacon.Core.Displays;
 using Beacon.Core.Games;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
+using Beacon.Platform.Windows.Streaming;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -509,6 +510,55 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task LaunchStopsBeforeDisplayLeaseWhenExternalManifestRejectsPlan()
+    {
+        var display = new FakeDisplayBackend();
+        var launcher = new FakeGameLauncher();
+        var runner = new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]);
+        var reader = new FakeExternalStreamingManifestReader();
+        reader.Manifests["C:\\Tools\\beacon-streaming.json"] = new ExternalStreamingManifest(
+            "Sunshine bridge",
+            "gamestream",
+            null,
+            new Dictionary<string, string>(),
+            ["h264"],
+            60,
+            40,
+            Hdr10: false,
+            ["lan-direct"],
+            ["software"],
+            ["dxgi"],
+            ["AV1 disabled"]);
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions("C:\\Tools\\sunshine-wrapper.exe", ManifestPath: "C:\\Tools\\beacon-streaming.json"),
+            runner,
+            reader);
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.RemoveAll<IGameLauncher>();
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IDisplayBackend>(display);
+                services.AddSingleton<IGameLauncher>(launcher);
+                services.AddSingleton<IStreamingBackend>(backend);
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
+        {
+            gameId = "steam-shortcut:3767414131"
+        });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        string body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("codec av1 is not supported", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(display.EnsureCalls);
+        Assert.Empty(launcher.Requests);
+        Assert.Empty(runner.StartedCommands);
+    }
+
+    [Fact]
     public async Task DisconnectQuitAndEmergencyRestoreReturnExplicitRecoveryState()
     {
         HttpClient client = factory.CreateClient();
@@ -650,5 +700,37 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
 
         Assert.Equal("client-z-fold-7", root.GetProperty("displayId").GetString());
         Assert.True(root.GetProperty("recovered").GetBoolean());
+    }
+
+    private sealed class FakeExternalStreamingProcessRunner(IEnumerable<string>? existingFiles = null) : IExternalStreamingProcessRunner
+    {
+        private int nextProcessId = 1001;
+
+        public HashSet<string> ExistingFiles { get; } = new(existingFiles ?? [], StringComparer.OrdinalIgnoreCase);
+
+        public List<ExternalStreamingCommand> StartedCommands { get; } = [];
+
+        public bool FileExists(string path) => ExistingFiles.Contains(path);
+
+        public ExternalStreamingProcess Start(ExternalStreamingCommand command)
+        {
+            StartedCommands.Add(command);
+            return new ExternalStreamingProcess(nextProcessId++);
+        }
+
+        public ExternalStreamingProcessStopResult Stop(ExternalStreamingProcess process) =>
+            ExternalStreamingProcessStopResult.Ok();
+    }
+
+    private sealed class FakeExternalStreamingManifestReader : IExternalStreamingManifestReader
+    {
+        public Dictionary<string, ExternalStreamingManifest> Manifests { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public bool FileExists(string path) => Manifests.ContainsKey(path);
+
+        public ExternalStreamingManifestReadResult Read(string path) =>
+            Manifests.TryGetValue(path, out ExternalStreamingManifest? manifest)
+                ? ExternalStreamingManifestReadResult.Ok(manifest)
+                : ExternalStreamingManifestReadResult.Fail($"External streaming manifest '{path}' does not exist.");
     }
 }
