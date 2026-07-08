@@ -80,6 +80,10 @@ public final class BeaconViewModel {
         record("telemetry", service.reportTelemetry(telemetry));
     }
 
+    public void beacon(boolean active) throws IOException {
+        record("beacon", service.beacon(active));
+    }
+
     public void loadGames() throws IOException {
         BeaconApiClient.BeaconResult result = service.games();
         record("games", result);
@@ -178,6 +182,8 @@ public final class BeaconViewModel {
         BeaconApiClient.BeaconResult reportCapabilities(BeaconApiClient.ClientCapabilities capabilities) throws IOException;
 
         BeaconApiClient.BeaconResult reportTelemetry(BeaconApiClient.ClientTelemetry telemetry) throws IOException;
+
+        BeaconApiClient.BeaconResult beacon(boolean active) throws IOException;
 
         BeaconApiClient.BeaconResult games() throws IOException;
 

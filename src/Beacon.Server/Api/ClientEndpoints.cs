@@ -12,6 +12,8 @@ namespace Beacon.Server.Api;
 
 public static class ClientEndpoints
 {
+    private static readonly JsonSerializerOptions WebJsonOptions = new(JsonSerializerDefaults.Web);
+
     private static readonly string[] EditableFields =
     [
         "preferredWidth",
@@ -258,6 +260,68 @@ public static class ClientEndpoints
             return stop.Success && stop.Session is not null
                 ? Results.Ok(new { clientId, stream = stop.Session })
                 : Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+        });
+
+        clients.MapPost("/{clientId}/beacon", async (
+            string clientId,
+            HttpRequest httpRequest,
+            InMemoryClientStore clients,
+            InMemorySessionStore sessions,
+            DisplayLeaseManager leases,
+            ISessionOwnershipTracker ownership,
+            CancellationToken cancellationToken) =>
+        {
+            ClientProfile? profile = clients.GetProfile(clientId);
+            if (profile is null)
+            {
+                return Results.NotFound(new { error = $"Client '{clientId}' is not registered." });
+            }
+
+            BeaconRequest request = await ReadBeaconRequestAsync(httpRequest, cancellationToken);
+            string displayId = DisplayLease.CreateDisplayId(new ClientId(clientId));
+            if (request.Active)
+            {
+                DisplayLeaseResult leaseResult = await leases.EnsureLeaseAsync(profile, cancellationToken);
+                if (!leaseResult.Success || leaseResult.Lease is null)
+                {
+                    return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+                }
+
+                return Results.Ok(new
+                {
+                    clientId,
+                    state = "active",
+                    displayId = leaseResult.Lease.DisplayId,
+                    leasePrepared = true,
+                    displayRemoved = false
+                });
+            }
+
+            SessionPlan? plan = sessions.Get(clientId);
+            SessionOwnershipSnapshot? ownershipSnapshot = plan is null
+                ? null
+                : await ownership.GetSnapshotAsync(plan.SessionId, cancellationToken);
+            bool displayRemoved = await leases.CleanupIfAllowedAsync(
+                displayId,
+                clientActive: false,
+                ownershipSnapshot?.LaunchedProcessRunning == true || ownershipSnapshot?.ChildProcessRunning == true,
+                ownershipSnapshot?.OwnedWindowRemaining == true,
+                cancellationToken);
+
+            if (displayRemoved && plan is not null)
+            {
+                await ownership.ClearAsync(plan.SessionId, cancellationToken);
+            }
+
+            return Results.Ok(new
+            {
+                clientId,
+                state = "inactive",
+                displayId,
+                leasePrepared = false,
+                displayRemoved,
+                ownership = ownershipSnapshot
+            });
         });
 
         clients.MapPost("/{clientId}/input", async (
@@ -584,23 +648,47 @@ public static class ClientEndpoints
         HttpRequest request,
         CancellationToken cancellationToken)
     {
+        return await ReadOptionalJsonRequestAsync(
+            request,
+            static () => new DisconnectRequest(),
+            "Disconnect request JSON is invalid.",
+            cancellationToken);
+    }
+
+    private static async Task<BeaconRequest> ReadBeaconRequestAsync(
+        HttpRequest request,
+        CancellationToken cancellationToken)
+    {
+        return await ReadOptionalJsonRequestAsync(
+            request,
+            static () => new BeaconRequest(),
+            "Beacon request JSON is invalid.",
+            cancellationToken);
+    }
+
+    private static async Task<TRequest> ReadOptionalJsonRequestAsync<TRequest>(
+        HttpRequest request,
+        Func<TRequest> createDefault,
+        string invalidJsonMessage,
+        CancellationToken cancellationToken)
+    {
         if (request.ContentLength is <= 0 ||
             (request.ContentLength is null && string.IsNullOrWhiteSpace(request.ContentType)))
         {
-            return new DisconnectRequest();
+            return createDefault();
         }
 
         try
         {
-            DisconnectRequest? disconnect = await JsonSerializer.DeserializeAsync<DisconnectRequest>(
+            TRequest? parsed = await JsonSerializer.DeserializeAsync<TRequest>(
                 request.Body,
-                new JsonSerializerOptions(JsonSerializerDefaults.Web),
+                WebJsonOptions,
                 cancellationToken: cancellationToken);
-            return disconnect ?? new DisconnectRequest();
+            return parsed ?? createDefault();
         }
         catch (JsonException ex)
         {
-            throw new BadHttpRequestException("Disconnect request JSON is invalid.", ex);
+            throw new BadHttpRequestException(invalidJsonMessage, ex);
         }
     }
 
@@ -662,5 +750,7 @@ public sealed record PlanRequest(string? AppId = null, string? Title = null, str
 public sealed record QuitRequest(bool ClientActive, bool? OwnedProcessRunning = null, bool? OwnedWindowRemaining = null);
 
 public sealed record DisconnectRequest(bool ClientActive = true);
+
+public sealed record BeaconRequest(bool Active = true);
 
 public sealed record ClientInputRequest(long Sequence, IReadOnlyList<ClientInputEvent> Events);

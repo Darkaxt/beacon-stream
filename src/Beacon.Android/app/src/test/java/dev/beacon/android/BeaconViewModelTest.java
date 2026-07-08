@@ -88,6 +88,18 @@ public final class BeaconViewModelTest {
     }
 
     @Test
+    public void beaconRecordsClientActivity() throws Exception {
+        FakeService service = new FakeService();
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
+
+        model.beacon(true);
+
+        assertEquals("beacon", service.lastAction);
+        assertTrue(service.lastBeaconActive);
+        assertEquals("beacon: 200", model.status());
+    }
+
+    @Test
     public void launchRecordsServerSelectedStreamState() throws Exception {
         FakeService service = new FakeService();
         service.next = new BeaconApiClient.BeaconResult(200, "{\"state\":\"streaming\",\"stream\":{\"fps\":120}}");
@@ -218,6 +230,7 @@ public final class BeaconViewModelTest {
         String lastAction = "";
         private final StringBuilder actions = new StringBuilder();
         BeaconApiClient.ProfilePatch lastPatch;
+        boolean lastBeaconActive;
         BeaconApiClient.BeaconResult next = new BeaconApiClient.BeaconResult(200, "{}");
 
         String actions() {
@@ -260,6 +273,13 @@ public final class BeaconViewModelTest {
         @Override
         public BeaconApiClient.BeaconResult games() throws IOException {
             record("games");
+            return next;
+        }
+
+        @Override
+        public BeaconApiClient.BeaconResult beacon(boolean active) throws IOException {
+            record("beacon");
+            lastBeaconActive = active;
             return next;
         }
 

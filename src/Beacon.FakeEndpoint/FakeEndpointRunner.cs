@@ -160,6 +160,7 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
             await SendAsync(HttpMethod.Patch, $"/clients/{script.ClientId}/profile", CreateProfilePatch(script), operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/capabilities", CreateCapabilities(script), operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/telemetry", CreateTelemetry(script), operations, cancellationToken) &&
+            await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/beacon", new { active = true }, operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/plan", CreatePlanRequest(script), operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/launch", CreatePlanRequest(script), operations, cancellationToken);
 
