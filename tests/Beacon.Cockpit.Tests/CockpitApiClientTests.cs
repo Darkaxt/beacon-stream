@@ -11,7 +11,18 @@ public sealed class CockpitApiClientTests
         var handler = new FakeHttpHandler(
             """
             {
-              "clients": [{ "clientId": "z-fold-7", "profile": {}, "capabilities": {}, "telemetry": {} }],
+              "clients": [{
+                "clientId": "z-fold-7",
+                "profile": {
+                  "name": "Z Fold 7",
+                  "display": { "preferredWidth": 2560, "preferredHeight": 1600, "preferredRefreshHz": 120, "hdrPreference": "Prefer", "mode": "virtual-primary", "restorePhysicalDisplayOnEnd": true, "forbidMirrorMode": true },
+                  "stream": { "qualityMode": "auto", "codecPreference": "auto", "bitrateCapMbps": null },
+                  "audio": { "mode": "stereo" },
+                  "session": { "keepAppRunningOnDisconnect": false, "allowEmergencyRestoreFromClient": true }
+                },
+                "capabilities": {},
+                "telemetry": {}
+              }],
               "sessions": [{ "clientId": { "value": "z-fold-7" }, "appId": "steam-shortcut:3767414131" }],
               "streams": [{ "sessionId": "z-fold-7-steam-shortcut:3767414131", "clientId": "z-fold-7", "appId": "steam-shortcut:3767414131", "displayId": "client-z-fold-7", "codec": "av1", "fps": 120, "initialBitrateMbps": 65, "transport": "lan-direct", "state": "running", "error": null }],
               "ownership": [{ "sessionId": "z-fold-7-steam-shortcut:3767414131", "appId": "steam-shortcut:3767414131", "launchedProcessId": 4321, "launchedProcessRunning": false, "childProcessRunning": false, "ownedWindowRemaining": false, "reasons": [] }],
@@ -24,6 +35,10 @@ public sealed class CockpitApiClientTests
 
         Assert.Single(snapshot.Clients);
         Assert.Equal("z-fold-7", snapshot.Clients[0].ClientId);
+        Assert.Equal("Z Fold 7", snapshot.Clients[0].Profile.Name);
+        Assert.Equal(2560, snapshot.Clients[0].Profile.Display.PreferredWidth);
+        Assert.Equal(1600, snapshot.Clients[0].Profile.Display.PreferredHeight);
+        Assert.Equal("virtual-primary", snapshot.Clients[0].Profile.Display.Mode);
         Assert.Single(snapshot.Streams);
         Assert.Equal("running", snapshot.Streams[0].State);
         Assert.Equal("client-z-fold-7", snapshot.Streams[0].DisplayId);
@@ -31,6 +46,31 @@ public sealed class CockpitApiClientTests
         Assert.Equal(4321, snapshot.Ownership[0].LaunchedProcessId);
         Assert.Equal(36, snapshot.Games.Total);
         Assert.Single(snapshot.Games.Diagnostics);
+    }
+
+    [Fact]
+    public async Task SendsProfilePatchToAdminEndpoint()
+    {
+        var handler = new FakeHttpHandler("{}");
+        var client = new CockpitApiClient(new HttpClient(handler) { BaseAddress = new Uri("http://localhost:5000") });
+
+        await client.PatchClientProfileAsync("z fold/7", new CockpitClientProfilePatch
+        {
+            PreferredWidth = 2560,
+            PreferredHeight = 1600,
+            PreferredRefreshHz = 90,
+            Mode = "physical-blackout",
+            RestorePhysicalDisplayOnEnd = false,
+            ForbidMirrorMode = false,
+            KeepAppRunningOnDisconnect = true,
+            AllowEmergencyRestoreFromClient = false
+        }, CancellationToken.None);
+
+        Assert.Equal(HttpMethod.Patch, handler.Requests[0].Method);
+        Assert.Equal("/admin/clients/z%20fold%2F7/profile", handler.Requests[0].RequestUri?.PathAndQuery);
+        Assert.Contains("\"preferredRefreshHz\":90", handler.Bodies[0], StringComparison.Ordinal);
+        Assert.Contains("\"mode\":\"physical-blackout\"", handler.Bodies[0], StringComparison.Ordinal);
+        Assert.Contains("\"keepAppRunningOnDisconnect\":true", handler.Bodies[0], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -61,14 +101,16 @@ public sealed class CockpitApiClientTests
     private sealed class FakeHttpHandler(string responseBody) : HttpMessageHandler
     {
         public List<HttpRequestMessage> Requests { get; } = [];
+        public List<string> Bodies { get; } = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests.Add(request);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            Bodies.Add(request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken));
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(responseBody)
-            });
+            };
         }
     }
 }

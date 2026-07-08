@@ -39,6 +39,11 @@ dotnet run --project src\Beacon.Server
 
 If no profile path is configured, profiles use an in-memory repository for deterministic development and tests. `/admin/snapshot` reports `profiles.store`, `profiles.location`, and `profiles.pairingEnabled`; it never returns the pairing token.
 
+Profile editing has two different boundaries:
+
+- `/clients/{clientId}/profile` is the APK/client route. It accepts only basic client-owned preferences such as geometry, refresh rate, HDR preference, codec, quality, bitrate cap, audio mode, and keep-app-running behavior.
+- `/admin/clients/{clientId}/profile` is the local-admin route used by the WPF cockpit. It can also edit display behavior policy such as display mode, physical-display restore, mirror prohibition, and emergency restore permission.
+
 The fake endpoint can simulate a paired non-phone client:
 
 ```powershell
@@ -89,7 +94,7 @@ WPF cockpit:
 dotnet run --project src/Beacon.Cockpit -- --server http://localhost:5000
 ```
 
-`Beacon.Cockpit` is a thin local admin UI over the server `/admin` endpoints. It does not call display drivers, parse Steam/Heroic/Hydra data, or duplicate lifecycle policy; recovery actions are delegated back to Beacon Server.
+`Beacon.Cockpit` is a thin local admin UI over the server `/admin` endpoints. It can inspect and edit persisted client profiles and trigger recovery actions. It does not call display drivers, parse Steam/Heroic/Hydra data, or duplicate lifecycle policy; those actions are delegated back to Beacon Server.
 
 Recovery actions:
 
@@ -152,4 +157,5 @@ See:
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-10-streaming-selection.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-11-recovery-actions.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-12-persistent-pairing.md`
+- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-13-cockpit-profile-editing.md`
 - `docs/windows-display-backend.md`

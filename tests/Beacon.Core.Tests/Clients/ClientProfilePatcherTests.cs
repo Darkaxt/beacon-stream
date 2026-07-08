@@ -67,4 +67,40 @@ public sealed class ClientProfilePatcherTests
 
         Assert.Contains("2560x1440", error.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void AdminPatchAppliesDisplayAndSessionPolicyFields()
+    {
+        ClientProfile profile = ClientProfile.CreateZFold7Default();
+        var patch = new ClientProfileAdminPatch(
+            PreferredWidth: 2560,
+            PreferredHeight: 1600,
+            PreferredRefreshHz: 90,
+            HdrPreference: HdrPreference.Require,
+            Mode: "physical-blackout",
+            RestorePhysicalDisplayOnEnd: false,
+            ForbidMirrorMode: false,
+            CodecPreference: "hevc",
+            QualityMode: "quality",
+            BitrateCapMbps: 80,
+            AudioMode: "surround",
+            KeepAppRunningOnDisconnect: true,
+            AllowEmergencyRestoreFromClient: false);
+
+        ClientProfile updated = ClientProfilePatcher.ApplyAdminPatch(profile, patch);
+
+        Assert.Equal(2560, updated.Display.PreferredWidth);
+        Assert.Equal(1600, updated.Display.PreferredHeight);
+        Assert.Equal(90, updated.Display.PreferredRefreshHz);
+        Assert.Equal(HdrPreference.Require, updated.Display.HdrPreference);
+        Assert.Equal("physical-blackout", updated.Display.Mode);
+        Assert.False(updated.Display.RestorePhysicalDisplayOnEnd);
+        Assert.False(updated.Display.ForbidMirrorMode);
+        Assert.Equal("hevc", updated.Stream.CodecPreference);
+        Assert.Equal("quality", updated.Stream.QualityMode);
+        Assert.Equal(80, updated.Stream.BitrateCapMbps);
+        Assert.Equal("surround", updated.Audio.Mode);
+        Assert.True(updated.Session.KeepAppRunningOnDisconnect);
+        Assert.False(updated.Session.AllowEmergencyRestoreFromClient);
+    }
 }
