@@ -6,6 +6,8 @@ Milestone 0/1 covers the control plane, fake backends, planner, profile ownershi
 
 Milestone 67 adds explicit inactive-client disconnect cleanup: empty/default disconnects retain the display lease for reconnect, while `clientActive: false` disconnects evaluate the server-owned cleanup gate and remove the lease only when no owned work remains.
 
+Milestone 68 adds explicit client beacon lease preparation: active beacon prepares the per-client display lease before launch, while inactive beacon evaluates the same server-owned cleanup gate without timers or watchdogs.
+
 ## Server Host Mode
 
 The server defaults to deterministic fake host mode:
@@ -56,7 +58,7 @@ The fake endpoint can simulate a paired non-phone client:
 dotnet run --project src\Beacon.FakeEndpoint -- --server http://localhost:5000 --client-id handheld-1 --name "Handheld 1" --pairing-token pair-me
 ```
 
-It can also simulate named telemetry profiles through the no-phone script: hello, profile fetch, allowed profile patch, capabilities, telemetry, plan, launch, optional stream connection assertion, pointer gesture input, keyboard input, disconnect, reconnect, plan refresh, quit, and emergency restore.
+It can also simulate named telemetry profiles through the no-phone script: hello, profile fetch, allowed profile patch, capabilities, telemetry, active beacon, plan, launch, optional stream connection assertion, pointer gesture input, keyboard input, disconnect, reconnect, plan refresh, quit, and emergency restore.
 
 ```powershell
 dotnet run --project src\Beacon.FakeEndpoint -- --server http://localhost:5000 --telemetry-profile excellent-lan
@@ -191,7 +193,7 @@ curl.exe -X POST http://localhost:5000/admin/clients/z-fold-7/stream/stop
 In the WPF cockpit, the Recovery tab exposes the same actions. Reset topology restores the physical primary display first, then moves virtual-display windows back minimized. Display lease removal restores the physical primary display and removes the selected client's virtual display. These are explicit manual escape hatches; normal session cleanup still belongs to the server lifecycle rules.
 
 Owning-client emergency restore is profile-gated by `allowEmergencyRestoreFromClient`. Admin recovery endpoints remain broader local-admin escape hatches, including display lease recovery/removal. Admin physical restore returns `503` with the verified backend error when the laptop panel cannot be confirmed as primary.
-Stream stop returns `404` when the selected client has no session plan, and `503` when the streaming backend cannot stop an existing planned session. Client disconnect and quit use the same stop-failure contract; quit does not continue into ownership or display lease cleanup when the streaming backend refuses to stop. Empty/default disconnect represents a still-active client and retains the leased display. Explicit `clientActive: false` disconnect stops streaming, evaluates server-owned activity, restores physical primary through display cleanup, and removes the lease only when the client is inactive and no owned work remains.
+Stream stop returns `404` when the selected client has no session plan, and `503` when the streaming backend cannot stop an existing planned session. Client disconnect and quit use the same stop-failure contract; quit does not continue into ownership or display lease cleanup when the streaming backend refuses to stop. Empty/default disconnect represents a still-active client and retains the leased display. Explicit `clientActive: false` disconnect stops streaming, evaluates server-owned activity, restores physical primary through display cleanup, and removes the lease only when the client is inactive and no owned work remains. `POST /clients/{clientId}/beacon` lets an active client prepare its display lease before launch; `{ "active": false }` evaluates the same cleanup gate without adding a timeout or watchdog.
 
 `/admin/snapshot` also returns recent operational diagnostics. These events include display lease decisions, physical-primary restore attempts, recovery actions, and streaming preflight/start/stop failures. The WPF cockpit shows them in the Diagnostics tab together with game-provider diagnostics.
 
@@ -236,6 +238,8 @@ Android client checks:
 ```
 
 `Beacon.Android` is a thin Java APK shell for the client control plane. It can identify the device, patch only APK-allowed client profile fields, fetch and show the server-owned game catalog, report expanded capability and telemetry facts, request/launch a server plan, delegate the server-provided `stream.connection.launchUri` through Android `ACTION_VIEW` on the Activity UI thread, stop/disconnect/quit, forward pointer input including batched multi-pointer touch events, send a simple Escape keyboard press, manage APK-local theme/wake-lock/debug-overlay controls, and call owning-client emergency restore. Plan and launch actions send the profile patch, capabilities, and telemetry first so the server can compute the stream plan from the current client facts. Display behavior policy still belongs to Beacon Server, not the APK. It does not implement real video decode, Moonlight/Sunshine protocol handling, controller, or native touch/gesture protocol support yet.
+
+The APK also exposes manual active and inactive beacon actions; these only report client activity to Beacon Server and do not move display policy into the APK.
 
 If the server returns a stream connection with endpoints but no `launchUri`, the APK records a visible diagnostic instead of silently doing nothing. Endpoint-only native streaming is a future client capability, not something the current thin APK fakes.
 
@@ -303,6 +307,7 @@ See:
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-65-wrapper-child-health.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-66-wrapper-child-config-invariant.md`
 - `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-67-inactive-disconnect-cleanup.md`
+- `docs/superpowers/plans/2026-07-08-beacon-stream-milestone-68-client-beacon-lease.md`
 - `docs/external-streaming-wrapper-manifest.md`
 - `docs/source-audits/2026-07-08-windows-input-sink-upstream-audit.md`
 - `docs/windows-display-backend.md`

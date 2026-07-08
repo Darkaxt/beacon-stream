@@ -1091,6 +1091,112 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task BeaconActiveClientEnsuresDisplayLeaseBeforeLaunch()
+    {
+        var display = new FakeDisplayBackend();
+        WebApplicationFactory<Program> displayFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.AddSingleton<IDisplayBackend>(display);
+            }));
+        HttpClient client = displayFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/beacon", new { active = true });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.Equal("active", root.GetProperty("state").GetString());
+        Assert.Equal("client-z-fold-7", root.GetProperty("displayId").GetString());
+        Assert.True(root.GetProperty("leasePrepared").GetBoolean());
+        Assert.False(root.GetProperty("displayRemoved").GetBoolean());
+        Assert.Equal("client-z-fold-7:2560x1600@120:hdr=Prefer", Assert.Single(display.EnsureCalls));
+        Assert.Empty(display.RemoveCalls);
+    }
+
+    [Fact]
+    public async Task BeaconRejectsUnknownClientWithoutDisplaySideEffects()
+    {
+        var display = new FakeDisplayBackend();
+        WebApplicationFactory<Program> displayFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.AddSingleton<IDisplayBackend>(display);
+            }));
+        HttpClient client = displayFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/unknown-client/beacon", new { active = true });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Empty(display.EnsureCalls);
+        Assert.Empty(display.RemoveCalls);
+    }
+
+    [Fact]
+    public async Task BeaconInactiveClientRemovesDisplayWhenNoOwnedWorkRemains()
+    {
+        var display = new FakeDisplayBackend();
+        WebApplicationFactory<Program> displayFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.AddSingleton<IDisplayBackend>(display);
+            }));
+        HttpClient client = displayFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/beacon", new { active = false });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.Equal("inactive", root.GetProperty("state").GetString());
+        Assert.False(root.GetProperty("leasePrepared").GetBoolean());
+        Assert.True(root.GetProperty("displayRemoved").GetBoolean());
+        Assert.Equal("physical-primary", Assert.Single(display.RestoreCalls));
+        Assert.Equal("client-z-fold-7", Assert.Single(display.RemoveCalls));
+    }
+
+    [Fact]
+    public async Task BeaconInactiveClientRetainsDisplayWhenServerOwnedWorkRemains()
+    {
+        var display = new FakeDisplayBackend();
+        var inspector = new FakeSessionActivityInspector();
+        var ownership = new SessionOwnershipTracker(inspector);
+        WebApplicationFactory<Program> ownedFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.RemoveAll<FakeSessionActivityInspector>();
+                services.RemoveAll<ISessionActivityInspector>();
+                services.RemoveAll<ISessionOwnershipTracker>();
+                services.AddSingleton<IDisplayBackend>(display);
+                services.AddSingleton<ISessionActivityInspector>(inspector);
+                services.AddSingleton<ISessionOwnershipTracker>(ownership);
+            }));
+        HttpClient client = ownedFactory.CreateClient();
+        const string sessionId = "z-fold-7-steam-shortcut:3767414131";
+
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        inspector.SetActivity(sessionId, new SessionActivitySnapshot(false, true, false, []));
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/beacon", new { active = false });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+
+        Assert.Equal("inactive", root.GetProperty("state").GetString());
+        Assert.False(root.GetProperty("leasePrepared").GetBoolean());
+        Assert.False(root.GetProperty("displayRemoved").GetBoolean());
+        Assert.True(root.GetProperty("ownership").GetProperty("childProcessRunning").GetBoolean());
+        Assert.Equal("physical-primary", Assert.Single(display.RestoreCalls));
+        Assert.Empty(display.RemoveCalls);
+    }
+
+    [Fact]
     public async Task DisconnectWithInactiveClientRetainsDisplayWhenServerOwnedWorkRemains()
     {
         var display = new FakeDisplayBackend();

@@ -100,6 +100,7 @@ public sealed class FakeEndpointRunnerTests
                 "PATCH /clients/z-fold-7/profile",
                 "POST /clients/z-fold-7/capabilities",
                 "POST /clients/z-fold-7/telemetry",
+                "POST /clients/z-fold-7/beacon",
                 "POST /clients/z-fold-7/plan",
                 "POST /clients/z-fold-7/launch",
                 "POST /clients/z-fold-7/input",

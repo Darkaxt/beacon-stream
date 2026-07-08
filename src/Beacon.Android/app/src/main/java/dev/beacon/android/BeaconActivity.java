@@ -145,6 +145,8 @@ public final class BeaconActivity extends Activity {
         root.addView(button("Patch Profile", model -> model.patchProfile(readPatch())));
         root.addView(button("Report Capabilities", model -> model.reportCapabilities(readCapabilities())));
         root.addView(button("Report Telemetry", model -> model.reportTelemetry(readTelemetry())));
+        root.addView(button("Beacon Active", model -> model.beacon(true)));
+        root.addView(button("Beacon Inactive", model -> model.beacon(false)));
         root.addView(button("Plan", model -> model.preflightAndPlan(
             readPatch(),
             readCapabilities(),

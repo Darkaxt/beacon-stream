@@ -91,6 +91,7 @@ This section is the implementation contract. If a later plan contradicts this re
 - `REQ-CTRL-011`: APK profile patches must be server-validated against an explicit allowlist.
 - `REQ-CTRL-012`: Display mode, blackout, mirror prohibition, persistence, destruction, restore, and recovery safety policies are WPF/server-admin controlled in version 1.
 - `REQ-CTRL-013`: Until the APK implements native streaming from endpoint maps, a successful launch response with endpoints but no launch URI must be surfaced as an explicit client diagnostic instead of silently doing nothing.
+- `REQ-CTRL-014`: An actively beaconing client must be able to ask the server to prepare its own display lease before app launch; an explicit inactive beacon must evaluate the server-owned display cleanup gate without timers or background watchdogs.
 
 ### Client Profile
 

@@ -42,6 +42,13 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
     }
 
     @Override
+    public BeaconResult beacon(boolean active) throws IOException {
+        JsonObject body = new JsonObject();
+        body.addProperty("active", active);
+        return post("/clients/" + config.clientId() + "/beacon", body);
+    }
+
+    @Override
     public BeaconResult games() throws IOException {
         return get("/games");
     }

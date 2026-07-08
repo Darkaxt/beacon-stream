@@ -97,6 +97,20 @@ public final class BeaconApiClientTest {
     }
 
     @Test
+    public void beaconSerializesClientActivityWithoutDisplayPolicy() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        BeaconApiClient client = new BeaconApiClient(new BeaconClientConfig("http://server", "z-fold-7"), transport);
+
+        client.beacon(true);
+
+        assertEquals("POST", transport.method);
+        assertEquals("/clients/z-fold-7/beacon", transport.path);
+        assertTrue(transport.body.contains("\"active\":true"));
+        assertFalse(transport.body.contains("display"));
+        assertFalse(transport.body.contains("mode"));
+    }
+
+    @Test
     public void gamesFetchesServerCatalogWithGet() throws Exception {
         FakeTransport transport = new FakeTransport();
         transport.response = new BeaconHttpResponse(200, "{\"games\":[]}");
