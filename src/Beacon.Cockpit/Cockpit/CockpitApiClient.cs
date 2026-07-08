@@ -31,8 +31,18 @@ public sealed class CockpitApiClient(HttpClient httpClient) : ICockpitApi
     public async Task<CockpitSnapshot> GetSnapshotAsync(CancellationToken cancellationToken)
     {
         CockpitSnapshot? snapshot = await httpClient.GetFromJsonAsync<CockpitSnapshot>("/admin/snapshot", cancellationToken);
-        return snapshot ?? new CockpitSnapshot([], [], [], [], new CockpitGameSummary(0, []), []);
+        if (snapshot is null)
+        {
+            return EmptySnapshot();
+        }
+
+        return snapshot.Display is null
+            ? snapshot with { Display = CockpitDisplayHealth.Unknown }
+            : snapshot;
     }
+
+    private static CockpitSnapshot EmptySnapshot() =>
+        new([], [], [], [], CockpitDisplayHealth.Unknown, new CockpitGameSummary(0, []), []);
 
     public async Task PatchClientProfileAsync(string clientId, CockpitClientProfilePatch patch, CancellationToken cancellationToken)
     {

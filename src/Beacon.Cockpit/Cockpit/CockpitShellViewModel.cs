@@ -31,6 +31,7 @@ public sealed class CockpitShellViewModel : ObservableObject
     private string profileAudioMode = string.Empty;
     private bool profileKeepAppRunningOnDisconnect;
     private bool profileAllowEmergencyRestoreFromClient;
+    private string displayHealthSummary = "Display health unknown.";
     private string statusMessage = "Ready.";
 
     public CockpitShellViewModel(ICockpitApi api, string serverUrl = "http://localhost:5000")
@@ -197,6 +198,12 @@ public sealed class CockpitShellViewModel : ObservableObject
         private set => SetProperty(ref statusMessage, value);
     }
 
+    public string DisplayHealthSummary
+    {
+        get => displayHealthSummary;
+        private set => SetProperty(ref displayHealthSummary, value);
+    }
+
     public string ServerUrl { get; }
 
     public ObservableCollection<string> Clients { get; } = [];
@@ -254,9 +261,11 @@ public sealed class CockpitShellViewModel : ObservableObject
         }));
         Replace(Ownership, snapshot.Ownership.Select(ownership =>
             $"{ownership.AppId} process={ownership.LaunchedProcessRunning} child={ownership.ChildProcessRunning} window={ownership.OwnedWindowRemaining}"));
-        Replace(Diagnostics, snapshot.Diagnostics
+        DisplayHealthSummary = FormatDisplayHealth(snapshot.Display);
+        Replace(Diagnostics, new[] { $"[display] {DisplayHealthSummary}" }
+            .Concat(snapshot.Diagnostics
             .Select(evt => $"[{evt.Severity}] {evt.Category}/{evt.Operation}: {evt.Message}")
-            .Concat(snapshot.Games.Diagnostics.Select(message => $"[provider] {message}")));
+            .Concat(snapshot.Games.Diagnostics.Select(message => $"[provider] {message}"))));
 
         ClientCount = snapshot.Clients.Count;
         SessionCount = snapshot.Sessions.Count;
@@ -452,6 +461,16 @@ public sealed class CockpitShellViewModel : ObservableObject
         {
             collection.Add(value);
         }
+    }
+
+    private static string FormatDisplayHealth(CockpitDisplayHealth? display)
+    {
+        display ??= CockpitDisplayHealth.Unknown;
+        string driver = display.DriverReady ? "ready" : "not ready";
+        string topology = display.TopologyAvailable ? "topology available" : "topology unavailable";
+        string primary = display.PhysicalPrimaryVerified ? "physical primary verified" : "physical primary not verified";
+        string mirror = display.MirrorMode ? "mirror mode" : "extended/no mirror";
+        return $"{driver}; {topology}; {primary}; {mirror}; {display.Paths.Count} display path(s); {display.Diagnostic}";
     }
 
     private void LoadSelectedClientProfile()

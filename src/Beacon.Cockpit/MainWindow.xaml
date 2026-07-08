@@ -84,6 +84,11 @@
                     <TextBlock Text="Games" Style="{StaticResource LabelText}" />
                     <TextBlock Text="{Binding GameCount}" Style="{StaticResource MetricText}" />
 
+                    <TextBlock Text="Display" Style="{StaticResource LabelText}" />
+                    <TextBlock Text="{Binding DisplayHealthSummary}"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,14" />
+
                     <Separator Margin="0,8,0,14" />
 
                     <TextBlock Text="Selected Client" Style="{StaticResource LabelText}" />

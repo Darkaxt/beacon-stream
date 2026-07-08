@@ -8,6 +8,42 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
 
     public IReadOnlyList<DisplayOperationLogEntry> OperationLog => operationLog;
 
+    public async Task<DisplayHealth> GetHealthAsync(CancellationToken cancellationToken)
+    {
+        DisplayDriverStatus driverStatus = api.GetDriverStatus();
+        try
+        {
+            DisplayTopologySnapshot topology = await api.QueryTopologyAsync(cancellationToken);
+            return new DisplayHealth(
+                DriverReady: driverStatus.Ready,
+                Diagnostic: driverStatus.Diagnostic,
+                TopologyAvailable: true,
+                MirrorMode: topology.IsMirrorMode,
+                PhysicalPrimaryVerified: topology.PhysicalPrimaryVerified,
+                Paths: topology.Paths
+                    .Select(path => new DisplayPathHealth(
+                        path.DisplayId,
+                        path.Kind.ToString(),
+                        path.Width,
+                        path.Height,
+                        path.RefreshHz,
+                        path.IsPrimary,
+                        path.X,
+                        path.Y))
+                    .ToArray());
+        }
+        catch (Exception ex)
+        {
+            return new DisplayHealth(
+                DriverReady: driverStatus.Ready,
+                Diagnostic: $"{driverStatus.Diagnostic} Topology query failed: {ex.Message}",
+                TopologyAvailable: false,
+                MirrorMode: false,
+                PhysicalPrimaryVerified: false,
+                Paths: []);
+        }
+    }
+
     public async Task<DisplayEnsureResult> EnsureVirtualDisplayAsync(
         string displayId,
         int width,

@@ -22,6 +22,7 @@ public static class AdminEndpoints
             IStreamingBackend streaming,
             ISessionOwnershipTracker ownership,
             GameLibraryService games,
+            IDisplayBackend displayBackend,
             BeaconHostOptions hostOptions,
             ClientPairingOptions pairingOptions,
             IDiagnosticEventSource diagnostics,
@@ -29,6 +30,15 @@ public static class AdminEndpoints
         {
             GameLibrarySnapshot gameSnapshot = await games.ScanAsync(cancellationToken);
             IReadOnlyList<SessionOwnershipSnapshot> ownershipSnapshots = await ownership.GetSnapshotsAsync(cancellationToken);
+            DisplayHealth displayHealth;
+            try
+            {
+                displayHealth = await displayBackend.GetHealthAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                displayHealth = DisplayHealth.Unknown($"Display health check failed: {ex.Message}");
+            }
             return Results.Ok(new
             {
                 clients = clients.GetProfiles().Select(profile => new
@@ -56,6 +66,7 @@ public static class AdminEndpoints
                     location = clients.ProfileStoreLocation,
                     pairingEnabled = pairingOptions.Enabled
                 },
+                display = displayHealth,
                 games = new
                 {
                     total = gameSnapshot.Games.Count,

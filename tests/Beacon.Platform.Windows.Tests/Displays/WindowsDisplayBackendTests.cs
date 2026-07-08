@@ -6,6 +6,37 @@ namespace Beacon.Platform.Windows.Tests.Displays;
 public sealed class WindowsDisplayBackendTests
 {
     [Fact]
+    public async Task GetHealthAsyncReportsDriverAndTopologyWithoutMutatingDisplays()
+    {
+        var api = new FakeWindowsDisplayApi
+        {
+            CurrentTopology = DisplayTopologySnapshot.Extended(
+                physicalDisplayId: "physical-laptop-panel",
+                virtualDisplayId: "client-z-fold-7",
+                width: 2560,
+                height: 1600,
+                refreshHz: 120,
+                virtualPrimary: false)
+        };
+        var backend = new WindowsDisplayBackend(api);
+
+        DisplayHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.True(health.DriverReady);
+        Assert.Equal("SudoVDA driver is ready.", health.Diagnostic);
+        Assert.True(health.TopologyAvailable);
+        Assert.False(health.MirrorMode);
+        Assert.True(health.PhysicalPrimaryVerified);
+        Assert.Equal(2, health.Paths.Count);
+        Assert.Contains(health.Paths, path => path.DisplayId == "physical-laptop-panel" && path.Kind == "Physical" && path.IsPrimary);
+        Assert.Contains(health.Paths, path => path.DisplayId == "client-z-fold-7" && path.Kind == "Virtual" && !path.IsPrimary);
+        Assert.Empty(api.CreatedDisplays);
+        Assert.Empty(api.PrimaryRequests);
+        Assert.Empty(api.RestoreRequests);
+        Assert.Empty(api.RemovedDisplays);
+    }
+
+    [Fact]
     public async Task EnsureVirtualDisplayAsync_WhenDriverIsUnavailable_ReturnsDiagnosticAndDoesNotChangeTopology()
     {
         var api = new FakeWindowsDisplayApi

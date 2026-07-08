@@ -37,6 +37,7 @@ public sealed class CockpitShellViewModelTests
                 false,
                 false,
                 [])],
+            CreateHealthyDisplay(),
             new CockpitGameSummary(36, ["Steam library stale"]),
             []));
         var viewModel = new CockpitShellViewModel(api);
@@ -60,6 +61,9 @@ public sealed class CockpitShellViewModelTests
         Assert.Contains(viewModel.Streams, stream => stream.Contains("z-fold-7 steam-shortcut:3767414131 running av1 120fps", StringComparison.Ordinal));
         Assert.Contains(viewModel.Streams, stream => stream.Contains("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", StringComparison.Ordinal));
         Assert.Contains("steam-shortcut:3767414131 process=False child=False window=False", viewModel.Ownership);
+        Assert.Contains("ready", viewModel.DisplayHealthSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("physical primary verified", viewModel.DisplayHealthSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(viewModel.Diagnostics, value => value.Contains("[display]", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(viewModel.Diagnostics, value => value.Contains("Steam library stale", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -71,6 +75,7 @@ public sealed class CockpitShellViewModelTests
             [],
             [],
             [],
+            CreateHealthyDisplay(),
             new CockpitGameSummary(0, []),
             []));
         var viewModel = new CockpitShellViewModel(api);
@@ -104,6 +109,7 @@ public sealed class CockpitShellViewModelTests
             [],
             [],
             [],
+            CreateHealthyDisplay(),
             new CockpitGameSummary(1, ["Steam library stale"]),
             [new CockpitDiagnosticEvent(
                 "evt-1",
@@ -127,7 +133,7 @@ public sealed class CockpitShellViewModelTests
     [Fact]
     public async Task RecoveryMethodsDelegateToServer()
     {
-        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], new CockpitGameSummary(0, []), []));
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), new CockpitGameSummary(0, []), []));
         var viewModel = new CockpitShellViewModel(api) { SelectedClientId = "z-fold-7" };
 
         await viewModel.RestorePhysicalAsync(CancellationToken.None);
@@ -153,7 +159,7 @@ public sealed class CockpitShellViewModelTests
     [Fact]
     public async Task RecoverSelectedClientReportsMissingSelection()
     {
-        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], new CockpitGameSummary(0, []), []));
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), new CockpitGameSummary(0, []), []));
         var viewModel = new CockpitShellViewModel(api);
 
         await viewModel.RecoverSelectedClientAsync(CancellationToken.None);
@@ -165,7 +171,7 @@ public sealed class CockpitShellViewModelTests
     [Fact]
     public void ConstructorStoresServerUrl()
     {
-        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], new CockpitGameSummary(0, []), []));
+        var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), new CockpitGameSummary(0, []), []));
         var viewModel = new CockpitShellViewModel(api, "http://127.0.0.1:5000");
 
         Assert.Equal("http://127.0.0.1:5000", viewModel.ServerUrl);
@@ -306,4 +312,24 @@ public sealed class CockpitShellViewModelTests
                 new CockpitStreamProfile("auto", "auto", null),
                 new CockpitAudioProfile("stereo"),
                 new CockpitSessionProfile(false, true)));
+
+    private static CockpitDisplayHealth CreateHealthyDisplay() =>
+        new(
+            DriverReady: true,
+            Diagnostic: "SudoVDA driver is ready.",
+            TopologyAvailable: true,
+            MirrorMode: false,
+            PhysicalPrimaryVerified: true,
+            Paths:
+            [
+                new CockpitDisplayPath(
+                    "physical-laptop-panel",
+                    "Physical",
+                    2560,
+                    1600,
+                    120,
+                    IsPrimary: true,
+                    X: 0,
+                    Y: 0)
+            ]);
 }
