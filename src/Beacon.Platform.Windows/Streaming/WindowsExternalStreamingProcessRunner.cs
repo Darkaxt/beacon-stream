@@ -20,18 +20,19 @@ public sealed class WindowsExternalStreamingProcessRunner : IExternalStreamingPr
             throw new InvalidOperationException($"Windows did not return a process for '{command.FileName}'.");
         }
 
+        int processId = process.Id;
         lock (gate)
         {
-            processes[process.Id] = process;
-            outputLinesByProcessId[process.Id] = new Queue<string>();
+            processes[processId] = process;
+            outputLinesByProcessId[processId] = new Queue<string>();
         }
 
-        process.OutputDataReceived += (_, args) => AppendOutput(process.Id, "stdout", args.Data);
-        process.ErrorDataReceived += (_, args) => AppendOutput(process.Id, "stderr", args.Data);
+        process.OutputDataReceived += (_, args) => AppendOutput(processId, "stdout", args.Data);
+        process.ErrorDataReceived += (_, args) => AppendOutput(processId, "stderr", args.Data);
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
-        return new ExternalStreamingProcess(process.Id);
+        return new ExternalStreamingProcess(processId);
     }
 
     public static ProcessStartInfo CreateStartInfo(ExternalStreamingCommand command)

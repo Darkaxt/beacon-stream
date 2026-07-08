@@ -256,6 +256,32 @@ public sealed class ExternalProcessStreamingBackendTests
     }
 
     [Fact]
+    public void WindowsRunnerReportsFastExitingProcessAfterOutputCallbacks()
+    {
+        string powerShell = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe");
+        var runner = new WindowsExternalStreamingProcessRunner();
+        var command = new ExternalStreamingCommand(
+            powerShell,
+            "-NoProfile -Command \"Write-Output 'fast stdout'; [Console]::Error.WriteLine('fast stderr')\"",
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+
+        ExternalStreamingProcess process = runner.Start(command);
+        ExternalStreamingProcessStatus status = runner.GetStatus(process);
+        while (status.IsRunning)
+        {
+            Thread.Yield();
+            status = runner.GetStatus(process);
+        }
+
+        Assert.Equal(0, status.ExitCode);
+        Assert.Contains("stdout: fast stdout", status.Diagnostics);
+    }
+
+    [Fact]
     public void SunshineEndpointProfileUsesDocumentedPortOffsets()
     {
         var profile = new SunshineEndpointProfile("127.0.0.1", 47989);
