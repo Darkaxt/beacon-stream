@@ -783,7 +783,7 @@ rg "Thread\.Sleep|Task\.Delay|timeout|Timeout|CancelAfter|CancellationTokenSourc
 
 Expected: upstream terms only appear in docs/test URI literals; no copied upstream source appears under `src`; no timeout/cancellation helper is introduced.
 
-- [ ] **Step 5: Commit and sync**
+- [x] **Step 5: Commit and sync**
 
 Run:
 
