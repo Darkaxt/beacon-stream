@@ -141,6 +141,8 @@ When `ChildExecutablePath` is configured, Beacon preflights the child executable
 
 `/admin/snapshot` exposes wrapper child readiness in `streamingHealth`: `wrapperChildExecutableConfigured`, `wrapperChildExecutableAvailable`, `wrapperChildExecutablePath`, and `wrapperChildArgumentsConfigured`. Cockpit renders the same state in its streaming health summary so missing child binaries or argument-only misconfiguration are visible before phone testing.
 
+`ChildArguments` is valid only with `ChildExecutablePath`. Arguments without a child executable make the external-process backend not ready, fail streaming preflight before display/app side effects, and are not passed to the wrapper as orphan `BEACON_WRAPPER_CHILD_ARGUMENTS` environment state.
+
 ## Stability Rules
 
 - Manifest validation happens during streaming preflight, before display or launch side effects.

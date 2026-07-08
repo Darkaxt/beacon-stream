@@ -111,6 +111,24 @@ public sealed class ExternalProcessStreamingBackendTests
     }
 
     [Fact]
+    public async Task GetHealthAsyncReportsWrapperChildArgumentsWithoutExecutableAsNotReady()
+    {
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions(
+                "C:\\Tools\\beacon-streaming-probe.exe",
+                WrapperChildArguments: "--config sunshine.json"),
+            new FakeExternalStreamingProcessRunner(["C:\\Tools\\beacon-streaming-probe.exe"]));
+
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.False(health.Ready);
+        Assert.False(health.WrapperChildExecutableConfigured);
+        Assert.True(health.WrapperChildArgumentsConfigured);
+        Assert.Contains("wrapper child arguments", health.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("child executable", health.Diagnostic, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void CreateStartInfoPassesSessionPlanAsArgumentsAndEnvironment()
     {
         SessionPlan plan = CreatePlan();
@@ -143,6 +161,21 @@ public sealed class ExternalProcessStreamingBackendTests
 
         Assert.Equal("C:\\Tools\\sunshine.exe", command.Environment["BEACON_WRAPPER_CHILD_EXECUTABLE"]);
         Assert.Equal("--config sunshine.json", command.Environment["BEACON_WRAPPER_CHILD_ARGUMENTS"]);
+    }
+
+    [Fact]
+    public void CreateStartCommandDoesNotPassWrapperChildArgumentsWithoutExecutable()
+    {
+        SessionPlan plan = CreatePlan();
+
+        ExternalStreamingCommand command = ExternalProcessStreamingBackend.CreateStartCommand(
+            "C:\\Tools\\beacon-streaming-probe.exe",
+            plan,
+            new ExternalProcessStreamingOptions(
+                "C:\\Tools\\beacon-streaming-probe.exe",
+                WrapperChildArguments: "--config sunshine.json"));
+
+        Assert.DoesNotContain("BEACON_WRAPPER_CHILD_ARGUMENTS", command.Environment.Keys);
     }
 
     [Fact]
@@ -241,6 +274,22 @@ public sealed class ExternalProcessStreamingBackendTests
         Assert.False(result.Success);
         Assert.Contains("wrapper child executable", result.Error, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("missing-sunshine.exe", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PreflightFailsWhenWrapperChildArgumentsAreConfiguredWithoutExecutable()
+    {
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions(
+                "C:\\Tools\\beacon-streaming-probe.exe",
+                WrapperChildArguments: "--config sunshine.json"),
+            new FakeExternalStreamingProcessRunner(["C:\\Tools\\beacon-streaming-probe.exe"]));
+
+        StreamingPreflightResult result = await backend.CheckReadinessAsync(CreatePlan(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("wrapper child arguments", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("child executable", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
