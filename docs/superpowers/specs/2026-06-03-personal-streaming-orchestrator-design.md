@@ -165,6 +165,7 @@ This section is the implementation contract. If a later plan contradicts this re
 - `REQ-NET-006`: Sunshine/GameStream-compatible endpoint metadata may be derived from a server-owned host plus base-port profile. Explicit per-role endpoint settings and runtime wrapper descriptors must override derived metadata, and Beacon must not generate a client launch URI from the profile unless a wrapper contract explicitly provides one.
 - `REQ-NET-007`: A wrapper harness that supervises a child streaming process must fail before publishing runtime descriptor evidence when the child executable is unavailable, and it must exit when the child exits before Beacon stops the wrapper.
 - `REQ-NET-008`: Server-owned external-process configuration must be able to pass a wrapper child executable and arguments into the wrapper, and missing configured child executables must fail streaming preflight before display or app side effects.
+- `REQ-NET-009`: Admin and Cockpit streaming health must expose wrapper child executable configuration, availability, path, and whether child arguments are configured so wrapper handoff mistakes are visible before launch and phone testing.
 
 ### Game Library And Launch
 
@@ -190,7 +191,7 @@ This section is the implementation contract. If a later plan contradicts this re
 - `REQ-REC-007`: Recovery tooling is a user escape hatch. It must not become a substitute for correct orchestrator lifecycle behavior.
 - `REQ-REC-008`: Logs must expose display API access failures, driver readiness, virtual display creation result, topology changes, restore attempts, stream backend failures, and selected repair actions.
 - `REQ-REC-009`: Error messages must be clear, but root fixes and safe auto-repair are preferred over merely surfacing nicer errors.
-- `REQ-REC-010`: Admin diagnostics must expose the stream backend's advertised connection protocol, launch URI when available, and static endpoint map so wrapper/client handoff mistakes are visible before phone testing.
+- `REQ-REC-010`: Admin diagnostics must expose the stream backend's advertised connection protocol, launch URI when available, static endpoint map, and wrapper child readiness so wrapper/client handoff mistakes are visible before phone testing.
 
 ### Testing Without Phone
 

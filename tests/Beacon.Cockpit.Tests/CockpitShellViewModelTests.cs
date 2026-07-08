@@ -66,6 +66,7 @@ public sealed class CockpitShellViewModelTests
         Assert.Contains("ready", viewModel.DisplayHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("physical primary verified", viewModel.DisplayHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("external-process", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("child executable available", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("1 active stream", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("2 endpoint", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("windows-sendinput", viewModel.InputHealthSummary, StringComparison.OrdinalIgnoreCase);
@@ -356,6 +357,10 @@ public sealed class CockpitShellViewModelTests
             ExecutableConfigured: true,
             ExecutableAvailable: true,
             ExecutablePath: "C:\\Tools\\sunshine-wrapper.exe",
+            WrapperChildExecutableConfigured: true,
+            WrapperChildExecutableAvailable: true,
+            WrapperChildExecutablePath: "C:\\Tools\\sunshine.exe",
+            WrapperChildArgumentsConfigured: true,
             ManifestConfigured: true,
             ManifestAvailable: true,
             ManifestPath: "C:\\Tools\\beacon-streaming.json",

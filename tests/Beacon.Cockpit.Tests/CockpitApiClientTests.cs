@@ -60,6 +60,10 @@ public sealed class CockpitApiClientTests
                 "executableConfigured": true,
                 "executableAvailable": true,
                 "executablePath": "C:\\Tools\\sunshine-wrapper.exe",
+                "wrapperChildExecutableConfigured": true,
+                "wrapperChildExecutableAvailable": true,
+                "wrapperChildExecutablePath": "C:\\Tools\\sunshine.exe",
+                "wrapperChildArgumentsConfigured": true,
                 "manifestConfigured": true,
                 "manifestAvailable": true,
                 "manifestPath": "C:\\Tools\\beacon-streaming.json",
@@ -126,6 +130,10 @@ public sealed class CockpitApiClientTests
         Assert.Equal(@"\\.\DISPLAY5", snapshot.Display.Paths[0].DisplayId);
         Assert.True(snapshot.StreamingHealth.Ready);
         Assert.Equal("external-process", snapshot.StreamingHealth.Backend);
+        Assert.True(snapshot.StreamingHealth.WrapperChildExecutableConfigured);
+        Assert.True(snapshot.StreamingHealth.WrapperChildExecutableAvailable);
+        Assert.Equal("C:\\Tools\\sunshine.exe", snapshot.StreamingHealth.WrapperChildExecutablePath);
+        Assert.True(snapshot.StreamingHealth.WrapperChildArgumentsConfigured);
         Assert.Equal(["av1", "hevc"], snapshot.StreamingHealth.Codecs);
         Assert.Contains(snapshot.StreamingHealth.Endpoints, endpoint => endpoint.Role == "rtsp" && endpoint.Uri == "rtsp://127.0.0.1:48010");
         Assert.True(snapshot.StreamingHealth.Hdr10);

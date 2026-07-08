@@ -80,8 +80,34 @@ public sealed class ExternalProcessStreamingBackendTests
         StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
 
         Assert.False(health.Ready);
+        Assert.True(health.WrapperChildExecutableConfigured);
+        Assert.False(health.WrapperChildExecutableAvailable);
+        Assert.Equal("C:\\Tools\\missing-sunshine.exe", health.WrapperChildExecutablePath);
         Assert.Contains("wrapper child executable", health.Diagnostic, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("missing-sunshine.exe", health.Diagnostic, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GetHealthAsyncReportsWrapperChildExecutableReadiness()
+    {
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions(
+                "C:\\Tools\\beacon-streaming-probe.exe",
+                WrapperChildExecutablePath: "C:\\Tools\\sunshine.exe",
+                WrapperChildArguments: "--config sunshine.json"),
+            new FakeExternalStreamingProcessRunner(
+            [
+                "C:\\Tools\\beacon-streaming-probe.exe",
+                "C:\\Tools\\sunshine.exe"
+            ]));
+
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.True(health.Ready);
+        Assert.True(health.WrapperChildExecutableConfigured);
+        Assert.True(health.WrapperChildExecutableAvailable);
+        Assert.Equal("C:\\Tools\\sunshine.exe", health.WrapperChildExecutablePath);
+        Assert.True(health.WrapperChildArgumentsConfigured);
     }
 
     [Fact]

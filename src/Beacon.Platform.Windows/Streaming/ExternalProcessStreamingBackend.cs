@@ -164,6 +164,7 @@ public sealed class ExternalProcessStreamingBackend(
         string? wrapperChildExecutablePath = TrimOrNull(options.WrapperChildExecutablePath);
         bool wrapperChildExecutableConfigured = wrapperChildExecutablePath is not null;
         bool wrapperChildExecutableAvailable = false;
+        bool wrapperChildArgumentsConfigured = TrimOrNull(options.WrapperChildArguments) is not null;
         bool manifestConfigured = !string.IsNullOrWhiteSpace(options.ManifestPath);
         bool manifestAvailable = false;
         string? diagnostic = null;
@@ -246,6 +247,10 @@ public sealed class ExternalProcessStreamingBackend(
             ExecutableConfigured: executableConfigured,
             ExecutableAvailable: executableAvailable,
             ExecutablePath: executablePath,
+            WrapperChildExecutableConfigured: wrapperChildExecutableConfigured,
+            WrapperChildExecutableAvailable: wrapperChildExecutableAvailable,
+            WrapperChildExecutablePath: wrapperChildExecutablePath,
+            WrapperChildArgumentsConfigured: wrapperChildArgumentsConfigured,
             ManifestConfigured: manifestConfigured,
             ManifestAvailable: manifestAvailable,
             ManifestPath: TrimOrNull(options.ManifestPath),

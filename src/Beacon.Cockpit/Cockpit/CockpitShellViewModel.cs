@@ -498,12 +498,20 @@ public sealed class CockpitShellViewModel : ObservableObject
         string executable = streaming.ExecutableConfigured
             ? streaming.ExecutableAvailable ? "executable available" : "executable missing"
             : "no executable configured";
+        string wrapperChild = streaming.WrapperChildExecutableConfigured
+            ? streaming.WrapperChildExecutableAvailable ? "child executable available" : "child executable missing"
+            : streaming.WrapperChildArgumentsConfigured ? "child arguments without executable" : "no child executable configured";
+        if (streaming.WrapperChildExecutableConfigured && streaming.WrapperChildArgumentsConfigured)
+        {
+            wrapperChild = $"{wrapperChild}, child arguments configured";
+        }
+
         string manifest = streaming.ManifestConfigured
             ? streaming.ManifestAvailable ? "manifest available" : "manifest missing"
             : "no manifest configured";
         string active = streaming.ActiveSessions == 1 ? "1 active stream" : $"{streaming.ActiveSessions} active streams";
         string endpoints = streaming.Endpoints.Count == 1 ? "1 endpoint" : $"{streaming.Endpoints.Count} endpoints";
-        return $"{streaming.Backend} {state}; {executable}; {manifest}; {active}; {endpoints}; {streaming.Diagnostic}";
+        return $"{streaming.Backend} {state}; {executable}; {wrapperChild}; {manifest}; {active}; {endpoints}; {streaming.Diagnostic}";
     }
 
     private static string FormatInputHealth(CockpitInputHealth? input)
