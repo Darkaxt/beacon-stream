@@ -136,6 +136,7 @@ curl.exe -X POST http://localhost:5000/admin/clients/z-fold-7/stream/stop
 In the WPF cockpit, the Recovery tab exposes the same actions. Display lease removal restores the physical primary display and removes the selected client's virtual display. These are explicit manual escape hatches; normal session cleanup still belongs to the server lifecycle rules.
 
 Owning-client emergency restore is profile-gated by `allowEmergencyRestoreFromClient`. Admin recovery endpoints remain broader local-admin escape hatches, including display lease recovery/removal. Admin physical restore returns `503` with the verified backend error when the laptop panel cannot be confirmed as primary.
+Stream stop returns `404` when the selected client has no session plan, and `503` when the streaming backend cannot stop an existing planned session.
 
 `/admin/snapshot` also returns recent operational diagnostics. These events include display lease decisions, physical-primary restore attempts, recovery actions, and streaming preflight/start/stop failures. The WPF cockpit shows them in the Diagnostics tab together with game-provider diagnostics.
 

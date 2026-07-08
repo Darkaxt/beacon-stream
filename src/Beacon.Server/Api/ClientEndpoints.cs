@@ -255,7 +255,7 @@ public static class ClientEndpoints
             StreamingStopResult stop = await streaming.StopAsync(plan.SessionId, cancellationToken);
             return stop.Success && stop.Session is not null
                 ? Results.Ok(new { clientId, stream = stop.Session })
-                : Results.NotFound(new { error = stop.Error });
+                : Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
         });
 
         clients.MapPost("/{clientId}/disconnect", async (
