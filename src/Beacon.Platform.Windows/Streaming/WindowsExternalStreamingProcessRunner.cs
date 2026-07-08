@@ -37,6 +37,35 @@ public sealed class WindowsExternalStreamingProcessRunner : IExternalStreamingPr
         return new ExternalStreamingProcess(process.Id);
     }
 
+    public ExternalStreamingProcessStatus GetStatus(ExternalStreamingProcess process)
+    {
+        Process? trackedProcess;
+        lock (gate)
+        {
+            processes.TryGetValue(process.ProcessId, out trackedProcess);
+        }
+
+        if (trackedProcess is null)
+        {
+            return ExternalStreamingProcessStatus.Exited(null);
+        }
+
+        try
+        {
+            if (!trackedProcess.HasExited)
+            {
+                return ExternalStreamingProcessStatus.Running();
+            }
+
+            return ExternalStreamingProcessStatus.Exited(trackedProcess.ExitCode);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return ExternalStreamingProcessStatus.Unknown(
+                $"Unable to query external streaming process {process.ProcessId}: {ex.Message}");
+        }
+    }
+
     public ExternalStreamingProcessStopResult Stop(ExternalStreamingProcess process)
     {
         Process? trackedProcess;

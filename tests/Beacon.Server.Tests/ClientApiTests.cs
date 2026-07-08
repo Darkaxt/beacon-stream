@@ -818,6 +818,9 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             return new ExternalStreamingProcess(nextProcessId++);
         }
 
+        public ExternalStreamingProcessStatus GetStatus(ExternalStreamingProcess process) =>
+            ExternalStreamingProcessStatus.Running();
+
         public ExternalStreamingProcessStopResult Stop(ExternalStreamingProcess process) =>
             ExternalStreamingProcessStopResult.Ok();
     }

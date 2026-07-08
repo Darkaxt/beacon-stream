@@ -197,6 +197,26 @@ public sealed class ExternalProcessStreamingBackendTests
     }
 
     [Fact]
+    public async Task GetSessionsMarksRunningSessionExitedWhenWrapperProcessExited()
+    {
+        var runner = new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]);
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions("C:\\Tools\\sunshine-wrapper.exe"),
+            runner);
+        SessionPlan plan = CreatePlan();
+        await backend.StartAsync(plan, CancellationToken.None);
+        runner.MarkExited(processId: 1001, exitCode: 3221225781);
+
+        StreamingSessionState session = Assert.Single(backend.GetSessions());
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.Equal("exited", session.State);
+        Assert.Contains("3221225781", session.Error, StringComparison.Ordinal);
+        Assert.Equal(0, health.ActiveSessions);
+        Assert.Contains(health.Diagnostics, diagnostic => diagnostic.Contains("exited", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task StartIncludesConfiguredConnectionDescriptor()
     {
         var reader = new FakeExternalStreamingManifestReader();
@@ -353,6 +373,8 @@ public sealed class ExternalProcessStreamingBackendTests
 
         public List<int> StoppedProcessIds { get; } = [];
 
+        public Dictionary<int, ExternalStreamingProcessStatus> ProcessStatuses { get; } = [];
+
         public string? NextStopError { get; set; }
 
         public bool FileExists(string path) => ExistingFiles.Contains(path);
@@ -360,7 +382,9 @@ public sealed class ExternalProcessStreamingBackendTests
         public ExternalStreamingProcess Start(ExternalStreamingCommand command)
         {
             StartedCommands.Add(command);
-            return new ExternalStreamingProcess(nextProcessId++);
+            int processId = nextProcessId++;
+            ProcessStatuses[processId] = ExternalStreamingProcessStatus.Running();
+            return new ExternalStreamingProcess(processId);
         }
 
         public ExternalStreamingProcessStopResult Stop(ExternalStreamingProcess process)
@@ -371,8 +395,15 @@ public sealed class ExternalProcessStreamingBackendTests
             }
 
             StoppedProcessIds.Add(process.ProcessId);
+            ProcessStatuses[process.ProcessId] = ExternalStreamingProcessStatus.Exited(0);
             return ExternalStreamingProcessStopResult.Ok();
         }
+
+        public ExternalStreamingProcessStatus GetStatus(ExternalStreamingProcess process) =>
+            ProcessStatuses.GetValueOrDefault(process.ProcessId, ExternalStreamingProcessStatus.Exited(null));
+
+        public void MarkExited(int processId, long exitCode) =>
+            ProcessStatuses[processId] = ExternalStreamingProcessStatus.Exited(exitCode);
     }
 
     private sealed class FakeExternalStreamingManifestReader : IExternalStreamingManifestReader

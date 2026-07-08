@@ -40,6 +40,18 @@ public sealed record ExternalStreamingCommand(
 
 public sealed record ExternalStreamingProcess(int ProcessId);
 
+public sealed record ExternalStreamingProcessStatus(bool IsRunning, long? ExitCode, string? Diagnostic)
+{
+    public static ExternalStreamingProcessStatus Running() => new(true, null, null);
+
+    public static ExternalStreamingProcessStatus Exited(long? exitCode) =>
+        new(false, exitCode, exitCode.HasValue
+            ? $"External streaming process exited with code {exitCode.Value}."
+            : "External streaming process is not running.");
+
+    public static ExternalStreamingProcessStatus Unknown(string diagnostic) => new(false, null, diagnostic);
+}
+
 public sealed record ExternalStreamingProcessStopResult(bool Success, string? Error)
 {
     public static ExternalStreamingProcessStopResult Ok() => new(true, null);
@@ -52,6 +64,8 @@ public interface IExternalStreamingProcessRunner
     bool FileExists(string path);
 
     ExternalStreamingProcess Start(ExternalStreamingCommand command);
+
+    ExternalStreamingProcessStatus GetStatus(ExternalStreamingProcess process);
 
     ExternalStreamingProcessStopResult Stop(ExternalStreamingProcess process);
 }
@@ -86,11 +100,13 @@ public sealed class ExternalProcessStreamingBackend(
     private readonly Lock gate = new();
     private readonly Dictionary<string, StreamingSessionState> sessions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ExternalStreamingProcess> processes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<string> processDiagnostics = [];
     private readonly IExternalStreamingManifestReader manifestReader = manifestReader ?? NoExternalStreamingManifestReader.Instance;
 
     public Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        ReconcileProcessStates();
 
         string? executablePath = TrimOrNull(options.ExecutablePath);
         bool executableConfigured = executablePath is not null;
@@ -147,10 +163,12 @@ public sealed class ExternalProcessStreamingBackend(
         }
 
         int activeSessions;
+        IReadOnlyList<string> processDiagnosticSnapshot;
         lock (gate)
         {
             activeSessions = sessions.Values.Count(session =>
                 session.State.Equals("running", StringComparison.OrdinalIgnoreCase));
+            processDiagnosticSnapshot = processDiagnostics.ToArray();
         }
 
         bool ready = executableConfigured
@@ -179,7 +197,9 @@ public sealed class ExternalProcessStreamingBackend(
             MaxBitrateMbps: manifest?.MaxBitrateMbps,
             Hdr10: manifest?.Hdr10 == true,
             ActiveSessions: activeSessions,
-            Diagnostics: NormalizeList(manifest?.Diagnostics));
+            Diagnostics: NormalizeList(manifest?.Diagnostics)
+                .Concat(processDiagnosticSnapshot)
+                .ToArray());
         return Task.FromResult(health);
     }
 
@@ -313,6 +333,7 @@ public sealed class ExternalProcessStreamingBackend(
     public Task<StreamingSessionState?> GetSessionAsync(string sessionId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        ReconcileProcessStates();
         lock (gate)
         {
             return Task.FromResult(sessions.GetValueOrDefault(sessionId));
@@ -321,6 +342,7 @@ public sealed class ExternalProcessStreamingBackend(
 
     public IReadOnlyList<StreamingSessionState> GetSessions()
     {
+        ReconcileProcessStates();
         lock (gate)
         {
             return sessions.Values
@@ -328,6 +350,50 @@ public sealed class ExternalProcessStreamingBackend(
                 .ThenBy(session => session.SessionId, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
         }
+    }
+
+    private IReadOnlyList<string> ReconcileProcessStates()
+    {
+        var reconciledDiagnostics = new List<string>();
+        var exitedEvents = new List<(StreamingSessionState Session, string Error)>();
+        lock (gate)
+        {
+            foreach ((string sessionId, ExternalStreamingProcess process) in processes.ToArray())
+            {
+                if (!sessions.TryGetValue(sessionId, out StreamingSessionState? session)
+                    || !session.State.Equals("running", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                ExternalStreamingProcessStatus status = runner.GetStatus(process);
+                if (status.IsRunning)
+                {
+                    continue;
+                }
+
+                string error = status.Diagnostic ?? $"External streaming process {process.ProcessId} exited.";
+                if (status.ExitCode.HasValue && !error.Contains(status.ExitCode.Value.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
+                {
+                    error = $"{error} ExitCode={status.ExitCode.Value}.";
+                }
+
+                StreamingSessionState exited = session with { State = "exited", Error = error };
+                sessions[sessionId] = exited;
+                processes.Remove(sessionId);
+                string diagnostic = $"{sessionId}: {error}";
+                processDiagnostics.Add(diagnostic);
+                reconciledDiagnostics.Add(diagnostic);
+                exitedEvents.Add((exited, error));
+            }
+        }
+
+        foreach ((StreamingSessionState session, string error) in exitedEvents)
+        {
+            Publish(session, "process-exited", DiagnosticSeverity.Error, error);
+        }
+
+        return reconciledDiagnostics;
     }
 
     public static ExternalStreamingCommand CreateStartCommand(
