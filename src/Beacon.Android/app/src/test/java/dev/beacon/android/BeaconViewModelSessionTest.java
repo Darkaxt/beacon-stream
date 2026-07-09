@@ -40,8 +40,41 @@ public final class BeaconViewModelSessionTest {
     }
 
     @Test
+    public void identityChangeRecoversWhenPreviousNativeStreamStopFails() throws Exception {
+        RecordingModelFactory factory = new RecordingModelFactory(true);
+        BeaconViewModelSession session = new BeaconViewModelSession(factory);
+        BeaconViewModel first = session.get("z-fold-7", "http://server");
+        CreatedModel firstCreated = factory.created.get(0);
+        firstCreated.service.next = gameStreamResponse();
+        first.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+
+        BeaconViewModel second = session.get("z-fold-8", "http://server");
+
+        assertNotSame(first, second);
+        assertEquals(1, firstCreated.nativeStreamClient.stopCount);
+        assertEquals(2, factory.created.size());
+    }
+
+    @Test
     public void closeStopsActiveNativeStreamAndForcesNextCreate() throws Exception {
         RecordingModelFactory factory = new RecordingModelFactory();
+        BeaconViewModelSession session = new BeaconViewModelSession(factory);
+        BeaconViewModel first = session.get("z-fold-7", "http://server");
+        CreatedModel firstCreated = factory.created.get(0);
+        firstCreated.service.next = gameStreamResponse();
+        first.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+
+        session.close();
+        BeaconViewModel second = session.get("z-fold-7", "http://server");
+
+        assertNotSame(first, second);
+        assertEquals(1, firstCreated.nativeStreamClient.stopCount);
+        assertEquals(2, factory.created.size());
+    }
+
+    @Test
+    public void closeRecoversWhenActiveNativeStreamStopFails() throws Exception {
+        RecordingModelFactory factory = new RecordingModelFactory(true);
         BeaconViewModelSession session = new BeaconViewModelSession(factory);
         BeaconViewModel first = session.get("z-fold-7", "http://server");
         CreatedModel firstCreated = factory.created.get(0);
@@ -68,12 +101,22 @@ public final class BeaconViewModelSessionTest {
 
     private static final class RecordingModelFactory implements BeaconViewModelSession.Factory {
         private final List<CreatedModel> created = new ArrayList<>();
+        private final boolean failOnStop;
+
+        private RecordingModelFactory() {
+            this(false);
+        }
+
+        private RecordingModelFactory(boolean failOnStop) {
+            this.failOnStop = failOnStop;
+        }
 
         @Override
         public BeaconViewModel create(String clientId, String serverUrl) {
             FakeService service = new FakeService();
             RecordingNativeStreamClient nativeStreamClient = new RecordingNativeStreamClient(
-                NativeStreamStartResult.started("Native GameStream RTSP session started."));
+                NativeStreamStartResult.started("Native GameStream RTSP session started."),
+                failOnStop);
             BeaconViewModel model = new BeaconViewModel(
                 clientId,
                 serverUrl,
@@ -102,10 +145,12 @@ public final class BeaconViewModelSessionTest {
 
     private static final class RecordingNativeStreamClient implements NativeStreamClient {
         private final NativeStreamStartResult result;
+        private final boolean failOnStop;
         private int stopCount;
 
-        private RecordingNativeStreamClient(NativeStreamStartResult result) {
+        private RecordingNativeStreamClient(NativeStreamStartResult result, boolean failOnStop) {
             this.result = result;
+            this.failOnStop = failOnStop;
         }
 
         @Override
@@ -116,6 +161,9 @@ public final class BeaconViewModelSessionTest {
         @Override
         public void stop() {
             stopCount++;
+            if (failOnStop) {
+                throw new IllegalStateException("Native stream stop failed.");
+            }
         }
     }
 

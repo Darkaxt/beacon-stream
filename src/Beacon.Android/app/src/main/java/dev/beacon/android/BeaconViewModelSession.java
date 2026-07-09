@@ -35,10 +35,15 @@ public final class BeaconViewModelSession {
             return;
         }
 
-        activeModel.stopNativeStream();
+        BeaconViewModel model = activeModel;
         activeModel = null;
         activeClientId = "";
         activeServerUrl = "";
+        try {
+            model.stopNativeStream();
+        } catch (RuntimeException ignored) {
+            // Session cleanup must not leave Activity actions pinned to a stale model.
+        }
     }
 
     public interface Factory {
