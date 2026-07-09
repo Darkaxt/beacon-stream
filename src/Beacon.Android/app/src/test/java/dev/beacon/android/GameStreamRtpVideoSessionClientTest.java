@@ -107,6 +107,28 @@ public final class GameStreamRtpVideoSessionClientTest {
     }
 
     @Test
+    public void h264RtpProviderGroupsSameTimestampPacketsInSession() {
+        RecordingRtpPacketSource source = new RecordingRtpPacketSource(
+            packet(1, 90000L, false, new byte[] {0x41, 0x11}),
+            packet(2, 90000L, true, new byte[] {0x41, 0x22}));
+        RecordingVideoConsumer consumer = new RecordingVideoConsumer(
+            NativeStreamStartResult.started("H.264 RTP video sample provider started."));
+        GameStreamRtpVideoSessionClient client = new GameStreamRtpVideoSessionClient(
+            new RecordingPacketSourceFactory(source),
+            consumer);
+
+        NativeStreamStartResult result = client.start(completePlan("\"codec\":\"h264\""), sessionInfo());
+        EncodedVideoSample sample = consumer.sampleProvider.nextSample();
+
+        assertTrue(result.success());
+        assertArrayEquals(
+            concat(
+                start(), new byte[] {0x41, 0x11},
+                start(), new byte[] {0x41, 0x22}),
+            sample.data());
+    }
+
+    @Test
     public void h264PlanInjectsParameterSetsFromMetadata() {
         assertParameterSetMetadataInjects("h264SpropParameterSets");
     }
@@ -320,9 +342,13 @@ public final class GameStreamRtpVideoSessionClientTest {
     }
 
     private static RtpPacket packet(int sequenceNumber, long timestamp, byte[] payload) {
+        return packet(sequenceNumber, timestamp, false, payload);
+    }
+
+    private static RtpPacket packet(int sequenceNumber, long timestamp, boolean marker, byte[] payload) {
         byte[] bytes = new byte[12 + payload.length];
         bytes[0] = (byte) 0x80;
-        bytes[1] = 0x60;
+        bytes[1] = (byte) (0x60 | (marker ? 0x80 : 0));
         bytes[2] = (byte) ((sequenceNumber >>> 8) & 0xFF);
         bytes[3] = (byte) (sequenceNumber & 0xFF);
         bytes[4] = (byte) ((timestamp >>> 24) & 0xFF);

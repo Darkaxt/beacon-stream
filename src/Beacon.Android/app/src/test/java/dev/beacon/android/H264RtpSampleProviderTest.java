@@ -80,6 +80,48 @@ public final class H264RtpSampleProviderTest {
     }
 
     @Test
+    public void groupsSameTimestampSingleNalPacketsUntilMarker() {
+        H264RtpSampleProvider provider = new H264RtpSampleProvider(new RecordingRtpPacketSource(
+            packet(1, 90000L, false, new byte[] {0x41, 0x11}),
+            packet(2, 90000L, true, new byte[] {0x41, 0x22})));
+
+        EncodedVideoSample sample = provider.nextSample();
+
+        assertArrayEquals(
+            concat(
+                start(), new byte[] {0x41, 0x11},
+                start(), new byte[] {0x41, 0x22}),
+            sample.data());
+        assertEquals(0L, sample.presentationTimeUs());
+    }
+
+    @Test
+    public void flushesPendingAccessUnitWhenTimestampChangesBeforeMarker() {
+        H264RtpSampleProvider provider = new H264RtpSampleProvider(new RecordingRtpPacketSource(
+            packet(1, 90000L, false, new byte[] {0x41, 0x11}),
+            packet(2, 91500L, true, new byte[] {0x41, 0x22})));
+
+        EncodedVideoSample first = provider.nextSample();
+        EncodedVideoSample second = provider.nextSample();
+
+        assertArrayEquals(concat(start(), new byte[] {0x41, 0x11}), first.data());
+        assertArrayEquals(concat(start(), new byte[] {0x41, 0x22}), second.data());
+        assertEquals(16666L, second.presentationTimeUs());
+    }
+
+    @Test
+    public void flushesPendingAccessUnitAtEndOfSource() {
+        H264RtpSampleProvider provider = new H264RtpSampleProvider(new RecordingRtpPacketSource(
+            packet(1, 90000L, false, new byte[] {0x41, 0x11})));
+
+        EncodedVideoSample sample = provider.nextSample();
+        EncodedVideoSample eos = provider.nextSample();
+
+        assertArrayEquals(concat(start(), new byte[] {0x41, 0x11}), sample.data());
+        assertTrue(eos.endOfStream());
+    }
+
+    @Test
     public void mapsStapAPacketToOneAnnexBSampleWithMultipleNals() {
         H264RtpSampleProvider provider = new H264RtpSampleProvider(new RecordingRtpPacketSource(
             packet(1, 90000L, new byte[] {
@@ -100,13 +142,13 @@ public final class H264RtpSampleProviderTest {
     @Test
     public void mapsFuAFragmentsToOneAnnexBSample() {
         H264RtpSampleProvider provider = new H264RtpSampleProvider(new RecordingRtpPacketSource(
-            packet(1, 90000L, new byte[] {
+            packet(1, 90000L, false, new byte[] {
                 0x7C,
                 (byte) 0x85,
                 0x11,
                 0x22
             }),
-            packet(2, 90000L, new byte[] {
+            packet(2, 90000L, true, new byte[] {
                 0x7C,
                 0x45,
                 0x33
@@ -116,6 +158,30 @@ public final class H264RtpSampleProviderTest {
 
         assertArrayEquals(new byte[] {0, 0, 0, 1, 0x65, 0x11, 0x22, 0x33}, sample.data());
         assertEquals(0L, sample.presentationTimeUs());
+    }
+
+    @Test
+    public void groupsFuAAndSingleNalWithSameTimestampUntilMarker() {
+        H264RtpSampleProvider provider = new H264RtpSampleProvider(new RecordingRtpPacketSource(
+            packet(1, 90000L, false, new byte[] {
+                0x7C,
+                (byte) 0x85,
+                0x11
+            }),
+            packet(2, 90000L, false, new byte[] {
+                0x7C,
+                0x45,
+                0x22
+            }),
+            packet(3, 90000L, true, new byte[] {0x41, 0x33})));
+
+        EncodedVideoSample sample = provider.nextSample();
+
+        assertArrayEquals(
+            concat(
+                start(), new byte[] {0x65, 0x11, 0x22},
+                start(), new byte[] {0x41, 0x33}),
+            sample.data());
     }
 
     @Test
@@ -189,9 +255,13 @@ public final class H264RtpSampleProviderTest {
     }
 
     private static RtpPacket packet(int sequenceNumber, long timestamp, byte[] payload) {
+        return packet(sequenceNumber, timestamp, true, payload);
+    }
+
+    private static RtpPacket packet(int sequenceNumber, long timestamp, boolean marker, byte[] payload) {
         byte[] bytes = new byte[12 + payload.length];
         bytes[0] = (byte) 0x80;
-        bytes[1] = 0x60;
+        bytes[1] = (byte) (0x60 | (marker ? 0x80 : 0));
         bytes[2] = (byte) ((sequenceNumber >>> 8) & 0xFF);
         bytes[3] = (byte) (sequenceNumber & 0xFF);
         bytes[4] = (byte) ((timestamp >>> 24) & 0xFF);

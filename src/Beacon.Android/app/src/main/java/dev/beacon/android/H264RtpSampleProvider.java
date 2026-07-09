@@ -14,6 +14,9 @@ public final class H264RtpSampleProvider implements EncodedVideoSampleProvider {
     private boolean parameterSetsInjected;
     private ByteArrayOutputStream activeFragment;
     private long activeFragmentTimestamp;
+    private ByteArrayOutputStream activeAccessUnit;
+    private long activeAccessUnitTimestamp;
+    private RtpPacket pendingPacket;
 
     public H264RtpSampleProvider(RtpPacketSource source) {
         this(source, H264ParameterSets.empty());
@@ -31,10 +34,14 @@ public final class H264RtpSampleProvider implements EncodedVideoSampleProvider {
     @Override
     public EncodedVideoSample nextSample() {
         while (true) {
-            RtpPacket packet = source.nextPacket();
+            RtpPacket packet = nextPacket();
             if (packet == null) {
                 if (activeFragment != null) {
                     throw payloadFailure("FU-A stream ended before end fragment.");
+                }
+
+                if (activeAccessUnit != null) {
+                    return flushAccessUnit();
                 }
 
                 return EncodedVideoSample.eos();
@@ -45,21 +52,41 @@ public final class H264RtpSampleProvider implements EncodedVideoSampleProvider {
                 continue;
             }
 
-            EncodedVideoSample sample = sampleFromPayload(packet, payload);
+            if (activeAccessUnit != null && activeAccessUnitTimestamp != packet.timestamp()) {
+                pendingPacket = packet;
+                return flushAccessUnit();
+            }
+
+            byte[] sampleData = sampleDataFromPayload(packet, payload);
+            if (sampleData == null) {
+                continue;
+            }
+
+            EncodedVideoSample sample = appendAccessUnit(packet, sampleData);
             if (sample != null) {
                 return sample;
             }
         }
     }
 
-    private EncodedVideoSample sampleFromPayload(RtpPacket packet, byte[] payload) {
+    private RtpPacket nextPacket() {
+        RtpPacket packet = pendingPacket;
+        if (packet != null) {
+            pendingPacket = null;
+            return packet;
+        }
+
+        return source.nextPacket();
+    }
+
+    private byte[] sampleDataFromPayload(RtpPacket packet, byte[] payload) {
         int nalType = payload[0] & 0x1F;
         if (nalType >= 1 && nalType <= 23) {
-            return sample(packet.timestamp(), annexB(payload));
+            return annexB(payload);
         }
 
         if (nalType == 24) {
-            return sample(packet.timestamp(), stapA(payload));
+            return stapA(payload);
         }
 
         if (nalType == 28) {
@@ -69,7 +96,7 @@ public final class H264RtpSampleProvider implements EncodedVideoSampleProvider {
         throw payloadFailure("unsupported H.264 packetization type " + nalType + ".");
     }
 
-    private EncodedVideoSample fuA(long timestamp, byte[] payload) {
+    private byte[] fuA(long timestamp, byte[] payload) {
         if (payload.length < 2) {
             throw payloadFailure("truncated FU-A header.");
         }
@@ -114,7 +141,7 @@ public final class H264RtpSampleProvider implements EncodedVideoSampleProvider {
 
         byte[] sample = activeFragment.toByteArray();
         activeFragment = null;
-        return sample(timestamp, sample);
+        return sample;
     }
 
     private byte[] stapA(byte[] payload) {
@@ -148,6 +175,27 @@ public final class H264RtpSampleProvider implements EncodedVideoSampleProvider {
         writeStartCode(output);
         output.write(payload, 0, payload.length);
         return output.toByteArray();
+    }
+
+    private EncodedVideoSample appendAccessUnit(RtpPacket packet, byte[] data) {
+        if (activeAccessUnit == null) {
+            activeAccessUnit = new ByteArrayOutputStream();
+            activeAccessUnitTimestamp = packet.timestamp();
+        }
+
+        activeAccessUnit.write(data, 0, data.length);
+        if (packet.marker()) {
+            return flushAccessUnit();
+        }
+
+        return null;
+    }
+
+    private EncodedVideoSample flushAccessUnit() {
+        byte[] data = activeAccessUnit.toByteArray();
+        long timestamp = activeAccessUnitTimestamp;
+        activeAccessUnit = null;
+        return sample(timestamp, data);
     }
 
     private EncodedVideoSample sample(long timestamp, byte[] data) {
