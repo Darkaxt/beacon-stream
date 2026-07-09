@@ -43,7 +43,7 @@ public final class GameStreamRtpVideoSessionClient implements GameStreamVideoSes
             result = consumer.start(
                 plan,
                 sessionInfo,
-                new GameStreamRtpVideoSampleProvider(source));
+                sampleProvider(plan, source));
         } catch (RuntimeException ex) {
             closeSourceQuietly(source);
             return NativeStreamStartResult.unsupported(
@@ -79,6 +79,14 @@ public final class GameStreamRtpVideoSessionClient implements GameStreamVideoSes
             consumer.stop();
         } catch (RuntimeException ignored) {
         }
+    }
+
+    private static EncodedVideoSampleProvider sampleProvider(GameStreamEndpointPlan plan, RtpPacketSource source) {
+        if (plan != null && "h264".equalsIgnoreCase(plan.metadataValue("codec"))) {
+            return new H264RtpSampleProvider(source);
+        }
+
+        return new GameStreamRtpVideoSampleProvider(source);
     }
 
     private static void closeSourceQuietly(RtpPacketSource source) {
