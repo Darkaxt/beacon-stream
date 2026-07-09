@@ -44,7 +44,7 @@ public final class GameStreamRtpVideoSessionClient implements GameStreamVideoSes
             result = consumer.start(
                 plan,
                 sessionInfo,
-                sampleProvider(plan, orderedSource));
+                sampleProvider(plan, sessionInfo, orderedSource));
         } catch (RuntimeException ex) {
             closeSourceQuietly(orderedSource);
             return NativeStreamStartResult.unsupported(
@@ -82,17 +82,22 @@ public final class GameStreamRtpVideoSessionClient implements GameStreamVideoSes
         }
     }
 
-    private static EncodedVideoSampleProvider sampleProvider(GameStreamEndpointPlan plan, RtpPacketSource source) {
+    private static EncodedVideoSampleProvider sampleProvider(
+        GameStreamEndpointPlan plan,
+        GameStreamRtspSessionInfo sessionInfo,
+        RtpPacketSource source) {
         if (plan != null && "h264".equalsIgnoreCase(plan.metadataValue("codec"))) {
             return new H264RtpSampleProvider(
                 source,
-                H264ParameterSets.fromSpropParameterSets(h264ParameterSetMetadata(plan)));
+                H264ParameterSets.fromSpropParameterSets(h264ParameterSetMetadata(plan, sessionInfo)));
         }
 
         return new GameStreamRtpVideoSampleProvider(source);
     }
 
-    private static String h264ParameterSetMetadata(GameStreamEndpointPlan plan) {
+    private static String h264ParameterSetMetadata(
+        GameStreamEndpointPlan plan,
+        GameStreamRtspSessionInfo sessionInfo) {
         String[] keys = {"h264SpropParameterSets", "spropParameterSets", "sprop-parameter-sets"};
         for (String key : keys) {
             String value = plan.metadataValue(key);
@@ -101,7 +106,7 @@ public final class GameStreamRtpVideoSessionClient implements GameStreamVideoSes
             }
         }
 
-        return "";
+        return sessionInfo == null ? "" : sessionInfo.h264SpropParameterSets();
     }
 
     private static RtpPacketSource orderedSource(RtpPacketSource source) {

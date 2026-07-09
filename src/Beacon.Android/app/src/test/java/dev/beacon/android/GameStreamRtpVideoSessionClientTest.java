@@ -122,6 +122,54 @@ public final class GameStreamRtpVideoSessionClientTest {
     }
 
     @Test
+    public void h264PlanFallsBackToRtspSdpParameterSets() {
+        RecordingRtpPacketSource source = new RecordingRtpPacketSource(
+            packet(1, 90000L, new byte[] {0x65, 0x11}));
+        RecordingVideoConsumer consumer = new RecordingVideoConsumer(
+            NativeStreamStartResult.started("H.264 RTP video sample provider started."));
+        GameStreamRtpVideoSessionClient client = new GameStreamRtpVideoSessionClient(
+            new RecordingPacketSourceFactory(source),
+            consumer);
+
+        NativeStreamStartResult result = client.start(
+            completePlan("\"codec\":\"h264\""),
+            sessionInfoWithParameterSets("Z0IAHg==,aM4G4g=="));
+        EncodedVideoSample sample = consumer.sampleProvider.nextSample();
+
+        assertTrue(result.success());
+        assertArrayEquals(
+            concat(
+                start(), new byte[] {0x67, 0x42, 0x00, 0x1E},
+                start(), new byte[] {0x68, (byte) 0xCE, 0x06, (byte) 0xE2},
+                start(), new byte[] {0x65, 0x11}),
+            sample.data());
+    }
+
+    @Test
+    public void h264DescriptorParameterSetsOverrideRtspSdpParameterSets() {
+        RecordingRtpPacketSource source = new RecordingRtpPacketSource(
+            packet(1, 90000L, new byte[] {0x65, 0x11}));
+        RecordingVideoConsumer consumer = new RecordingVideoConsumer(
+            NativeStreamStartResult.started("H.264 RTP video sample provider started."));
+        GameStreamRtpVideoSessionClient client = new GameStreamRtpVideoSessionClient(
+            new RecordingPacketSourceFactory(source),
+            consumer);
+
+        NativeStreamStartResult result = client.start(
+            completePlan("\"codec\":\"h264\",\"h264SpropParameterSets\":\"Z0IAHg==,aM4G4g==\""),
+            sessionInfoWithParameterSets("Z0IAHw==,aM4G4w=="));
+        EncodedVideoSample sample = consumer.sampleProvider.nextSample();
+
+        assertTrue(result.success());
+        assertArrayEquals(
+            concat(
+                start(), new byte[] {0x67, 0x42, 0x00, 0x1E},
+                start(), new byte[] {0x68, (byte) 0xCE, 0x06, (byte) 0xE2},
+                start(), new byte[] {0x65, 0x11}),
+            sample.data());
+    }
+
+    @Test
     public void invalidH264ParameterSetMetadataFailsAndClosesSource() {
         RecordingRtpPacketSource source = new RecordingRtpPacketSource(
             packet(1, 90000L, new byte[] {0x65, 0x11}));
@@ -254,6 +302,21 @@ public final class GameStreamRtpVideoSessionClientTest {
             48000,
             47998,
             47999);
+    }
+
+    private static GameStreamRtspSessionInfo sessionInfoWithParameterSets(String h264SpropParameterSets) {
+        return GameStreamRtspSessionInfo.startedWithClientPorts(
+            "gamestream",
+            "rtsp://127.0.0.1:48010/beacon/session",
+            "session-1",
+            50000,
+            48000,
+            50002,
+            47998,
+            50004,
+            47999,
+            null,
+            h264SpropParameterSets);
     }
 
     private static RtpPacket packet(int sequenceNumber, long timestamp, byte[] payload) {

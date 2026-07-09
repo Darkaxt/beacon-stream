@@ -20,6 +20,28 @@ public final class RtspResponseTest {
     }
 
     @Test
+    public void preservesBodyAfterHeaderDelimiter() {
+        RtspResponse response = RtspResponse.parse(
+            "RTSP/1.0 200 OK\r\n" +
+                "CSeq: 2\r\n" +
+                "Content-Length: 18\r\n" +
+                "\r\n" +
+                "v=0\r\nm=video 0\r\n");
+
+        assertEquals("v=0\r\nm=video 0\r\n", response.body());
+    }
+
+    @Test
+    public void responseWithoutBodyReturnsEmptyBody() {
+        RtspResponse response = RtspResponse.parse(
+            "RTSP/1.0 200 OK\r\n" +
+                "CSeq: 1\r\n" +
+                "\r\n");
+
+        assertEquals("", response.body());
+    }
+
+    @Test
     public void rejectsMalformedStatusLine() {
         try {
             RtspResponse.parse("NOT RTSP\r\n\r\n");

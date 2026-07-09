@@ -5,6 +5,7 @@ import org.junit.Test;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -111,6 +112,57 @@ public final class GameStreamRtspHandshakeClientTest {
                 "Session: session-1\r\n" +
                 "\r\n",
             transport.requests.get(6));
+    }
+
+    @Test
+    public void capturesH264ParameterSetsFromDescribeSdp() {
+        String sdp =
+            "v=0\r\n" +
+                "m=video 0 RTP/AVP 97\r\n" +
+                "a=rtpmap:97 H264/90000\r\n" +
+                "a=fmtp:97 packetization-mode=1;sprop-parameter-sets=Z0IAHg==,aM4G4g==\r\n";
+        RecordingRtspTransport transport = new RecordingRtspTransport(
+            RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n"),
+            describeResponse(sdp),
+            setupResponse("3", "session-1", 48000),
+            setupResponse("4", "session-1", 47998),
+            setupResponse("5", "session-1", 47999),
+            okResponse("6"),
+            okResponse("7"));
+        GameStreamRtspHandshakeClient client = new GameStreamRtspHandshakeClient(
+            transport,
+            new FixedSdpPayloadProvider(SdpPayload),
+            testPortLease());
+
+        GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
+
+        assertTrue(result.success());
+        assertEquals("Z0IAHg==,aM4G4g==", result.sessionInfo().h264SpropParameterSets());
+    }
+
+    @Test
+    public void leavesH264ParameterSetsEmptyWhenDescribeSdpDoesNotAdvertiseThem() {
+        String sdp =
+            "v=0\r\n" +
+                "m=video 0 RTP/AVP 97\r\n" +
+                "a=rtpmap:97 H264/90000\r\n";
+        RecordingRtspTransport transport = new RecordingRtspTransport(
+            RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n"),
+            describeResponse(sdp),
+            setupResponse("3", "session-1", 48000),
+            setupResponse("4", "session-1", 47998),
+            setupResponse("5", "session-1", 47999),
+            okResponse("6"),
+            okResponse("7"));
+        GameStreamRtspHandshakeClient client = new GameStreamRtspHandshakeClient(
+            transport,
+            new FixedSdpPayloadProvider(SdpPayload),
+            testPortLease());
+
+        GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
+
+        assertTrue(result.success());
+        assertEquals("", result.sessionInfo().h264SpropParameterSets());
     }
 
     @Test
@@ -291,6 +343,16 @@ public final class GameStreamRtspHandshakeClientTest {
 
     private static RtspResponse okResponse(String cseq) {
         return RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: " + cseq + "\r\n\r\n");
+    }
+
+    private static RtspResponse describeResponse(String sdp) {
+        return RtspResponse.parse(
+            "RTSP/1.0 200 OK\r\n" +
+                "CSeq: 2\r\n" +
+                "Content-Type: application/sdp\r\n" +
+                "Content-Length: " + sdp.getBytes(StandardCharsets.UTF_8).length + "\r\n" +
+                "\r\n" +
+                sdp);
     }
 
     private static final class FixedSdpPayloadProvider implements GameStreamRtspSdpPayloadProvider {

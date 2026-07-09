@@ -8,16 +8,27 @@ public final class RtspResponse {
     private final int statusCode;
     private final String reasonPhrase;
     private final Map<String, String> headers;
+    private final String body;
 
-    private RtspResponse(int statusCode, String reasonPhrase, Map<String, String> headers) {
+    private RtspResponse(int statusCode, String reasonPhrase, Map<String, String> headers, String body) {
         this.statusCode = statusCode;
         this.reasonPhrase = reasonPhrase == null ? "" : reasonPhrase;
         this.headers = new LinkedHashMap<>(headers);
+        this.body = body == null ? "" : body;
     }
 
     public static RtspResponse parse(String rawResponse) {
         String response = rawResponse == null ? "" : rawResponse;
-        String[] lines = response.split("\\r?\\n");
+        int delimiterIndex = response.indexOf("\r\n\r\n");
+        int delimiterLength = 4;
+        if (delimiterIndex < 0) {
+            delimiterIndex = response.indexOf("\n\n");
+            delimiterLength = 2;
+        }
+
+        String headerSection = delimiterIndex < 0 ? response : response.substring(0, delimiterIndex);
+        String body = delimiterIndex < 0 ? "" : response.substring(delimiterIndex + delimiterLength);
+        String[] lines = headerSection.split("\\r?\\n");
         String statusLine = lines.length == 0 ? "" : lines[0].trim();
         String[] parts = statusLine.split(" ", 3);
         if (parts.length < 2 || !"RTSP/1.0".equals(parts[0])) {
@@ -51,7 +62,7 @@ public final class RtspResponse {
             }
         }
 
-        return new RtspResponse(statusCode, reasonPhrase, headers);
+        return new RtspResponse(statusCode, reasonPhrase, headers, body);
     }
 
     public int statusCode() {
@@ -68,5 +79,13 @@ public final class RtspResponse {
         }
 
         return headers.getOrDefault(name.trim().toLowerCase(Locale.ROOT), "");
+    }
+
+    public String body() {
+        return body;
+    }
+
+    RtspResponse withBody(String body) {
+        return new RtspResponse(statusCode, reasonPhrase, headers, body);
     }
 }
