@@ -86,8 +86,10 @@ public final class GameStreamRtspHandshakeClientTest {
             transport.requests.get(2));
         assertTrue(transport.requests.get(3).contains("SETUP streamid=video/0/0 RTSP/1.0\r\n"));
         assertTrue(transport.requests.get(3).contains("Session: session-1\r\n"));
+        assertTrue(transport.requests.get(3).contains("Transport: unicast;X-GS-ClientPort=50002-50003\r\n"));
         assertTrue(transport.requests.get(4).contains("SETUP streamid=control/13/0 RTSP/1.0\r\n"));
         assertTrue(transport.requests.get(4).contains("Session: session-1\r\n"));
+        assertTrue(transport.requests.get(4).contains("Transport: unicast;X-GS-ClientPort=50004-50005\r\n"));
         assertEquals(
             "ANNOUNCE streamid=control/13/0 RTSP/1.0\r\n" +
                 "CSeq: 6\r\n" +
@@ -250,8 +252,11 @@ public final class GameStreamRtspHandshakeClientTest {
         assertEquals("gamestream", result.sessionInfo().protocol());
         assertEquals("rtsp://127.0.0.1:48010/beacon/session", result.sessionInfo().rtspUri());
         assertEquals("session-1", result.sessionInfo().sessionId());
+        assertEquals(50000, result.sessionInfo().audioClientPort());
         assertEquals(48000, result.sessionInfo().audioServerPort());
+        assertEquals(50002, result.sessionInfo().videoClientPort());
         assertEquals(47998, result.sessionInfo().videoServerPort());
+        assertEquals(50004, result.sessionInfo().controlClientPort());
         assertEquals(47999, result.sessionInfo().controlServerPort());
     }
 

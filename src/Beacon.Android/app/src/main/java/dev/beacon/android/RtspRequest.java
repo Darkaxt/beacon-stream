@@ -39,13 +39,17 @@ public final class RtspRequest {
     }
 
     public static RtspRequest setup(String target, int cseq, String host, String sessionId) {
+        return setup(target, cseq, host, sessionId, 50000);
+    }
+
+    public static RtspRequest setup(String target, int cseq, String host, String sessionId, int clientRtpPort) {
         Map<String, String> headers = new LinkedHashMap<>();
         String session = sessionId == null ? "" : sessionId.trim();
         if (!session.isEmpty()) {
             headers.put("Session", session);
         }
 
-        headers.put("Transport", "unicast;X-GS-ClientPort=50000-50001");
+        headers.put("Transport", "unicast;X-GS-ClientPort=" + clientRtpPort + "-" + (clientRtpPort + 1));
         headers.put("If-Modified-Since", "Thu, 01 Jan 1970 00:00:00 GMT");
         return new RtspRequest("SETUP", target, cseq, host, headers);
     }

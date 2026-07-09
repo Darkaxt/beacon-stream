@@ -35,7 +35,7 @@ public final class RtspRequestTest {
 
     @Test
     public void serializesSetupRequestWithoutSession() {
-        RtspRequest request = RtspRequest.setup("streamid=audio/0/0", 3, "127.0.0.1:48010", "");
+        RtspRequest request = RtspRequest.setup("streamid=audio/0/0", 3, "127.0.0.1:48010", "", 50000);
 
         assertEquals(
             "SETUP streamid=audio/0/0 RTSP/1.0\r\n" +
@@ -50,7 +50,7 @@ public final class RtspRequestTest {
 
     @Test
     public void serializesSetupRequestWithSession() {
-        RtspRequest request = RtspRequest.setup("streamid=video/0/0", 4, "127.0.0.1:48010", "abc123");
+        RtspRequest request = RtspRequest.setup("streamid=video/0/0", 4, "127.0.0.1:48010", "abc123", 50002);
 
         assertEquals(
             "SETUP streamid=video/0/0 RTSP/1.0\r\n" +
@@ -58,7 +58,7 @@ public final class RtspRequestTest {
                 "Host: 127.0.0.1:48010\r\n" +
                 "X-GS-ClientVersion: BeaconStream\r\n" +
                 "Session: abc123\r\n" +
-                "Transport: unicast;X-GS-ClientPort=50000-50001\r\n" +
+                "Transport: unicast;X-GS-ClientPort=50002-50003\r\n" +
                 "If-Modified-Since: Thu, 01 Jan 1970 00:00:00 GMT\r\n" +
                 "\r\n",
             request.serialize());
