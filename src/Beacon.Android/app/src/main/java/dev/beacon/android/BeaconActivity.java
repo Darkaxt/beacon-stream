@@ -3,6 +3,7 @@ package dev.beacon.android;
 import android.app.Activity;
 import android.content.res.Configuration;
 import android.os.Bundle;
+import android.view.Display;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
@@ -31,6 +32,7 @@ public final class BeaconActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final List<BeaconGameCatalog.GameEntry> gameEntries = new ArrayList<>();
     private final BeaconTouchInputMapper touchInputMapper = new BeaconTouchInputMapper();
+    private final AndroidDeviceCapabilityProbe capabilityProbe = AndroidDeviceCapabilityProbe.system();
 
     private BeaconLocalSettingsStore localSettingsStore;
     private BeaconLocalSettings localSettings;
@@ -520,16 +522,11 @@ public final class BeaconActivity extends Activity {
     }
 
     private BeaconApiClient.ClientCapabilities readCapabilities() {
-        int refresh = readRequiredInteger(refreshHz);
-        return new BeaconApiClient.ClientCapabilities(
-            true,
-            true,
-            true,
-            false,
-            false,
-            refresh,
-            true,
-            readScreenMode());
+        return capabilityProbe.read(
+            readRequiredInteger(width),
+            readRequiredInteger(height),
+            readRequiredInteger(refreshHz),
+            screenHdr10Supported());
     }
 
     private BeaconApiClient.ClientTelemetry readTelemetry() {
@@ -545,6 +542,27 @@ public final class BeaconActivity extends Activity {
 
     private String readScreenMode() {
         return readRequiredInteger(width) + "x" + readRequiredInteger(height) + "@" + readRequiredInteger(refreshHz);
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean screenHdr10Supported() {
+        Display display = getWindowManager().getDefaultDisplay();
+        if (display == null) {
+            return false;
+        }
+
+        Display.HdrCapabilities hdrCapabilities = display.getHdrCapabilities();
+        if (hdrCapabilities == null) {
+            return false;
+        }
+
+        for (int type : hdrCapabilities.getSupportedHdrTypes()) {
+            if (type == Display.HdrCapabilities.HDR_TYPE_HDR10) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private String selectedLocalTheme() {
