@@ -34,6 +34,7 @@ public final class BeaconActivity extends Activity {
     private final BeaconTouchInputMapper touchInputMapper = new BeaconTouchInputMapper();
     private final AndroidDeviceCapabilityProbe capabilityProbe = AndroidDeviceCapabilityProbe.system();
 
+    private AndroidDeviceTelemetryProbe telemetryProbe;
     private BeaconLocalSettingsStore localSettingsStore;
     private BeaconLocalSettings localSettings;
     private BeaconLocalSettingsUiState uiState;
@@ -79,6 +80,7 @@ public final class BeaconActivity extends Activity {
             new SharedPreferencesLocalSettingsStorage(getSharedPreferences("beacon", MODE_PRIVATE)));
         localSettings = localSettingsStore.load();
         uiState = BeaconLocalSettingsUiState.from(localSettings, systemDarkTheme());
+        telemetryProbe = AndroidDeviceTelemetryProbe.system(this);
         applyWindowFlags(uiState);
         setContentView(createContent());
     }
@@ -530,7 +532,11 @@ public final class BeaconActivity extends Activity {
     }
 
     private BeaconApiClient.ClientTelemetry readTelemetry() {
-        return new BeaconApiClient.ClientTelemetry(
+        if (telemetryProbe == null) {
+            telemetryProbe = AndroidDeviceTelemetryProbe.system(this);
+        }
+
+        return telemetryProbe.read(
             readRequiredInteger(rttMs),
             readRequiredDouble(packetLossPercent),
             readRequiredInteger(decoderLoadPercent),
