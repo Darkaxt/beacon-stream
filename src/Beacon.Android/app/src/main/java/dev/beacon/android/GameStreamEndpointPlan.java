@@ -1,5 +1,7 @@
 package dev.beacon.android;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -97,5 +99,99 @@ public final class GameStreamEndpointPlan {
         }
 
         return String.join(", ", values);
+    }
+
+    public boolean rtspReady() {
+        return rtspDiagnostic().isEmpty();
+    }
+
+    public String rtspUri() {
+        return endpointUri("rtsp");
+    }
+
+    public String rtspHost() {
+        URI parsed = parseRtspUriOrNull();
+        if (parsed == null || parsed.getHost() == null) {
+            return "";
+        }
+
+        return parsed.getHost();
+    }
+
+    public int rtspPort() {
+        URI parsed = parseRtspUriOrNull();
+        if (parsed == null) {
+            return -1;
+        }
+
+        return parsed.getPort();
+    }
+
+    public String rtspPath() {
+        URI parsed = parseRtspUriOrNull();
+        if (parsed == null || parsed.getRawPath() == null || parsed.getRawPath().isEmpty()) {
+            return "/";
+        }
+
+        return parsed.getRawPath();
+    }
+
+    public String rtspHostHeader() {
+        String host = rtspHost();
+        int port = rtspPort();
+        if (host.isEmpty()) {
+            return "";
+        }
+
+        if (port > 0) {
+            return host + ":" + port;
+        }
+
+        return host;
+    }
+
+    public String rtspDiagnostic() {
+        if (!supportedProtocol) {
+            return "GameStream protocol is not supported for RTSP. protocol=" + protocol;
+        }
+
+        if (!complete()) {
+            return "GameStream endpoint map is incomplete. Missing required endpoints: " + missingRequiredRoles();
+        }
+
+        String rtspUri = rtspUri();
+        URI parsed;
+        try {
+            parsed = new URI(rtspUri);
+        } catch (URISyntaxException ex) {
+            return "GameStream RTSP endpoint is not a valid URI. rtsp=" + rtspUri;
+        }
+
+        String scheme = parsed.getScheme() == null ? "" : parsed.getScheme().toLowerCase(Locale.ROOT);
+        if (!"rtsp".equals(scheme)) {
+            return "GameStream RTSP endpoint must use rtsp://. rtsp=" + rtspUri;
+        }
+
+        if (parsed.getHost() == null || parsed.getHost().isEmpty()) {
+            return "GameStream RTSP endpoint is missing a host. rtsp=" + rtspUri;
+        }
+
+        if (parsed.getPort() <= 0) {
+            return "GameStream RTSP endpoint is missing a port. rtsp=" + rtspUri;
+        }
+
+        return "";
+    }
+
+    private String endpointUri(String role) {
+        return endpoints.getOrDefault(role, "");
+    }
+
+    private URI parseRtspUriOrNull() {
+        try {
+            return new URI(rtspUri());
+        } catch (URISyntaxException ex) {
+            return null;
+        }
     }
 }

@@ -82,7 +82,7 @@ public final class DiagnosticNativeStreamClientTest {
     }
 
     @Test
-    public void rejectsCompleteGameStreamEndpointMapWithDecoderNotImplementedDiagnostic() {
+    public void reportsCompleteGameStreamEndpointMapWithDefaultRtspBoundaryDiagnostic() {
         DiagnosticNativeStreamClient client = new DiagnosticNativeStreamClient();
         StreamConnectionDescriptor connection = StreamConnectionDescriptor.extract(
             "{\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"endpoints\":[" +
@@ -97,7 +97,7 @@ public final class DiagnosticNativeStreamClientTest {
         assertEquals("", result.status());
         assertFalse(result.presentation().active());
         assertEquals(
-            "GameStream endpoint map is complete, but native GameStream decode is not implemented yet. protocol=gamestream endpoints=rtsp=rtsp://127.0.0.1:48010, video=udp://127.0.0.1:47998, control=tcp://127.0.0.1:47999, audio=udp://127.0.0.1:48000",
+            "Native GameStream RTSP transport is not configured yet. protocol=gamestream rtsp=rtsp://127.0.0.1:48010",
             result.diagnostic());
     }
 }

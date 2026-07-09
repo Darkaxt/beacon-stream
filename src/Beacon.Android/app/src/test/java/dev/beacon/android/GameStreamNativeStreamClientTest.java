@@ -22,7 +22,7 @@ public final class GameStreamNativeStreamClientTest {
     }
 
     @Test
-    public void rejectsCompleteGameStreamEndpointMapWithDecoderNotImplementedDiagnostic() {
+    public void reportsDefaultRtspTransportNotConfiguredForCompleteGameStreamEndpointMap() {
         GameStreamNativeStreamClient client = new GameStreamNativeStreamClient();
         StreamConnectionDescriptor connection = StreamConnectionDescriptor.extract(
             "{\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"endpoints\":[" +
@@ -35,7 +35,49 @@ public final class GameStreamNativeStreamClientTest {
 
         assertFalse(result.success());
         assertEquals(
-            "GameStream endpoint map is complete, but native GameStream decode is not implemented yet. protocol=gamestream endpoints=rtsp=rtsp://127.0.0.1:48010, video=udp://127.0.0.1:47998, control=tcp://127.0.0.1:47999, audio=udp://127.0.0.1:48000",
+            "Native GameStream RTSP transport is not configured yet. protocol=gamestream rtsp=rtsp://127.0.0.1:48010",
+            result.diagnostic());
+    }
+
+    @Test
+    public void startsConfiguredRtspSessionForCompleteGameStreamEndpointMap() {
+        RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(
+            GameStreamRtspSessionResult.started("RTSP session started."));
+        GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient);
+        StreamConnectionDescriptor connection = completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session");
+
+        NativeStreamStartResult result = client.start(connection);
+
+        assertTrue(result.success());
+        assertEquals(
+            "Native GameStream RTSP session started. protocol=gamestream rtsp=rtsp://127.0.0.1:48010/beacon/session",
+            result.status());
+        assertEquals("rtsp://127.0.0.1:48010/beacon/session", rtspClient.startedPlan.rtspUri());
+    }
+
+    @Test
+    public void reportsConfiguredRtspSessionFailureForCompleteGameStreamEndpointMap() {
+        GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(
+            new RecordingRtspSessionClient(GameStreamRtspSessionResult.failed("RTSP DESCRIBE failed with status 503.")));
+        StreamConnectionDescriptor connection = completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session");
+
+        NativeStreamStartResult result = client.start(connection);
+
+        assertFalse(result.success());
+        assertEquals("RTSP DESCRIBE failed with status 503.", result.diagnostic());
+    }
+
+    @Test
+    public void rejectsCompleteGameStreamEndpointMapWhenRtspEndpointIsNotReady() {
+        GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(
+            new RecordingRtspSessionClient(GameStreamRtspSessionResult.started("Should not run.")));
+        StreamConnectionDescriptor connection = completeGameStreamConnection("https://127.0.0.1:48010/beacon/session");
+
+        NativeStreamStartResult result = client.start(connection);
+
+        assertFalse(result.success());
+        assertEquals(
+            "GameStream RTSP endpoint must use rtsp://. rtsp=https://127.0.0.1:48010/beacon/session",
             result.diagnostic());
     }
 
@@ -52,5 +94,29 @@ public final class GameStreamNativeStreamClientTest {
     private static StreamConnectionDescriptor connection(String protocol) {
         return StreamConnectionDescriptor.extract(
             "{\"stream\":{\"connection\":{\"protocol\":\"" + protocol + "\"}}}");
+    }
+
+    private static StreamConnectionDescriptor completeGameStreamConnection(String rtspUri) {
+        return StreamConnectionDescriptor.extract(
+            "{\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"endpoints\":[" +
+                "{\"role\":\"rtsp\",\"uri\":\"" + rtspUri + "\"}," +
+                "{\"role\":\"video\",\"uri\":\"udp://127.0.0.1:47998\"}," +
+                "{\"role\":\"control\",\"uri\":\"tcp://127.0.0.1:47999\"}," +
+                "{\"role\":\"audio\",\"uri\":\"udp://127.0.0.1:48000\"}]}}}");
+    }
+
+    private static final class RecordingRtspSessionClient implements GameStreamRtspSessionClient {
+        private final GameStreamRtspSessionResult result;
+        private GameStreamEndpointPlan startedPlan;
+
+        private RecordingRtspSessionClient(GameStreamRtspSessionResult result) {
+            this.result = result;
+        }
+
+        @Override
+        public GameStreamRtspSessionResult start(GameStreamEndpointPlan plan) {
+            startedPlan = plan;
+            return result;
+        }
     }
 }
