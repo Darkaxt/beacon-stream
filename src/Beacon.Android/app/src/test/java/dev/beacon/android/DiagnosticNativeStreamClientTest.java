@@ -38,6 +38,18 @@ public final class DiagnosticNativeStreamClientTest {
     }
 
     @Test
+    public void defaultFacadeRoutesEncodedVideoBeforeColorBarsClient() {
+        NativeStreamClient client = new DiagnosticNativeStreamClient();
+
+        NativeStreamStartResult result = client.start(EncodedVideoNativeStreamClientTest.validConnection());
+
+        assertFalse(result.success());
+        assertEquals(
+            "Beacon encoded video contract is valid, but MediaCodec decode is not implemented yet. codec=h264 container=annex-b video=beacon-test://video/color-bars.h264 1280x720@60",
+            result.diagnostic());
+    }
+
+    @Test
     public void rejectsBeaconTestProtocolWithoutSupportedVideoPattern() {
         DiagnosticNativeStreamClient client = new DiagnosticNativeStreamClient();
         StreamConnectionDescriptor connection = StreamConnectionDescriptor.extract(

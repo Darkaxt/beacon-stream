@@ -5,6 +5,7 @@ public final class DiagnosticNativeStreamClient implements NativeStreamClient {
 
     public DiagnosticNativeStreamClient() {
         this(new NativeStreamClientRouter(
+            new EncodedVideoNativeStreamClient(),
             new BeaconTestNativeStreamClient(),
             new GameStreamNativeStreamClient()));
     }

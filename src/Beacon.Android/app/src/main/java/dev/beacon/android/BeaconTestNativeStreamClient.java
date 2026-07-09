@@ -5,7 +5,10 @@ public final class BeaconTestNativeStreamClient implements NativeStreamProtocolC
 
     @Override
     public boolean supports(StreamConnectionDescriptor connection) {
-        return connection != null && connection.present() && "beacon-test".equalsIgnoreCase(connection.protocol());
+        return connection != null &&
+            connection.present() &&
+            "beacon-test".equalsIgnoreCase(connection.protocol()) &&
+            !EncodedVideoStreamPlan.from(connection).supportedProtocol();
     }
 
     @Override
