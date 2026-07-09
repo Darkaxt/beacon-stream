@@ -6,9 +6,19 @@ public final class GameStreamRtspHandshakeClient implements GameStreamRtspSessio
     private static final String ControlTarget = "streamid=control/13/0";
 
     private final RtspTransport transport;
+    private final GameStreamRtspSdpPayloadProvider sdpPayloadProvider;
 
     public GameStreamRtspHandshakeClient(RtspTransport transport) {
+        this(transport, GameStreamRtspSdpPayloadProvider.diagnostic());
+    }
+
+    public GameStreamRtspHandshakeClient(
+        RtspTransport transport,
+        GameStreamRtspSdpPayloadProvider sdpPayloadProvider) {
         this.transport = transport;
+        this.sdpPayloadProvider = sdpPayloadProvider == null
+            ? GameStreamRtspSdpPayloadProvider.diagnostic()
+            : sdpPayloadProvider;
     }
 
     @Override
@@ -57,8 +67,31 @@ public final class GameStreamRtspHandshakeClient implements GameStreamRtspSessio
             return GameStreamRtspSessionResult.failed(control.diagnostic());
         }
 
+        String sdpPayload = sdpPayloadProvider.createSdpPayload(
+            plan,
+            sessionId,
+            audio.serverPort(),
+            video.serverPort(),
+            control.serverPort());
+        if (sdpPayload == null || sdpPayload.trim().isEmpty()) {
+            return GameStreamRtspSessionResult.failed("RTSP ANNOUNCE payload is empty.");
+        }
+
+        RtspResponse announce = transport.transact(
+            RtspRequest.announce(ControlTarget, 6, plan.rtspHostHeader(), sessionId, sdpPayload));
+        if (!success(announce)) {
+            return GameStreamRtspSessionResult.failed(
+                "RTSP ANNOUNCE failed with status " + statusSummary(announce) + ".");
+        }
+
+        RtspResponse play = transport.transact(RtspRequest.play("/", 7, plan.rtspHostHeader(), sessionId));
+        if (!success(play)) {
+            return GameStreamRtspSessionResult.failed(
+                "RTSP PLAY failed with status " + statusSummary(play) + ".");
+        }
+
         return GameStreamRtspSessionResult.started(
-            "RTSP setup completed. protocol=" +
+            "RTSP play started. protocol=" +
                 plan.protocol() +
                 " rtsp=" +
                 plan.rtspUri() +

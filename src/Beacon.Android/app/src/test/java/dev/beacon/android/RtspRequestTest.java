@@ -63,4 +63,41 @@ public final class RtspRequestTest {
                 "\r\n",
             request.serialize());
     }
+
+    @Test
+    public void serializesAnnounceRequestWithSdpPayload() {
+        String payload = "v=0\r\ns=Beacon \u03c0\r\n";
+        RtspRequest request = RtspRequest.announce(
+            "streamid=control/13/0",
+            6,
+            "127.0.0.1:48010",
+            "session-1",
+            payload);
+
+        assertEquals(
+            "ANNOUNCE streamid=control/13/0 RTSP/1.0\r\n" +
+                "CSeq: 6\r\n" +
+                "Host: 127.0.0.1:48010\r\n" +
+                "X-GS-ClientVersion: BeaconStream\r\n" +
+                "Session: session-1\r\n" +
+                "Content-type: application/sdp\r\n" +
+                "Content-length: 18\r\n" +
+                "\r\n" +
+                payload,
+            request.serialize());
+    }
+
+    @Test
+    public void serializesPlayRequestWithSession() {
+        RtspRequest request = RtspRequest.play("/", 7, "127.0.0.1:48010", "session-1");
+
+        assertEquals(
+            "PLAY / RTSP/1.0\r\n" +
+                "CSeq: 7\r\n" +
+                "Host: 127.0.0.1:48010\r\n" +
+                "X-GS-ClientVersion: BeaconStream\r\n" +
+                "Session: session-1\r\n" +
+                "\r\n",
+            request.serialize());
+    }
 }
