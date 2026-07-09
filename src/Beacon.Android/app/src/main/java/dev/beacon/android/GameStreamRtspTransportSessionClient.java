@@ -23,6 +23,9 @@ public final class GameStreamRtspTransportSessionClient implements GameStreamRts
             lease = openLease(plan);
         } catch (RtspTransportException ex) {
             return GameStreamRtspSessionResult.failed(ex.getMessage());
+        } catch (RuntimeException ex) {
+            return GameStreamRtspSessionResult.failed(
+                "RTSP transport factory failed: " + safeMessage(ex));
         }
 
         RtspTransport transport = lease.transport();
@@ -74,7 +77,12 @@ public final class GameStreamRtspTransportSessionClient implements GameStreamRts
 
         try {
             lease.close();
-        } catch (RtspTransportException ignored) {
+        } catch (RuntimeException ignored) {
         }
+    }
+
+    private static String safeMessage(Throwable throwable) {
+        String message = throwable.getMessage();
+        return message == null || message.isEmpty() ? throwable.getClass().getSimpleName() : message;
     }
 }
