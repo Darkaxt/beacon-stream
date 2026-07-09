@@ -200,6 +200,10 @@ public final class BeaconViewModel {
         }
     }
 
+    public void stopNativeStream() {
+        clearNativeStream();
+    }
+
     private void clearNativeStream() {
         if (nativeStreamActive) {
             nativeStreamClient.stop();
