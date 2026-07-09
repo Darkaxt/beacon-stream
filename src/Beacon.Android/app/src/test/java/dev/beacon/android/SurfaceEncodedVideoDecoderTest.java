@@ -31,7 +31,7 @@ public final class SurfaceEncodedVideoDecoderTest {
 
         assertTrue(result.success());
         assertEquals(
-            "MediaCodec decoder configured. codec=h264 container=annex-b video=beacon-test://video/color-bars.h264 1280x720@60",
+            "MediaCodec decoder configured. codec=h264 container=annex-b video=/streams/beacon-test/color-bars.h264 1280x720@60",
             result.status());
         assertEquals(1, factory.createCount);
         assertEquals("h264", factory.lastCodec);
@@ -39,6 +39,25 @@ public final class SurfaceEncodedVideoDecoderTest {
         assertSame(surface, codec.configuredSurface);
         assertEquals(1, codec.configureCount);
         assertEquals(1, codec.startCount);
+    }
+
+    @Test
+    public void configuresCodecWithSampleProviderCreatedForPlan() {
+        Object surface = new Object();
+        RecordingCodec codec = new RecordingCodec();
+        RecordingSampleProvider sampleProvider = new RecordingSampleProvider();
+        RecordingSampleProviderFactory sampleFactory = new RecordingSampleProviderFactory(sampleProvider);
+        SurfaceEncodedVideoDecoder decoder = new SurfaceEncodedVideoDecoder(
+            new RecordingCodecFactory(codec),
+            new RecordingSurfaceProvider(surface),
+            sampleFactory);
+
+        EncodedVideoDecodeResult result = decoder.start(new EncodedVideoDecodeRequest(validPlan()));
+
+        assertTrue(result.success());
+        assertEquals(1, sampleFactory.createCount);
+        assertEquals("h264", sampleFactory.requestedPlan.codec());
+        assertSame(sampleProvider, codec.configuredSampleProvider);
     }
 
     @Test
@@ -129,6 +148,7 @@ public final class SurfaceEncodedVideoDecoderTest {
     private static final class RecordingCodec implements EncodedVideoCodec {
         private EncodedVideoStreamPlan configuredPlan;
         private Object configuredSurface;
+        private EncodedVideoSampleProvider configuredSampleProvider;
         private RuntimeException configureFailure;
         private RuntimeException startFailure;
         private int configureCount;
@@ -137,7 +157,7 @@ public final class SurfaceEncodedVideoDecoderTest {
         private int releaseCount;
 
         @Override
-        public void configure(EncodedVideoStreamPlan plan, Object surface) {
+        public void configure(EncodedVideoStreamPlan plan, Object surface, EncodedVideoSampleProvider sampleProvider) {
             configureCount++;
             if (configureFailure != null) {
                 throw configureFailure;
@@ -145,6 +165,7 @@ public final class SurfaceEncodedVideoDecoderTest {
 
             configuredPlan = plan;
             configuredSurface = surface;
+            configuredSampleProvider = sampleProvider;
         }
 
         @Override
@@ -163,6 +184,30 @@ public final class SurfaceEncodedVideoDecoderTest {
         @Override
         public void release() {
             releaseCount++;
+        }
+    }
+
+    private static final class RecordingSampleProviderFactory implements EncodedVideoSampleProviderFactory {
+        private final EncodedVideoSampleProvider provider;
+        private EncodedVideoStreamPlan requestedPlan;
+        private int createCount;
+
+        RecordingSampleProviderFactory(EncodedVideoSampleProvider provider) {
+            this.provider = provider;
+        }
+
+        @Override
+        public EncodedVideoSampleProvider create(EncodedVideoStreamPlan plan) {
+            createCount++;
+            requestedPlan = plan;
+            return provider;
+        }
+    }
+
+    private static final class RecordingSampleProvider implements EncodedVideoSampleProvider {
+        @Override
+        public EncodedVideoSample nextSample() {
+            return EncodedVideoSample.eos();
         }
     }
 }

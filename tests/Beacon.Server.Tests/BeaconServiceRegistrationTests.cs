@@ -117,7 +117,7 @@ public sealed class BeaconServiceRegistrationTests
         StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
 
         StreamingEndpointDescriptor endpoint = Assert.Single(health.Endpoints);
-        Assert.Equal("beacon-test://video/color-bars.h264", endpoint.Uri);
+        Assert.Equal("/streams/beacon-test/color-bars.h264", endpoint.Uri);
         Assert.Contains("h264", health.Codecs);
         Assert.Contains("beacon-test-encoded-video", health.Capture);
     }
@@ -140,7 +140,7 @@ public sealed class BeaconServiceRegistrationTests
         StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
 
         StreamingEndpointDescriptor endpoint = Assert.Single(health.Endpoints);
-        Assert.Equal("beacon-test://video/color-bars.h264", endpoint.Uri);
+        Assert.Equal("/streams/beacon-test/color-bars.h264", endpoint.Uri);
     }
 
     [Fact]
