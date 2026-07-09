@@ -9,7 +9,28 @@ import static org.junit.Assert.assertTrue;
 
 public final class GameStreamUdpRtpPacketSourceFactoryTest {
     @Test
-    public void bindsNegotiatedVideoClientPort() {
+    public void usesLeasedVideoSocketWithoutRebinding() {
+        RecordingDatagramSocket audio = new RecordingDatagramSocket(61000);
+        RecordingDatagramSocket video = new RecordingDatagramSocket(61002);
+        RecordingDatagramSocket control = new RecordingDatagramSocket(61004);
+        GameStreamRtpPortLease lease = GameStreamRtpPortLease.open(
+            new RecordingDatagramSocketFactory(audio, video, control));
+        RecordingDatagramSocketFactory fallbackSocketFactory = new RecordingDatagramSocketFactory();
+        GameStreamUdpRtpPacketSourceFactory factory = new GameStreamUdpRtpPacketSourceFactory(fallbackSocketFactory);
+
+        RtpPacketSource source = factory.create(completePlan(), sessionInfoWithClientPorts(lease));
+        source.close();
+        lease.close();
+
+        assertTrue(source instanceof RtpDatagramPacketSource);
+        assertEquals(-1, fallbackSocketFactory.boundPort);
+        assertEquals(1, audio.closeCount);
+        assertEquals(1, video.closeCount);
+        assertEquals(1, control.closeCount);
+    }
+
+    @Test
+    public void legacySessionInfoBindsNegotiatedVideoClientPort() {
         RecordingDatagramSocketFactory socketFactory = new RecordingDatagramSocketFactory();
         GameStreamUdpRtpPacketSourceFactory factory = new GameStreamUdpRtpPacketSourceFactory(socketFactory);
 
@@ -17,6 +38,23 @@ public final class GameStreamUdpRtpPacketSourceFactoryTest {
 
         assertTrue(source instanceof RtpDatagramPacketSource);
         assertEquals(50002, socketFactory.boundPort);
+    }
+
+    @Test
+    public void unavailableVideoSocketLeaseReturnsDiagnostic() {
+        GameStreamUdpRtpPacketSourceFactory factory = new GameStreamUdpRtpPacketSourceFactory(
+            new RecordingDatagramSocketFactory());
+
+        try {
+            factory.create(
+                completePlan(),
+                sessionInfoWithClientPorts(GameStreamRtpPortLease.staticPorts(50000, 50002, 50004)));
+        } catch (IllegalStateException ex) {
+            assertEquals("GameStream RTP video socket lease is unavailable.", ex.getMessage());
+            return;
+        }
+
+        throw new AssertionError("Expected unavailable video socket lease diagnostic.");
     }
 
     @Test
@@ -60,6 +98,10 @@ public final class GameStreamUdpRtpPacketSourceFactoryTest {
     }
 
     private static GameStreamRtspSessionInfo sessionInfoWithClientPorts() {
+        return sessionInfoWithClientPorts(null);
+    }
+
+    private static GameStreamRtspSessionInfo sessionInfoWithClientPorts(GameStreamRtpPortLease rtpPortLease) {
         return GameStreamRtspSessionInfo.startedWithClientPorts(
             "gamestream",
             "rtsp://127.0.0.1:48010/beacon/session",
@@ -69,7 +111,8 @@ public final class GameStreamUdpRtpPacketSourceFactoryTest {
             50002,
             47998,
             50004,
-            47999);
+            47999,
+            rtpPortLease);
     }
 
     private static GameStreamRtspSessionInfo legacySessionInfoWithoutClientPorts() {
@@ -83,11 +126,21 @@ public final class GameStreamUdpRtpPacketSourceFactoryTest {
     }
 
     private static final class RecordingDatagramSocketFactory implements RtpDatagramSocketFactory {
-        private int boundPort;
+        private final RtpDatagramSocket[] sockets;
+        private int boundPort = -1;
+        private int nextSocket;
+
+        private RecordingDatagramSocketFactory(RtpDatagramSocket... sockets) {
+            this.sockets = sockets;
+        }
 
         @Override
         public RtpDatagramSocket bind(int localPort) {
             boundPort = localPort;
+            if (nextSocket < sockets.length) {
+                return sockets[nextSocket++];
+            }
+
             return new RecordingDatagramSocket(localPort);
         }
     }
@@ -101,6 +154,7 @@ public final class GameStreamUdpRtpPacketSourceFactoryTest {
 
     private static final class RecordingDatagramSocket implements RtpDatagramSocket {
         private final int localPort;
+        private int closeCount;
 
         private RecordingDatagramSocket(int localPort) {
             this.localPort = localPort;
@@ -118,6 +172,7 @@ public final class GameStreamUdpRtpPacketSourceFactoryTest {
 
         @Override
         public void close() {
+            closeCount++;
         }
     }
 }

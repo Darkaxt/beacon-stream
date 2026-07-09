@@ -25,7 +25,8 @@ public final class GameStreamRtspHandshakeClientTest {
             okResponse("7"));
         GameStreamRtspHandshakeClient client = new GameStreamRtspHandshakeClient(
             transport,
-            new FixedSdpPayloadProvider(SdpPayload));
+            new FixedSdpPayloadProvider(SdpPayload),
+            testPortLease());
 
         GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
 
@@ -65,7 +66,8 @@ public final class GameStreamRtspHandshakeClientTest {
             okResponse("7"));
         GameStreamRtspHandshakeClient client = new GameStreamRtspHandshakeClient(
             transport,
-            new FixedSdpPayloadProvider(SdpPayload));
+            new FixedSdpPayloadProvider(SdpPayload),
+            testPortLease());
 
         GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
 
@@ -114,7 +116,9 @@ public final class GameStreamRtspHandshakeClientTest {
     @Test
     public void failsWhenOptionsReturnsNonSuccessStatus() {
         GameStreamRtspHandshakeClient client = new GameStreamRtspHandshakeClient(
-            new RecordingRtspTransport(RtspResponse.parse("RTSP/1.0 503 Busy\r\nCSeq: 1\r\n\r\n")));
+            new RecordingRtspTransport(RtspResponse.parse("RTSP/1.0 503 Busy\r\nCSeq: 1\r\n\r\n")),
+            GameStreamRtspSdpPayloadProvider.diagnostic(),
+            testPortLease());
 
         GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
 
@@ -124,7 +128,10 @@ public final class GameStreamRtspHandshakeClientTest {
 
     @Test
     public void failsWithTransportDiagnosticWhenTransportThrows() {
-        GameStreamRtspHandshakeClient client = new GameStreamRtspHandshakeClient(new ThrowingRtspTransport());
+        GameStreamRtspHandshakeClient client = new GameStreamRtspHandshakeClient(
+            new ThrowingRtspTransport(),
+            GameStreamRtspSdpPayloadProvider.diagnostic(),
+            testPortLease());
 
         GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
 
@@ -137,7 +144,9 @@ public final class GameStreamRtspHandshakeClientTest {
         GameStreamRtspHandshakeClient client = new GameStreamRtspHandshakeClient(
             new RecordingRtspTransport(
                 RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n"),
-                RtspResponse.parse("RTSP/1.0 404 Not Found\r\nCSeq: 2\r\n\r\n")));
+                RtspResponse.parse("RTSP/1.0 404 Not Found\r\nCSeq: 2\r\n\r\n")),
+            GameStreamRtspSdpPayloadProvider.diagnostic(),
+            testPortLease());
 
         GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
 
@@ -152,7 +161,9 @@ public final class GameStreamRtspHandshakeClientTest {
                 RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n"),
                 RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: 2\r\nContent-Type: application/sdp\r\n\r\n"),
                 setupResponse("3", "session-1", 48000),
-                RtspResponse.parse("RTSP/1.0 503 Busy\r\nCSeq: 4\r\n\r\n")));
+                RtspResponse.parse("RTSP/1.0 503 Busy\r\nCSeq: 4\r\n\r\n")),
+            GameStreamRtspSdpPayloadProvider.diagnostic(),
+            testPortLease());
 
         GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
 
@@ -171,7 +182,9 @@ public final class GameStreamRtspHandshakeClientTest {
                         "CSeq: 3\r\n" +
                         "Session: session-1\r\n" +
                         "Transport: unicast;source=127.0.0.1\r\n" +
-                        "\r\n")));
+                        "\r\n")),
+            GameStreamRtspSdpPayloadProvider.diagnostic(),
+            testPortLease());
 
         GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
 
@@ -191,7 +204,8 @@ public final class GameStreamRtspHandshakeClientTest {
             setupResponse("5", "session-1", 47999));
         GameStreamRtspHandshakeClient client = new GameStreamRtspHandshakeClient(
             transport,
-            new FixedSdpPayloadProvider(" \r\n "));
+            new FixedSdpPayloadProvider(" \r\n "),
+            testPortLease());
 
         GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
 
@@ -210,7 +224,8 @@ public final class GameStreamRtspHandshakeClientTest {
                 setupResponse("4", "session-1", 47998),
                 setupResponse("5", "session-1", 47999),
                 RtspResponse.parse("RTSP/1.0 503 Busy\r\nCSeq: 6\r\n\r\n")),
-            new FixedSdpPayloadProvider(SdpPayload));
+            new FixedSdpPayloadProvider(SdpPayload),
+            testPortLease());
 
         GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
 
@@ -229,7 +244,8 @@ public final class GameStreamRtspHandshakeClientTest {
                 setupResponse("5", "session-1", 47999),
                 okResponse("6"),
                 RtspResponse.parse("RTSP/1.0 404 Not Found\r\nCSeq: 7\r\n\r\n")),
-            new FixedSdpPayloadProvider(SdpPayload));
+            new FixedSdpPayloadProvider(SdpPayload),
+            testPortLease());
 
         GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
 
@@ -258,6 +274,10 @@ public final class GameStreamRtspHandshakeClientTest {
         assertEquals(47998, result.sessionInfo().videoServerPort());
         assertEquals(50004, result.sessionInfo().controlClientPort());
         assertEquals(47999, result.sessionInfo().controlServerPort());
+    }
+
+    private static GameStreamRtpPortLease testPortLease() {
+        return GameStreamRtpPortLease.staticPorts(50000, 50002, 50004);
     }
 
     private static RtspResponse setupResponse(String cseq, String sessionId, int serverPort) {
