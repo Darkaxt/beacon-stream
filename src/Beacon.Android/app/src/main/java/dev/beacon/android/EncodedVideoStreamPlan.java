@@ -98,6 +98,52 @@ public final class EncodedVideoStreamPlan {
             diagnostic);
     }
 
+    public static EncodedVideoStreamPlan fromGameStreamRtp(GameStreamEndpointPlan plan) {
+        if (plan == null || !plan.supportedProtocol()) {
+            return new EncodedVideoStreamPlan(false, "", "", "", "", "", 0, 0, 0, "");
+        }
+
+        String videoUri = plan.videoUri();
+        String codec = normalize(plan.metadataValue("codec"));
+        String container = normalize(plan.metadataValue("container"));
+        int width = positiveInteger(plan.metadataValue("width"));
+        int height = positiveInteger(plan.metadataValue("height"));
+        int fps = positiveInteger(plan.metadataValue("fps"));
+
+        List<String> missing = new ArrayList<>();
+        if (!validCodec(codec)) {
+            missing.add("codec");
+        }
+        if (!validContainer(container)) {
+            missing.add("container");
+        }
+        if (width <= 0) {
+            missing.add("width");
+        }
+        if (height <= 0) {
+            missing.add("height");
+        }
+        if (fps <= 0) {
+            missing.add("fps");
+        }
+
+        String diagnostic = missing.isEmpty()
+            ? ""
+            : "GameStream RTP video metadata is incomplete. Missing or invalid: " + String.join(", ", missing) + ".";
+
+        return new EncodedVideoStreamPlan(
+            true,
+            videoUri,
+            "",
+            "",
+            validCodec(codec) ? codec : "",
+            validContainer(container) ? container : "",
+            width,
+            height,
+            fps,
+            diagnostic);
+    }
+
     public boolean supportedProtocol() {
         return supportedProtocol;
     }

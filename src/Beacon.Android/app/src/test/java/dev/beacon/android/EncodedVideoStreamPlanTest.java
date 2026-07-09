@@ -49,6 +49,38 @@ public final class EncodedVideoStreamPlanTest {
     }
 
     @Test
+    public void acceptsCompleteGameStreamRtpMetadata() {
+        EncodedVideoStreamPlan plan = EncodedVideoStreamPlan.fromGameStreamRtp(GameStreamEndpointPlan.from(connection(
+            "gamestream",
+            "\"codec\":\"h264\",\"container\":\"annex-b\",\"width\":\"2560\",\"height\":\"1600\",\"fps\":\"120\"",
+            requiredGameStreamEndpoints())));
+
+        assertTrue(plan.supportedProtocol());
+        assertTrue(plan.complete());
+        assertEquals("udp://127.0.0.1:47998", plan.videoUri());
+        assertEquals("h264", plan.codec());
+        assertEquals("annex-b", plan.container());
+        assertEquals(2560, plan.width());
+        assertEquals(1600, plan.height());
+        assertEquals(120, plan.fps());
+        assertEquals("", plan.diagnostic());
+    }
+
+    @Test
+    public void reportsMissingGameStreamRtpMetadata() {
+        EncodedVideoStreamPlan plan = EncodedVideoStreamPlan.fromGameStreamRtp(GameStreamEndpointPlan.from(connection(
+            "gamestream",
+            "",
+            requiredGameStreamEndpoints())));
+
+        assertTrue(plan.supportedProtocol());
+        assertFalse(plan.complete());
+        assertEquals(
+            "GameStream RTP video metadata is incomplete. Missing or invalid: codec, container, width, height, fps.",
+            plan.diagnostic());
+    }
+
+    @Test
     public void reportsMissingContractFields() {
         EncodedVideoStreamPlan plan = EncodedVideoStreamPlan.from(encodedConnection(
             "\"codec\":\"vp9\",\"container\":\"raw\",\"width\":\"0\",\"height\":\"720\",\"fps\":\"60\"",
@@ -63,6 +95,13 @@ public final class EncodedVideoStreamPlanTest {
 
     private static StreamConnectionDescriptor encodedConnection(String metadata, String endpoint) {
         return connection("beacon-test", "\"streamKind\":\"encoded-video\"," + metadata, endpoint);
+    }
+
+    private static String requiredGameStreamEndpoints() {
+        return "{\"role\":\"rtsp\",\"uri\":\"rtsp://127.0.0.1:48010/beacon/session\"}," +
+            "{\"role\":\"video\",\"uri\":\"udp://127.0.0.1:47998\"}," +
+            "{\"role\":\"control\",\"uri\":\"tcp://127.0.0.1:47999\"}," +
+            "{\"role\":\"audio\",\"uri\":\"udp://127.0.0.1:48000\"}";
     }
 
     private static StreamConnectionDescriptor connection(String protocol, String metadata, String endpoint) {

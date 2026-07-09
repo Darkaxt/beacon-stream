@@ -14,3 +14,5 @@
 | Vibeshine | HDR/driver research reference and virtual-display lease/readiness comparison | No | Research notes only until a specific patch is chosen; Milestone 43 source audit records lease/readiness comparison without copied source |
 | Vibepollo | Settings complexity anti-patterns and selected research reference | No | Research notes only |
 | ApolloDisplayRescue | WPF recovery behavior reference | No | Milestone 4 only after focused source audit |
+
+Milestone 101 note: `GameStreamRtpDecoderVideoConsumer.java`, the GameStream RTP metadata conversion in `EncodedVideoStreamPlan.java`, and the `GameStreamRtpVideoConsumer.stop()` lifecycle are original Android boundary code. They connect Beacon's already-fakeable RTP sample provider to Beacon's existing `SurfaceEncodedVideoDecoder` abstraction when server-owned metadata advertises codec/container/width/height/fps. They do not copy Sunshine, Moonlight, Artemis, Apollo, or Vibepollo source, and live GameStream RTP depacketization remains a later boundary.

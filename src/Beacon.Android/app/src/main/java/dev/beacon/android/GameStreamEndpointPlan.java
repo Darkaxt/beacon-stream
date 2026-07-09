@@ -14,16 +14,22 @@ public final class GameStreamEndpointPlan {
     private final String protocol;
     private final boolean supportedProtocol;
     private final Map<String, String> endpoints;
+    private final Map<String, String> metadata;
 
-    private GameStreamEndpointPlan(String protocol, boolean supportedProtocol, Map<String, String> endpoints) {
+    private GameStreamEndpointPlan(
+        String protocol,
+        boolean supportedProtocol,
+        Map<String, String> endpoints,
+        Map<String, String> metadata) {
         this.protocol = protocol;
         this.supportedProtocol = supportedProtocol;
         this.endpoints = endpoints;
+        this.metadata = metadata;
     }
 
     public static GameStreamEndpointPlan from(StreamConnectionDescriptor descriptor) {
         if (descriptor == null || !descriptor.present()) {
-            return new GameStreamEndpointPlan("", false, new LinkedHashMap<>());
+            return new GameStreamEndpointPlan("", false, new LinkedHashMap<>(), new LinkedHashMap<>());
         }
 
         String protocol = descriptor.protocol().trim().toLowerCase(Locale.ROOT);
@@ -36,7 +42,7 @@ public final class GameStreamEndpointPlan {
             }
         }
 
-        return new GameStreamEndpointPlan(protocol, supportedProtocol, endpoints);
+        return new GameStreamEndpointPlan(protocol, supportedProtocol, endpoints, new LinkedHashMap<>(descriptor.metadata()));
     }
 
     public boolean supportedProtocol() {
@@ -107,6 +113,18 @@ public final class GameStreamEndpointPlan {
 
     public String rtspUri() {
         return endpointUri("rtsp");
+    }
+
+    public String videoUri() {
+        return endpointUri("video");
+    }
+
+    public String metadataValue(String key) {
+        if (key == null || key.trim().isEmpty()) {
+            return "";
+        }
+
+        return metadata.getOrDefault(key.trim(), "");
     }
 
     public String rtspHost() {
