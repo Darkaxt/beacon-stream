@@ -2,6 +2,10 @@ package dev.beacon.android;
 
 import org.junit.Test;
 
+import java.util.ArrayDeque;
+import java.util.Queue;
+
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertSame;
@@ -58,6 +62,48 @@ public final class GameStreamRtpVideoSessionClientTest {
 
         assertTrue(result.success());
         assertTrue(consumer.sampleProvider instanceof GameStreamRtpVideoSampleProvider);
+    }
+
+    @Test
+    public void rawRtpProviderReceivesPacketsInSequenceOrder() {
+        RecordingRtpPacketSource source = new RecordingRtpPacketSource(
+            packet(10, 90000L, new byte[] {0x0A}),
+            packet(12, 90000L, new byte[] {0x0C}),
+            packet(11, 90000L, new byte[] {0x0B}));
+        RecordingVideoConsumer consumer = new RecordingVideoConsumer(
+            NativeStreamStartResult.started("raw RTP video sample provider started."));
+        GameStreamRtpVideoSessionClient client = new GameStreamRtpVideoSessionClient(
+            new RecordingPacketSourceFactory(source),
+            consumer);
+
+        NativeStreamStartResult result = client.start(completePlan("\"codec\":\"hevc\""), sessionInfo());
+        EncodedVideoSample first = consumer.sampleProvider.nextSample();
+        EncodedVideoSample second = consumer.sampleProvider.nextSample();
+        EncodedVideoSample third = consumer.sampleProvider.nextSample();
+
+        assertTrue(result.success());
+        assertArrayEquals(new byte[] {0x0A}, first.data());
+        assertArrayEquals(new byte[] {0x0B}, second.data());
+        assertArrayEquals(new byte[] {0x0C}, third.data());
+    }
+
+    @Test
+    public void h264RtpProviderReceivesFragmentsInSequenceOrder() {
+        RecordingRtpPacketSource source = new RecordingRtpPacketSource(
+            packet(1, 90000L, new byte[] {0x7C, (byte) 0x85, 0x11}),
+            packet(3, 90000L, new byte[] {0x7C, 0x45, 0x33}),
+            packet(2, 90000L, new byte[] {0x7C, 0x05, 0x22}));
+        RecordingVideoConsumer consumer = new RecordingVideoConsumer(
+            NativeStreamStartResult.started("H.264 RTP video sample provider started."));
+        GameStreamRtpVideoSessionClient client = new GameStreamRtpVideoSessionClient(
+            new RecordingPacketSourceFactory(source),
+            consumer);
+
+        NativeStreamStartResult result = client.start(completePlan("\"codec\":\"h264\""), sessionInfo());
+        EncodedVideoSample sample = consumer.sampleProvider.nextSample();
+
+        assertTrue(result.success());
+        assertArrayEquals(new byte[] {0, 0, 0, 1, 0x65, 0x11, 0x22, 0x33}, sample.data());
     }
 
     @Test
@@ -150,6 +196,21 @@ public final class GameStreamRtpVideoSessionClientTest {
             47999);
     }
 
+    private static RtpPacket packet(int sequenceNumber, long timestamp, byte[] payload) {
+        byte[] bytes = new byte[12 + payload.length];
+        bytes[0] = (byte) 0x80;
+        bytes[1] = 0x60;
+        bytes[2] = (byte) ((sequenceNumber >>> 8) & 0xFF);
+        bytes[3] = (byte) (sequenceNumber & 0xFF);
+        bytes[4] = (byte) ((timestamp >>> 24) & 0xFF);
+        bytes[5] = (byte) ((timestamp >>> 16) & 0xFF);
+        bytes[6] = (byte) ((timestamp >>> 8) & 0xFF);
+        bytes[7] = (byte) (timestamp & 0xFF);
+        bytes[11] = 0x01;
+        System.arraycopy(payload, 0, bytes, 12, payload.length);
+        return RtpPacket.parse(bytes);
+    }
+
     private static final class RecordingPacketSourceFactory implements GameStreamRtpPacketSourceFactory {
         private final RtpPacketSource source;
         private GameStreamEndpointPlan requestedPlan;
@@ -218,11 +279,18 @@ public final class GameStreamRtpVideoSessionClientTest {
     }
 
     private static final class RecordingRtpPacketSource implements RtpPacketSource {
+        private final Queue<RtpPacket> packets = new ArrayDeque<>();
         private int closeCount;
+
+        private RecordingRtpPacketSource(RtpPacket... packets) {
+            for (RtpPacket packet : packets) {
+                this.packets.add(packet);
+            }
+        }
 
         @Override
         public RtpPacket nextPacket() {
-            return null;
+            return packets.poll();
         }
 
         @Override
