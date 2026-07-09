@@ -119,6 +119,16 @@ public final class GameStreamRtspHandshakeClientTest {
     }
 
     @Test
+    public void failsWithTransportDiagnosticWhenTransportThrows() {
+        GameStreamRtspHandshakeClient client = new GameStreamRtspHandshakeClient(new ThrowingRtspTransport());
+
+        GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
+
+        assertFalse(result.success());
+        assertEquals("RTSP write failed: disk full", result.diagnostic());
+    }
+
+    @Test
     public void failsWhenDescribeReturnsNonSuccessStatus() {
         GameStreamRtspHandshakeClient client = new GameStreamRtspHandshakeClient(
             new RecordingRtspTransport(
@@ -261,6 +271,13 @@ public final class GameStreamRtspHandshakeClientTest {
             int videoPort,
             int controlPort) {
             return payload;
+        }
+    }
+
+    private static final class ThrowingRtspTransport implements RtspTransport {
+        @Override
+        public RtspResponse transact(RtspRequest request) {
+            throw new RtspTransportException("RTSP write failed: disk full");
         }
     }
 
