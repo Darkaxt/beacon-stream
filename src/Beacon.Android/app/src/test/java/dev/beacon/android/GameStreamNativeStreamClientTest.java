@@ -95,12 +95,49 @@ public final class GameStreamNativeStreamClientTest {
     }
 
     @Test
+    public void videoSessionStartExceptionStopsVideoAndRtspSessionAndReturnsDiagnostic() {
+        RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(startedRtspSessionResult());
+        RecordingVideoSessionClient videoClient = new RecordingVideoSessionClient(
+            NativeStreamStartResult.started("should not be returned"));
+        videoClient.startFailure = new IllegalStateException("decoder exploded");
+        GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient, videoClient);
+
+        NativeStreamStartResult result = client.start(
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session"));
+
+        assertFalse(result.success());
+        assertEquals("GameStream video session failed: decoder exploded", result.diagnostic());
+        assertEquals(1, rtspClient.stopCount);
+        assertEquals(1, videoClient.stopCount);
+    }
+
+    @Test
     public void stopDelegatesVideoBeforeRtspAfterSuccessfulVideoStart() {
         List<String> stopOrder = new ArrayList<>();
         RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(startedRtspSessionResult(), stopOrder);
         RecordingVideoSessionClient videoClient = new RecordingVideoSessionClient(
             NativeStreamStartResult.started("Native GameStream video session started."),
             stopOrder);
+        GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient, videoClient);
+
+        NativeStreamStartResult result = client.start(
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session"));
+        client.stop();
+
+        assertTrue(result.success());
+        assertEquals(1, videoClient.stopCount);
+        assertEquals(1, rtspClient.stopCount);
+        assertEquals(Arrays.asList("video", "rtsp"), stopOrder);
+    }
+
+    @Test
+    public void stopReleasesRtspWhenVideoStopThrows() {
+        List<String> stopOrder = new ArrayList<>();
+        RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(startedRtspSessionResult(), stopOrder);
+        RecordingVideoSessionClient videoClient = new RecordingVideoSessionClient(
+            NativeStreamStartResult.started("Native GameStream video session started."),
+            stopOrder);
+        videoClient.stopFailure = new IllegalStateException("video stop failed");
         GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient, videoClient);
 
         NativeStreamStartResult result = client.start(
@@ -252,6 +289,8 @@ public final class GameStreamNativeStreamClientTest {
         private final List<String> stopOrder;
         private GameStreamEndpointPlan startedPlan;
         private GameStreamRtspSessionInfo startedSessionInfo;
+        private RuntimeException startFailure;
+        private RuntimeException stopFailure;
         private int stopCount;
 
         private RecordingVideoSessionClient(NativeStreamStartResult result) {
@@ -267,6 +306,10 @@ public final class GameStreamNativeStreamClientTest {
         public NativeStreamStartResult start(GameStreamEndpointPlan plan, GameStreamRtspSessionInfo sessionInfo) {
             startedPlan = plan;
             startedSessionInfo = sessionInfo;
+            if (startFailure != null) {
+                throw startFailure;
+            }
+
             return result;
         }
 
@@ -275,6 +318,9 @@ public final class GameStreamNativeStreamClientTest {
             stopCount++;
             if (stopOrder != null) {
                 stopOrder.add("video");
+            }
+            if (stopFailure != null) {
+                throw stopFailure;
             }
         }
     }
