@@ -1,6 +1,16 @@
 package dev.beacon.android;
 
 public final class GameStreamNativeStreamClient implements NativeStreamProtocolClient {
+    private final GameStreamRtspSessionClient rtspSessionClient;
+
+    public GameStreamNativeStreamClient() {
+        this(GameStreamRtspSessionClient.notConfigured());
+    }
+
+    public GameStreamNativeStreamClient(GameStreamRtspSessionClient rtspSessionClient) {
+        this.rtspSessionClient = rtspSessionClient == null ? GameStreamRtspSessionClient.notConfigured() : rtspSessionClient;
+    }
+
     @Override
     public boolean supports(StreamConnectionDescriptor connection) {
         return GameStreamEndpointPlan.from(connection).supportedProtocol();
@@ -19,10 +29,20 @@ public final class GameStreamNativeStreamClient implements NativeStreamProtocolC
                         " endpoints=" + endpointSummary);
             }
 
-            return NativeStreamStartResult.unsupported(
-                "GameStream endpoint map is complete, but native GameStream decode is not implemented yet. protocol=" +
+            if (!gameStreamPlan.rtspReady()) {
+                return NativeStreamStartResult.unsupported(gameStreamPlan.rtspDiagnostic());
+            }
+
+            GameStreamRtspSessionResult rtspResult = rtspSessionClient.start(gameStreamPlan);
+            if (!rtspResult.success()) {
+                return NativeStreamStartResult.unsupported(rtspResult.diagnostic());
+            }
+
+            return NativeStreamStartResult.started(
+                "Native GameStream RTSP session started. protocol=" +
                     gameStreamPlan.protocol() +
-                    " endpoints=" + gameStreamPlan.requiredEndpointSummary());
+                    " rtsp=" +
+                    gameStreamPlan.rtspUri());
         }
 
         return NativeStreamStartResult.unsupported(connection.missingLaunchUriDiagnostic());
