@@ -1,6 +1,8 @@
 package dev.beacon.android;
 
 public final class DiagnosticNativeStreamClient implements NativeStreamClient {
+    private static final String ColorBarsEndpoint = "beacon-test://pattern/color-bars";
+
     @Override
     public NativeStreamStartResult start(StreamConnectionDescriptor connection) {
         if (connection == null || !connection.present()) {
@@ -8,9 +10,17 @@ public final class DiagnosticNativeStreamClient implements NativeStreamClient {
         }
 
         if ("beacon-test".equalsIgnoreCase(connection.protocol())) {
+            String colorBarsEndpoint = findColorBarsEndpoint(connection);
+            if (colorBarsEndpoint.isEmpty()) {
+                return NativeStreamStartResult.unsupported(
+                    "Beacon test stream did not include supported video endpoint beacon-test://pattern/color-bars.");
+            }
+
             String endpoints = connection.endpointSummary();
             String endpointStatus = endpoints.isEmpty() ? "endpoints=none" : "endpoints=" + endpoints;
-            return NativeStreamStartResult.started("Native stream ready. protocol=beacon-test " + endpointStatus);
+            return NativeStreamStartResult.started(
+                "Native stream ready. protocol=beacon-test " + endpointStatus,
+                NativeStreamPresentation.colorBars(colorBarsEndpoint));
         }
 
         return NativeStreamStartResult.unsupported(connection.missingLaunchUriDiagnostic());
@@ -18,5 +28,15 @@ public final class DiagnosticNativeStreamClient implements NativeStreamClient {
 
     @Override
     public void stop() {
+    }
+
+    private static String findColorBarsEndpoint(StreamConnectionDescriptor connection) {
+        for (StreamConnectionDescriptor.Endpoint endpoint : connection.endpoints()) {
+            if ("video".equalsIgnoreCase(endpoint.role()) && ColorBarsEndpoint.equalsIgnoreCase(endpoint.uri())) {
+                return endpoint.uri();
+            }
+        }
+
+        return "";
     }
 }

@@ -34,6 +34,9 @@ public final class StreamConnectionLaunchUriTest {
         assertEquals("gamestream", descriptor.protocol());
         assertEquals("moonlight://stream/z-fold-7", descriptor.launchUri());
         assertEquals("rtsp=rtsp://127.0.0.1:48010, audio=udp://127.0.0.1:48000", descriptor.endpointSummary());
+        assertEquals(2, descriptor.endpoints().size());
+        assertEquals("rtsp", descriptor.endpoints().get(0).role());
+        assertEquals("rtsp://127.0.0.1:48010", descriptor.endpoints().get(0).uri());
         assertEquals("", descriptor.missingLaunchUriDiagnostic());
     }
 

@@ -16,6 +16,7 @@ public final class BeaconViewModel {
     private String latestPlan = "";
     private String latestStream = "";
     private String latestNativeStream = "";
+    private NativeStreamPresentation latestNativeStreamPresentation = NativeStreamPresentation.none();
     private String latestError = "";
     private boolean nativeStreamActive;
     private List<BeaconGameCatalog.GameEntry> latestGameEntries = Collections.emptyList();
@@ -75,6 +76,10 @@ public final class BeaconViewModel {
 
     public String latestNativeStream() {
         return latestNativeStream;
+    }
+
+    public NativeStreamPresentation latestNativeStreamPresentation() {
+        return latestNativeStreamPresentation;
     }
 
     public String latestError() {
@@ -161,6 +166,7 @@ public final class BeaconViewModel {
         NativeStreamStartResult start = nativeStreamClient.start(connection);
         if (start.success()) {
             latestNativeStream = start.status();
+            latestNativeStreamPresentation = start.presentation();
             latestError = "";
             nativeStreamActive = true;
             return;
@@ -201,6 +207,7 @@ public final class BeaconViewModel {
         }
 
         latestNativeStream = "";
+        latestNativeStreamPresentation = NativeStreamPresentation.none();
     }
 
     public void disconnect() throws IOException {

@@ -93,6 +93,20 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public void BeaconTestStreamingRegistrationUsesEndpointOnlyBackend()
+    {
+        using ServiceProvider provider = BuildProvider(new KeyValuePair<string, string?>(
+            BeaconServiceRegistration.StreamingBackendConfigurationKey,
+            "beacon-test"));
+
+        BeaconHostOptions options = provider.GetRequiredService<BeaconHostOptions>();
+
+        Assert.Equal(BeaconStreamingBackendMode.BeaconTest, options.StreamingBackendMode);
+        Assert.Equal("beacon-test", options.StreamingBackendModeName);
+        Assert.IsType<BeaconTestStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+    }
+
+    [Fact]
     public void ExternalProcessConnectionOptionsUseConfiguration()
     {
         IConfiguration configuration = new ConfigurationBuilder()
@@ -286,9 +300,9 @@ public sealed class BeaconServiceRegistrationTests
             BeaconServiceRegistration.StreamingBackendConfigurationKey,
             "fake"));
 
-        BeaconStreamingBackendMode mode = BeaconServiceRegistration.ResolveStreamingBackendMode(configuration, "external-process");
+        BeaconStreamingBackendMode mode = BeaconServiceRegistration.ResolveStreamingBackendMode(configuration, "beacon-test");
 
-        Assert.Equal(BeaconStreamingBackendMode.ExternalProcess, mode);
+        Assert.Equal(BeaconStreamingBackendMode.BeaconTest, mode);
     }
 
     [Fact]
@@ -329,7 +343,7 @@ public sealed class BeaconServiceRegistrationTests
             services.AddBeaconServices(configuration, environmentHostMode: null));
 
         Assert.Contains("Unsupported Beacon streaming backend 'broken'", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("fake, external-process", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("fake, external-process, beacon-test", exception.Message, StringComparison.Ordinal);
     }
 
     private static ServiceProvider BuildProvider(params KeyValuePair<string, string?>[] values)

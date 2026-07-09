@@ -9,9 +9,11 @@ using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.FakeEndpoint;
 using Beacon.Platform.Windows.Streaming;
+using Beacon.Server.Hosting;
 using Beacon.StreamingProbe;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -399,6 +401,34 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal("beacon-fake", connection.GetProperty("protocol").GetString());
         Assert.Equal("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", connection.GetProperty("launchUri").GetString());
         Assert.Equal("control", connection.GetProperty("endpoints")[0].GetProperty("role").GetString());
+    }
+
+    [Fact]
+    public async Task LaunchCanReturnBeaconTestEndpointOnlyStreamConnection()
+    {
+        WebApplicationFactory<Program> testPatternFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IStreamingBackend, BeaconTestStreamingBackend>();
+            }));
+        HttpClient client = testPatternFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
+        {
+            gameId = "steam-shortcut:3767414131"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement connection = document.RootElement.GetProperty("stream").GetProperty("connection");
+
+        Assert.Equal("beacon-test", connection.GetProperty("protocol").GetString());
+        Assert.True(connection.TryGetProperty("launchUri", out JsonElement launchUri));
+        Assert.Equal(JsonValueKind.Null, launchUri.ValueKind);
+        JsonElement endpoint = Assert.Single(connection.GetProperty("endpoints").EnumerateArray());
+        Assert.Equal("video", endpoint.GetProperty("role").GetString());
+        Assert.Equal("beacon-test://pattern/color-bars", endpoint.GetProperty("uri").GetString());
     }
 
     [Fact]

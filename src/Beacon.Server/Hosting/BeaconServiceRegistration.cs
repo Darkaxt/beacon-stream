@@ -168,8 +168,9 @@ public static class BeaconServiceRegistration
         {
             "fake" => BeaconStreamingBackendMode.Fake,
             "external-process" => BeaconStreamingBackendMode.ExternalProcess,
+            "beacon-test" => BeaconStreamingBackendMode.BeaconTest,
             _ => throw new InvalidOperationException(
-                $"Unsupported Beacon streaming backend '{configuredMode}'. Set {StreamingBackendConfigurationKey} or {StreamingBackendEnvironmentVariable} to one of: fake, external-process.")
+                $"Unsupported Beacon streaming backend '{configuredMode}'. Set {StreamingBackendConfigurationKey} or {StreamingBackendEnvironmentVariable} to one of: fake, external-process, beacon-test.")
         };
     }
 
@@ -249,6 +250,9 @@ public static class BeaconServiceRegistration
                 services.AddSingleton<IExternalStreamingManifestReader, WindowsExternalStreamingManifestReader>();
                 services.AddSingleton<IExternalStreamingSessionDescriptorStore, WindowsExternalStreamingSessionDescriptorStore>();
                 services.AddSingleton<IStreamingBackend, ExternalProcessStreamingBackend>();
+                break;
+            case BeaconStreamingBackendMode.BeaconTest:
+                services.AddSingleton<IStreamingBackend, BeaconTestStreamingBackend>();
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unsupported Beacon streaming backend mode.");

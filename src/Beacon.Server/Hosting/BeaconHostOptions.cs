@@ -23,6 +23,7 @@ public sealed record BeaconHostOptions(
     {
         BeaconStreamingBackendMode.Fake => "fake",
         BeaconStreamingBackendMode.ExternalProcess => "external-process",
+        BeaconStreamingBackendMode.BeaconTest => "beacon-test",
         _ => StreamingBackendMode.ToString().ToLowerInvariant()
     };
 
@@ -32,6 +33,7 @@ public sealed record BeaconHostOptions(
         {
             BeaconStreamingBackendMode.Fake => nameof(FakeStreamingBackend),
             BeaconStreamingBackendMode.ExternalProcess => nameof(ExternalProcessStreamingBackend),
+            BeaconStreamingBackendMode.BeaconTest => nameof(BeaconTestStreamingBackend),
             _ => throw new ArgumentOutOfRangeException(nameof(streamingBackendMode), streamingBackendMode, "Unsupported Beacon streaming backend mode.")
         };
 
