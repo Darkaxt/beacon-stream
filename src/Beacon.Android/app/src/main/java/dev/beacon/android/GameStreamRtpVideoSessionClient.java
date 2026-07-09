@@ -67,7 +67,18 @@ public final class GameStreamRtpVideoSessionClient implements GameStreamVideoSes
     private void closeActiveSource() {
         RtpPacketSource source = activeSource;
         activeSource = null;
+        if (source != null) {
+            stopConsumerQuietly();
+        }
+
         closeSourceQuietly(source);
+    }
+
+    private void stopConsumerQuietly() {
+        try {
+            consumer.stop();
+        } catch (RuntimeException ignored) {
+        }
     }
 
     private static void closeSourceQuietly(RtpPacketSource source) {

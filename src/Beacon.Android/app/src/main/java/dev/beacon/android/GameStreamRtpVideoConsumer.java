@@ -5,4 +5,7 @@ public interface GameStreamRtpVideoConsumer {
         GameStreamEndpointPlan plan,
         GameStreamRtspSessionInfo sessionInfo,
         EncodedVideoSampleProvider sampleProvider);
+
+    default void stop() {
+    }
 }

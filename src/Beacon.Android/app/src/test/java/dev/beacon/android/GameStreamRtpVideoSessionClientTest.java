@@ -77,11 +77,13 @@ public final class GameStreamRtpVideoSessionClientTest {
     }
 
     @Test
-    public void stopClosesSourceOnceAfterSuccessfulStart() {
+    public void stopClosesSourceAndConsumerOnceAfterSuccessfulStart() {
         RecordingRtpPacketSource source = new RecordingRtpPacketSource();
+        RecordingVideoConsumer consumer = new RecordingVideoConsumer(
+            NativeStreamStartResult.started("RTP video sample provider started."));
         GameStreamRtpVideoSessionClient client = new GameStreamRtpVideoSessionClient(
             new RecordingPacketSourceFactory(source),
-            new RecordingVideoConsumer(NativeStreamStartResult.started("RTP video sample provider started.")));
+            consumer);
 
         NativeStreamStartResult result = client.start(completePlan(), sessionInfo());
         client.stop();
@@ -89,6 +91,7 @@ public final class GameStreamRtpVideoSessionClientTest {
 
         assertTrue(result.success());
         assertEquals(1, source.closeCount);
+        assertEquals(1, consumer.stopCount);
     }
 
     private static GameStreamEndpointPlan completePlan() {
@@ -141,6 +144,7 @@ public final class GameStreamRtpVideoSessionClientTest {
         private GameStreamRtspSessionInfo requestedSessionInfo;
         private EncodedVideoSampleProvider sampleProvider;
         private int startCount;
+        private int stopCount;
 
         private RecordingVideoConsumer(NativeStreamStartResult result) {
             this.result = result;
@@ -156,6 +160,11 @@ public final class GameStreamRtpVideoSessionClientTest {
             requestedSessionInfo = sessionInfo;
             this.sampleProvider = sampleProvider;
             return result;
+        }
+
+        @Override
+        public void stop() {
+            stopCount++;
         }
     }
 
