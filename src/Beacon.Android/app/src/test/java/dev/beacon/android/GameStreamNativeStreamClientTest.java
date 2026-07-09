@@ -2,8 +2,13 @@ package dev.beacon.android;
 
 import org.junit.Test;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 public final class GameStreamNativeStreamClientTest {
@@ -53,6 +58,59 @@ public final class GameStreamNativeStreamClientTest {
             "Native GameStream RTSP session started. protocol=gamestream rtsp=rtsp://127.0.0.1:48010/beacon/session",
             result.status());
         assertEquals("rtsp://127.0.0.1:48010/beacon/session", rtspClient.startedPlan.rtspUri());
+    }
+
+    @Test
+    public void startsConfiguredVideoSessionAfterRtspSuccess() {
+        RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(startedRtspSessionResult());
+        RecordingVideoSessionClient videoClient = new RecordingVideoSessionClient(
+            NativeStreamStartResult.started("Native GameStream video session started."));
+        GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient, videoClient);
+
+        NativeStreamStartResult result = client.start(
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session"));
+
+        assertTrue(result.success());
+        assertEquals("Native GameStream video session started.", result.status());
+        assertSame(rtspClient.startedPlan, videoClient.startedPlan);
+        assertEquals("session-1", videoClient.startedSessionInfo.sessionId());
+        assertEquals(47998, videoClient.startedSessionInfo.videoServerPort());
+        assertEquals(0, rtspClient.stopCount);
+    }
+
+    @Test
+    public void videoSessionFailureStopsRtspSession() {
+        RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(startedRtspSessionResult());
+        RecordingVideoSessionClient videoClient = new RecordingVideoSessionClient(
+            NativeStreamStartResult.unsupported("RTP video failed"));
+        GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient, videoClient);
+
+        NativeStreamStartResult result = client.start(
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session"));
+
+        assertFalse(result.success());
+        assertEquals("RTP video failed", result.diagnostic());
+        assertEquals(1, rtspClient.stopCount);
+        assertEquals(0, videoClient.stopCount);
+    }
+
+    @Test
+    public void stopDelegatesVideoBeforeRtspAfterSuccessfulVideoStart() {
+        List<String> stopOrder = new ArrayList<>();
+        RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(startedRtspSessionResult(), stopOrder);
+        RecordingVideoSessionClient videoClient = new RecordingVideoSessionClient(
+            NativeStreamStartResult.started("Native GameStream video session started."),
+            stopOrder);
+        GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient, videoClient);
+
+        NativeStreamStartResult result = client.start(
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session"));
+        client.stop();
+
+        assertTrue(result.success());
+        assertEquals(1, videoClient.stopCount);
+        assertEquals(1, rtspClient.stopCount);
+        assertEquals(Arrays.asList("video", "rtsp"), stopOrder);
     }
 
     @Test
@@ -147,13 +205,31 @@ public final class GameStreamNativeStreamClientTest {
                 "{\"role\":\"audio\",\"uri\":\"udp://127.0.0.1:48000\"}]}}}");
     }
 
+    private static GameStreamRtspSessionResult startedRtspSessionResult() {
+        return GameStreamRtspSessionResult.started(
+            "RTSP session started.",
+            GameStreamRtspSessionInfo.started(
+                "gamestream",
+                "rtsp://127.0.0.1:48010/beacon/session",
+                "session-1",
+                48000,
+                47998,
+                47999));
+    }
+
     private static final class RecordingRtspSessionClient implements GameStreamRtspSessionClient {
         private final GameStreamRtspSessionResult result;
+        private final List<String> stopOrder;
         private GameStreamEndpointPlan startedPlan;
         private int stopCount;
 
         private RecordingRtspSessionClient(GameStreamRtspSessionResult result) {
+            this(result, null);
+        }
+
+        private RecordingRtspSessionClient(GameStreamRtspSessionResult result, List<String> stopOrder) {
             this.result = result;
+            this.stopOrder = stopOrder;
         }
 
         @Override
@@ -165,6 +241,41 @@ public final class GameStreamNativeStreamClientTest {
         @Override
         public void stop() {
             stopCount++;
+            if (stopOrder != null) {
+                stopOrder.add("rtsp");
+            }
+        }
+    }
+
+    private static final class RecordingVideoSessionClient implements GameStreamVideoSessionClient {
+        private final NativeStreamStartResult result;
+        private final List<String> stopOrder;
+        private GameStreamEndpointPlan startedPlan;
+        private GameStreamRtspSessionInfo startedSessionInfo;
+        private int stopCount;
+
+        private RecordingVideoSessionClient(NativeStreamStartResult result) {
+            this(result, null);
+        }
+
+        private RecordingVideoSessionClient(NativeStreamStartResult result, List<String> stopOrder) {
+            this.result = result;
+            this.stopOrder = stopOrder;
+        }
+
+        @Override
+        public NativeStreamStartResult start(GameStreamEndpointPlan plan, GameStreamRtspSessionInfo sessionInfo) {
+            startedPlan = plan;
+            startedSessionInfo = sessionInfo;
+            return result;
+        }
+
+        @Override
+        public void stop() {
+            stopCount++;
+            if (stopOrder != null) {
+                stopOrder.add("video");
+            }
         }
     }
 

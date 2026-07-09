@@ -33,6 +33,7 @@ public final class GameStreamRtspHandshakeClientTest {
         assertEquals(
             "RTSP play started. protocol=gamestream rtsp=rtsp://127.0.0.1:48010/beacon/session session=session-1 audioPort=48000 videoPort=47998 controlPort=47999",
             result.status());
+        assertSessionInfo(result);
         assertEquals(7, transport.requests.size());
         assertEquals(
             "OPTIONS rtsp://127.0.0.1:48010/beacon/session RTSP/1.0\r\n" +
@@ -72,6 +73,7 @@ public final class GameStreamRtspHandshakeClientTest {
         assertEquals(
             "RTSP play started. protocol=gamestream rtsp=rtsp://127.0.0.1:48010/beacon/session session=session-1 audioPort=48000 videoPort=47998 controlPort=47999",
             result.status());
+        assertSessionInfo(result);
         assertEquals(7, transport.requests.size());
         assertEquals(
             "SETUP streamid=audio/0/0 RTSP/1.0\r\n" +
@@ -241,6 +243,16 @@ public final class GameStreamRtspHandshakeClientTest {
                 "{\"role\":\"control\",\"uri\":\"tcp://127.0.0.1:47999\"}," +
                 "{\"role\":\"audio\",\"uri\":\"udp://127.0.0.1:48000\"}]}}}");
         return GameStreamEndpointPlan.from(descriptor);
+    }
+
+    private static void assertSessionInfo(GameStreamRtspSessionResult result) {
+        assertTrue(result.sessionInfo().present());
+        assertEquals("gamestream", result.sessionInfo().protocol());
+        assertEquals("rtsp://127.0.0.1:48010/beacon/session", result.sessionInfo().rtspUri());
+        assertEquals("session-1", result.sessionInfo().sessionId());
+        assertEquals(48000, result.sessionInfo().audioServerPort());
+        assertEquals(47998, result.sessionInfo().videoServerPort());
+        assertEquals(47999, result.sessionInfo().controlServerPort());
     }
 
     private static RtspResponse setupResponse(String cseq, String sessionId, int serverPort) {
