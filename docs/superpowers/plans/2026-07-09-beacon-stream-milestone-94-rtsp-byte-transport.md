@@ -142,6 +142,34 @@ Observed:
 - `gradle --no-daemon -p src\Beacon.Android test assembleDebug` passed.
 - `dotnet test Beacon.slnx` passed.
 
-- [ ] **Step 4: Sync**
+- [x] **Step 4: Sync**
+
+Commit, push, open a PR, wait for CI, and merge if checks are green.
+
+Observed implementation sync:
+- Commit `0276da8` pushed on branch `codex/milestone-94-rtsp-byte-transport`.
+- PR #94 passed duplicate GitHub `android`, `client-lab`, and `dotnet` checks.
+- PR #94 merged to `main` as merge commit `e60afec`.
+
+### Task 5: Refactor Pass And Second Sync
+
+**Files:**
+- Modify: `src/Beacon.Android/app/src/main/java/dev/beacon/android/RtspByteStreamTransport.java`
+- Modify: `docs/superpowers/plans/2026-07-09-beacon-stream-milestone-94-rtsp-byte-transport.md`
+
+- [x] **Step 1: Refactor header terminator detection**
+
+Replace the per-byte `ByteArrayOutputStream.toByteArray()` terminator check with a rolling four-byte `\r\n\r\n` window. This preserves behavior while removing an avoidable allocation from the response read loop.
+
+- [x] **Step 2: Validate refactor**
+
+Observed:
+- Focused `RtspByteStreamTransportTest` Gradle run passed.
+- `git diff --check` passed.
+- `git diff -U0 -- src tests | rg -n "Thread\.Sleep|Task\.Delay|CancelAfter|CancellationTokenSource\(|Timeout|setSoTimeout|connect\\([^,]+,\\s*[0-9]+\\)|sleep\\("` found no matches.
+- `gradle --no-daemon -p src\Beacon.Android test assembleDebug` passed.
+- `dotnet test Beacon.slnx` passed.
+
+- [ ] **Step 3: Sync refactor**
 
 Commit, push, open a PR, wait for CI, and merge if checks are green.
