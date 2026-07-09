@@ -433,6 +433,45 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task LaunchCanReturnBeaconTestEncodedVideoStreamConnection()
+    {
+        WebApplicationFactory<Program> encodedVideoFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton(new BeaconTestStreamingOptions(BeaconTestStreamKind.EncodedVideo));
+                services.AddSingleton<IStreamingBackend, BeaconTestStreamingBackend>();
+            }));
+        HttpClient client = encodedVideoFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
+        {
+            gameId = "steam-shortcut:3767414131"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement stream = document.RootElement.GetProperty("stream");
+        JsonElement connection = stream.GetProperty("connection");
+
+        Assert.Equal("h264", stream.GetProperty("codec").GetString());
+        Assert.Equal(120, stream.GetProperty("fps").GetInt32());
+        Assert.Equal("beacon-test", connection.GetProperty("protocol").GetString());
+        Assert.True(connection.TryGetProperty("launchUri", out JsonElement launchUri));
+        Assert.Equal(JsonValueKind.Null, launchUri.ValueKind);
+        JsonElement endpoint = Assert.Single(connection.GetProperty("endpoints").EnumerateArray());
+        Assert.Equal("video", endpoint.GetProperty("role").GetString());
+        Assert.Equal("beacon-test://video/color-bars.h264", endpoint.GetProperty("uri").GetString());
+        JsonElement metadata = connection.GetProperty("metadata");
+        Assert.Equal("encoded-video", metadata.GetProperty("streamKind").GetString());
+        Assert.Equal("h264", metadata.GetProperty("codec").GetString());
+        Assert.Equal("annex-b", metadata.GetProperty("container").GetString());
+        Assert.Equal("2560", metadata.GetProperty("width").GetString());
+        Assert.Equal("1600", metadata.GetProperty("height").GetString());
+        Assert.Equal("120", metadata.GetProperty("fps").GetString());
+    }
+
+    [Fact]
     public async Task LaunchRecordsServerOwnedSessionState()
     {
         var launcher = new FakeGameLauncher { NextProcessId = 4321 };

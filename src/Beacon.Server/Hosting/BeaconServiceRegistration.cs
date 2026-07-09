@@ -23,6 +23,8 @@ public static class BeaconServiceRegistration
     public const string HostModeEnvironmentVariable = "BEACON_HOST_MODE";
     public const string StreamingBackendConfigurationKey = "Beacon:Streaming:Backend";
     public const string StreamingBackendEnvironmentVariable = "BEACON_STREAMING_BACKEND";
+    public const string BeaconTestStreamKindConfigurationKey = "Beacon:Streaming:BeaconTest:StreamKind";
+    public const string BeaconTestStreamKindEnvironmentVariable = "BEACON_TEST_STREAM_KIND";
     public const string ExternalStreamingExecutableConfigurationKey = "Beacon:Streaming:ExternalProcess:ExecutablePath";
     public const string ExternalStreamingExecutableEnvironmentVariable = "BEACON_EXTERNAL_STREAMING_EXECUTABLE";
     public const string ExternalStreamingManifestConfigurationKey = "Beacon:Streaming:ExternalProcess:ManifestPath";
@@ -63,7 +65,8 @@ public static class BeaconServiceRegistration
             Environment.GetEnvironmentVariable(PairingTokenEnvironmentVariable),
             Environment.GetEnvironmentVariable(ExternalStreamingWrapperChildExecutableEnvironmentVariable),
             Environment.GetEnvironmentVariable(ExternalStreamingWrapperChildArgumentsEnvironmentVariable),
-            Environment.GetEnvironmentVariable(ExternalStreamingArgumentTemplateEnvironmentVariable));
+            Environment.GetEnvironmentVariable(ExternalStreamingArgumentTemplateEnvironmentVariable),
+            Environment.GetEnvironmentVariable(BeaconTestStreamKindEnvironmentVariable));
 
     public static IServiceCollection AddBeaconServices(
         this IServiceCollection services,
@@ -80,7 +83,8 @@ public static class BeaconServiceRegistration
         string? environmentPairingToken = null,
         string? environmentExternalStreamingWrapperChildExecutable = null,
         string? environmentExternalStreamingWrapperChildArguments = null,
-        string? environmentExternalStreamingArgumentTemplate = null)
+        string? environmentExternalStreamingArgumentTemplate = null,
+        string? environmentBeaconTestStreamKind = null)
     {
         BeaconHostMode mode = ResolveHostMode(configuration, environmentHostMode);
         BeaconStreamingBackendMode streamingBackendMode = ResolveStreamingBackendMode(configuration, environmentStreamingBackend);
@@ -127,7 +131,8 @@ public static class BeaconServiceRegistration
             environmentExternalStreamingManifest,
             environmentExternalStreamingWrapperChildExecutable,
             environmentExternalStreamingWrapperChildArguments,
-            environmentExternalStreamingArgumentTemplate);
+            environmentExternalStreamingArgumentTemplate,
+            environmentBeaconTestStreamKind);
         return services;
     }
 
@@ -227,7 +232,8 @@ public static class BeaconServiceRegistration
         string? environmentExternalStreamingManifest,
         string? environmentExternalStreamingWrapperChildExecutable,
         string? environmentExternalStreamingWrapperChildArguments,
-        string? environmentExternalStreamingArgumentTemplate)
+        string? environmentExternalStreamingArgumentTemplate,
+        string? environmentBeaconTestStreamKind)
     {
         switch (mode)
         {
@@ -252,11 +258,34 @@ public static class BeaconServiceRegistration
                 services.AddSingleton<IStreamingBackend, ExternalProcessStreamingBackend>();
                 break;
             case BeaconStreamingBackendMode.BeaconTest:
+                services.AddSingleton(CreateBeaconTestStreamingOptions(configuration, environmentBeaconTestStreamKind));
                 services.AddSingleton<IStreamingBackend, BeaconTestStreamingBackend>();
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unsupported Beacon streaming backend mode.");
         }
+    }
+
+    private static BeaconTestStreamingOptions CreateBeaconTestStreamingOptions(
+        IConfiguration configuration,
+        string? environmentBeaconTestStreamKind)
+    {
+        string? configuredKind = string.IsNullOrWhiteSpace(environmentBeaconTestStreamKind)
+            ? configuration[BeaconTestStreamKindConfigurationKey]
+            : environmentBeaconTestStreamKind;
+
+        if (string.IsNullOrWhiteSpace(configuredKind))
+        {
+            return BeaconTestStreamingOptions.Default;
+        }
+
+        return configuredKind.Trim().ToLowerInvariant() switch
+        {
+            "color-bars" => new BeaconTestStreamingOptions(BeaconTestStreamKind.ColorBars),
+            "encoded-video" => new BeaconTestStreamingOptions(BeaconTestStreamKind.EncodedVideo),
+            _ => throw new InvalidOperationException(
+                $"Unsupported Beacon test stream kind '{configuredKind}'. Set {BeaconTestStreamKindConfigurationKey} or {BeaconTestStreamKindEnvironmentVariable} to one of: color-bars, encoded-video.")
+        };
     }
 
     private static string? ResolveExternalStreamingExecutable(

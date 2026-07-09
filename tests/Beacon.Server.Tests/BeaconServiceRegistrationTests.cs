@@ -107,6 +107,58 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public async Task BeaconTestStreamKindUsesConfiguration()
+    {
+        using ServiceProvider provider = BuildProvider(
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "beacon-test"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.BeaconTestStreamKindConfigurationKey, "encoded-video"));
+
+        var backend = Assert.IsType<BeaconTestStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        StreamingEndpointDescriptor endpoint = Assert.Single(health.Endpoints);
+        Assert.Equal("beacon-test://video/color-bars.h264", endpoint.Uri);
+        Assert.Contains("h264", health.Codecs);
+        Assert.Contains("beacon-test-encoded-video", health.Capture);
+    }
+
+    [Fact]
+    public async Task BeaconTestStreamKindUsesEnvironmentOverride()
+    {
+        IConfiguration configuration = CreateConfiguration(
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "beacon-test"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.BeaconTestStreamKindConfigurationKey, "color-bars"));
+
+        using ServiceProvider provider = new ServiceCollection()
+            .AddBeaconServices(
+                configuration,
+                environmentHostMode: null,
+                environmentBeaconTestStreamKind: "encoded-video")
+            .BuildServiceProvider();
+
+        var backend = Assert.IsType<BeaconTestStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        StreamingEndpointDescriptor endpoint = Assert.Single(health.Endpoints);
+        Assert.Equal("beacon-test://video/color-bars.h264", endpoint.Uri);
+    }
+
+    [Fact]
+    public void UnknownBeaconTestStreamKindFailsWithClearConfigurationError()
+    {
+        IConfiguration configuration = CreateConfiguration(
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "beacon-test"),
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.BeaconTestStreamKindConfigurationKey, "broken"));
+        var services = new ServiceCollection();
+
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
+            services.AddBeaconServices(configuration, environmentHostMode: null));
+
+        Assert.Contains("Unsupported Beacon test stream kind 'broken'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("color-bars, encoded-video", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ExternalProcessConnectionOptionsUseConfiguration()
     {
         IConfiguration configuration = new ConfigurationBuilder()
