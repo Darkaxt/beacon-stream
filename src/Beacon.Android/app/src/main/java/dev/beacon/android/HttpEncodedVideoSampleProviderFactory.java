@@ -6,6 +6,8 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 public final class HttpEncodedVideoSampleProviderFactory implements EncodedVideoSampleProviderFactory {
@@ -38,7 +40,14 @@ public final class HttpEncodedVideoSampleProviderFactory implements EncodedVideo
                 throw new IllegalArgumentException("Encoded video endpoint returned no bytes: " + url);
             }
 
-            return new SingleSampleProvider(EncodedVideoSample.data(bytes, 0));
+            List<byte[]> accessUnits = AnnexBAccessUnitSplitter.split(bytes);
+            List<EncodedVideoSample> samples = new ArrayList<>();
+            long frameDurationUs = 1_000_000L / plan.fps();
+            for (int index = 0; index < accessUnits.size(); index++) {
+                samples.add(EncodedVideoSample.data(accessUnits.get(index), index * frameDurationUs));
+            }
+
+            return new SequenceSampleProvider(samples);
         } catch (IOException ex) {
             throw new IllegalStateException("Encoded video sample fetch failed: " + ex.getMessage(), ex);
         }
@@ -103,21 +112,22 @@ public final class HttpEncodedVideoSampleProviderFactory implements EncodedVideo
         }
     }
 
-    private static final class SingleSampleProvider implements EncodedVideoSampleProvider {
-        private final EncodedVideoSample sample;
-        private boolean consumed;
+    private static final class SequenceSampleProvider implements EncodedVideoSampleProvider {
+        private final List<EncodedVideoSample> samples;
+        private int index;
 
-        SingleSampleProvider(EncodedVideoSample sample) {
-            this.sample = sample;
+        SequenceSampleProvider(List<EncodedVideoSample> samples) {
+            this.samples = new ArrayList<>(samples);
         }
 
         @Override
         public EncodedVideoSample nextSample() {
-            if (consumed) {
+            if (index >= samples.size()) {
                 return EncodedVideoSample.eos();
             }
 
-            consumed = true;
+            EncodedVideoSample sample = samples.get(index);
+            index++;
             return sample;
         }
     }

@@ -486,6 +486,21 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal(0, bytes[1]);
         Assert.Equal(0, bytes[2]);
         Assert.Equal(1, bytes[3]);
+        Assert.True(CountAnnexBStartCodes(bytes) >= 4);
+    }
+
+    private static int CountAnnexBStartCodes(byte[] bytes)
+    {
+        int count = 0;
+        for (int index = 0; index <= bytes.Length - 4; index++)
+        {
+            if (bytes[index] == 0 && bytes[index + 1] == 0 && bytes[index + 2] == 0 && bytes[index + 3] == 1)
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     [Fact]
