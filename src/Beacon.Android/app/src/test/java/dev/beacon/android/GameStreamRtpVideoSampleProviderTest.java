@@ -42,6 +42,20 @@ public final class GameStreamRtpVideoSampleProviderTest {
     }
 
     @Test
+    public void mapsWrappedRtpTimestampToForwardPresentationTime() {
+        RecordingRtpPacketSource source = new RecordingRtpPacketSource(
+            packet(1, 0xFFFFFFF0L, new byte[] {0, 0, 1, 0x65}),
+            packet(2, 0x00000020L, new byte[] {0, 0, 1, 0x41}));
+        GameStreamRtpVideoSampleProvider provider = new GameStreamRtpVideoSampleProvider(source);
+
+        EncodedVideoSample first = provider.nextSample();
+        EncodedVideoSample second = provider.nextSample();
+
+        assertEquals(0L, first.presentationTimeUs());
+        assertEquals(533L, second.presentationTimeUs());
+    }
+
+    @Test
     public void sourceExceptionPropagatesAsProviderException() {
         GameStreamRtpVideoSampleProvider provider = new GameStreamRtpVideoSampleProvider(new ThrowingRtpPacketSource());
 
