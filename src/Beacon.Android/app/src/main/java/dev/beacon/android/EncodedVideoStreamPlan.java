@@ -9,6 +9,8 @@ public final class EncodedVideoStreamPlan {
 
     private final boolean supportedProtocol;
     private final String videoUri;
+    private final String sampleTransport;
+    private final String sampleUri;
     private final String codec;
     private final String container;
     private final int width;
@@ -19,6 +21,8 @@ public final class EncodedVideoStreamPlan {
     private EncodedVideoStreamPlan(
         boolean supportedProtocol,
         String videoUri,
+        String sampleTransport,
+        String sampleUri,
         String codec,
         String container,
         int width,
@@ -27,6 +31,8 @@ public final class EncodedVideoStreamPlan {
         String diagnostic) {
         this.supportedProtocol = supportedProtocol;
         this.videoUri = videoUri;
+        this.sampleTransport = sampleTransport;
+        this.sampleUri = sampleUri;
         this.codec = codec;
         this.container = container;
         this.width = width;
@@ -40,10 +46,12 @@ public final class EncodedVideoStreamPlan {
             !connection.present() ||
             !"beacon-test".equalsIgnoreCase(connection.protocol()) ||
             !StreamKind.equalsIgnoreCase(connection.metadataValue("streamKind"))) {
-            return new EncodedVideoStreamPlan(false, "", "", "", 0, 0, 0, "");
+            return new EncodedVideoStreamPlan(false, "", "", "", "", "", 0, 0, 0, "");
         }
 
         String videoUri = videoUri(connection);
+        String sampleTransport = normalize(connection.metadataValue("sampleTransport"));
+        String sampleUri = sampleUri(connection, sampleTransport);
         String codec = normalize(connection.metadataValue("codec"));
         String container = normalize(connection.metadataValue("container"));
         int width = positiveInteger(connection.metadataValue("width"));
@@ -53,6 +61,9 @@ public final class EncodedVideoStreamPlan {
         List<String> missing = new ArrayList<>();
         if (videoUri.isEmpty()) {
             missing.add("video endpoint");
+        }
+        if (!sampleTransport.isEmpty() && sampleUri.isEmpty()) {
+            missing.add("samples endpoint");
         }
         if (!validCodec(codec)) {
             missing.add("codec");
@@ -77,6 +88,8 @@ public final class EncodedVideoStreamPlan {
         return new EncodedVideoStreamPlan(
             true,
             videoUri,
+            validSampleTransport(sampleTransport) ? sampleTransport : "",
+            validSampleTransport(sampleTransport) ? sampleUri : "",
             validCodec(codec) ? codec : "",
             validContainer(container) ? container : "",
             width,
@@ -95,6 +108,14 @@ public final class EncodedVideoStreamPlan {
 
     public String videoUri() {
         return videoUri;
+    }
+
+    public String sampleTransport() {
+        return sampleTransport;
+    }
+
+    public String sampleUri() {
+        return sampleUri;
     }
 
     public String codec() {
@@ -122,13 +143,25 @@ public final class EncodedVideoStreamPlan {
     }
 
     private static String videoUri(StreamConnectionDescriptor connection) {
+        return endpointUri(connection, "video");
+    }
+
+    private static String sampleUri(StreamConnectionDescriptor connection, String sampleTransport) {
+        return "beacon-annexb-samples".equals(sampleTransport) ? endpointUri(connection, "samples") : "";
+    }
+
+    private static String endpointUri(StreamConnectionDescriptor connection, String role) {
         for (StreamConnectionDescriptor.Endpoint endpoint : connection.endpoints()) {
-            if ("video".equalsIgnoreCase(endpoint.role())) {
+            if (role.equalsIgnoreCase(endpoint.role())) {
                 return endpoint.uri();
             }
         }
 
         return "";
+    }
+
+    private static boolean validSampleTransport(String sampleTransport) {
+        return sampleTransport.isEmpty() || "beacon-annexb-samples".equals(sampleTransport);
     }
 
     private static boolean validCodec(String codec) {

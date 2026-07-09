@@ -22,6 +22,20 @@ public static class StreamAssetEndpoints
             return Results.File(File.ReadAllBytes(assetPath), H264ContentType);
         });
 
+        endpoints.MapGet(BeaconTestStreamingBackend.EncodedVideoSamplesEndpoint, () =>
+        {
+            string assetPath = Path.Combine(AppContext.BaseDirectory, "Assets", BeaconTestColorBarsAsset);
+            if (!File.Exists(assetPath))
+            {
+                return Results.Problem(
+                    $"Beacon test encoded-video asset '{BeaconTestColorBarsAsset}' is missing.",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            byte[] envelope = BeaconAnnexBSampleEnvelope.Create(File.ReadAllBytes(assetPath), fps: 120);
+            return Results.File(envelope, BeaconAnnexBSampleEnvelope.ContentType);
+        });
+
         return endpoints;
     }
 }

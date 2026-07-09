@@ -3,6 +3,9 @@ package dev.beacon.android;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -67,6 +70,32 @@ public final class HttpEncodedVideoSampleProviderFactoryTest {
     }
 
     @Test
+    public void fetchesFramedSampleEndpointWhenAdvertised() {
+        byte[] first = concat(start(), new byte[] { 0x67, 0x01 });
+        byte[] second = concat(start(), new byte[] { 0x65, 0x02 });
+        RecordingByteFetcher fetcher = new RecordingByteFetcher(envelope(
+            record(44_000L, first),
+            record(99_000L, second)));
+        HttpEncodedVideoSampleProviderFactory factory = new HttpEncodedVideoSampleProviderFactory(
+            "http://10.0.2.2:5000",
+            fetcher);
+
+        EncodedVideoSampleProvider provider = factory.create(planWithSamples(
+            "/streams/beacon-test/color-bars.h264",
+            "/streams/beacon-test/color-bars.beacon-annexb"));
+
+        EncodedVideoSample firstSample = provider.nextSample();
+        EncodedVideoSample secondSample = provider.nextSample();
+
+        assertEquals("http://10.0.2.2:5000/streams/beacon-test/color-bars.beacon-annexb", fetcher.lastUrl);
+        assertArrayEquals(first, firstSample.data());
+        assertEquals(44_000L, firstSample.presentationTimeUs());
+        assertArrayEquals(second, secondSample.data());
+        assertEquals(99_000L, secondSample.presentationTimeUs());
+        assertTrue(provider.nextSample().endOfStream());
+    }
+
+    @Test
     public void rejectsUnsupportedEndpointScheme() {
         HttpEncodedVideoSampleProviderFactory factory = new HttpEncodedVideoSampleProviderFactory(
             "http://10.0.2.2:5000",
@@ -92,6 +121,33 @@ public final class HttpEncodedVideoSampleProviderFactoryTest {
                 "\"width\":\"2560\"," +
                 "\"height\":\"1600\"," +
                 "\"fps\":\"120\"}}}}"));
+    }
+
+    private static EncodedVideoStreamPlan planWithSamples(String videoUri, String sampleUri) {
+        return EncodedVideoStreamPlan.from(StreamConnectionDescriptor.extract(
+            "{\"stream\":{\"connection\":{\"protocol\":\"beacon-test\",\"endpoints\":[" +
+                "{\"role\":\"video\",\"uri\":\"" + videoUri + "\"}," +
+                "{\"role\":\"samples\",\"uri\":\"" + sampleUri + "\"}]," +
+                "\"metadata\":{" +
+                "\"streamKind\":\"encoded-video\"," +
+                "\"codec\":\"h264\"," +
+                "\"container\":\"annex-b\"," +
+                "\"sampleTransport\":\"beacon-annexb-samples\"," +
+                "\"width\":\"2560\"," +
+                "\"height\":\"1600\"," +
+                "\"fps\":\"120\"}}}}"));
+    }
+
+    private static byte[] envelope(byte[]... records) {
+        return concat("BEACONANNEXB1\n".getBytes(StandardCharsets.US_ASCII), concat(records));
+    }
+
+    private static byte[] record(long presentationTimeUs, byte[] sample) {
+        ByteBuffer buffer = ByteBuffer.allocate(12 + sample.length).order(ByteOrder.LITTLE_ENDIAN);
+        buffer.putLong(presentationTimeUs);
+        buffer.putInt(sample.length);
+        buffer.put(sample);
+        return buffer.array();
     }
 
     private static byte[] start() {

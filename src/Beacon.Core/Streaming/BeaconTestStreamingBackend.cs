@@ -20,6 +20,7 @@ public sealed class BeaconTestStreamingBackend : IStreamingBackend
     public const string Protocol = "beacon-test";
     public const string ColorBarsEndpoint = "beacon-test://pattern/color-bars";
     public const string EncodedVideoEndpoint = "/streams/beacon-test/color-bars.h264";
+    public const string EncodedVideoSamplesEndpoint = "/streams/beacon-test/color-bars.beacon-annexb";
 
     private const string EncodedVideoCodec = "h264";
     private const string EncodedVideoContainer = "annex-b";
@@ -60,7 +61,7 @@ public sealed class BeaconTestStreamingBackend : IStreamingBackend
             ManifestName: null,
             Protocol: Protocol,
             LaunchUri: null,
-            Endpoints: [CreateVideoEndpoint()],
+            Endpoints: CreateEndpoints(),
             Codecs: options.StreamKind == BeaconTestStreamKind.EncodedVideo ? [EncodedVideoCodec] : ["beacon-test"],
             Transports: ["in-app-test"],
             Encoders: ["beacon-test"],
@@ -79,7 +80,7 @@ public sealed class BeaconTestStreamingBackend : IStreamingBackend
         var connection = new StreamingConnectionDescriptor(
             Protocol,
             LaunchUri: null,
-            [CreateVideoEndpoint()],
+            CreateEndpoints(),
             CreateMetadata(plan));
 
         var session = new StreamingSessionState(
@@ -120,10 +121,14 @@ public sealed class BeaconTestStreamingBackend : IStreamingBackend
             .ThenBy(session => session.SessionId, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-    private StreamingEndpointDescriptor CreateVideoEndpoint() =>
+    private IReadOnlyList<StreamingEndpointDescriptor> CreateEndpoints() =>
         options.StreamKind == BeaconTestStreamKind.EncodedVideo
-            ? new StreamingEndpointDescriptor("video", EncodedVideoEndpoint)
-            : new StreamingEndpointDescriptor("video", ColorBarsEndpoint);
+            ?
+            [
+                new StreamingEndpointDescriptor("video", EncodedVideoEndpoint),
+                new StreamingEndpointDescriptor("samples", EncodedVideoSamplesEndpoint)
+            ]
+            : [new StreamingEndpointDescriptor("video", ColorBarsEndpoint)];
 
     private Dictionary<string, string> CreateMetadata(SessionPlan plan)
     {
@@ -138,6 +143,7 @@ public sealed class BeaconTestStreamingBackend : IStreamingBackend
             metadata["streamKind"] = "encoded-video";
             metadata["codec"] = EncodedVideoCodec;
             metadata["container"] = EncodedVideoContainer;
+            metadata["sampleTransport"] = "beacon-annexb-samples";
             metadata["width"] = plan.Display.Width.ToString(CultureInfo.InvariantCulture);
             metadata["height"] = plan.Display.Height.ToString(CultureInfo.InvariantCulture);
             metadata["fps"] = plan.Stream.Fps.ToString(CultureInfo.InvariantCulture);

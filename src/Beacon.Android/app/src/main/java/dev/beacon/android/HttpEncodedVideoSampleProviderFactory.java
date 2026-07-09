@@ -33,11 +33,16 @@ public final class HttpEncodedVideoSampleProviderFactory implements EncodedVideo
 
     @Override
     public EncodedVideoSampleProvider create(EncodedVideoStreamPlan plan) {
-        String url = resolveUrl(plan.videoUri());
+        boolean framedSamples = "beacon-annexb-samples".equals(plan.sampleTransport());
+        String url = resolveUrl(framedSamples ? plan.sampleUri() : plan.videoUri());
         try {
             byte[] bytes = byteFetcher.fetch(url);
             if (bytes == null || bytes.length == 0) {
                 throw new IllegalArgumentException("Encoded video endpoint returned no bytes: " + url);
+            }
+
+            if (framedSamples) {
+                return new SequenceSampleProvider(BeaconAnnexBSampleEnvelopeParser.parse(bytes));
             }
 
             List<byte[]> accessUnits = AnnexBAccessUnitSplitter.split(bytes);

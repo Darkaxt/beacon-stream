@@ -11,26 +11,26 @@ final class AnnexBAccessUnitSplitter {
     }
 
     static List<byte[]> split(byte[] bytes) {
-        if (bytes == null || bytes.length < 5 || !startsWithStartCode(bytes, 0)) {
+        if (bytes == null || bytes.length < 4 || startCodeLength(bytes, 0) == 0) {
             throw new IllegalArgumentException(MissingStartCode);
         }
 
-        List<Integer> starts = findStartCodes(bytes);
+        List<StartCode> starts = findStartCodes(bytes);
         if (starts.isEmpty()) {
             throw new IllegalArgumentException(MissingStartCode);
         }
 
         List<byte[]> samples = new ArrayList<>();
-        int sampleStart = starts.get(0);
+        int sampleStart = starts.get(0).index;
         boolean currentSampleHasVcl = false;
 
         for (int startIndex = 0; startIndex < starts.size(); startIndex++) {
-            int start = starts.get(startIndex);
-            int payload = start + 4;
+            StartCode start = starts.get(startIndex);
+            int payload = start.index + start.length;
             boolean vcl = payload < bytes.length && isVclNal(bytes[payload]);
             if (vcl && currentSampleHasVcl) {
-                samples.add(Arrays.copyOfRange(bytes, sampleStart, start));
-                sampleStart = start;
+                samples.add(Arrays.copyOfRange(bytes, sampleStart, start.index));
+                sampleStart = start.index;
             }
 
             if (vcl) {
@@ -45,24 +45,50 @@ final class AnnexBAccessUnitSplitter {
         return samples;
     }
 
-    private static List<Integer> findStartCodes(byte[] bytes) {
-        List<Integer> starts = new ArrayList<>();
-        for (int index = 0; index <= bytes.length - 4; index++) {
-            if (startsWithStartCode(bytes, index)) {
-                starts.add(index);
-                index += 3;
+    private static List<StartCode> findStartCodes(byte[] bytes) {
+        List<StartCode> starts = new ArrayList<>();
+        for (int index = 0; index <= bytes.length - 3; index++) {
+            int length = startCodeLength(bytes, index);
+            if (length > 0) {
+                starts.add(new StartCode(index, length));
+                index += length - 1;
             }
         }
 
         return starts;
     }
 
-    private static boolean startsWithStartCode(byte[] bytes, int index) {
-        return bytes[index] == 0 && bytes[index + 1] == 0 && bytes[index + 2] == 0 && bytes[index + 3] == 1;
+    private static int startCodeLength(byte[] bytes, int index) {
+        if (index <= bytes.length - 4 &&
+            bytes[index] == 0 &&
+            bytes[index + 1] == 0 &&
+            bytes[index + 2] == 0 &&
+            bytes[index + 3] == 1) {
+            return 4;
+        }
+
+        if (index <= bytes.length - 3 &&
+            bytes[index] == 0 &&
+            bytes[index + 1] == 0 &&
+            bytes[index + 2] == 1) {
+            return 3;
+        }
+
+        return 0;
     }
 
     private static boolean isVclNal(byte value) {
         int type = value & 0x1F;
         return type >= 1 && type <= 5;
+    }
+
+    private static final class StartCode {
+        private final int index;
+        private final int length;
+
+        StartCode(int index, int length) {
+            this.index = index;
+            this.length = length;
+        }
     }
 }

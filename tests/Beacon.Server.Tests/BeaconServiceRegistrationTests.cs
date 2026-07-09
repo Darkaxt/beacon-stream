@@ -116,8 +116,9 @@ public sealed class BeaconServiceRegistrationTests
         var backend = Assert.IsType<BeaconTestStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
         StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
 
-        StreamingEndpointDescriptor endpoint = Assert.Single(health.Endpoints);
-        Assert.Equal("/streams/beacon-test/color-bars.h264", endpoint.Uri);
+        Assert.Equal(2, health.Endpoints.Count);
+        Assert.Contains(health.Endpoints, endpoint => endpoint.Role == "video" && endpoint.Uri == "/streams/beacon-test/color-bars.h264");
+        Assert.Contains(health.Endpoints, endpoint => endpoint.Role == "samples" && endpoint.Uri == "/streams/beacon-test/color-bars.beacon-annexb");
         Assert.Contains("h264", health.Codecs);
         Assert.Contains("beacon-test-encoded-video", health.Capture);
     }
@@ -139,8 +140,9 @@ public sealed class BeaconServiceRegistrationTests
         var backend = Assert.IsType<BeaconTestStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
         StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
 
-        StreamingEndpointDescriptor endpoint = Assert.Single(health.Endpoints);
-        Assert.Equal("/streams/beacon-test/color-bars.h264", endpoint.Uri);
+        Assert.Equal(2, health.Endpoints.Count);
+        Assert.Contains(health.Endpoints, endpoint => endpoint.Role == "video" && endpoint.Uri == "/streams/beacon-test/color-bars.h264");
+        Assert.Contains(health.Endpoints, endpoint => endpoint.Role == "samples" && endpoint.Uri == "/streams/beacon-test/color-bars.beacon-annexb");
     }
 
     [Fact]
