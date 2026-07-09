@@ -23,6 +23,19 @@ public final class NativeStreamPresentation {
         return new NativeStreamPresentation(true, "color-bars", endpointUri, "Beacon test stream");
     }
 
+    public static NativeStreamPresentation encodedVideo(
+        String endpointUri,
+        String codec,
+        int width,
+        int height,
+        int fps) {
+        return new NativeStreamPresentation(
+            true,
+            "encoded-video",
+            endpointUri,
+            "Beacon encoded video " + codec + " " + width + "x" + height + "@" + fps);
+    }
+
     public boolean active() {
         return active;
     }
