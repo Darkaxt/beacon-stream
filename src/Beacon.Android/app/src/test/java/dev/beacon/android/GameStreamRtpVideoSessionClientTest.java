@@ -107,6 +107,43 @@ public final class GameStreamRtpVideoSessionClientTest {
     }
 
     @Test
+    public void h264PlanInjectsParameterSetsFromMetadata() {
+        assertParameterSetMetadataInjects("h264SpropParameterSets");
+    }
+
+    @Test
+    public void h264PlanAcceptsCamelCaseParameterSetAlias() {
+        assertParameterSetMetadataInjects("spropParameterSets");
+    }
+
+    @Test
+    public void h264PlanAcceptsSdpParameterSetAlias() {
+        assertParameterSetMetadataInjects("sprop-parameter-sets");
+    }
+
+    @Test
+    public void invalidH264ParameterSetMetadataFailsAndClosesSource() {
+        RecordingRtpPacketSource source = new RecordingRtpPacketSource(
+            packet(1, 90000L, new byte[] {0x65, 0x11}));
+        RecordingVideoConsumer consumer = new RecordingVideoConsumer(
+            NativeStreamStartResult.started("should not start"));
+        GameStreamRtpVideoSessionClient client = new GameStreamRtpVideoSessionClient(
+            new RecordingPacketSourceFactory(source),
+            consumer);
+
+        NativeStreamStartResult result = client.start(
+            completePlan("\"codec\":\"h264\",\"h264SpropParameterSets\":\"invalid\""),
+            sessionInfo());
+
+        assertFalse(result.success());
+        assertEquals(
+            "GameStream RTP video consumer failed: H.264 sprop-parameter-sets metadata is invalid.",
+            result.diagnostic());
+        assertEquals(0, consumer.startCount);
+        assertEquals(1, source.closeCount);
+    }
+
+    @Test
     public void sourceFactoryFailureReturnsDiagnostic() {
         ThrowingPacketSourceFactory sourceFactory = new ThrowingPacketSourceFactory();
         RecordingVideoConsumer consumer = new RecordingVideoConsumer(
@@ -186,6 +223,29 @@ public final class GameStreamRtpVideoSessionClientTest {
         return GameStreamEndpointPlan.from(descriptor);
     }
 
+    private static void assertParameterSetMetadataInjects(String metadataKey) {
+        RecordingRtpPacketSource source = new RecordingRtpPacketSource(
+            packet(1, 90000L, new byte[] {0x65, 0x11}));
+        RecordingVideoConsumer consumer = new RecordingVideoConsumer(
+            NativeStreamStartResult.started("H.264 RTP video sample provider started."));
+        GameStreamRtpVideoSessionClient client = new GameStreamRtpVideoSessionClient(
+            new RecordingPacketSourceFactory(source),
+            consumer);
+
+        NativeStreamStartResult result = client.start(
+            completePlan("\"codec\":\"h264\",\"" + metadataKey + "\":\"Z0IAHg==,aM4G4g==\""),
+            sessionInfo());
+        EncodedVideoSample sample = consumer.sampleProvider.nextSample();
+
+        assertTrue(result.success());
+        assertArrayEquals(
+            concat(
+                start(), new byte[] {0x67, 0x42, 0x00, 0x1E},
+                start(), new byte[] {0x68, (byte) 0xCE, 0x06, (byte) 0xE2},
+                start(), new byte[] {0x65, 0x11}),
+            sample.data());
+    }
+
     private static GameStreamRtspSessionInfo sessionInfo() {
         return GameStreamRtspSessionInfo.started(
             "gamestream",
@@ -209,6 +269,26 @@ public final class GameStreamRtpVideoSessionClientTest {
         bytes[11] = 0x01;
         System.arraycopy(payload, 0, bytes, 12, payload.length);
         return RtpPacket.parse(bytes);
+    }
+
+    private static byte[] start() {
+        return new byte[] {0, 0, 0, 1};
+    }
+
+    private static byte[] concat(byte[]... chunks) {
+        int total = 0;
+        for (byte[] chunk : chunks) {
+            total += chunk.length;
+        }
+
+        byte[] result = new byte[total];
+        int offset = 0;
+        for (byte[] chunk : chunks) {
+            System.arraycopy(chunk, 0, result, offset, chunk.length);
+            offset += chunk.length;
+        }
+
+        return result;
     }
 
     private static final class RecordingPacketSourceFactory implements GameStreamRtpPacketSourceFactory {
