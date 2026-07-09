@@ -164,6 +164,27 @@ public final class GameStreamNativeStreamClientTest {
     }
 
     @Test
+    public void failedReplacementStartStopsPreviousVideoSession() {
+        QueuedRtspSessionClient rtspClient = new QueuedRtspSessionClient(
+            startedRtspSessionResult(),
+            GameStreamRtspSessionResult.failed("RTSP replacement failed."));
+        RecordingVideoSessionClient videoClient = new RecordingVideoSessionClient(
+            NativeStreamStartResult.started("Native GameStream video session started."));
+        GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient, videoClient);
+
+        NativeStreamStartResult first = client.start(
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session", completeRtpMetadata()));
+        NativeStreamStartResult second = client.start(
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session", completeRtpMetadata()));
+
+        assertTrue(first.success());
+        assertFalse(second.success());
+        assertEquals("RTSP replacement failed.", second.diagnostic());
+        assertEquals(1, videoClient.stopCount);
+        assertEquals(1, rtspClient.stopCount);
+    }
+
+    @Test
     public void stopDelegatesVideoBeforeRtspAfterSuccessfulVideoStart() {
         List<String> stopOrder = new ArrayList<>();
         RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(startedRtspSessionResult(), stopOrder);
@@ -359,6 +380,26 @@ public final class GameStreamNativeStreamClientTest {
             if (stopOrder != null) {
                 stopOrder.add("rtsp");
             }
+        }
+    }
+
+    private static final class QueuedRtspSessionClient implements GameStreamRtspSessionClient {
+        private final List<GameStreamRtspSessionResult> results;
+        private int startCount;
+        private int stopCount;
+
+        private QueuedRtspSessionClient(GameStreamRtspSessionResult... results) {
+            this.results = Arrays.asList(results);
+        }
+
+        @Override
+        public GameStreamRtspSessionResult start(GameStreamEndpointPlan plan) {
+            return results.get(startCount++);
+        }
+
+        @Override
+        public void stop() {
+            stopCount++;
         }
     }
 
