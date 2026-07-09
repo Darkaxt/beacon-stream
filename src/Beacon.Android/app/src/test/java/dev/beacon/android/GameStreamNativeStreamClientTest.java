@@ -68,6 +68,34 @@ public final class GameStreamNativeStreamClientTest {
     }
 
     @Test
+    public void stopDelegatesToSuccessfulRtspSession() {
+        RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(
+            GameStreamRtspSessionResult.started("RTSP session started."));
+        GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient);
+
+        NativeStreamStartResult result = client.start(
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session"));
+        client.stop();
+
+        assertTrue(result.success());
+        assertEquals(1, rtspClient.stopCount);
+    }
+
+    @Test
+    public void stopDoesNotDelegateAfterFailedRtspSessionStart() {
+        RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(
+            GameStreamRtspSessionResult.failed("RTSP socket open failed: refused"));
+        GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient);
+
+        NativeStreamStartResult result = client.start(
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session"));
+        client.stop();
+
+        assertFalse(result.success());
+        assertEquals(0, rtspClient.stopCount);
+    }
+
+    @Test
     public void startsRealHandshakeClientForCompleteGameStreamEndpointMap() {
         GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(
             new GameStreamRtspHandshakeClient(new SuccessfulRtspTransport()));
@@ -122,6 +150,7 @@ public final class GameStreamNativeStreamClientTest {
     private static final class RecordingRtspSessionClient implements GameStreamRtspSessionClient {
         private final GameStreamRtspSessionResult result;
         private GameStreamEndpointPlan startedPlan;
+        private int stopCount;
 
         private RecordingRtspSessionClient(GameStreamRtspSessionResult result) {
             this.result = result;
@@ -131,6 +160,11 @@ public final class GameStreamNativeStreamClientTest {
         public GameStreamRtspSessionResult start(GameStreamEndpointPlan plan) {
             startedPlan = plan;
             return result;
+        }
+
+        @Override
+        public void stop() {
+            stopCount++;
         }
     }
 
