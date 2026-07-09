@@ -27,6 +27,23 @@ public final class AnnexBAccessUnitSplitterTest {
     }
 
     @Test
+    public void acceptsThreeByteStartCodesAfterFourByteParameterSets() {
+        byte[] bytes = concat(
+            start(), new byte[] { 0x67, 0x01 },
+            start(), new byte[] { 0x68, 0x02 },
+            shortStart(), new byte[] { 0x65, 0x03 },
+            shortStart(), new byte[] { 0x65, 0x04 });
+
+        List<byte[]> samples = AnnexBAccessUnitSplitter.split(bytes);
+
+        assertEquals(2, samples.size());
+        assertArrayEquals(
+            concat(start(), new byte[] { 0x67, 0x01 }, start(), new byte[] { 0x68, 0x02 }, shortStart(), new byte[] { 0x65, 0x03 }),
+            samples.get(0));
+        assertArrayEquals(concat(shortStart(), new byte[] { 0x65, 0x04 }), samples.get(1));
+    }
+
+    @Test
     public void rejectsBytesWithoutStartCode() {
         IllegalArgumentException exception = assertThrows(
             IllegalArgumentException.class,
@@ -37,6 +54,10 @@ public final class AnnexBAccessUnitSplitterTest {
 
     private static byte[] start() {
         return new byte[] { 0, 0, 0, 1 };
+    }
+
+    private static byte[] shortStart() {
+        return new byte[] { 0, 0, 1 };
     }
 
     private static byte[] concat(byte[]... chunks) {

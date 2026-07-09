@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json;
 using Beacon.Core.Displays;
@@ -459,13 +460,17 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal("beacon-test", connection.GetProperty("protocol").GetString());
         Assert.True(connection.TryGetProperty("launchUri", out JsonElement launchUri));
         Assert.Equal(JsonValueKind.Null, launchUri.ValueKind);
-        JsonElement endpoint = Assert.Single(connection.GetProperty("endpoints").EnumerateArray());
-        Assert.Equal("video", endpoint.GetProperty("role").GetString());
-        Assert.Equal("/streams/beacon-test/color-bars.h264", endpoint.GetProperty("uri").GetString());
+        JsonElement[] endpoints = connection.GetProperty("endpoints").EnumerateArray().ToArray();
+        Assert.Equal(2, endpoints.Length);
+        JsonElement videoEndpoint = Assert.Single(endpoints, endpoint => endpoint.GetProperty("role").GetString() == "video");
+        Assert.Equal("/streams/beacon-test/color-bars.h264", videoEndpoint.GetProperty("uri").GetString());
+        JsonElement samplesEndpoint = Assert.Single(endpoints, endpoint => endpoint.GetProperty("role").GetString() == "samples");
+        Assert.Equal("/streams/beacon-test/color-bars.beacon-annexb", samplesEndpoint.GetProperty("uri").GetString());
         JsonElement metadata = connection.GetProperty("metadata");
         Assert.Equal("encoded-video", metadata.GetProperty("streamKind").GetString());
         Assert.Equal("h264", metadata.GetProperty("codec").GetString());
         Assert.Equal("annex-b", metadata.GetProperty("container").GetString());
+        Assert.Equal("beacon-annexb-samples", metadata.GetProperty("sampleTransport").GetString());
         Assert.Equal("2560", metadata.GetProperty("width").GetString());
         Assert.Equal("1600", metadata.GetProperty("height").GetString());
         Assert.Equal("120", metadata.GetProperty("fps").GetString());
@@ -489,6 +494,21 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.True(CountAnnexBStartCodes(bytes) >= 4);
     }
 
+    [Fact]
+    public async Task BeaconTestEncodedVideoSampleStreamReturnsFramedSamples()
+    {
+        HttpClient client = factory.CreateClient();
+
+        HttpResponseMessage response = await client.GetAsync("/streams/beacon-test/color-bars.beacon-annexb");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/vnd.beacon.annexb-samples", response.Content.Headers.ContentType?.MediaType);
+        byte[] bytes = await response.Content.ReadAsByteArrayAsync();
+        byte[] magic = Encoding.ASCII.GetBytes("BEACONANNEXB1\n");
+        Assert.True(bytes.AsSpan(0, magic.Length).SequenceEqual(magic));
+        Assert.True(CountBeaconSampleRecords(bytes) >= 2);
+    }
+
     private static int CountAnnexBStartCodes(byte[] bytes)
     {
         int count = 0;
@@ -500,6 +520,25 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             }
         }
 
+        return count;
+    }
+
+    private static int CountBeaconSampleRecords(byte[] bytes)
+    {
+        int offset = Encoding.ASCII.GetByteCount("BEACONANNEXB1\n");
+        int count = 0;
+        while (offset + 12 <= bytes.Length)
+        {
+            long presentationTimeUs = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(offset, 8));
+            int sampleLength = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(offset + 8, 4));
+            Assert.True(presentationTimeUs >= 0);
+            Assert.True(sampleLength > 0);
+            offset += 12 + sampleLength;
+            Assert.True(offset <= bytes.Length);
+            count++;
+        }
+
+        Assert.Equal(bytes.Length, offset);
         return count;
     }
 

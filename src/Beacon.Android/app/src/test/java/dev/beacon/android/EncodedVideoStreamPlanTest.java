@@ -25,6 +25,19 @@ public final class EncodedVideoStreamPlanTest {
     }
 
     @Test
+    public void exposesBeaconAnnexBSampleTransportEndpoint() {
+        EncodedVideoStreamPlan plan = EncodedVideoStreamPlan.from(encodedConnection(
+            "\"codec\":\"h264\",\"container\":\"annex-b\",\"sampleTransport\":\"beacon-annexb-samples\",\"width\":\"1280\",\"height\":\"720\",\"fps\":\"60\"",
+            "{\"role\":\"video\",\"uri\":\"/streams/beacon-test/color-bars.h264\"}," +
+                "{\"role\":\"samples\",\"uri\":\"/streams/beacon-test/color-bars.beacon-annexb\"}"));
+
+        assertTrue(plan.supportedProtocol());
+        assertTrue(plan.complete());
+        assertEquals("beacon-annexb-samples", plan.sampleTransport());
+        assertEquals("/streams/beacon-test/color-bars.beacon-annexb", plan.sampleUri());
+    }
+
+    @Test
     public void rejectsUnsupportedProtocol() {
         EncodedVideoStreamPlan plan = EncodedVideoStreamPlan.from(connection(
             "gamestream",

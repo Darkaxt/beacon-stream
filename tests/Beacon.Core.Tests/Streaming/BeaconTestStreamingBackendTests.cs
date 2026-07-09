@@ -62,14 +62,21 @@ public sealed class BeaconTestStreamingBackendTests
         Assert.NotNull(session.Connection);
         Assert.Equal("beacon-test", session.Connection.Protocol);
         Assert.Null(session.Connection.LaunchUri);
-        StreamingEndpointDescriptor endpoint = Assert.Single(session.Connection.Endpoints);
-        Assert.Equal("video", endpoint.Role);
-        Assert.Equal("/streams/beacon-test/color-bars.h264", endpoint.Uri);
+        Assert.Equal(2, session.Connection.Endpoints.Count);
+        StreamingEndpointDescriptor videoEndpoint = Assert.Single(
+            session.Connection.Endpoints,
+            endpoint => endpoint.Role == "video");
+        Assert.Equal("/streams/beacon-test/color-bars.h264", videoEndpoint.Uri);
+        StreamingEndpointDescriptor samplesEndpoint = Assert.Single(
+            session.Connection.Endpoints,
+            endpoint => endpoint.Role == "samples");
+        Assert.Equal("/streams/beacon-test/color-bars.beacon-annexb", samplesEndpoint.Uri);
         Assert.Equal("client-z-fold-7", session.Connection.Metadata["displayId"]);
         Assert.Equal("lan-direct", session.Connection.Metadata["transport"]);
         Assert.Equal("encoded-video", session.Connection.Metadata["streamKind"]);
         Assert.Equal("h264", session.Connection.Metadata["codec"]);
         Assert.Equal("annex-b", session.Connection.Metadata["container"]);
+        Assert.Equal("beacon-annexb-samples", session.Connection.Metadata["sampleTransport"]);
         Assert.Equal("2560", session.Connection.Metadata["width"]);
         Assert.Equal("1600", session.Connection.Metadata["height"]);
         Assert.Equal("120", session.Connection.Metadata["fps"]);
@@ -86,9 +93,9 @@ public sealed class BeaconTestStreamingBackendTests
         Assert.Equal("beacon-test", health.Backend);
         Assert.Equal("beacon-test", health.Protocol);
         Assert.Null(health.LaunchUri);
-        StreamingEndpointDescriptor endpoint = Assert.Single(health.Endpoints);
-        Assert.Equal("video", endpoint.Role);
-        Assert.Equal("/streams/beacon-test/color-bars.h264", endpoint.Uri);
+        Assert.Equal(2, health.Endpoints.Count);
+        Assert.Contains(health.Endpoints, endpoint => endpoint.Role == "video" && endpoint.Uri == "/streams/beacon-test/color-bars.h264");
+        Assert.Contains(health.Endpoints, endpoint => endpoint.Role == "samples" && endpoint.Uri == "/streams/beacon-test/color-bars.beacon-annexb");
         Assert.Contains("h264", health.Codecs);
         Assert.Contains("beacon-test-encoded-video", health.Capture);
     }
