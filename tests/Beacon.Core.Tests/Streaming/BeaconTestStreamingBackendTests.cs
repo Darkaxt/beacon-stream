@@ -48,6 +48,52 @@ public sealed class BeaconTestStreamingBackendTests
     }
 
     [Fact]
+    public async Task StartCanCreateEncodedVideoSession()
+    {
+        var backend = new BeaconTestStreamingBackend(new BeaconTestStreamingOptions(BeaconTestStreamKind.EncodedVideo));
+        SessionPlan plan = CreatePlan();
+
+        StreamingStartResult result = await backend.StartAsync(plan, CancellationToken.None);
+
+        Assert.True(result.Success);
+        StreamingSessionState session = Assert.IsType<StreamingSessionState>(result.Session);
+        Assert.Equal("running", session.State);
+        Assert.Equal("h264", session.Codec);
+        Assert.NotNull(session.Connection);
+        Assert.Equal("beacon-test", session.Connection.Protocol);
+        Assert.Null(session.Connection.LaunchUri);
+        StreamingEndpointDescriptor endpoint = Assert.Single(session.Connection.Endpoints);
+        Assert.Equal("video", endpoint.Role);
+        Assert.Equal("beacon-test://video/color-bars.h264", endpoint.Uri);
+        Assert.Equal("client-z-fold-7", session.Connection.Metadata["displayId"]);
+        Assert.Equal("lan-direct", session.Connection.Metadata["transport"]);
+        Assert.Equal("encoded-video", session.Connection.Metadata["streamKind"]);
+        Assert.Equal("h264", session.Connection.Metadata["codec"]);
+        Assert.Equal("annex-b", session.Connection.Metadata["container"]);
+        Assert.Equal("2560", session.Connection.Metadata["width"]);
+        Assert.Equal("1600", session.Connection.Metadata["height"]);
+        Assert.Equal("120", session.Connection.Metadata["fps"]);
+    }
+
+    [Fact]
+    public async Task HealthAdvertisesEncodedVideoEndpointWhenConfigured()
+    {
+        var backend = new BeaconTestStreamingBackend(new BeaconTestStreamingOptions(BeaconTestStreamKind.EncodedVideo));
+
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.True(health.Ready);
+        Assert.Equal("beacon-test", health.Backend);
+        Assert.Equal("beacon-test", health.Protocol);
+        Assert.Null(health.LaunchUri);
+        StreamingEndpointDescriptor endpoint = Assert.Single(health.Endpoints);
+        Assert.Equal("video", endpoint.Role);
+        Assert.Equal("beacon-test://video/color-bars.h264", endpoint.Uri);
+        Assert.Contains("h264", health.Codecs);
+        Assert.Contains("beacon-test-encoded-video", health.Capture);
+    }
+
+    [Fact]
     public async Task StopMarksSessionStoppedWithoutDeletingState()
     {
         var backend = new BeaconTestStreamingBackend();
