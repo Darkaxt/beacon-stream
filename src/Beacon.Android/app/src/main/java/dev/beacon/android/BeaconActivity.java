@@ -66,6 +66,7 @@ public final class BeaconActivity extends Activity {
     private EditText thermalState;
     private TextView decoderDebugOverlay;
     private TextView controllerOverlayMarker;
+    private BeaconTestPatternView nativeStreamView;
     private TextView touchSurfaceView;
     private TextView status;
 
@@ -173,6 +174,8 @@ public final class BeaconActivity extends Activity {
             readCapabilities(),
             readTelemetry(),
             readGame())));
+        nativeStreamView = new BeaconTestPatternView(this);
+        root.addView(nativeStreamView);
         root.addView(touchSurface());
         root.addView(button("Send Pointer", model -> model.sendInput(BeaconApiClient.InputBatch.pointerTap(1, 0.5, 0.5))));
         root.addView(button("Send Escape", model -> model.sendInput(BeaconApiClient.InputBatch.keyboardPress(2, "Escape", "Escape"))));
@@ -364,6 +367,7 @@ public final class BeaconActivity extends Activity {
                 action.run(model);
                 String error = model.latestError().isEmpty() ? "" : "\nError: " + model.latestError();
                 String nativeStream = model.latestNativeStream().isEmpty() ? "" : "\nNative stream: " + model.latestNativeStream();
+                updateNativeStreamPresentation(model.latestNativeStreamPresentation());
                 setStatus(model.status() + "\nGames: " + model.latestGames() + "\nPlan: " + model.latestPlan() + "\nStream: " + model.latestStream() + nativeStream + error);
             } catch (IOException | RuntimeException ex) {
                 setStatus(label + " failed: " + ex.getMessage());
@@ -373,6 +377,14 @@ public final class BeaconActivity extends Activity {
 
     private void setStatus(String value) {
         runOnUiThread(() -> status.setText(value));
+    }
+
+    private void updateNativeStreamPresentation(NativeStreamPresentation presentation) {
+        runOnUiThread(() -> {
+            if (nativeStreamView != null) {
+                nativeStreamView.setPresentation(presentation);
+            }
+        });
     }
 
     private void saveLocalSettings() {

@@ -65,6 +65,10 @@ public final class StreamConnectionDescriptor {
         return launchUri;
     }
 
+    public List<Endpoint> endpoints() {
+        return endpoints;
+    }
+
     public String endpointSummary() {
         List<String> values = new ArrayList<>();
         for (Endpoint endpoint : endpoints) {

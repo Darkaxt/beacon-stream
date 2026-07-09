@@ -19,7 +19,26 @@ public final class DiagnosticNativeStreamClientTest {
         assertEquals(
             "Native stream ready. protocol=beacon-test endpoints=video=beacon-test://pattern/color-bars",
             result.status());
+        assertTrue(result.presentation().active());
+        assertEquals("color-bars", result.presentation().kind());
+        assertEquals("beacon-test://pattern/color-bars", result.presentation().endpointUri());
         assertEquals("", result.diagnostic());
+    }
+
+    @Test
+    public void rejectsBeaconTestProtocolWithoutSupportedVideoPattern() {
+        DiagnosticNativeStreamClient client = new DiagnosticNativeStreamClient();
+        StreamConnectionDescriptor connection = StreamConnectionDescriptor.extract(
+            "{\"stream\":{\"connection\":{\"protocol\":\"beacon-test\",\"endpoints\":[{\"role\":\"control\",\"uri\":\"beacon-test://control\"}]}}}");
+
+        NativeStreamStartResult result = client.start(connection);
+
+        assertFalse(result.success());
+        assertEquals("", result.status());
+        assertFalse(result.presentation().active());
+        assertEquals(
+            "Beacon test stream did not include supported video endpoint beacon-test://pattern/color-bars.",
+            result.diagnostic());
     }
 
     @Test
@@ -32,6 +51,7 @@ public final class DiagnosticNativeStreamClientTest {
 
         assertFalse(result.success());
         assertEquals("", result.status());
+        assertFalse(result.presentation().active());
         assertEquals(
             "Stream connection did not include a launch URI. protocol=gamestream endpoints=rtsp=rtsp://127.0.0.1:48010",
             result.diagnostic());

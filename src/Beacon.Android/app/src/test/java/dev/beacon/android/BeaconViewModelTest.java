@@ -5,6 +5,7 @@ import org.junit.Test;
 import java.io.IOException;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public final class BeaconViewModelTest {
@@ -176,7 +177,9 @@ public final class BeaconViewModelTest {
             "{\"state\":\"streaming\",\"stream\":{\"connection\":{\"protocol\":\"beacon-test\",\"endpoints\":[{\"role\":\"video\",\"uri\":\"beacon-test://pattern/color-bars\"}]}}}");
         RecordingStreamConnectionLauncher launcher = new RecordingStreamConnectionLauncher();
         RecordingNativeStreamClient nativeStreamClient = new RecordingNativeStreamClient(
-            NativeStreamStartResult.started("Native stream ready. protocol=beacon-test endpoints=video=beacon-test://pattern/color-bars"));
+            NativeStreamStartResult.started(
+                "Native stream ready. protocol=beacon-test endpoints=video=beacon-test://pattern/color-bars",
+                NativeStreamPresentation.colorBars("beacon-test://pattern/color-bars")));
         BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service, launcher, nativeStreamClient);
 
         model.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
@@ -186,6 +189,8 @@ public final class BeaconViewModelTest {
         assertEquals(
             "Native stream ready. protocol=beacon-test endpoints=video=beacon-test://pattern/color-bars",
             model.latestNativeStream());
+        assertTrue(model.latestNativeStreamPresentation().active());
+        assertEquals("color-bars", model.latestNativeStreamPresentation().kind());
         assertEquals("", model.latestError());
     }
 
@@ -196,7 +201,9 @@ public final class BeaconViewModelTest {
             200,
             "{\"state\":\"streaming\",\"stream\":{\"connection\":{\"protocol\":\"beacon-test\",\"endpoints\":[{\"role\":\"video\",\"uri\":\"beacon-test://pattern/color-bars\"}]}}}");
         RecordingNativeStreamClient nativeStreamClient = new RecordingNativeStreamClient(
-            NativeStreamStartResult.started("Native stream ready. protocol=beacon-test endpoints=video=beacon-test://pattern/color-bars"));
+            NativeStreamStartResult.started(
+                "Native stream ready. protocol=beacon-test endpoints=video=beacon-test://pattern/color-bars",
+                NativeStreamPresentation.colorBars("beacon-test://pattern/color-bars")));
         BeaconViewModel model = new BeaconViewModel(
             "z-fold-7",
             "http://server",
@@ -210,6 +217,7 @@ public final class BeaconViewModelTest {
 
         assertEquals(1, nativeStreamClient.stopCount);
         assertEquals("", model.latestNativeStream());
+        assertFalse(model.latestNativeStreamPresentation().active());
     }
 
     @Test
@@ -220,7 +228,9 @@ public final class BeaconViewModelTest {
             "{\"state\":\"streaming\",\"stream\":{\"connection\":{\"protocol\":\"beacon-test\",\"endpoints\":[{\"role\":\"video\",\"uri\":\"beacon-test://pattern/color-bars\"}]}}}");
         RecordingStreamConnectionLauncher launcher = new RecordingStreamConnectionLauncher();
         RecordingNativeStreamClient nativeStreamClient = new RecordingNativeStreamClient(
-            NativeStreamStartResult.started("Native stream ready. protocol=beacon-test endpoints=video=beacon-test://pattern/color-bars"));
+            NativeStreamStartResult.started(
+                "Native stream ready. protocol=beacon-test endpoints=video=beacon-test://pattern/color-bars",
+                NativeStreamPresentation.colorBars("beacon-test://pattern/color-bars")));
         BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service, launcher, nativeStreamClient);
         model.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
         service.next = new BeaconApiClient.BeaconResult(
@@ -232,6 +242,7 @@ public final class BeaconViewModelTest {
         assertEquals("moonlight://stream/z-fold-7", launcher.launchedUri);
         assertEquals(1, nativeStreamClient.stopCount);
         assertEquals("", model.latestNativeStream());
+        assertFalse(model.latestNativeStreamPresentation().active());
     }
 
     @Test
