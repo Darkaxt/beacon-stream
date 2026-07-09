@@ -28,6 +28,8 @@ public final class GameStreamNativeStreamClient implements NativeStreamProtocolC
 
     @Override
     public NativeStreamStartResult start(StreamConnectionDescriptor connection) {
+        stopActiveSessionBeforeReplacement();
+
         GameStreamEndpointPlan gameStreamPlan = GameStreamEndpointPlan.from(connection);
         if (gameStreamPlan.supportedProtocol() && connection.launchUri().isEmpty()) {
             String endpointSummary = gameStreamPlan.diagnosticEndpointSummary();
@@ -61,6 +63,15 @@ public final class GameStreamNativeStreamClient implements NativeStreamProtocolC
         }
 
         return NativeStreamStartResult.unsupported(connection.missingLaunchUriDiagnostic());
+    }
+
+    private void stopActiveSessionBeforeReplacement() {
+        if (videoSessionActive) {
+            videoSessionActive = false;
+            stopVideoSessionQuietly();
+        }
+
+        stopRtspSession();
     }
 
     private NativeStreamStartResult startVideoSession(
