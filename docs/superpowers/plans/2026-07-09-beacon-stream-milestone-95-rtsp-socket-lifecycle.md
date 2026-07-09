@@ -174,6 +174,36 @@ Result: `gradle --no-daemon -p src\Beacon.Android test assembleDebug` passed, an
 
 Additional emulator smoke: installed `src\Beacon.Android\app\build\outputs\apk\debug\app-debug.apk` on `emulator-5554` and launched `dev.beacon.android/.BeaconActivity`; Android reported `Status: ok`.
 
-- [ ] **Step 4: Sync**
+- [x] **Step 4: Sync**
+
+Commit, push, open a PR, wait for CI, and merge if checks are green.
+
+Result: PR #96 merged after Android, client-lab, and dotnet CI checks passed.
+
+### Task 6: Post-Sync Refactor Pass
+
+**Files:**
+- Modify: `src/Beacon.Android/app/src/main/java/dev/beacon/android/GameStreamRtspTransportSessionClient.java`
+- Modify: `src/Beacon.Android/app/src/test/java/dev/beacon/android/GameStreamRtspTransportSessionClientTest.java`
+
+- [x] **Step 1: Add close/factory hardening tests**
+
+Add regression coverage proving unexpected lease factory exceptions become diagnostics and unexpected lease close exceptions do not crash `stop()`.
+
+Result: the focused Gradle run failed with `IllegalStateException` for both new tests before the refactor.
+
+- [x] **Step 2: Harden the session client cleanup boundary**
+
+Make `GameStreamRtspTransportSessionClient` convert unexpected factory failures to a diagnostic and swallow runtime lease-close failures on cleanup paths.
+
+Result: the focused Gradle run passed for `GameStreamRtspTransportSessionClientTest`.
+
+- [x] **Step 3: Validate refactor pass**
+
+Run static checks, full Android test/build, .NET solution tests, and emulator launch smoke again.
+
+Result: `git diff --check` passed; the diff scan reported no new sleep/timeout/socket-timeout/connect-timeout patterns; `gradle --no-daemon -p src\Beacon.Android test assembleDebug` passed; `dotnet test Beacon.slnx` passed; emulator reinstall and launch of `dev.beacon.android/.BeaconActivity` reported `Status: ok`.
+
+- [ ] **Step 4: Sync refactor pass**
 
 Commit, push, open a PR, wait for CI, and merge if checks are green.

@@ -76,6 +76,32 @@ public final class GameStreamRtspTransportSessionClientTest {
         assertEquals("RTSP socket open failed: refused", result.diagnostic());
     }
 
+    @Test
+    public void unexpectedFactoryFailureReturnsDiagnostic() {
+        GameStreamRtspTransportSessionClient client = new GameStreamRtspTransportSessionClient(
+            new UnexpectedThrowingLeaseFactory(),
+            new FixedSdpPayloadProvider("v=0\r\ns=Beacon Test\r\n"));
+
+        GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
+
+        assertFalse(result.success());
+        assertEquals("RTSP transport factory failed: boom", result.diagnostic());
+    }
+
+    @Test
+    public void stopSwallowsUnexpectedLeaseCloseFailure() {
+        ThrowingCloseLease lease = new ThrowingCloseLease(new SuccessfulRtspTransport());
+        GameStreamRtspTransportSessionClient client = new GameStreamRtspTransportSessionClient(
+            new RecordingLeaseFactory(lease),
+            new FixedSdpPayloadProvider("v=0\r\ns=Beacon Test\r\n"));
+
+        GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
+        client.stop();
+
+        assertTrue(result.success());
+        assertEquals(1, lease.closeCount);
+    }
+
     private static GameStreamEndpointPlan completePlan(String rtspUri) {
         StreamConnectionDescriptor descriptor = StreamConnectionDescriptor.extract(
             "{\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"endpoints\":[" +
@@ -109,6 +135,13 @@ public final class GameStreamRtspTransportSessionClientTest {
         }
     }
 
+    private static final class UnexpectedThrowingLeaseFactory implements RtspTransportLeaseFactory {
+        @Override
+        public RtspTransportLease open(GameStreamEndpointPlan plan) {
+            throw new IllegalStateException("boom");
+        }
+    }
+
     private static final class RecordingLease implements RtspTransportLease {
         private final RtspTransport transport;
         private int closeCount;
@@ -125,6 +158,26 @@ public final class GameStreamRtspTransportSessionClientTest {
         @Override
         public void close() {
             closeCount++;
+        }
+    }
+
+    private static final class ThrowingCloseLease implements RtspTransportLease {
+        private final RtspTransport transport;
+        private int closeCount;
+
+        private ThrowingCloseLease(RtspTransport transport) {
+            this.transport = transport;
+        }
+
+        @Override
+        public RtspTransport transport() {
+            return transport;
+        }
+
+        @Override
+        public void close() {
+            closeCount++;
+            throw new IllegalStateException("boom");
         }
     }
 
