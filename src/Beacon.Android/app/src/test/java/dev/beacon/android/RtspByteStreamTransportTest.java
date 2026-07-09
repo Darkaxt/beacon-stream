@@ -52,6 +52,7 @@ public final class RtspByteStreamTransportTest {
 
         assertEquals(200, first.statusCode());
         assertEquals("5", first.header("Content-Length"));
+        assertEquals("abcde", first.body());
         assertEquals(404, second.statusCode());
         assertEquals("Not Found", second.reasonPhrase());
         assertEquals("2", second.header("CSeq"));

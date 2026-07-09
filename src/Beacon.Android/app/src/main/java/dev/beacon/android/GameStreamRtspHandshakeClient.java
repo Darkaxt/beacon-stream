@@ -77,6 +77,7 @@ public final class GameStreamRtspHandshakeClient implements GameStreamRtspSessio
             return GameStreamRtspSessionResult.failed(
                 "RTSP DESCRIBE failed with status " + statusSummary(describe) + ".");
         }
+        String h264SpropParameterSets = GameStreamRtspSdpMetadata.from(describe.body()).h264SpropParameterSets();
 
         int audioClientPort = rtpPortLease.audioClientPort();
         int videoClientPort = rtpPortLease.videoClientPort();
@@ -144,7 +145,8 @@ public final class GameStreamRtspHandshakeClient implements GameStreamRtspSessio
                 video.serverPort(),
                 controlClientPort,
                 control.serverPort(),
-                rtpPortLease));
+                rtpPortLease,
+                h264SpropParameterSets));
     }
 
     private GameStreamRtspSetupResult setup(

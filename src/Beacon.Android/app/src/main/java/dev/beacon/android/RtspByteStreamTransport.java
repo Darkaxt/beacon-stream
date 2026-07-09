@@ -25,8 +25,7 @@ public final class RtspByteStreamTransport implements RtspTransport, AutoCloseab
         writeRequest(request);
         String rawHeaders = readResponseHeaders();
         RtspResponse response = parseResponse(rawHeaders);
-        consumeBody(response);
-        return response;
+        return response.withBody(readBody(response));
     }
 
     @Override
@@ -119,13 +118,14 @@ public final class RtspByteStreamTransport implements RtspTransport, AutoCloseab
         }
     }
 
-    private void consumeBody(RtspResponse response) {
+    private String readBody(RtspResponse response) {
         int contentLength = parseContentLength(response.header("Content-Length"));
         if (contentLength <= 0) {
-            return;
+            return "";
         }
 
         byte[] buffer = new byte[Math.min(4096, contentLength)];
+        ByteArrayOutputStream body = new ByteArrayOutputStream(contentLength);
         int remaining = contentLength;
         try {
             while (remaining > 0) {
@@ -135,11 +135,14 @@ public final class RtspByteStreamTransport implements RtspTransport, AutoCloseab
                         "RTSP response body ended before Content-Length bytes were read.");
                 }
 
+                body.write(buffer, 0, read);
                 remaining -= read;
             }
         } catch (IOException ex) {
             throw new RtspTransportException("RTSP read failed: " + safeMessage(ex), ex);
         }
+
+        return new String(body.toByteArray(), StandardCharsets.UTF_8);
     }
 
     private static int parseContentLength(String value) {

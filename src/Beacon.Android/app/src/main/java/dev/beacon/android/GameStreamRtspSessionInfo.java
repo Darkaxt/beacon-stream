@@ -12,7 +12,8 @@ public final class GameStreamRtspSessionInfo {
         -1,
         -1,
         -1,
-        null);
+        null,
+        "");
 
     private final boolean present;
     private final String protocol;
@@ -25,6 +26,7 @@ public final class GameStreamRtspSessionInfo {
     private final int controlClientPort;
     private final int controlServerPort;
     private final GameStreamRtpPortLease rtpPortLease;
+    private final String h264SpropParameterSets;
 
     private GameStreamRtspSessionInfo(
         boolean present,
@@ -37,7 +39,8 @@ public final class GameStreamRtspSessionInfo {
         int videoServerPort,
         int controlClientPort,
         int controlServerPort,
-        GameStreamRtpPortLease rtpPortLease) {
+        GameStreamRtpPortLease rtpPortLease,
+        String h264SpropParameterSets) {
         this.present = present;
         this.protocol = protocol == null ? "" : protocol;
         this.rtspUri = rtspUri == null ? "" : rtspUri;
@@ -49,6 +52,7 @@ public final class GameStreamRtspSessionInfo {
         this.controlClientPort = controlClientPort;
         this.controlServerPort = controlServerPort;
         this.rtpPortLease = rtpPortLease;
+        this.h264SpropParameterSets = trim(h264SpropParameterSets);
     }
 
     public static GameStreamRtspSessionInfo empty() {
@@ -120,7 +124,35 @@ public final class GameStreamRtspSessionInfo {
             controlClientPort,
             controlServerPort,
             true,
-            rtpPortLease);
+            rtpPortLease,
+            "");
+    }
+
+    public static GameStreamRtspSessionInfo startedWithClientPorts(
+        String protocol,
+        String rtspUri,
+        String sessionId,
+        int audioClientPort,
+        int audioServerPort,
+        int videoClientPort,
+        int videoServerPort,
+        int controlClientPort,
+        int controlServerPort,
+        GameStreamRtpPortLease rtpPortLease,
+        String h264SpropParameterSets) {
+        return startedCore(
+            protocol,
+            rtspUri,
+            sessionId,
+            audioClientPort,
+            audioServerPort,
+            videoClientPort,
+            videoServerPort,
+            controlClientPort,
+            controlServerPort,
+            true,
+            rtpPortLease,
+            h264SpropParameterSets);
     }
 
     private static GameStreamRtspSessionInfo startedCore(
@@ -145,7 +177,8 @@ public final class GameStreamRtspSessionInfo {
             controlClientPort,
             controlServerPort,
             requireClientPorts,
-            null);
+            null,
+            "");
     }
 
     private static GameStreamRtspSessionInfo startedCore(
@@ -159,7 +192,8 @@ public final class GameStreamRtspSessionInfo {
         int controlClientPort,
         int controlServerPort,
         boolean requireClientPorts,
-        GameStreamRtpPortLease rtpPortLease) {
+        GameStreamRtpPortLease rtpPortLease,
+        String h264SpropParameterSets) {
         String safeProtocol = trim(protocol);
         String safeRtspUri = trim(rtspUri);
         String safeSessionId = trim(sessionId);
@@ -188,7 +222,8 @@ public final class GameStreamRtspSessionInfo {
             videoServerPort,
             controlClientPort,
             controlServerPort,
-            rtpPortLease);
+            rtpPortLease,
+            h264SpropParameterSets);
     }
 
     public boolean present() {
@@ -233,6 +268,10 @@ public final class GameStreamRtspSessionInfo {
 
     public GameStreamRtpPortLease rtpPortLease() {
         return rtpPortLease;
+    }
+
+    public String h264SpropParameterSets() {
+        return h264SpropParameterSets;
     }
 
     private static String trim(String value) {
