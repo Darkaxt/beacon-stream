@@ -68,6 +68,20 @@ public final class GameStreamNativeStreamClientTest {
     }
 
     @Test
+    public void startsRealHandshakeClientForCompleteGameStreamEndpointMap() {
+        GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(
+            new GameStreamRtspHandshakeClient(new SuccessfulRtspTransport()));
+        StreamConnectionDescriptor connection = completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session");
+
+        NativeStreamStartResult result = client.start(connection);
+
+        assertTrue(result.success());
+        assertEquals(
+            "Native GameStream RTSP session started. protocol=gamestream rtsp=rtsp://127.0.0.1:48010/beacon/session",
+            result.status());
+    }
+
+    @Test
     public void rejectsCompleteGameStreamEndpointMapWhenRtspEndpointIsNotReady() {
         GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(
             new RecordingRtspSessionClient(GameStreamRtspSessionResult.started("Should not run.")));
@@ -117,6 +131,15 @@ public final class GameStreamNativeStreamClientTest {
         public GameStreamRtspSessionResult start(GameStreamEndpointPlan plan) {
             startedPlan = plan;
             return result;
+        }
+    }
+
+    private static final class SuccessfulRtspTransport implements RtspTransport {
+        private int cseq = 1;
+
+        @Override
+        public RtspResponse transact(RtspRequest request) {
+            return RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: " + cseq++ + "\r\n\r\n");
         }
     }
 }
