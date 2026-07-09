@@ -7,6 +7,7 @@ import android.view.Display;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.ArrayAdapter;
@@ -69,6 +70,7 @@ public final class BeaconActivity extends Activity {
     private EditText thermalState;
     private TextView decoderDebugOverlay;
     private TextView controllerOverlayMarker;
+    private SurfaceView encodedVideoSurfaceView;
     private BeaconTestPatternView nativeStreamView;
     private TextView touchSurfaceView;
     private TextView status;
@@ -178,6 +180,10 @@ public final class BeaconActivity extends Activity {
             readCapabilities(),
             readTelemetry(),
             readGame())));
+        encodedVideoSurfaceView = new SurfaceView(this);
+        encodedVideoSurfaceView.setMinimumHeight(360);
+        encodedVideoSurfaceView.setVisibility(View.INVISIBLE);
+        root.addView(encodedVideoSurfaceView);
         nativeStreamView = new BeaconTestPatternView(this);
         root.addView(nativeStreamView);
         root.addView(touchSurface());
@@ -385,8 +391,19 @@ public final class BeaconActivity extends Activity {
 
     private void updateNativeStreamPresentation(NativeStreamPresentation presentation) {
         runOnUiThread(() -> {
+            NativeStreamPresentation safePresentation = presentation == null
+                ? NativeStreamPresentation.none()
+                : presentation;
+            boolean encodedVideoActive =
+                safePresentation.active() && "encoded-video".equalsIgnoreCase(safePresentation.kind());
+            if (encodedVideoSurfaceView != null) {
+                encodedVideoSurfaceView.setVisibility(encodedVideoActive ? View.VISIBLE : View.INVISIBLE);
+            }
+
             if (nativeStreamView != null) {
-                nativeStreamView.setPresentation(presentation);
+                boolean colorBarsActive =
+                    safePresentation.active() && "color-bars".equalsIgnoreCase(safePresentation.kind());
+                nativeStreamView.setPresentation(colorBarsActive ? safePresentation : NativeStreamPresentation.none());
             }
         });
     }
@@ -497,7 +514,17 @@ public final class BeaconActivity extends Activity {
             new BeaconApiClient(config),
             new DispatchingStreamConnectionLauncher(
                 new AndroidMainThreadDispatcher(this),
-                new AndroidIntentStreamConnectionLauncher(this)));
+                new AndroidIntentStreamConnectionLauncher(this)),
+            createNativeStreamClient());
+    }
+
+    private NativeStreamClient createNativeStreamClient() {
+        return new DiagnosticNativeStreamClient(new NativeStreamClientRouter(
+            new EncodedVideoNativeStreamClient(new SurfaceEncodedVideoDecoder(
+                new AndroidMediaCodecFactory(),
+                new AndroidSurfaceViewProvider(encodedVideoSurfaceView))),
+            new BeaconTestNativeStreamClient(),
+            new GameStreamNativeStreamClient()));
     }
 
     private BeaconApiClient.ProfilePatch readPatch() {
