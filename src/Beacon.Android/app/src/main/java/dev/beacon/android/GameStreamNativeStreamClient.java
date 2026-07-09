@@ -2,6 +2,7 @@ package dev.beacon.android;
 
 public final class GameStreamNativeStreamClient implements NativeStreamProtocolClient {
     private final GameStreamRtspSessionClient rtspSessionClient;
+    private boolean rtspSessionActive;
 
     public GameStreamNativeStreamClient() {
         this(GameStreamRtspSessionClient.notConfigured());
@@ -34,6 +35,7 @@ public final class GameStreamNativeStreamClient implements NativeStreamProtocolC
             }
 
             GameStreamRtspSessionResult rtspResult = rtspSessionClient.start(gameStreamPlan);
+            rtspSessionActive = rtspResult.success();
             if (!rtspResult.success()) {
                 return NativeStreamStartResult.unsupported(rtspResult.diagnostic());
             }
@@ -50,5 +52,11 @@ public final class GameStreamNativeStreamClient implements NativeStreamProtocolC
 
     @Override
     public void stop() {
+        if (!rtspSessionActive) {
+            return;
+        }
+
+        rtspSessionActive = false;
+        rtspSessionClient.stop();
     }
 }
