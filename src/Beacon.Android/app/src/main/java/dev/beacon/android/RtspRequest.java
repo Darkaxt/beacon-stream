@@ -43,6 +43,10 @@ public final class RtspRequest {
     }
 
     public static RtspRequest setup(String target, int cseq, String host, String sessionId, int clientRtpPort) {
+        if (clientRtpPort <= 0 || clientRtpPort >= 65535) {
+            throw new IllegalArgumentException("RTSP client RTP port must leave room for an RTCP pair.");
+        }
+
         Map<String, String> headers = new LinkedHashMap<>();
         String session = sessionId == null ? "" : sessionId.trim();
         if (!session.isEmpty()) {

@@ -65,6 +65,12 @@ public final class RtspRequestTest {
     }
 
     @Test
+    public void rejectsSetupClientPortWithoutRoomForRtcpPair() {
+        assertInvalidSetupClientPort(0);
+        assertInvalidSetupClientPort(65535);
+    }
+
+    @Test
     public void serializesAnnounceRequestWithSdpPayload() {
         String payload = "v=0\r\ns=Beacon \u03c0\r\n";
         RtspRequest request = RtspRequest.announce(
@@ -99,5 +105,16 @@ public final class RtspRequestTest {
                 "Session: session-1\r\n" +
                 "\r\n",
             request.serialize());
+    }
+
+    private static void assertInvalidSetupClientPort(int clientRtpPort) {
+        try {
+            RtspRequest.setup("streamid=video/0/0", 4, "127.0.0.1:48010", "abc123", clientRtpPort);
+        } catch (IllegalArgumentException ex) {
+            assertEquals("RTSP client RTP port must leave room for an RTCP pair.", ex.getMessage());
+            return;
+        }
+
+        throw new AssertionError("Expected invalid RTSP client RTP port to be rejected.");
     }
 }
