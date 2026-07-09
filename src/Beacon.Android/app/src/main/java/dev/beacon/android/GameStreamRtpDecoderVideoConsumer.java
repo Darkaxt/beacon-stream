@@ -43,7 +43,14 @@ public final class GameStreamRtpDecoderVideoConsumer implements GameStreamRtpVid
         }
 
         activeDecoder = decoder;
-        return NativeStreamStartResult.started(result.status());
+        return NativeStreamStartResult.started(
+            result.status(),
+            NativeStreamPresentation.encodedVideo(
+                videoPlan.videoUri(),
+                videoPlan.codec(),
+                videoPlan.width(),
+                videoPlan.height(),
+                videoPlan.fps()));
     }
 
     @Override

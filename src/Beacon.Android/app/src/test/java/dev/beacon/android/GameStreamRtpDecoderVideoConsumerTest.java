@@ -24,6 +24,10 @@ public final class GameStreamRtpDecoderVideoConsumerTest {
         assertEquals(
             "MediaCodec decoder configured. codec=h264 container=annex-b video=udp://127.0.0.1:47998 2560x1600@120",
             result.status());
+        assertTrue(result.presentation().active());
+        assertEquals("encoded-video", result.presentation().kind());
+        assertEquals("udp://127.0.0.1:47998", result.presentation().endpointUri());
+        assertEquals("Beacon encoded video h264 2560x1600@120", result.presentation().label());
         assertEquals(1, codecFactory.createCount);
         assertEquals("h264", codecFactory.lastCodec);
         assertEquals(1, codec.configureCount);
