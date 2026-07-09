@@ -11,11 +11,11 @@ public final class EncodedVideoStreamPlanTest {
     public void acceptsCompleteBeaconTestEncodedVideoContract() {
         EncodedVideoStreamPlan plan = EncodedVideoStreamPlan.from(encodedConnection(
             "\"codec\":\"h264\",\"container\":\"annex-b\",\"width\":\"1280\",\"height\":\"720\",\"fps\":\"60\"",
-            "{\"role\":\"video\",\"uri\":\"beacon-test://video/color-bars.h264\"}"));
+            "{\"role\":\"video\",\"uri\":\"/streams/beacon-test/color-bars.h264\"}"));
 
         assertTrue(plan.supportedProtocol());
         assertTrue(plan.complete());
-        assertEquals("beacon-test://video/color-bars.h264", plan.videoUri());
+        assertEquals("/streams/beacon-test/color-bars.h264", plan.videoUri());
         assertEquals("h264", plan.codec());
         assertEquals("annex-b", plan.container());
         assertEquals(1280, plan.width());

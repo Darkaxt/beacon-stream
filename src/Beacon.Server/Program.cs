@@ -17,6 +17,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 app.MapAdminEndpoints();
 app.MapGameEndpoints();
 app.MapClientEndpoints();
+app.MapStreamAssetEndpoints();
 
 app.Run();
 

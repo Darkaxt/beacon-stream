@@ -3,11 +3,19 @@ package dev.beacon.android;
 public final class SurfaceEncodedVideoDecoder implements EncodedVideoDecoder {
     private final EncodedVideoCodecFactory codecFactory;
     private final EncodedVideoSurfaceProvider surfaceProvider;
+    private final EncodedVideoSampleProviderFactory sampleProviderFactory;
     private EncodedVideoCodec activeCodec;
 
     public SurfaceEncodedVideoDecoder(
         EncodedVideoCodecFactory codecFactory,
         EncodedVideoSurfaceProvider surfaceProvider) {
+        this(codecFactory, surfaceProvider, EncodedVideoSampleProviderFactory.empty());
+    }
+
+    public SurfaceEncodedVideoDecoder(
+        EncodedVideoCodecFactory codecFactory,
+        EncodedVideoSurfaceProvider surfaceProvider,
+        EncodedVideoSampleProviderFactory sampleProviderFactory) {
         if (codecFactory == null) {
             throw new IllegalArgumentException("Encoded video codec factory is required.");
         }
@@ -16,8 +24,13 @@ public final class SurfaceEncodedVideoDecoder implements EncodedVideoDecoder {
             throw new IllegalArgumentException("Encoded video surface provider is required.");
         }
 
+        if (sampleProviderFactory == null) {
+            throw new IllegalArgumentException("Encoded video sample provider factory is required.");
+        }
+
         this.codecFactory = codecFactory;
         this.surfaceProvider = surfaceProvider;
+        this.sampleProviderFactory = sampleProviderFactory;
     }
 
     @Override
@@ -28,9 +41,17 @@ public final class SurfaceEncodedVideoDecoder implements EncodedVideoDecoder {
         }
 
         EncodedVideoStreamPlan plan = request.plan();
-        EncodedVideoCodec codec = codecFactory.create(plan.codec());
+        EncodedVideoSampleProvider sampleProvider;
         try {
-            codec.configure(plan, surface);
+            sampleProvider = sampleProviderFactory.create(plan);
+        } catch (RuntimeException ex) {
+            return EncodedVideoDecodeResult.failed(ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
+        }
+
+        EncodedVideoCodec codec = null;
+        try {
+            codec = codecFactory.create(plan.codec());
+            codec.configure(plan, surface, sampleProvider);
             codec.start();
             activeCodec = codec;
             return EncodedVideoDecodeResult.started(
@@ -40,7 +61,10 @@ public final class SurfaceEncodedVideoDecoder implements EncodedVideoDecoder {
                     " video=" + plan.videoUri() +
                     " " + plan.width() + "x" + plan.height() + "@" + plan.fps());
         } catch (RuntimeException ex) {
-            codec.release();
+            if (codec != null) {
+                codec.release();
+            }
+
             return EncodedVideoDecodeResult.failed(ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage());
         }
     }

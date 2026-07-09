@@ -45,7 +45,7 @@ public final class DiagnosticNativeStreamClientTest {
 
         assertFalse(result.success());
         assertEquals(
-            "Beacon encoded video contract is valid, but no MediaCodec decoder is configured yet. codec=h264 container=annex-b video=beacon-test://video/color-bars.h264 1280x720@60",
+            "Beacon encoded video contract is valid, but no MediaCodec decoder is configured yet. codec=h264 container=annex-b video=/streams/beacon-test/color-bars.h264 1280x720@60",
             result.diagnostic());
     }
 

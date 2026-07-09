@@ -16,7 +16,7 @@ public final class EncodedVideoNativeStreamClientTest {
         assertFalse(result.success());
         assertEquals("", result.status());
         assertEquals(
-            "Beacon encoded video contract is valid, but no MediaCodec decoder is configured yet. codec=h264 container=annex-b video=beacon-test://video/color-bars.h264 1280x720@60",
+            "Beacon encoded video contract is valid, but no MediaCodec decoder is configured yet. codec=h264 container=annex-b video=/streams/beacon-test/color-bars.h264 1280x720@60",
             result.diagnostic());
     }
 
@@ -30,19 +30,19 @@ public final class EncodedVideoNativeStreamClientTest {
 
         assertTrue(result.success());
         assertEquals(
-            "Native encoded video stream started. codec=h264 container=annex-b video=beacon-test://video/color-bars.h264 1280x720@60",
+            "Native encoded video stream started. codec=h264 container=annex-b video=/streams/beacon-test/color-bars.h264 1280x720@60",
             result.status());
         assertEquals("", result.diagnostic());
         assertEquals(1, decoder.startCount);
         assertEquals("h264", decoder.lastRequest.plan().codec());
         assertEquals("annex-b", decoder.lastRequest.plan().container());
-        assertEquals("beacon-test://video/color-bars.h264", decoder.lastRequest.plan().videoUri());
+        assertEquals("/streams/beacon-test/color-bars.h264", decoder.lastRequest.plan().videoUri());
         assertEquals(1280, decoder.lastRequest.plan().width());
         assertEquals(720, decoder.lastRequest.plan().height());
         assertEquals(60, decoder.lastRequest.plan().fps());
         assertTrue(result.presentation().active());
         assertEquals("encoded-video", result.presentation().kind());
-        assertEquals("beacon-test://video/color-bars.h264", result.presentation().endpointUri());
+        assertEquals("/streams/beacon-test/color-bars.h264", result.presentation().endpointUri());
     }
 
     @Test
@@ -104,7 +104,7 @@ public final class EncodedVideoNativeStreamClientTest {
     static StreamConnectionDescriptor validConnection() {
         return StreamConnectionDescriptor.extract(
             "{\"stream\":{\"connection\":{\"protocol\":\"beacon-test\",\"endpoints\":[" +
-                "{\"role\":\"video\",\"uri\":\"beacon-test://video/color-bars.h264\"}]," +
+                "{\"role\":\"video\",\"uri\":\"/streams/beacon-test/color-bars.h264\"}]," +
                 "\"metadata\":{" +
                 "\"streamKind\":\"encoded-video\"," +
                 "\"codec\":\"h264\"," +

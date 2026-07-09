@@ -64,7 +64,7 @@ public sealed class BeaconTestStreamingBackendTests
         Assert.Null(session.Connection.LaunchUri);
         StreamingEndpointDescriptor endpoint = Assert.Single(session.Connection.Endpoints);
         Assert.Equal("video", endpoint.Role);
-        Assert.Equal("beacon-test://video/color-bars.h264", endpoint.Uri);
+        Assert.Equal("/streams/beacon-test/color-bars.h264", endpoint.Uri);
         Assert.Equal("client-z-fold-7", session.Connection.Metadata["displayId"]);
         Assert.Equal("lan-direct", session.Connection.Metadata["transport"]);
         Assert.Equal("encoded-video", session.Connection.Metadata["streamKind"]);
@@ -88,7 +88,7 @@ public sealed class BeaconTestStreamingBackendTests
         Assert.Null(health.LaunchUri);
         StreamingEndpointDescriptor endpoint = Assert.Single(health.Endpoints);
         Assert.Equal("video", endpoint.Role);
-        Assert.Equal("beacon-test://video/color-bars.h264", endpoint.Uri);
+        Assert.Equal("/streams/beacon-test/color-bars.h264", endpoint.Uri);
         Assert.Contains("h264", health.Codecs);
         Assert.Contains("beacon-test-encoded-video", health.Capture);
     }

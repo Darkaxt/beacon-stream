@@ -182,7 +182,11 @@ public final class BeaconActivity extends Activity {
             readGame())));
         encodedVideoSurfaceView = new SurfaceView(this);
         encodedVideoSurfaceView.setMinimumHeight(360);
-        encodedVideoSurfaceView.setVisibility(View.INVISIBLE);
+        encodedVideoSurfaceView.setLayoutParams(new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            360));
+        encodedVideoSurfaceView.setAlpha(0f);
+        encodedVideoSurfaceView.setVisibility(View.VISIBLE);
         root.addView(encodedVideoSurfaceView);
         nativeStreamView = new BeaconTestPatternView(this);
         root.addView(nativeStreamView);
@@ -397,7 +401,8 @@ public final class BeaconActivity extends Activity {
             boolean encodedVideoActive =
                 safePresentation.active() && "encoded-video".equalsIgnoreCase(safePresentation.kind());
             if (encodedVideoSurfaceView != null) {
-                encodedVideoSurfaceView.setVisibility(encodedVideoActive ? View.VISIBLE : View.INVISIBLE);
+                encodedVideoSurfaceView.setVisibility(View.VISIBLE);
+                encodedVideoSurfaceView.setAlpha(encodedVideoActive ? 1f : 0f);
             }
 
             if (nativeStreamView != null) {
@@ -515,14 +520,15 @@ public final class BeaconActivity extends Activity {
             new DispatchingStreamConnectionLauncher(
                 new AndroidMainThreadDispatcher(this),
                 new AndroidIntentStreamConnectionLauncher(this)),
-            createNativeStreamClient());
+            createNativeStreamClient(config.serverUrl()));
     }
 
-    private NativeStreamClient createNativeStreamClient() {
+    private NativeStreamClient createNativeStreamClient(String serverUrl) {
         return new DiagnosticNativeStreamClient(new NativeStreamClientRouter(
             new EncodedVideoNativeStreamClient(new SurfaceEncodedVideoDecoder(
                 new AndroidMediaCodecFactory(),
-                new AndroidSurfaceViewProvider(encodedVideoSurfaceView))),
+                new AndroidSurfaceViewProvider(encodedVideoSurfaceView),
+                new HttpEncodedVideoSampleProviderFactory(serverUrl))),
             new BeaconTestNativeStreamClient(),
             new GameStreamNativeStreamClient()));
     }

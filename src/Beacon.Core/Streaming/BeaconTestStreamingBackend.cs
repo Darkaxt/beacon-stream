@@ -19,7 +19,7 @@ public sealed class BeaconTestStreamingBackend : IStreamingBackend
     public const string BackendName = "beacon-test";
     public const string Protocol = "beacon-test";
     public const string ColorBarsEndpoint = "beacon-test://pattern/color-bars";
-    public const string EncodedVideoEndpoint = "beacon-test://video/color-bars.h264";
+    public const string EncodedVideoEndpoint = "/streams/beacon-test/color-bars.h264";
 
     private const string EncodedVideoCodec = "h264";
     private const string EncodedVideoContainer = "annex-b";

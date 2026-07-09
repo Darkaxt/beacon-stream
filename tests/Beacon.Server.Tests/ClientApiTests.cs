@@ -461,7 +461,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal(JsonValueKind.Null, launchUri.ValueKind);
         JsonElement endpoint = Assert.Single(connection.GetProperty("endpoints").EnumerateArray());
         Assert.Equal("video", endpoint.GetProperty("role").GetString());
-        Assert.Equal("beacon-test://video/color-bars.h264", endpoint.GetProperty("uri").GetString());
+        Assert.Equal("/streams/beacon-test/color-bars.h264", endpoint.GetProperty("uri").GetString());
         JsonElement metadata = connection.GetProperty("metadata");
         Assert.Equal("encoded-video", metadata.GetProperty("streamKind").GetString());
         Assert.Equal("h264", metadata.GetProperty("codec").GetString());
@@ -469,6 +469,23 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal("2560", metadata.GetProperty("width").GetString());
         Assert.Equal("1600", metadata.GetProperty("height").GetString());
         Assert.Equal("120", metadata.GetProperty("fps").GetString());
+    }
+
+    [Fact]
+    public async Task BeaconTestEncodedVideoAssetReturnsAnnexBBytes()
+    {
+        HttpClient client = factory.CreateClient();
+
+        HttpResponseMessage response = await client.GetAsync("/streams/beacon-test/color-bars.h264");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("video/H264", response.Content.Headers.ContentType?.MediaType);
+        byte[] bytes = await response.Content.ReadAsByteArrayAsync();
+        Assert.True(bytes.Length > 0);
+        Assert.Equal(0, bytes[0]);
+        Assert.Equal(0, bytes[1]);
+        Assert.Equal(0, bytes[2]);
+        Assert.Equal(1, bytes[3]);
     }
 
     [Fact]

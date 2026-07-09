@@ -5,6 +5,7 @@ import android.media.MediaFormat;
 import android.view.Surface;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.Locale;
 
 public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory {
@@ -42,11 +43,16 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
         }
 
         @Override
-        public void configure(EncodedVideoStreamPlan plan, Object surface) {
+        public void configure(EncodedVideoStreamPlan plan, Object surface, EncodedVideoSampleProvider sampleProvider) {
             if (!(surface instanceof Surface androidSurface)) {
                 throw new IllegalStateException("Encoded video surface is not an Android Surface.");
             }
 
+            if (sampleProvider == null) {
+                throw new IllegalStateException("Encoded video sample provider is required.");
+            }
+
+            codec.setCallback(new QueueingCallback(sampleProvider));
             MediaFormat format = MediaFormat.createVideoFormat(mimeType, plan.width(), plan.height());
             format.setInteger(MediaFormat.KEY_FRAME_RATE, plan.fps());
             codec.configure(format, androidSurface, null, 0);
@@ -65,6 +71,47 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
         @Override
         public void release() {
             codec.release();
+        }
+
+        private static final class QueueingCallback extends MediaCodec.Callback {
+            private final EncodedVideoSampleProvider sampleProvider;
+
+            QueueingCallback(EncodedVideoSampleProvider sampleProvider) {
+                this.sampleProvider = sampleProvider;
+            }
+
+            @Override
+            public void onInputBufferAvailable(MediaCodec codec, int index) {
+                EncodedVideoSample sample = sampleProvider.nextSample();
+                if (sample.endOfStream()) {
+                    codec.queueInputBuffer(index, 0, 0, sample.presentationTimeUs(), MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                    return;
+                }
+
+                ByteBuffer inputBuffer = codec.getInputBuffer(index);
+                byte[] data = sample.data();
+                if (inputBuffer == null || data.length > inputBuffer.capacity()) {
+                    codec.queueInputBuffer(index, 0, 0, sample.presentationTimeUs(), MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                    return;
+                }
+
+                inputBuffer.clear();
+                inputBuffer.put(data);
+                codec.queueInputBuffer(index, 0, data.length, sample.presentationTimeUs(), 0);
+            }
+
+            @Override
+            public void onOutputBufferAvailable(MediaCodec codec, int index, MediaCodec.BufferInfo info) {
+                codec.releaseOutputBuffer(index, info.size > 0);
+            }
+
+            @Override
+            public void onError(MediaCodec codec, MediaCodec.CodecException exception) {
+            }
+
+            @Override
+            public void onOutputFormatChanged(MediaCodec codec, MediaFormat format) {
+            }
         }
     }
 }
