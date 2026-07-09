@@ -23,6 +23,16 @@ public final class GameStreamUdpRtpPacketSourceFactory implements GameStreamRtpP
             throw new IllegalStateException("GameStream RTP video client port is unavailable.");
         }
 
+        GameStreamRtpPortLease rtpPortLease = sessionInfo.rtpPortLease();
+        if (rtpPortLease != null) {
+            RtpDatagramSocket leasedSocket = rtpPortLease.takeVideoSocket();
+            if (leasedSocket == null) {
+                throw new IllegalStateException("GameStream RTP video socket lease is unavailable.");
+            }
+
+            return new RtpDatagramPacketSource(leasedSocket);
+        }
+
         RtpDatagramSocket socket;
         try {
             socket = socketFactory.bind(sessionInfo.videoClientPort());

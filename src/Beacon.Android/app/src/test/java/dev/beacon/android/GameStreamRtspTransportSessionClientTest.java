@@ -33,6 +33,40 @@ public final class GameStreamRtspTransportSessionClientTest {
     }
 
     @Test
+    public void handshakeAdvertisesDynamicRtpLeasePorts() {
+        RecordingSuccessfulRtspTransport transport = new RecordingSuccessfulRtspTransport();
+        GameStreamRtspTransportSessionClient client = new GameStreamRtspTransportSessionClient(
+            new RecordingLeaseFactory(new RecordingLease(transport)),
+            new RecordingRtpPortLeaseFactory(GameStreamRtpPortLease.staticPorts(61000, 61002, 61004)),
+            new FixedSdpPayloadProvider("v=0\r\ns=Beacon Test\r\n"));
+
+        GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
+
+        assertTrue(result.success());
+        assertTrue(transport.requests.get(2).contains("Transport: unicast;X-GS-ClientPort=61000-61001\r\n"));
+        assertTrue(transport.requests.get(3).contains("Transport: unicast;X-GS-ClientPort=61002-61003\r\n"));
+        assertTrue(transport.requests.get(4).contains("Transport: unicast;X-GS-ClientPort=61004-61005\r\n"));
+        assertEquals(61000, result.sessionInfo().audioClientPort());
+        assertEquals(61002, result.sessionInfo().videoClientPort());
+        assertEquals(61004, result.sessionInfo().controlClientPort());
+    }
+
+    @Test
+    public void rtpLeaseFailureClosesRtspLeaseAndReturnsDiagnostic() {
+        RecordingLease rtspLease = new RecordingLease(new SuccessfulRtspTransport());
+        GameStreamRtspTransportSessionClient client = new GameStreamRtspTransportSessionClient(
+            new RecordingLeaseFactory(rtspLease),
+            new ThrowingRtpPortLeaseFactory(),
+            new FixedSdpPayloadProvider("v=0\r\ns=Beacon Test\r\n"));
+
+        GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
+
+        assertFalse(result.success());
+        assertEquals("RTP UDP port lease failed: video busy", result.diagnostic());
+        assertEquals(1, rtspLease.closeCount);
+    }
+
+    @Test
     public void failedHandshakeClosesLeaseImmediately() {
         RecordingLease lease = new RecordingLease(new FailingRtspTransport());
         GameStreamRtspTransportSessionClient client = new GameStreamRtspTransportSessionClient(
@@ -134,6 +168,26 @@ public final class GameStreamRtspTransportSessionClientTest {
         }
     }
 
+    private static final class RecordingRtpPortLeaseFactory implements GameStreamRtpPortLeaseFactory {
+        private final GameStreamRtpPortLease lease;
+
+        private RecordingRtpPortLeaseFactory(GameStreamRtpPortLease lease) {
+            this.lease = lease;
+        }
+
+        @Override
+        public GameStreamRtpPortLease open() {
+            return lease;
+        }
+    }
+
+    private static final class ThrowingRtpPortLeaseFactory implements GameStreamRtpPortLeaseFactory {
+        @Override
+        public GameStreamRtpPortLease open() {
+            throw new IllegalStateException("RTP UDP port lease failed: video busy");
+        }
+    }
+
     private static final class ThrowingLeaseFactory implements RtspTransportLeaseFactory {
         @Override
         public RtspTransportLease open(GameStreamEndpointPlan plan) {
@@ -192,6 +246,28 @@ public final class GameStreamRtspTransportSessionClientTest {
 
         @Override
         public RtspResponse transact(RtspRequest request) {
+            int current = cseq++;
+            if (current <= 2 || current >= 6) {
+                return RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: " + current + "\r\n\r\n");
+            }
+
+            int serverPort = current == 3 ? 48000 : current == 4 ? 47998 : 47999;
+            return RtspResponse.parse(
+                "RTSP/1.0 200 OK\r\n" +
+                    "CSeq: " + current + "\r\n" +
+                    "Session: session-1;timeout=30\r\n" +
+                    "Transport: unicast;server_port=" + serverPort + "-" + (serverPort + 1) + ";source=127.0.0.1\r\n" +
+                    "\r\n");
+        }
+    }
+
+    private static final class RecordingSuccessfulRtspTransport implements RtspTransport {
+        private final List<String> requests = new ArrayList<>();
+        private int cseq = 1;
+
+        @Override
+        public RtspResponse transact(RtspRequest request) {
+            requests.add(request.serialize());
             int current = cseq++;
             if (current <= 2 || current >= 6) {
                 return RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: " + current + "\r\n\r\n");

@@ -23,6 +23,7 @@ public final class AndroidNativeStreamClientFactory {
     public static GameStreamRtspSessionClient socketRtspSessionClient() {
         return new GameStreamRtspTransportSessionClient(
             new RtspSocketTransportLeaseFactory(),
+            () -> GameStreamRtpPortLease.open(new JavaRtpDatagramSocketFactory()),
             GameStreamRtspSdpPayloadProvider.diagnostic());
     }
 

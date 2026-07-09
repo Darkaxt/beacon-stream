@@ -10,6 +10,7 @@ public final class GameStreamRtspHandshakeClient implements GameStreamRtspSessio
 
     private final RtspTransport transport;
     private final GameStreamRtspSdpPayloadProvider sdpPayloadProvider;
+    private final GameStreamRtpPortLease rtpPortLease;
 
     public GameStreamRtspHandshakeClient(RtspTransport transport) {
         this(transport, GameStreamRtspSdpPayloadProvider.diagnostic());
@@ -18,10 +19,21 @@ public final class GameStreamRtspHandshakeClient implements GameStreamRtspSessio
     public GameStreamRtspHandshakeClient(
         RtspTransport transport,
         GameStreamRtspSdpPayloadProvider sdpPayloadProvider) {
+        this(
+            transport,
+            sdpPayloadProvider,
+            GameStreamRtpPortLease.staticPorts(AudioClientPort, VideoClientPort, ControlClientPort));
+    }
+
+    public GameStreamRtspHandshakeClient(
+        RtspTransport transport,
+        GameStreamRtspSdpPayloadProvider sdpPayloadProvider,
+        GameStreamRtpPortLease rtpPortLease) {
         this.transport = transport;
         this.sdpPayloadProvider = sdpPayloadProvider == null
             ? GameStreamRtspSdpPayloadProvider.diagnostic()
             : sdpPayloadProvider;
+        this.rtpPortLease = rtpPortLease;
     }
 
     @Override
@@ -40,6 +52,10 @@ public final class GameStreamRtspHandshakeClient implements GameStreamRtspSessio
                     plan.protocol() +
                     " rtsp=" +
                     plan.rtspUri());
+        }
+
+        if (rtpPortLease == null) {
+            return GameStreamRtspSessionResult.failed("GameStream RTP port lease is missing.");
         }
 
         try {
@@ -62,18 +78,22 @@ public final class GameStreamRtspHandshakeClient implements GameStreamRtspSessio
                 "RTSP DESCRIBE failed with status " + statusSummary(describe) + ".");
         }
 
-        GameStreamRtspSetupResult audio = setup(plan, AudioTarget, "audio", 3, "", AudioClientPort);
+        int audioClientPort = rtpPortLease.audioClientPort();
+        int videoClientPort = rtpPortLease.videoClientPort();
+        int controlClientPort = rtpPortLease.controlClientPort();
+
+        GameStreamRtspSetupResult audio = setup(plan, AudioTarget, "audio", 3, "", audioClientPort);
         if (!audio.success()) {
             return GameStreamRtspSessionResult.failed(audio.diagnostic());
         }
 
         String sessionId = audio.sessionId();
-        GameStreamRtspSetupResult video = setup(plan, VideoTarget, "video", 4, sessionId, VideoClientPort);
+        GameStreamRtspSetupResult video = setup(plan, VideoTarget, "video", 4, sessionId, videoClientPort);
         if (!video.success()) {
             return GameStreamRtspSessionResult.failed(video.diagnostic());
         }
 
-        GameStreamRtspSetupResult control = setup(plan, ControlTarget, "control", 5, sessionId, ControlClientPort);
+        GameStreamRtspSetupResult control = setup(plan, ControlTarget, "control", 5, sessionId, controlClientPort);
         if (!control.success()) {
             return GameStreamRtspSessionResult.failed(control.diagnostic());
         }
@@ -118,12 +138,13 @@ public final class GameStreamRtspHandshakeClient implements GameStreamRtspSessio
                 plan.protocol(),
                 plan.rtspUri(),
                 sessionId,
-                AudioClientPort,
+                audioClientPort,
                 audio.serverPort(),
-                VideoClientPort,
+                videoClientPort,
                 video.serverPort(),
-                ControlClientPort,
-                control.serverPort()));
+                controlClientPort,
+                control.serverPort(),
+                rtpPortLease));
     }
 
     private GameStreamRtspSetupResult setup(

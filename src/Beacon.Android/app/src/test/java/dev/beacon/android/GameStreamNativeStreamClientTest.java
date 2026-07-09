@@ -131,6 +131,22 @@ public final class GameStreamNativeStreamClientTest {
     }
 
     @Test
+    public void videoSessionFailureStopsRtspSessionWhenRtpLeaseIsAttached() {
+        RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(startedRtspSessionResultWithRtpLease());
+        RecordingVideoSessionClient videoClient = new RecordingVideoSessionClient(
+            NativeStreamStartResult.unsupported("RTP video failed"));
+        GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient, videoClient);
+
+        NativeStreamStartResult result = client.start(
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session", completeRtpMetadata()));
+
+        assertFalse(result.success());
+        assertEquals("RTP video failed", result.diagnostic());
+        assertEquals(1, rtspClient.stopCount);
+        assertEquals(0, videoClient.stopCount);
+    }
+
+    @Test
     public void videoSessionStartExceptionStopsVideoAndRtspSessionAndReturnsDiagnostic() {
         RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(startedRtspSessionResult());
         RecordingVideoSessionClient videoClient = new RecordingVideoSessionClient(
@@ -298,6 +314,22 @@ public final class GameStreamNativeStreamClientTest {
                 48000,
                 47998,
                 47999));
+    }
+
+    private static GameStreamRtspSessionResult startedRtspSessionResultWithRtpLease() {
+        return GameStreamRtspSessionResult.started(
+            "RTSP session started.",
+            GameStreamRtspSessionInfo.startedWithClientPorts(
+                "gamestream",
+                "rtsp://127.0.0.1:48010/beacon/session",
+                "session-1",
+                61000,
+                48000,
+                61002,
+                47998,
+                61004,
+                47999,
+                GameStreamRtpPortLease.staticPorts(61000, 61002, 61004)));
     }
 
     private static final class RecordingRtspSessionClient implements GameStreamRtspSessionClient {

@@ -11,7 +11,8 @@ public final class GameStreamRtspSessionInfo {
         -1,
         -1,
         -1,
-        -1);
+        -1,
+        null);
 
     private final boolean present;
     private final String protocol;
@@ -23,6 +24,7 @@ public final class GameStreamRtspSessionInfo {
     private final int videoServerPort;
     private final int controlClientPort;
     private final int controlServerPort;
+    private final GameStreamRtpPortLease rtpPortLease;
 
     private GameStreamRtspSessionInfo(
         boolean present,
@@ -34,7 +36,8 @@ public final class GameStreamRtspSessionInfo {
         int videoClientPort,
         int videoServerPort,
         int controlClientPort,
-        int controlServerPort) {
+        int controlServerPort,
+        GameStreamRtpPortLease rtpPortLease) {
         this.present = present;
         this.protocol = protocol == null ? "" : protocol;
         this.rtspUri = rtspUri == null ? "" : rtspUri;
@@ -45,6 +48,7 @@ public final class GameStreamRtspSessionInfo {
         this.videoServerPort = videoServerPort;
         this.controlClientPort = controlClientPort;
         this.controlServerPort = controlServerPort;
+        this.rtpPortLease = rtpPortLease;
     }
 
     public static GameStreamRtspSessionInfo empty() {
@@ -81,6 +85,30 @@ public final class GameStreamRtspSessionInfo {
         int videoServerPort,
         int controlClientPort,
         int controlServerPort) {
+        return startedWithClientPorts(
+            protocol,
+            rtspUri,
+            sessionId,
+            audioClientPort,
+            audioServerPort,
+            videoClientPort,
+            videoServerPort,
+            controlClientPort,
+            controlServerPort,
+            null);
+    }
+
+    public static GameStreamRtspSessionInfo startedWithClientPorts(
+        String protocol,
+        String rtspUri,
+        String sessionId,
+        int audioClientPort,
+        int audioServerPort,
+        int videoClientPort,
+        int videoServerPort,
+        int controlClientPort,
+        int controlServerPort,
+        GameStreamRtpPortLease rtpPortLease) {
         return startedCore(
             protocol,
             rtspUri,
@@ -91,7 +119,8 @@ public final class GameStreamRtspSessionInfo {
             videoServerPort,
             controlClientPort,
             controlServerPort,
-            true);
+            true,
+            rtpPortLease);
     }
 
     private static GameStreamRtspSessionInfo startedCore(
@@ -105,6 +134,32 @@ public final class GameStreamRtspSessionInfo {
         int controlClientPort,
         int controlServerPort,
         boolean requireClientPorts) {
+        return startedCore(
+            protocol,
+            rtspUri,
+            sessionId,
+            audioClientPort,
+            audioServerPort,
+            videoClientPort,
+            videoServerPort,
+            controlClientPort,
+            controlServerPort,
+            requireClientPorts,
+            null);
+    }
+
+    private static GameStreamRtspSessionInfo startedCore(
+        String protocol,
+        String rtspUri,
+        String sessionId,
+        int audioClientPort,
+        int audioServerPort,
+        int videoClientPort,
+        int videoServerPort,
+        int controlClientPort,
+        int controlServerPort,
+        boolean requireClientPorts,
+        GameStreamRtpPortLease rtpPortLease) {
         String safeProtocol = trim(protocol);
         String safeRtspUri = trim(rtspUri);
         String safeSessionId = trim(sessionId);
@@ -132,7 +187,8 @@ public final class GameStreamRtspSessionInfo {
             videoClientPort,
             videoServerPort,
             controlClientPort,
-            controlServerPort);
+            controlServerPort,
+            rtpPortLease);
     }
 
     public boolean present() {
@@ -173,6 +229,10 @@ public final class GameStreamRtspSessionInfo {
 
     public int controlServerPort() {
         return controlServerPort;
+    }
+
+    public GameStreamRtpPortLease rtpPortLease() {
+        return rtpPortLease;
     }
 
     private static String trim(String value) {
