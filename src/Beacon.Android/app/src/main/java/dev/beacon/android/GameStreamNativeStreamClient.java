@@ -2,14 +2,23 @@ package dev.beacon.android;
 
 public final class GameStreamNativeStreamClient implements NativeStreamProtocolClient {
     private final GameStreamRtspSessionClient rtspSessionClient;
+    private final GameStreamVideoSessionClient videoSessionClient;
     private boolean rtspSessionActive;
+    private boolean videoSessionActive;
 
     public GameStreamNativeStreamClient() {
         this(GameStreamRtspSessionClient.notConfigured());
     }
 
     public GameStreamNativeStreamClient(GameStreamRtspSessionClient rtspSessionClient) {
+        this(rtspSessionClient, null);
+    }
+
+    public GameStreamNativeStreamClient(
+        GameStreamRtspSessionClient rtspSessionClient,
+        GameStreamVideoSessionClient videoSessionClient) {
         this.rtspSessionClient = rtspSessionClient == null ? GameStreamRtspSessionClient.notConfigured() : rtspSessionClient;
+        this.videoSessionClient = videoSessionClient;
     }
 
     @Override
@@ -40,6 +49,10 @@ public final class GameStreamNativeStreamClient implements NativeStreamProtocolC
                 return NativeStreamStartResult.unsupported(rtspResult.diagnostic());
             }
 
+            if (videoSessionClient != null) {
+                return startVideoSession(gameStreamPlan, rtspResult.sessionInfo());
+            }
+
             return NativeStreamStartResult.started(
                 "Native GameStream RTSP session started. protocol=" +
                     gameStreamPlan.protocol() +
@@ -50,8 +63,35 @@ public final class GameStreamNativeStreamClient implements NativeStreamProtocolC
         return NativeStreamStartResult.unsupported(connection.missingLaunchUriDiagnostic());
     }
 
+    private NativeStreamStartResult startVideoSession(
+        GameStreamEndpointPlan gameStreamPlan,
+        GameStreamRtspSessionInfo sessionInfo) {
+        if (sessionInfo == null || !sessionInfo.present()) {
+            stopRtspSession();
+            return NativeStreamStartResult.unsupported("Native GameStream RTSP session did not include media setup info.");
+        }
+
+        NativeStreamStartResult videoResult = videoSessionClient.start(gameStreamPlan, sessionInfo);
+        if (!videoResult.success()) {
+            stopRtspSession();
+            return videoResult;
+        }
+
+        videoSessionActive = true;
+        return videoResult;
+    }
+
     @Override
     public void stop() {
+        if (videoSessionActive) {
+            videoSessionActive = false;
+            videoSessionClient.stop();
+        }
+
+        stopRtspSession();
+    }
+
+    private void stopRtspSession() {
         if (!rtspSessionActive) {
             return;
         }

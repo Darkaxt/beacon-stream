@@ -102,6 +102,12 @@ public final class GameStreamRtspTransportSessionClientTest {
         assertEquals(1, lease.closeCount);
     }
 
+    @Test
+    public void failedAndLegacyStartedResultsDoNotCarrySessionInfo() {
+        assertFalse(GameStreamRtspSessionResult.failed("x").sessionInfo().present());
+        assertFalse(GameStreamRtspSessionResult.started("x").sessionInfo().present());
+    }
+
     private static GameStreamEndpointPlan completePlan(String rtspUri) {
         StreamConnectionDescriptor descriptor = StreamConnectionDescriptor.extract(
             "{\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"endpoints\":[" +

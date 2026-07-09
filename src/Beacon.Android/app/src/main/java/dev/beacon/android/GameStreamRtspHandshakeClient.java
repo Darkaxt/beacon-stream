@@ -110,7 +110,14 @@ public final class GameStreamRtspHandshakeClient implements GameStreamRtspSessio
                 " videoPort=" +
                 video.serverPort() +
                 " controlPort=" +
-                control.serverPort());
+                control.serverPort(),
+            GameStreamRtspSessionInfo.started(
+                plan.protocol(),
+                plan.rtspUri(),
+                sessionId,
+                audio.serverPort(),
+                video.serverPort(),
+                control.serverPort()));
     }
 
     private GameStreamRtspSetupResult setup(
