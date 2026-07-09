@@ -535,12 +535,15 @@ public final class BeaconActivity extends Activity {
     }
 
     private NativeStreamClient createNativeStreamClient(String serverUrl) {
+        AndroidMediaCodecFactory codecFactory = new AndroidMediaCodecFactory();
+        AndroidSurfaceViewProvider surfaceProvider = new AndroidSurfaceViewProvider(encodedVideoSurfaceView);
         return AndroidNativeStreamClientFactory.create(
             new SurfaceEncodedVideoDecoder(
-                new AndroidMediaCodecFactory(),
-                new AndroidSurfaceViewProvider(encodedVideoSurfaceView),
+                codecFactory,
+                surfaceProvider,
                 new HttpEncodedVideoSampleProviderFactory(serverUrl)),
-            AndroidNativeStreamClientFactory.socketRtspSessionClient());
+            AndroidNativeStreamClientFactory.socketRtspSessionClient(),
+            AndroidNativeStreamClientFactory.socketRtpVideoSessionClient(codecFactory, surfaceProvider));
     }
 
     private BeaconApiClient.ProfilePatch readPatch() {

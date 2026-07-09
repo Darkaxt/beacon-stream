@@ -68,7 +68,7 @@ public final class GameStreamNativeStreamClientTest {
         GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient, videoClient);
 
         NativeStreamStartResult result = client.start(
-            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session"));
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session", completeRtpMetadata()));
 
         assertTrue(result.success());
         assertEquals("Native GameStream video session started.", result.status());
@@ -79,6 +79,42 @@ public final class GameStreamNativeStreamClientTest {
     }
 
     @Test
+    public void configuredVideoClientWithoutRtpMetadataKeepsRtspOnly() {
+        RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(startedRtspSessionResult());
+        RecordingVideoSessionClient videoClient = new RecordingVideoSessionClient(
+            NativeStreamStartResult.unsupported("should not start video"));
+        GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient, videoClient);
+
+        NativeStreamStartResult result = client.start(
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session"));
+
+        assertTrue(result.success());
+        assertEquals(
+            "Native GameStream RTSP session started. protocol=gamestream rtsp=rtsp://127.0.0.1:48010/beacon/session",
+            result.status());
+        assertEquals(0, videoClient.startCount);
+        assertEquals(0, rtspClient.stopCount);
+    }
+
+    @Test
+    public void configuredVideoClientWithPartialRtpMetadataFailsAndStopsRtsp() {
+        RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(startedRtspSessionResult());
+        RecordingVideoSessionClient videoClient = new RecordingVideoSessionClient(
+            NativeStreamStartResult.unsupported("metadata rejected"));
+        GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient, videoClient);
+
+        NativeStreamStartResult result = client.start(
+            completeGameStreamConnection(
+                "rtsp://127.0.0.1:48010/beacon/session",
+                "\"codec\":\"h264\""));
+
+        assertFalse(result.success());
+        assertEquals("metadata rejected", result.diagnostic());
+        assertEquals(1, videoClient.startCount);
+        assertEquals(1, rtspClient.stopCount);
+    }
+
+    @Test
     public void videoSessionFailureStopsRtspSession() {
         RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(startedRtspSessionResult());
         RecordingVideoSessionClient videoClient = new RecordingVideoSessionClient(
@@ -86,7 +122,7 @@ public final class GameStreamNativeStreamClientTest {
         GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient, videoClient);
 
         NativeStreamStartResult result = client.start(
-            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session"));
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session", completeRtpMetadata()));
 
         assertFalse(result.success());
         assertEquals("RTP video failed", result.diagnostic());
@@ -103,7 +139,7 @@ public final class GameStreamNativeStreamClientTest {
         GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient, videoClient);
 
         NativeStreamStartResult result = client.start(
-            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session"));
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session", completeRtpMetadata()));
 
         assertFalse(result.success());
         assertEquals("GameStream video session failed: decoder exploded", result.diagnostic());
@@ -121,7 +157,7 @@ public final class GameStreamNativeStreamClientTest {
         GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient, videoClient);
 
         NativeStreamStartResult result = client.start(
-            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session"));
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session", completeRtpMetadata()));
         client.stop();
 
         assertTrue(result.success());
@@ -141,7 +177,7 @@ public final class GameStreamNativeStreamClientTest {
         GameStreamNativeStreamClient client = new GameStreamNativeStreamClient(rtspClient, videoClient);
 
         NativeStreamStartResult result = client.start(
-            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session"));
+            completeGameStreamConnection("rtsp://127.0.0.1:48010/beacon/session", completeRtpMetadata()));
         client.stop();
 
         assertTrue(result.success());
@@ -234,12 +270,22 @@ public final class GameStreamNativeStreamClientTest {
     }
 
     private static StreamConnectionDescriptor completeGameStreamConnection(String rtspUri) {
+        return completeGameStreamConnection(rtspUri, "");
+    }
+
+    private static StreamConnectionDescriptor completeGameStreamConnection(String rtspUri, String metadata) {
         return StreamConnectionDescriptor.extract(
             "{\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"endpoints\":[" +
                 "{\"role\":\"rtsp\",\"uri\":\"" + rtspUri + "\"}," +
                 "{\"role\":\"video\",\"uri\":\"udp://127.0.0.1:47998\"}," +
                 "{\"role\":\"control\",\"uri\":\"tcp://127.0.0.1:47999\"}," +
-                "{\"role\":\"audio\",\"uri\":\"udp://127.0.0.1:48000\"}]}}}");
+                "{\"role\":\"audio\",\"uri\":\"udp://127.0.0.1:48000\"}],\"metadata\":{" +
+                metadata +
+                "}}}}");
+    }
+
+    private static String completeRtpMetadata() {
+        return "\"codec\":\"h264\",\"container\":\"annex-b\",\"width\":\"2560\",\"height\":\"1600\",\"fps\":\"120\"";
     }
 
     private static GameStreamRtspSessionResult startedRtspSessionResult() {
@@ -291,6 +337,7 @@ public final class GameStreamNativeStreamClientTest {
         private GameStreamRtspSessionInfo startedSessionInfo;
         private RuntimeException startFailure;
         private RuntimeException stopFailure;
+        private int startCount;
         private int stopCount;
 
         private RecordingVideoSessionClient(NativeStreamStartResult result) {
@@ -304,6 +351,7 @@ public final class GameStreamNativeStreamClientTest {
 
         @Override
         public NativeStreamStartResult start(GameStreamEndpointPlan plan, GameStreamRtspSessionInfo sessionInfo) {
+            startCount++;
             startedPlan = plan;
             startedSessionInfo = sessionInfo;
             if (startFailure != null) {

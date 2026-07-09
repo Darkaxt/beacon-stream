@@ -4,6 +4,7 @@ import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 public final class AndroidNativeStreamClientFactoryTest {
@@ -41,6 +42,26 @@ public final class AndroidNativeStreamClientFactoryTest {
     }
 
     @Test
+    public void gameStreamRouteUsesInjectedVideoSessionWhenMetadataPresent() {
+        RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(startedRtspSessionResult());
+        RecordingVideoSessionClient videoClient = new RecordingVideoSessionClient(
+            NativeStreamStartResult.started("RTP decoder ready."));
+        NativeStreamClient client = AndroidNativeStreamClientFactory.create(
+            new RecordingEncodedVideoDecoder(EncodedVideoDecodeResult.failed("unused")),
+            rtspClient,
+            videoClient);
+
+        NativeStreamStartResult result = client.start(gameStreamConnection(completeRtpMetadata()));
+
+        assertTrue(result.success());
+        assertEquals("RTP decoder ready.", result.status());
+        assertEquals(1, rtspClient.startCount);
+        assertEquals(1, videoClient.startCount);
+        assertSame(rtspClient.startedPlan, videoClient.startedPlan);
+        assertEquals(50002, videoClient.startedSessionInfo.videoClientPort());
+    }
+
+    @Test
     public void beaconTestRouteStillUsesColorBarsClient() {
         RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(
             GameStreamRtspSessionResult.started("should not start"));
@@ -73,12 +94,37 @@ public final class AndroidNativeStreamClientFactoryTest {
     }
 
     private static StreamConnectionDescriptor gameStreamConnection() {
+        return gameStreamConnection("");
+    }
+
+    private static StreamConnectionDescriptor gameStreamConnection(String metadata) {
         return StreamConnectionDescriptor.extract(
             "{\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"endpoints\":[" +
                 "{\"role\":\"rtsp\",\"uri\":\"rtsp://127.0.0.1:48010/beacon/session\"}," +
                 "{\"role\":\"video\",\"uri\":\"udp://127.0.0.1:47998\"}," +
                 "{\"role\":\"control\",\"uri\":\"tcp://127.0.0.1:47999\"}," +
-                "{\"role\":\"audio\",\"uri\":\"udp://127.0.0.1:48000\"}]}}}");
+                "{\"role\":\"audio\",\"uri\":\"udp://127.0.0.1:48000\"}],\"metadata\":{" +
+                metadata +
+                "}}}}");
+    }
+
+    private static String completeRtpMetadata() {
+        return "\"codec\":\"h264\",\"container\":\"annex-b\",\"width\":\"2560\",\"height\":\"1600\",\"fps\":\"120\"";
+    }
+
+    private static GameStreamRtspSessionResult startedRtspSessionResult() {
+        return GameStreamRtspSessionResult.started(
+            "RTSP play started.",
+            GameStreamRtspSessionInfo.startedWithClientPorts(
+                "gamestream",
+                "rtsp://127.0.0.1:48010/beacon/session",
+                "session-1",
+                50000,
+                48000,
+                50002,
+                47998,
+                50004,
+                47999));
     }
 
     private static final class RecordingRtspSessionClient implements GameStreamRtspSessionClient {
@@ -115,6 +161,29 @@ public final class AndroidNativeStreamClientFactoryTest {
         @Override
         public EncodedVideoDecodeResult start(EncodedVideoDecodeRequest request) {
             startCount++;
+            return result;
+        }
+
+        @Override
+        public void stop() {
+        }
+    }
+
+    private static final class RecordingVideoSessionClient implements GameStreamVideoSessionClient {
+        private final NativeStreamStartResult result;
+        private GameStreamEndpointPlan startedPlan;
+        private GameStreamRtspSessionInfo startedSessionInfo;
+        private int startCount;
+
+        private RecordingVideoSessionClient(NativeStreamStartResult result) {
+            this.result = result;
+        }
+
+        @Override
+        public NativeStreamStartResult start(GameStreamEndpointPlan plan, GameStreamRtspSessionInfo sessionInfo) {
+            startCount++;
+            startedPlan = plan;
+            startedSessionInfo = sessionInfo;
             return result;
         }
 

@@ -49,7 +49,7 @@ public final class GameStreamNativeStreamClient implements NativeStreamProtocolC
                 return NativeStreamStartResult.unsupported(rtspResult.diagnostic());
             }
 
-            if (videoSessionClient != null) {
+            if (videoSessionClient != null && gameStreamRtpMetadataAdvertised(gameStreamPlan)) {
                 return startVideoSession(gameStreamPlan, rtspResult.sessionInfo());
             }
 
@@ -87,6 +87,14 @@ public final class GameStreamNativeStreamClient implements NativeStreamProtocolC
 
         videoSessionActive = true;
         return videoResult;
+    }
+
+    private static boolean gameStreamRtpMetadataAdvertised(GameStreamEndpointPlan gameStreamPlan) {
+        return !gameStreamPlan.metadataValue("codec").isEmpty() ||
+            !gameStreamPlan.metadataValue("container").isEmpty() ||
+            !gameStreamPlan.metadataValue("width").isEmpty() ||
+            !gameStreamPlan.metadataValue("height").isEmpty() ||
+            !gameStreamPlan.metadataValue("fps").isEmpty();
     }
 
     @Override
