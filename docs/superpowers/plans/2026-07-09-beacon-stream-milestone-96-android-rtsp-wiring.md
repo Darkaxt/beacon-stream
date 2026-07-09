@@ -137,6 +137,61 @@ Expected: Android tests/APK build, .NET solution tests, and emulator launch smok
 
 Result: `gradle --no-daemon -p src\Beacon.Android test assembleDebug` passed; `dotnet test Beacon.slnx` passed; emulator reinstall and launch of `dev.beacon.android/.BeaconActivity` reported `Status: ok`.
 
-- [ ] **Step 4: Sync**
+- [x] **Step 4: Sync**
+
+Commit, push, open a PR, wait for CI, and merge if checks are green.
+
+Result: PR #98 (`https://github.com/Darkaxt/beacon-stream/pull/98`) merged at `50812a8d883eb17b77f20019b7ce9b3aa94eb860` after CI passed.
+
+### Task 5: Post-Sync Refactor Hardening
+
+**Files:**
+- Modify: `src/Beacon.Android/app/src/test/java/dev/beacon/android/BeaconViewModelSessionTest.java`
+- Modify: `src/Beacon.Android/app/src/main/java/dev/beacon/android/BeaconViewModelSession.java`
+- Modify: `README.md`
+- Modify: `docs/extraction-map.md`
+- Modify: `docs/superpowers/plans/2026-07-09-beacon-stream-milestone-96-android-rtsp-wiring.md`
+
+- [x] **Step 1: Add RED cleanup-failure tests**
+
+Add session tests proving identity replacement and explicit close recover when the active native stream client's `stop()` throws an unchecked exception.
+
+Result: the focused Gradle run failed in `closeRecoversWhenActiveNativeStreamStopFails` and `identityChangeRecoversWhenPreviousNativeStreamStopFails` because `BeaconViewModelSession.close()` let the native cleanup exception escape.
+
+- [x] **Step 2: Harden session cleanup boundary**
+
+Detach the retained model and clear the active identity before attempting native stream cleanup. Catch unchecked cleanup failures at this Activity/session boundary so the next action can create a fresh model instead of being pinned to stale stream state.
+
+Result: the focused `BeaconViewModelSessionTest` run passed.
+
+- [x] **Step 3: Static checks**
+
+Run:
+
+```powershell
+git diff --check
+git diff -U0 -- src tests | rg -n "Thread\.Sleep|Task\.Delay|CancelAfter|CancellationTokenSource\(|Timeout|setSoTimeout|connect\\([^,]+,\\s*[0-9]+\\)|sleep\\("
+```
+
+Expected: no whitespace errors and no new sleep/timeout/socket-timeout/connect-timeout patterns.
+
+Result: `git diff --check` passed, and the diff scan reported `NO_MATCHES`.
+
+- [x] **Step 4: Dynamic checks**
+
+Run:
+
+```powershell
+& "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.14.1-bin\baw1sv0jfoi8rxs14qo3h49cs\gradle-8.14.1\bin\gradle.bat" --no-daemon -p src\Beacon.Android test assembleDebug
+dotnet test Beacon.slnx
+adb -s emulator-5554 install -r src\Beacon.Android\app\build\outputs\apk\debug\app-debug.apk
+adb -s emulator-5554 shell am start -W -n dev.beacon.android/.BeaconActivity
+```
+
+Expected: Android tests/APK build, .NET solution tests, and emulator launch smoke pass.
+
+Result: `gradle --no-daemon -p src\Beacon.Android test assembleDebug` passed; `dotnet test Beacon.slnx` passed with 296 total .NET tests; emulator reinstall reported `Success` and launch of `dev.beacon.android/.BeaconActivity` reported `Status: ok`.
+
+- [ ] **Step 5: Sync**
 
 Commit, push, open a PR, wait for CI, and merge if checks are green.
