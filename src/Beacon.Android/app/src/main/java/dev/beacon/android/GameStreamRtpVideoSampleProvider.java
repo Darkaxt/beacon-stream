@@ -2,6 +2,7 @@ package dev.beacon.android;
 
 public final class GameStreamRtpVideoSampleProvider implements EncodedVideoSampleProvider {
     private static final long VideoClockHz = 90_000L;
+    private static final long TimestampMask = 0xFFFFFFFFL;
 
     private final RtpPacketSource source;
     private boolean baseTimestampSet;
@@ -38,6 +39,7 @@ public final class GameStreamRtpVideoSampleProvider implements EncodedVideoSampl
     }
 
     private long presentationTimeUs(long timestamp) {
-        return ((timestamp - baseTimestamp) * 1_000_000L) / VideoClockHz;
+        long elapsedTicks = (timestamp - baseTimestamp) & TimestampMask;
+        return (elapsedTicks * 1_000_000L) / VideoClockHz;
     }
 }
