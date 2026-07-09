@@ -84,10 +84,24 @@ public final class GameStreamRtpVideoSessionClient implements GameStreamVideoSes
 
     private static EncodedVideoSampleProvider sampleProvider(GameStreamEndpointPlan plan, RtpPacketSource source) {
         if (plan != null && "h264".equalsIgnoreCase(plan.metadataValue("codec"))) {
-            return new H264RtpSampleProvider(source);
+            return new H264RtpSampleProvider(
+                source,
+                H264ParameterSets.fromSpropParameterSets(h264ParameterSetMetadata(plan)));
         }
 
         return new GameStreamRtpVideoSampleProvider(source);
+    }
+
+    private static String h264ParameterSetMetadata(GameStreamEndpointPlan plan) {
+        String[] keys = {"h264SpropParameterSets", "spropParameterSets", "sprop-parameter-sets"};
+        for (String key : keys) {
+            String value = plan.metadataValue(key);
+            if (!value.trim().isEmpty()) {
+                return value;
+            }
+        }
+
+        return "";
     }
 
     private static RtpPacketSource orderedSource(RtpPacketSource source) {

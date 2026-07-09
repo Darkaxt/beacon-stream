@@ -8,17 +8,24 @@ public final class H264RtpSampleProvider implements EncodedVideoSampleProvider {
     private static final long TimestampMask = 0xFFFFFFFFL;
 
     private final RtpPacketSource source;
+    private final H264ParameterSets parameterSets;
     private boolean baseTimestampSet;
     private long baseTimestamp;
+    private boolean parameterSetsInjected;
     private ByteArrayOutputStream activeFragment;
     private long activeFragmentTimestamp;
 
     public H264RtpSampleProvider(RtpPacketSource source) {
+        this(source, H264ParameterSets.empty());
+    }
+
+    public H264RtpSampleProvider(RtpPacketSource source, H264ParameterSets parameterSets) {
         if (source == null) {
             throw new IllegalArgumentException("RTP packet source is required.");
         }
 
         this.source = source;
+        this.parameterSets = parameterSets == null ? H264ParameterSets.empty() : parameterSets;
     }
 
     @Override
@@ -144,17 +151,73 @@ public final class H264RtpSampleProvider implements EncodedVideoSampleProvider {
     }
 
     private EncodedVideoSample sample(long timestamp, byte[] data) {
+        byte[] sampleData = injectParameterSetsIfNeeded(data);
         if (!baseTimestampSet) {
             baseTimestamp = timestamp;
             baseTimestampSet = true;
         }
 
         long elapsedTicks = (timestamp - baseTimestamp) & TimestampMask;
-        return EncodedVideoSample.data(data, (elapsedTicks * 1_000_000L) / VideoClockHz);
+        return EncodedVideoSample.data(sampleData, (elapsedTicks * 1_000_000L) / VideoClockHz);
     }
 
     private static void writeStartCode(ByteArrayOutputStream output) {
         output.write(AnnexBStartCode, 0, AnnexBStartCode.length);
+    }
+
+    private byte[] injectParameterSetsIfNeeded(byte[] data) {
+        if (!parameterSets.present() || parameterSetsInjected || !containsVclNal(data)) {
+            return data;
+        }
+
+        parameterSetsInjected = true;
+        byte[] parameterSetBytes = parameterSets.annexB();
+        byte[] result = new byte[parameterSetBytes.length + data.length];
+        System.arraycopy(parameterSetBytes, 0, result, 0, parameterSetBytes.length);
+        System.arraycopy(data, 0, result, parameterSetBytes.length, data.length);
+        return result;
+    }
+
+    private static boolean containsVclNal(byte[] data) {
+        for (int index = 0; index <= data.length - 3; index++) {
+            int startCodeLength = startCodeLength(data, index);
+            if (startCodeLength == 0) {
+                continue;
+            }
+
+            int nalIndex = index + startCodeLength;
+            if (nalIndex < data.length && isVclNal(data[nalIndex])) {
+                return true;
+            }
+
+            index += startCodeLength - 1;
+        }
+
+        return false;
+    }
+
+    private static int startCodeLength(byte[] data, int index) {
+        if (index <= data.length - 4 &&
+            data[index] == 0 &&
+            data[index + 1] == 0 &&
+            data[index + 2] == 0 &&
+            data[index + 3] == 1) {
+            return 4;
+        }
+
+        if (index <= data.length - 3 &&
+            data[index] == 0 &&
+            data[index + 1] == 0 &&
+            data[index + 2] == 1) {
+            return 3;
+        }
+
+        return 0;
+    }
+
+    private static boolean isVclNal(byte value) {
+        int nalType = value & 0x1F;
+        return nalType >= 1 && nalType <= 5;
     }
 
     private static IllegalStateException payloadFailure(String message) {

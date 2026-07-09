@@ -11,6 +11,62 @@ import static org.junit.Assert.assertTrue;
 
 public final class H264RtpSampleProviderTest {
     @Test
+    public void prependsConfiguredParameterSetsBeforeFirstVclSample() {
+        H264RtpSampleProvider provider = new H264RtpSampleProvider(
+            new RecordingRtpPacketSource(packet(1, 90000L, new byte[] {0x65, 0x11})),
+            parameterSets());
+
+        EncodedVideoSample sample = provider.nextSample();
+
+        assertArrayEquals(
+            concat(
+                start(), new byte[] {0x67, 0x42, 0x00, 0x1E},
+                start(), new byte[] {0x68, (byte) 0xCE, 0x06, (byte) 0xE2},
+                start(), new byte[] {0x65, 0x11}),
+            sample.data());
+    }
+
+    @Test
+    public void prependsConfiguredParameterSetsOnlyOnce() {
+        H264RtpSampleProvider provider = new H264RtpSampleProvider(
+            new RecordingRtpPacketSource(
+                packet(1, 90000L, new byte[] {0x65, 0x11}),
+                packet(2, 91500L, new byte[] {0x41, 0x22})),
+            parameterSets());
+
+        EncodedVideoSample first = provider.nextSample();
+        EncodedVideoSample second = provider.nextSample();
+
+        assertArrayEquals(
+            concat(
+                start(), new byte[] {0x67, 0x42, 0x00, 0x1E},
+                start(), new byte[] {0x68, (byte) 0xCE, 0x06, (byte) 0xE2},
+                start(), new byte[] {0x65, 0x11}),
+            first.data());
+        assertArrayEquals(concat(start(), new byte[] {0x41, 0x22}), second.data());
+    }
+
+    @Test
+    public void defersConfiguredParameterSetsUntilFirstVclSample() {
+        H264RtpSampleProvider provider = new H264RtpSampleProvider(
+            new RecordingRtpPacketSource(
+                packet(1, 90000L, new byte[] {0x67, 0x55}),
+                packet(2, 90000L, new byte[] {0x65, 0x11})),
+            parameterSets());
+
+        EncodedVideoSample parameterSetSample = provider.nextSample();
+        EncodedVideoSample vclSample = provider.nextSample();
+
+        assertArrayEquals(concat(start(), new byte[] {0x67, 0x55}), parameterSetSample.data());
+        assertArrayEquals(
+            concat(
+                start(), new byte[] {0x67, 0x42, 0x00, 0x1E},
+                start(), new byte[] {0x68, (byte) 0xCE, 0x06, (byte) 0xE2},
+                start(), new byte[] {0x65, 0x11}),
+            vclSample.data());
+    }
+
+    @Test
     public void mapsSingleNalPacketToAnnexBSample() {
         H264RtpSampleProvider provider = new H264RtpSampleProvider(new RecordingRtpPacketSource(
             packet(1, 90000L, new byte[] {0x65, 0x11, 0x22})));
@@ -145,6 +201,30 @@ public final class H264RtpSampleProviderTest {
         bytes[11] = 0x01;
         System.arraycopy(payload, 0, bytes, 12, payload.length);
         return RtpPacket.parse(bytes);
+    }
+
+    private static H264ParameterSets parameterSets() {
+        return H264ParameterSets.fromSpropParameterSets("Z0IAHg==,aM4G4g==");
+    }
+
+    private static byte[] start() {
+        return new byte[] {0, 0, 0, 1};
+    }
+
+    private static byte[] concat(byte[]... chunks) {
+        int total = 0;
+        for (byte[] chunk : chunks) {
+            total += chunk.length;
+        }
+
+        byte[] result = new byte[total];
+        int offset = 0;
+        for (byte[] chunk : chunks) {
+            System.arraycopy(chunk, 0, result, offset, chunk.length);
+            offset += chunk.length;
+        }
+
+        return result;
     }
 
     private static final class RecordingRtpPacketSource implements RtpPacketSource {
