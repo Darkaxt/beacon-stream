@@ -31,6 +31,18 @@ public final class RtspRequest {
         return new RtspRequest("DESCRIBE", uri, cseq, host, headers);
     }
 
+    public static RtspRequest setup(String target, int cseq, String host, String sessionId) {
+        Map<String, String> headers = new LinkedHashMap<>();
+        String session = sessionId == null ? "" : sessionId.trim();
+        if (!session.isEmpty()) {
+            headers.put("Session", session);
+        }
+
+        headers.put("Transport", "unicast;X-GS-ClientPort=50000-50001");
+        headers.put("If-Modified-Since", "Thu, 01 Jan 1970 00:00:00 GMT");
+        return new RtspRequest("SETUP", target, cseq, host, headers);
+    }
+
     public String serialize() {
         StringBuilder builder = new StringBuilder();
         builder.append(method).append(' ').append(uri).append(" RTSP/1.0\r\n");

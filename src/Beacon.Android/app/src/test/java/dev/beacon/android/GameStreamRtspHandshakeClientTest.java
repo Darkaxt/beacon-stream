@@ -15,16 +15,19 @@ public final class GameStreamRtspHandshakeClientTest {
     public void sendsOptionsThenDescribeOverTransport() {
         RecordingRtspTransport transport = new RecordingRtspTransport(
             RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n"),
-            RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: 2\r\nContent-Type: application/sdp\r\n\r\n"));
+            RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: 2\r\nContent-Type: application/sdp\r\n\r\n"),
+            setupResponse("3", "session-1", 48000),
+            setupResponse("4", "session-1", 47998),
+            setupResponse("5", "session-1", 47999));
         GameStreamRtspHandshakeClient client = new GameStreamRtspHandshakeClient(transport);
 
         GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
 
         assertTrue(result.success());
         assertEquals(
-            "RTSP handshake completed. protocol=gamestream rtsp=rtsp://127.0.0.1:48010/beacon/session",
+            "RTSP setup completed. protocol=gamestream rtsp=rtsp://127.0.0.1:48010/beacon/session session=session-1 audioPort=48000 videoPort=47998 controlPort=47999",
             result.status());
-        assertEquals(2, transport.requests.size());
+        assertEquals(5, transport.requests.size());
         assertEquals(
             "OPTIONS rtsp://127.0.0.1:48010/beacon/session RTSP/1.0\r\n" +
                 "CSeq: 1\r\n" +
@@ -41,6 +44,37 @@ public final class GameStreamRtspHandshakeClientTest {
                 "If-Modified-Since: Thu, 01 Jan 1970 00:00:00 GMT\r\n" +
                 "\r\n",
             transport.requests.get(1));
+    }
+
+    @Test
+    public void sendsSetupRequestsAndCapturesSessionAndServerPorts() {
+        RecordingRtspTransport transport = new RecordingRtspTransport(
+            RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n"),
+            RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: 2\r\nContent-Type: application/sdp\r\n\r\n"),
+            setupResponse("3", "session-1", 48000),
+            setupResponse("4", "session-1", 47998),
+            setupResponse("5", "session-1", 47999));
+        GameStreamRtspHandshakeClient client = new GameStreamRtspHandshakeClient(transport);
+
+        GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
+
+        assertTrue(result.success());
+        assertEquals(
+            "RTSP setup completed. protocol=gamestream rtsp=rtsp://127.0.0.1:48010/beacon/session session=session-1 audioPort=48000 videoPort=47998 controlPort=47999",
+            result.status());
+        assertEquals(
+            "SETUP streamid=audio/0/0 RTSP/1.0\r\n" +
+                "CSeq: 3\r\n" +
+                "Host: 127.0.0.1:48010\r\n" +
+                "X-GS-ClientVersion: BeaconStream\r\n" +
+                "Transport: unicast;X-GS-ClientPort=50000-50001\r\n" +
+                "If-Modified-Since: Thu, 01 Jan 1970 00:00:00 GMT\r\n" +
+                "\r\n",
+            transport.requests.get(2));
+        assertTrue(transport.requests.get(3).contains("SETUP streamid=video/0/0 RTSP/1.0\r\n"));
+        assertTrue(transport.requests.get(3).contains("Session: session-1\r\n"));
+        assertTrue(transport.requests.get(4).contains("SETUP streamid=control/13/0 RTSP/1.0\r\n"));
+        assertTrue(transport.requests.get(4).contains("Session: session-1\r\n"));
     }
 
     @Test
@@ -67,6 +101,42 @@ public final class GameStreamRtspHandshakeClientTest {
         assertEquals("RTSP DESCRIBE failed with status 404 Not Found.", result.diagnostic());
     }
 
+    @Test
+    public void failsWhenSetupReturnsNonSuccessStatus() {
+        GameStreamRtspHandshakeClient client = new GameStreamRtspHandshakeClient(
+            new RecordingRtspTransport(
+                RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n"),
+                RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: 2\r\nContent-Type: application/sdp\r\n\r\n"),
+                setupResponse("3", "session-1", 48000),
+                RtspResponse.parse("RTSP/1.0 503 Busy\r\nCSeq: 4\r\n\r\n")));
+
+        GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
+
+        assertFalse(result.success());
+        assertEquals("RTSP SETUP video failed with status 503 Busy.", result.diagnostic());
+    }
+
+    @Test
+    public void failsWhenSetupTransportHeaderCannotBeParsed() {
+        GameStreamRtspHandshakeClient client = new GameStreamRtspHandshakeClient(
+            new RecordingRtspTransport(
+                RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: 1\r\n\r\n"),
+                RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: 2\r\nContent-Type: application/sdp\r\n\r\n"),
+                RtspResponse.parse(
+                    "RTSP/1.0 200 OK\r\n" +
+                        "CSeq: 3\r\n" +
+                        "Session: session-1\r\n" +
+                        "Transport: unicast;source=127.0.0.1\r\n" +
+                        "\r\n")));
+
+        GameStreamRtspSessionResult result = client.start(completePlan("rtsp://127.0.0.1:48010/beacon/session"));
+
+        assertFalse(result.success());
+        assertEquals(
+            "RTSP SETUP audio response did not include a valid server_port in the Transport header.",
+            result.diagnostic());
+    }
+
     private static GameStreamEndpointPlan completePlan(String rtspUri) {
         StreamConnectionDescriptor descriptor = StreamConnectionDescriptor.extract(
             "{\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"endpoints\":[" +
@@ -75,6 +145,15 @@ public final class GameStreamRtspHandshakeClientTest {
                 "{\"role\":\"control\",\"uri\":\"tcp://127.0.0.1:47999\"}," +
                 "{\"role\":\"audio\",\"uri\":\"udp://127.0.0.1:48000\"}]}}}");
         return GameStreamEndpointPlan.from(descriptor);
+    }
+
+    private static RtspResponse setupResponse(String cseq, String sessionId, int serverPort) {
+        return RtspResponse.parse(
+            "RTSP/1.0 200 OK\r\n" +
+                "CSeq: " + cseq + "\r\n" +
+                "Session: " + sessionId + ";timeout=30\r\n" +
+                "Transport: unicast;server_port=" + serverPort + "-" + (serverPort + 1) + ";source=127.0.0.1\r\n" +
+                "\r\n");
     }
 
     private static final class RecordingRtspTransport implements RtspTransport {
