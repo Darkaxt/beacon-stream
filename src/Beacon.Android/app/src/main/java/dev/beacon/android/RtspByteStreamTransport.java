@@ -83,15 +83,20 @@ public final class RtspByteStreamTransport implements RtspTransport, AutoCloseab
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         try {
             int current;
+            int fourthPrevious = -1;
+            int thirdPrevious = -1;
+            int secondPrevious = -1;
+            int previous = -1;
             while ((current = input.read()) >= 0) {
                 buffer.write(current);
-                byte[] bytes = buffer.toByteArray();
-                int length = bytes.length;
-                if (length >= 4 &&
-                    bytes[length - 4] == '\r' &&
-                    bytes[length - 3] == '\n' &&
-                    bytes[length - 2] == '\r' &&
-                    bytes[length - 1] == '\n') {
+                fourthPrevious = thirdPrevious;
+                thirdPrevious = secondPrevious;
+                secondPrevious = previous;
+                previous = current;
+                if (fourthPrevious == '\r' &&
+                    thirdPrevious == '\n' &&
+                    secondPrevious == '\r' &&
+                    previous == '\n') {
                     return buffer.toString(StandardCharsets.UTF_8.name());
                 }
             }
