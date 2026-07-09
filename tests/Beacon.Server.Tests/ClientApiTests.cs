@@ -429,6 +429,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         JsonElement endpoint = Assert.Single(connection.GetProperty("endpoints").EnumerateArray());
         Assert.Equal("video", endpoint.GetProperty("role").GetString());
         Assert.Equal("beacon-test://pattern/color-bars", endpoint.GetProperty("uri").GetString());
+        Assert.Equal("color-bars", connection.GetProperty("metadata").GetProperty("pattern").GetString());
     }
 
     [Fact]

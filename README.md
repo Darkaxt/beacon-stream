@@ -284,6 +284,8 @@ For endpoint-only GameStream/Moonlight descriptors, Android validates the server
 
 Android native stream handling is routed through protocol-specific clients. The implemented `beacon-test` client renders the diagnostic color-bars presentation, while GameStream/Moonlight descriptors are still diagnostic-only until a real decoder/transport client is added behind the same router.
 
+Android also parses `stream.connection.metadata` and recognizes a decoder-bound `beacon-test` encoded-video contract: `metadata.streamKind=encoded-video`, a `video` endpoint, codec `h264`/`hevc`/`av1`, container `annex-b`/`mp4`, and positive width/height/fps. This is currently preflight/diagnostic-only; valid encoded-video descriptors produce a truthful MediaCodec-not-implemented diagnostic instead of falling through to the color-bars path.
+
 Client input uses `POST /clients/{clientId}/input`. The server resolves the active session plan and running stream before forwarding a typed input batch to `IClientInputSink`, so the client never supplies display topology or session ownership. The default fake-host sink is a no-op for phone-free testing. In Windows host mode, `WindowsClientInputSink` resolves the active display topology, targets the leased display id, and sends pointer `move`, `down`, `up`, and `tap` commands plus keyboard `down`, `up`, and `press` commands through a fakeable Win32 `SendInput` boundary. Keyboard support is a conservative virtual-key subset for common gaming/navigation keys such as letters, digits, arrows, Escape, Space, Enter, modifiers, and F1-F12; text composition, IME, controller, and GameStream-native input are still future work. The Android shell has a simple touch surface that maps Android pointer down/up plus batched multi-pointer move/cancel events into normalized pointer batches; this is still not a native touch or gesture protocol. Client Lab sends active/inactive beacon actions, separate deterministic pointer gesture, and Escape keyboard press batches, while the CLI fake endpoint includes beacon and input in its no-phone scripted validation. Accepted, rejected, and failed input batches publish `input` diagnostics into `/admin/snapshot`; `inputHealth` reports whether the active sink is `no-op`, `windows-sendinput`, or unknown, including supported pointer and keyboard actions.
 
 See:
@@ -363,6 +365,7 @@ See:
 - `docs/superpowers/plans/2026-07-09-beacon-stream-milestone-80-android-device-capability-probe.md`
 - `docs/superpowers/plans/2026-07-09-beacon-stream-milestone-81-android-device-telemetry-probe.md`
 - `docs/superpowers/plans/2026-07-09-beacon-stream-milestone-82-android-native-stream-router.md`
+- `docs/superpowers/plans/2026-07-09-beacon-stream-milestone-83-android-encoded-video-contract.md`
 - `docs/external-streaming-wrapper-manifest.md`
 - `docs/source-audits/2026-07-08-windows-input-sink-upstream-audit.md`
 - `docs/windows-display-backend.md`

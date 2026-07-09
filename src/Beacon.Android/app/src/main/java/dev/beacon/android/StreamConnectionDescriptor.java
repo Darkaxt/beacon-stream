@@ -8,21 +8,35 @@ import com.google.gson.JsonParser;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public final class StreamConnectionDescriptor {
-    private static final StreamConnectionDescriptor EMPTY = new StreamConnectionDescriptor(false, "", "", Collections.emptyList());
+    private static final StreamConnectionDescriptor EMPTY = new StreamConnectionDescriptor(
+        false,
+        "",
+        "",
+        Collections.emptyList(),
+        Collections.emptyMap());
 
     private final boolean present;
     private final String protocol;
     private final String launchUri;
     private final List<Endpoint> endpoints;
+    private final Map<String, String> metadata;
 
-    private StreamConnectionDescriptor(boolean present, String protocol, String launchUri, List<Endpoint> endpoints) {
+    private StreamConnectionDescriptor(
+        boolean present,
+        String protocol,
+        String launchUri,
+        List<Endpoint> endpoints,
+        Map<String, String> metadata) {
         this.present = present;
         this.protocol = protocol;
         this.launchUri = launchUri;
         this.endpoints = Collections.unmodifiableList(new ArrayList<>(endpoints));
+        this.metadata = Collections.unmodifiableMap(new LinkedHashMap<>(metadata));
     }
 
     public static StreamConnectionDescriptor extract(String responseBody) {
@@ -47,7 +61,8 @@ public final class StreamConnectionDescriptor {
                 true,
                 stringProperty(connection, "protocol"),
                 stringProperty(connection, "launchUri"),
-                endpoints(connection));
+                endpoints(connection),
+                metadata(connection));
         } catch (IllegalStateException | UnsupportedOperationException | JsonParseException ex) {
             return EMPTY;
         }
@@ -67,6 +82,18 @@ public final class StreamConnectionDescriptor {
 
     public List<Endpoint> endpoints() {
         return endpoints;
+    }
+
+    public Map<String, String> metadata() {
+        return metadata;
+    }
+
+    public String metadataValue(String key) {
+        if (key == null || key.trim().isEmpty()) {
+            return "";
+        }
+
+        return metadata.getOrDefault(key.trim(), "");
     }
 
     public String endpointSummary() {
@@ -121,6 +148,29 @@ public final class StreamConnectionDescriptor {
             String uri = stringProperty(endpoint, "uri");
             if (!role.isEmpty() && !uri.isEmpty()) {
                 result.add(new Endpoint(role, uri));
+            }
+        }
+
+        return result;
+    }
+
+    private static Map<String, String> metadata(JsonObject connection) {
+        JsonObject metadata = objectProperty(connection, "metadata");
+        if (metadata == null) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, String> result = new LinkedHashMap<>();
+        for (Map.Entry<String, JsonElement> entry : metadata.entrySet()) {
+            String key = entry.getKey() == null ? "" : entry.getKey().trim();
+            JsonElement value = entry.getValue();
+            if (key.isEmpty() || value == null || value.isJsonNull() || !value.isJsonPrimitive()) {
+                continue;
+            }
+
+            String stringValue = value.getAsString().trim();
+            if (!stringValue.isEmpty()) {
+                result.put(key, stringValue);
             }
         }
 
