@@ -178,3 +178,55 @@ Result: `gradle --no-daemon -p src\Beacon.Android test assembleDebug` passed; `d
 - [ ] **Step 4: Sync**
 
 Commit, push, open a PR, wait for CI, and merge if checks are green.
+
+### Task 6: Post-Sync Video Hook Cleanup Hardening
+
+**Files:**
+- Modify: `src/Beacon.Android/app/src/test/java/dev/beacon/android/GameStreamNativeStreamClientTest.java`
+- Modify: `src/Beacon.Android/app/src/main/java/dev/beacon/android/GameStreamNativeStreamClient.java`
+- Modify: `README.md`
+- Modify: `docs/superpowers/plans/2026-07-09-beacon-stream-milestone-97-gamestream-video-session-hook.md`
+
+- [x] **Step 1: Add RED video-hook cleanup exception tests**
+
+Add tests proving that a video-session startup exception returns a diagnostic and releases RTSP, and that a video-session stop exception does not prevent RTSP release.
+
+Result: the focused `GameStreamNativeStreamClientTest` run failed in `videoSessionStartExceptionStopsVideoAndRtspSessionAndReturnsDiagnostic` and `stopReleasesRtspWhenVideoStopThrows` because the exceptions escaped.
+
+- [x] **Step 2: Harden video-hook startup and stop cleanup**
+
+Catch unchecked video hook startup failures, ask the video hook to clean up, release RTSP, and return a diagnostic. During stop, contain unchecked video stop failures so RTSP still stops.
+
+Result: the focused `GameStreamNativeStreamClientTest` run passed.
+
+- [x] **Step 3: Static checks**
+
+Run:
+
+```powershell
+git diff --check
+git diff -U0 -- src tests | rg -n "Thread\.Sleep|Task\.Delay|CancelAfter|CancellationTokenSource\(|Timeout|setSoTimeout|connect\\([^,]+,\\s*[0-9]+\\)|sleep\\("
+```
+
+Expected: no whitespace errors and no new sleep/timeout/socket-timeout/connect-timeout patterns.
+
+Result: `git diff --check` passed, and the diff scan reported `NO_MATCHES`.
+
+- [x] **Step 4: Dynamic checks**
+
+Run:
+
+```powershell
+& "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.14.1-bin\baw1sv0jfoi8rxs14qo3h49cs\gradle-8.14.1\bin\gradle.bat" --no-daemon -p src\Beacon.Android test assembleDebug
+dotnet test Beacon.slnx
+adb -s emulator-5554 install -r src\Beacon.Android\app\build\outputs\apk\debug\app-debug.apk
+adb -s emulator-5554 shell am start -W -n dev.beacon.android/.BeaconActivity
+```
+
+Expected: Android tests/APK build, .NET solution tests, and emulator launch smoke pass.
+
+Result: `gradle --no-daemon -p src\Beacon.Android test assembleDebug` passed; `dotnet test Beacon.slnx` passed with 296 total .NET tests; emulator reinstall reported `Success` and launch of `dev.beacon.android/.BeaconActivity` reported `Status: ok`.
+
+- [ ] **Step 5: Sync**
+
+Commit, push, open a PR, wait for CI, and merge if checks are green.

@@ -71,7 +71,15 @@ public final class GameStreamNativeStreamClient implements NativeStreamProtocolC
             return NativeStreamStartResult.unsupported("Native GameStream RTSP session did not include media setup info.");
         }
 
-        NativeStreamStartResult videoResult = videoSessionClient.start(gameStreamPlan, sessionInfo);
+        NativeStreamStartResult videoResult;
+        try {
+            videoResult = videoSessionClient.start(gameStreamPlan, sessionInfo);
+        } catch (RuntimeException ex) {
+            stopVideoSessionQuietly();
+            stopRtspSession();
+            return NativeStreamStartResult.unsupported("GameStream video session failed: " + safeMessage(ex));
+        }
+
         if (!videoResult.success()) {
             stopRtspSession();
             return videoResult;
@@ -85,7 +93,7 @@ public final class GameStreamNativeStreamClient implements NativeStreamProtocolC
     public void stop() {
         if (videoSessionActive) {
             videoSessionActive = false;
-            videoSessionClient.stop();
+            stopVideoSessionQuietly();
         }
 
         stopRtspSession();
@@ -98,5 +106,21 @@ public final class GameStreamNativeStreamClient implements NativeStreamProtocolC
 
         rtspSessionActive = false;
         rtspSessionClient.stop();
+    }
+
+    private void stopVideoSessionQuietly() {
+        if (videoSessionClient == null) {
+            return;
+        }
+
+        try {
+            videoSessionClient.stop();
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private static String safeMessage(Throwable throwable) {
+        String message = throwable.getMessage();
+        return message == null || message.isEmpty() ? throwable.getClass().getSimpleName() : message;
     }
 }
