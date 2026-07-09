@@ -38,22 +38,23 @@ public final class GameStreamRtpVideoSessionClient implements GameStreamVideoSes
             return NativeStreamStartResult.unsupported("GameStream RTP video source factory returned no source.");
         }
 
+        RtpPacketSource orderedSource = orderedSource(source);
         NativeStreamStartResult result;
         try {
             result = consumer.start(
                 plan,
                 sessionInfo,
-                sampleProvider(plan, source));
+                sampleProvider(plan, orderedSource));
         } catch (RuntimeException ex) {
-            closeSourceQuietly(source);
+            closeSourceQuietly(orderedSource);
             return NativeStreamStartResult.unsupported(
                 "GameStream RTP video consumer failed: " + safeMessage(ex));
         }
 
         if (result.success()) {
-            activeSource = source;
+            activeSource = orderedSource;
         } else {
-            closeSourceQuietly(source);
+            closeSourceQuietly(orderedSource);
         }
 
         return result;
@@ -87,6 +88,10 @@ public final class GameStreamRtpVideoSessionClient implements GameStreamVideoSes
         }
 
         return new GameStreamRtpVideoSampleProvider(source);
+    }
+
+    private static RtpPacketSource orderedSource(RtpPacketSource source) {
+        return new RtpReorderingPacketSource(source, 16);
     }
 
     private static void closeSourceQuietly(RtpPacketSource source) {
