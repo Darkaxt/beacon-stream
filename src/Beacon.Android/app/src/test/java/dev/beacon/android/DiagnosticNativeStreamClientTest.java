@@ -42,7 +42,7 @@ public final class DiagnosticNativeStreamClientTest {
     }
 
     @Test
-    public void rejectsGameStreamProtocolWithoutClaimingDecodeSupport() {
+    public void rejectsIncompleteGameStreamEndpointMapWithoutGenericMissingLaunchUriDiagnostic() {
         DiagnosticNativeStreamClient client = new DiagnosticNativeStreamClient();
         StreamConnectionDescriptor connection = StreamConnectionDescriptor.extract(
             "{\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"endpoints\":[{\"role\":\"rtsp\",\"uri\":\"rtsp://127.0.0.1:48010\"}]}}}");
@@ -53,7 +53,27 @@ public final class DiagnosticNativeStreamClientTest {
         assertEquals("", result.status());
         assertFalse(result.presentation().active());
         assertEquals(
-            "Stream connection did not include a launch URI. protocol=gamestream endpoints=rtsp=rtsp://127.0.0.1:48010",
+            "GameStream endpoint map is incomplete. Missing required endpoints: video, control, audio. protocol=gamestream endpoints=rtsp=rtsp://127.0.0.1:48010",
+            result.diagnostic());
+    }
+
+    @Test
+    public void rejectsCompleteGameStreamEndpointMapWithDecoderNotImplementedDiagnostic() {
+        DiagnosticNativeStreamClient client = new DiagnosticNativeStreamClient();
+        StreamConnectionDescriptor connection = StreamConnectionDescriptor.extract(
+            "{\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"endpoints\":[" +
+                "{\"role\":\"rtsp\",\"uri\":\"rtsp://127.0.0.1:48010\"}," +
+                "{\"role\":\"video\",\"uri\":\"udp://127.0.0.1:47998\"}," +
+                "{\"role\":\"control\",\"uri\":\"tcp://127.0.0.1:47999\"}," +
+                "{\"role\":\"audio\",\"uri\":\"udp://127.0.0.1:48000\"}]}}}");
+
+        NativeStreamStartResult result = client.start(connection);
+
+        assertFalse(result.success());
+        assertEquals("", result.status());
+        assertFalse(result.presentation().active());
+        assertEquals(
+            "GameStream endpoint map is complete, but native GameStream decode is not implemented yet. protocol=gamestream endpoints=rtsp=rtsp://127.0.0.1:48010, video=udp://127.0.0.1:47998, control=tcp://127.0.0.1:47999, audio=udp://127.0.0.1:48000",
             result.diagnostic());
     }
 }

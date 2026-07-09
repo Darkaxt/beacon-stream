@@ -165,7 +165,7 @@ public final class BeaconViewModelTest {
 
         assertEquals("", launcher.launchedUri);
         assertEquals(
-            "Stream connection did not include a launch URI. protocol=gamestream endpoints=rtsp=rtsp://127.0.0.1:48010",
+            "GameStream endpoint map is incomplete. Missing required endpoints: video, control, audio. protocol=gamestream endpoints=rtsp=rtsp://127.0.0.1:48010",
             model.latestError());
     }
 

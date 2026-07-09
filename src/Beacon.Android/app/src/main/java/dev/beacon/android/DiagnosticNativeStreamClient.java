@@ -23,6 +23,23 @@ public final class DiagnosticNativeStreamClient implements NativeStreamClient {
                 NativeStreamPresentation.colorBars(colorBarsEndpoint));
         }
 
+        GameStreamEndpointPlan gameStreamPlan = GameStreamEndpointPlan.from(connection);
+        if (gameStreamPlan.supportedProtocol() && connection.launchUri().isEmpty()) {
+            String endpointSummary = gameStreamPlan.diagnosticEndpointSummary();
+            if (!gameStreamPlan.complete()) {
+                return NativeStreamStartResult.unsupported(
+                    "GameStream endpoint map is incomplete. Missing required endpoints: " +
+                        gameStreamPlan.missingRequiredRoles() +
+                        ". protocol=" + gameStreamPlan.protocol() +
+                        " endpoints=" + endpointSummary);
+            }
+
+            return NativeStreamStartResult.unsupported(
+                "GameStream endpoint map is complete, but native GameStream decode is not implemented yet. protocol=" +
+                    gameStreamPlan.protocol() +
+                    " endpoints=" + gameStreamPlan.requiredEndpointSummary());
+        }
+
         return NativeStreamStartResult.unsupported(connection.missingLaunchUriDiagnostic());
     }
 
