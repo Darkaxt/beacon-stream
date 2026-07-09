@@ -26,6 +26,18 @@ public final class DiagnosticNativeStreamClientTest {
     }
 
     @Test
+    public void defaultFacadeKeepsBeaconTestRouting() {
+        NativeStreamClient client = new DiagnosticNativeStreamClient();
+        StreamConnectionDescriptor connection = StreamConnectionDescriptor.extract(
+            "{\"stream\":{\"connection\":{\"protocol\":\"beacon-test\",\"endpoints\":[{\"role\":\"video\",\"uri\":\"beacon-test://pattern/color-bars\"}]}}}");
+
+        NativeStreamStartResult result = client.start(connection);
+
+        assertTrue(result.success());
+        assertEquals("color-bars", result.presentation().kind());
+    }
+
+    @Test
     public void rejectsBeaconTestProtocolWithoutSupportedVideoPattern() {
         DiagnosticNativeStreamClient client = new DiagnosticNativeStreamClient();
         StreamConnectionDescriptor connection = StreamConnectionDescriptor.extract(
