@@ -31,6 +31,36 @@ public final class GameStreamRtpVideoSessionClientTest {
     }
 
     @Test
+    public void h264PlanUsesH264RtpSampleProvider() {
+        RecordingRtpPacketSource source = new RecordingRtpPacketSource();
+        RecordingVideoConsumer consumer = new RecordingVideoConsumer(
+            NativeStreamStartResult.started("H.264 RTP video sample provider started."));
+        GameStreamRtpVideoSessionClient client = new GameStreamRtpVideoSessionClient(
+            new RecordingPacketSourceFactory(source),
+            consumer);
+
+        NativeStreamStartResult result = client.start(completePlan("\"codec\":\"h264\""), sessionInfo());
+
+        assertTrue(result.success());
+        assertTrue(consumer.sampleProvider instanceof H264RtpSampleProvider);
+    }
+
+    @Test
+    public void nonH264PlanKeepsRawRtpSampleProvider() {
+        RecordingRtpPacketSource source = new RecordingRtpPacketSource();
+        RecordingVideoConsumer consumer = new RecordingVideoConsumer(
+            NativeStreamStartResult.started("raw RTP video sample provider started."));
+        GameStreamRtpVideoSessionClient client = new GameStreamRtpVideoSessionClient(
+            new RecordingPacketSourceFactory(source),
+            consumer);
+
+        NativeStreamStartResult result = client.start(completePlan("\"codec\":\"hevc\""), sessionInfo());
+
+        assertTrue(result.success());
+        assertTrue(consumer.sampleProvider instanceof GameStreamRtpVideoSampleProvider);
+    }
+
+    @Test
     public void sourceFactoryFailureReturnsDiagnostic() {
         ThrowingPacketSourceFactory sourceFactory = new ThrowingPacketSourceFactory();
         RecordingVideoConsumer consumer = new RecordingVideoConsumer(
@@ -95,12 +125,18 @@ public final class GameStreamRtpVideoSessionClientTest {
     }
 
     private static GameStreamEndpointPlan completePlan() {
+        return completePlan("");
+    }
+
+    private static GameStreamEndpointPlan completePlan(String metadata) {
         StreamConnectionDescriptor descriptor = StreamConnectionDescriptor.extract(
             "{\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"endpoints\":[" +
                 "{\"role\":\"rtsp\",\"uri\":\"rtsp://127.0.0.1:48010/beacon/session\"}," +
                 "{\"role\":\"video\",\"uri\":\"udp://127.0.0.1:47998\"}," +
                 "{\"role\":\"control\",\"uri\":\"tcp://127.0.0.1:47999\"}," +
-                "{\"role\":\"audio\",\"uri\":\"udp://127.0.0.1:48000\"}]}}}");
+                "{\"role\":\"audio\",\"uri\":\"udp://127.0.0.1:48000\"}],\"metadata\":{" +
+                metadata +
+                "}}}}");
         return GameStreamEndpointPlan.from(descriptor);
     }
 
