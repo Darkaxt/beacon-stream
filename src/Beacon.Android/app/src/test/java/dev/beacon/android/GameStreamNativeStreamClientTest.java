@@ -139,7 +139,18 @@ public final class GameStreamNativeStreamClientTest {
 
         @Override
         public RtspResponse transact(RtspRequest request) {
-            return RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: " + cseq++ + "\r\n\r\n");
+            int current = cseq++;
+            if (current <= 2) {
+                return RtspResponse.parse("RTSP/1.0 200 OK\r\nCSeq: " + current + "\r\n\r\n");
+            }
+
+            int serverPort = current == 3 ? 48000 : current == 4 ? 47998 : 47999;
+            return RtspResponse.parse(
+                "RTSP/1.0 200 OK\r\n" +
+                    "CSeq: " + current + "\r\n" +
+                    "Session: session-1;timeout=30\r\n" +
+                    "Transport: unicast;server_port=" + serverPort + "-" + (serverPort + 1) + ";source=127.0.0.1\r\n" +
+                    "\r\n");
         }
     }
 }

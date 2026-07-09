@@ -1,6 +1,10 @@
 package dev.beacon.android;
 
 public final class GameStreamRtspHandshakeClient implements GameStreamRtspSessionClient {
+    private static final String AudioTarget = "streamid=audio/0/0";
+    private static final String VideoTarget = "streamid=video/0/0";
+    private static final String ControlTarget = "streamid=control/13/0";
+
     private final RtspTransport transport;
 
     public GameStreamRtspHandshakeClient(RtspTransport transport) {
@@ -37,8 +41,50 @@ public final class GameStreamRtspHandshakeClient implements GameStreamRtspSessio
                 "RTSP DESCRIBE failed with status " + statusSummary(describe) + ".");
         }
 
+        GameStreamRtspSetupResult audio = setup(plan, AudioTarget, "audio", 3, "");
+        if (!audio.success()) {
+            return GameStreamRtspSessionResult.failed(audio.diagnostic());
+        }
+
+        String sessionId = audio.sessionId();
+        GameStreamRtspSetupResult video = setup(plan, VideoTarget, "video", 4, sessionId);
+        if (!video.success()) {
+            return GameStreamRtspSessionResult.failed(video.diagnostic());
+        }
+
+        GameStreamRtspSetupResult control = setup(plan, ControlTarget, "control", 5, sessionId);
+        if (!control.success()) {
+            return GameStreamRtspSessionResult.failed(control.diagnostic());
+        }
+
         return GameStreamRtspSessionResult.started(
-            "RTSP handshake completed. protocol=" + plan.protocol() + " rtsp=" + plan.rtspUri());
+            "RTSP setup completed. protocol=" +
+                plan.protocol() +
+                " rtsp=" +
+                plan.rtspUri() +
+                " session=" +
+                sessionId +
+                " audioPort=" +
+                audio.serverPort() +
+                " videoPort=" +
+                video.serverPort() +
+                " controlPort=" +
+                control.serverPort());
+    }
+
+    private GameStreamRtspSetupResult setup(
+        GameStreamEndpointPlan plan,
+        String target,
+        String streamName,
+        int cseq,
+        String sessionId) {
+        RtspResponse response = transport.transact(RtspRequest.setup(target, cseq, plan.rtspHostHeader(), sessionId));
+        if (!success(response)) {
+            return GameStreamRtspSetupResult.failedWithDiagnostic(
+                "RTSP SETUP " + streamName + " failed with status " + statusSummary(response) + ".");
+        }
+
+        return GameStreamRtspSetupResult.fromResponse(streamName, response);
     }
 
     private static boolean success(RtspResponse response) {
