@@ -35,6 +35,7 @@ public final class BeaconActivity extends Activity {
     private final BeaconTouchInputMapper touchInputMapper = new BeaconTouchInputMapper();
     private final AndroidDeviceCapabilityProbe capabilityProbe = AndroidDeviceCapabilityProbe.system();
 
+    private BeaconViewModelSession modelSession;
     private AndroidDeviceTelemetryProbe telemetryProbe;
     private BeaconLocalSettingsStore localSettingsStore;
     private BeaconLocalSettings localSettings;
@@ -85,10 +86,15 @@ public final class BeaconActivity extends Activity {
         telemetryProbe = AndroidDeviceTelemetryProbe.system(this);
         applyWindowFlags(uiState);
         setContentView(createContent());
+        modelSession = new BeaconViewModelSession(this::createModel);
     }
 
     @Override
     protected void onDestroy() {
+        if (modelSession != null) {
+            modelSession.close();
+        }
+
         executor.shutdown();
         super.onDestroy();
     }
@@ -375,7 +381,7 @@ public final class BeaconActivity extends Activity {
 
     private void runAction(String label, BeaconAction action) {
         status.setText(label + "...");
-        BeaconViewModel model = createModel();
+        BeaconViewModel model = currentModel();
         executor.execute(() -> {
             try {
                 action.run(model);
@@ -387,6 +393,11 @@ public final class BeaconActivity extends Activity {
                 setStatus(label + " failed: " + ex.getMessage());
             }
         });
+    }
+
+    private BeaconViewModel currentModel() {
+        BeaconClientConfig config = new BeaconClientConfig(serverUrl.getText().toString(), clientId.getText().toString());
+        return modelSession.get(config.clientId(), config.serverUrl());
     }
 
     private void setStatus(String value) {
@@ -511,8 +522,8 @@ public final class BeaconActivity extends Activity {
         });
     }
 
-    private BeaconViewModel createModel() {
-        BeaconClientConfig config = new BeaconClientConfig(serverUrl.getText().toString(), clientId.getText().toString());
+    private BeaconViewModel createModel(String clientId, String serverUrl) {
+        BeaconClientConfig config = new BeaconClientConfig(serverUrl, clientId);
         return new BeaconViewModel(
             config.clientId(),
             config.serverUrl(),
@@ -524,13 +535,12 @@ public final class BeaconActivity extends Activity {
     }
 
     private NativeStreamClient createNativeStreamClient(String serverUrl) {
-        return new DiagnosticNativeStreamClient(new NativeStreamClientRouter(
-            new EncodedVideoNativeStreamClient(new SurfaceEncodedVideoDecoder(
+        return AndroidNativeStreamClientFactory.create(
+            new SurfaceEncodedVideoDecoder(
                 new AndroidMediaCodecFactory(),
                 new AndroidSurfaceViewProvider(encodedVideoSurfaceView),
-                new HttpEncodedVideoSampleProviderFactory(serverUrl))),
-            new BeaconTestNativeStreamClient(),
-            new GameStreamNativeStreamClient()));
+                new HttpEncodedVideoSampleProviderFactory(serverUrl)),
+            AndroidNativeStreamClientFactory.socketRtspSessionClient());
     }
 
     private BeaconApiClient.ProfilePatch readPatch() {
