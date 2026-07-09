@@ -39,6 +39,14 @@ public final class GameStreamRtspHandshakeClient implements GameStreamRtspSessio
                     plan.rtspUri());
         }
 
+        try {
+            return startHandshake(plan);
+        } catch (RtspTransportException ex) {
+            return GameStreamRtspSessionResult.failed(ex.getMessage());
+        }
+    }
+
+    private GameStreamRtspSessionResult startHandshake(GameStreamEndpointPlan plan) {
         RtspResponse options = transport.transact(RtspRequest.options(plan.rtspUri(), 1, plan.rtspHostHeader()));
         if (!success(options)) {
             return GameStreamRtspSessionResult.failed(
