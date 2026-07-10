@@ -18,7 +18,7 @@ public final class MoonlightNativeCore {
 
     public static String identity() {
         requireAvailable();
-        return nativeIdentity();
+        return LOAD_STATE.identity;
     }
 
     public static String stageName(int stage) {
@@ -30,12 +30,12 @@ public final class MoonlightNativeCore {
         try {
             System.loadLibrary(LIBRARY_NAME);
             if (!CORE_IDENTITY.equals(nativeIdentity())) {
-                return new LoadState(false, "Moonlight native core returned an unexpected identity.");
+                return LoadState.unavailable("Moonlight native core returned an unexpected identity.");
             }
 
-            return new LoadState(true, "Moonlight native core loaded.");
+            return LoadState.available(CORE_IDENTITY);
         } catch (LinkageError error) {
-            return new LoadState(false, "Moonlight native core unavailable: " + error.getMessage());
+            return LoadState.unavailable("Moonlight native core unavailable: " + error.getMessage());
         }
     }
 
@@ -51,11 +51,21 @@ public final class MoonlightNativeCore {
 
     private static final class LoadState {
         final boolean available;
+        final String identity;
         final String diagnostic;
 
-        LoadState(boolean available, String diagnostic) {
+        private LoadState(boolean available, String identity, String diagnostic) {
             this.available = available;
+            this.identity = identity;
             this.diagnostic = diagnostic;
+        }
+
+        static LoadState available(String identity) {
+            return new LoadState(true, identity, "Moonlight native core loaded.");
+        }
+
+        static LoadState unavailable(String diagnostic) {
+            return new LoadState(false, "", diagnostic);
         }
     }
 }
