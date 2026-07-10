@@ -885,6 +885,34 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task OwningClientUsesOneCoherentPublicAndPrivateSessionSnapshot()
+    {
+        MoonlightNativeSessionDescriptor nativeSession = CreateNativeSession() with { Address = "10.0.2.7" };
+        var backend = new CoherentNativeSessionStreamingBackend(nativeSession, "revision-7");
+        WebApplicationFactory<Program> coherentFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IStreamingBackend>(backend);
+            }));
+        HttpClient client = coherentFactory.CreateClient();
+
+        HttpResponseMessage launch = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
+        {
+            gameId = "steam-shortcut:3767414131"
+        });
+        HttpResponseMessage status = await client.GetAsync("/clients/z-fold-7/stream");
+
+        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, status.StatusCode);
+        using JsonDocument launchJson = await JsonDocument.ParseAsync(await launch.Content.ReadAsStreamAsync());
+        using JsonDocument statusJson = await JsonDocument.ParseAsync(await status.Content.ReadAsStreamAsync());
+        AssertCoherentNativeSession(launchJson.RootElement, "revision-7", "10.0.2.7");
+        AssertCoherentNativeSession(statusJson.RootElement, "revision-7", "10.0.2.7");
+        Assert.Equal(2, backend.CoherentReadCalls);
+    }
+
+    [Fact]
     public async Task LaunchWithStreamingProbePublishesRuntimeDescriptorAndDisconnectStopsProcess()
     {
         string descriptorRoot = Path.Combine(Path.GetTempPath(), $"beacon-streaming-smoke-{Guid.NewGuid():N}");
@@ -1645,6 +1673,17 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             Convert.ToBase64String(Enumerable.Range(0, 16).Select(value => (byte)value).ToArray()),
             Convert.ToBase64String(Enumerable.Range(16, 16).Select(value => (byte)value).ToArray()));
 
+    private static void AssertCoherentNativeSession(
+        JsonElement response,
+        string expectedRevision,
+        string expectedAddress)
+    {
+        Assert.Equal(
+            expectedRevision,
+            response.GetProperty("stream").GetProperty("connection").GetProperty("metadata").GetProperty("snapshot").GetString());
+        Assert.Equal(expectedAddress, response.GetProperty("nativeSession").GetProperty("address").GetString());
+    }
+
     private static string GetCommandPromptExecutablePath()
     {
         string executablePath = Path.Combine(
@@ -1824,6 +1863,60 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             string sessionId,
             CancellationToken cancellationToken) =>
             Task.FromResult(nativeSessions.GetValueOrDefault(sessionId));
+
+        public IReadOnlyList<StreamingSessionState> GetSessions() => inner.GetSessions();
+    }
+
+    private sealed class CoherentNativeSessionStreamingBackend(
+        MoonlightNativeSessionDescriptor nativeSession,
+        string revision) : IStreamingBackend
+    {
+        private readonly FakeStreamingBackend inner = new();
+
+        public int CoherentReadCalls { get; private set; }
+
+        public Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken) =>
+            inner.GetHealthAsync(cancellationToken);
+
+        public Task<StreamingPreflightResult> CheckReadinessAsync(
+            SessionPlan plan,
+            CancellationToken cancellationToken) =>
+            inner.CheckReadinessAsync(plan, cancellationToken);
+
+        public Task<StreamingStartResult> StartAsync(SessionPlan plan, CancellationToken cancellationToken) =>
+            inner.StartAsync(plan, cancellationToken);
+
+        public Task<StreamingStopResult> StopAsync(string sessionId, CancellationToken cancellationToken) =>
+            inner.StopAsync(sessionId, cancellationToken);
+
+        public Task<StreamingSessionState?> GetSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Client API must use the coherent session accessor.");
+
+        public Task<MoonlightNativeSessionDescriptor?> GetNativeSessionAsync(
+            string sessionId,
+            CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Client API must use the coherent session accessor.");
+
+        public async Task<StreamingClientSessionSnapshot?> GetClientSessionAsync(
+            string sessionId,
+            CancellationToken cancellationToken)
+        {
+            CoherentReadCalls++;
+            StreamingSessionState? session = await inner.GetSessionAsync(sessionId, cancellationToken);
+            if (session is null)
+            {
+                return null;
+            }
+
+            StreamingConnectionDescriptor connection = Assert.IsType<StreamingConnectionDescriptor>(session.Connection) with
+            {
+                Metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["snapshot"] = revision
+                }
+            };
+            return new StreamingClientSessionSnapshot(session with { Connection = connection }, nativeSession);
+        }
 
         public IReadOnlyList<StreamingSessionState> GetSessions() => inner.GetSessions();
     }
