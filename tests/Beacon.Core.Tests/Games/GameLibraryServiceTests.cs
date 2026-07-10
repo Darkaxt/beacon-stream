@@ -6,7 +6,7 @@ namespace Beacon.Core.Tests.Games;
 public sealed class GameLibraryServiceTests
 {
     [Fact]
-    public async Task DedupesLegacySteamMappingsWhenAutomaticDiscoveryCoversThem()
+    public async Task DedupesObsoleteManualSteamMappingsWhenAutomaticDiscoveryCoversThem()
     {
         var steam = new FakeProvider("steam", new GameDescriptor(
             "steam:1086940",
@@ -18,9 +18,9 @@ public sealed class GameLibraryServiceTests
             new GameProcessHints(null, null)));
 
         var manual = new FakeProvider("manual", new GameDescriptor(
-            "legacy-sunshine:BG3",
+            "obsolete-manual:BG3",
             "Baldur's Gate 3",
-            "legacy-sunshine",
+            "obsolete-manual",
             new GameLaunchIntent("steam-app", "steam://run/1086940"),
             new GameArtwork(null, "none"),
             true,

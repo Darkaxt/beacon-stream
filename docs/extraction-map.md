@@ -32,8 +32,9 @@ shortcut during Gate 3.
 
 ## Gate 3 Rule
 
-No StreamWorker or StreamCore source has been selected. The Gate 3 audit must compare
-mature implementations at the primitive level and record, for every copied or adapted file:
+The selected StreamWorker and StreamCore sources are fixed by
+`docs/source-audits/2026-07-10-beacon-streamworker-streamcore.md`. For every copied or
+adapted file, implementation must record:
 
 - source repository and immutable revision;
 - source file and license;
@@ -42,12 +43,8 @@ mature implementations at the primitive level and record, for every copied or ad
 - why reuse is safer than a Beacon-original implementation;
 - tests proving the primitive works through the Beacon-owned contract.
 
-See `docs/license-notes.md` for the repository licensing rule.
-
-The completed Gate 3 source decision is recorded in
-`docs/source-audits/2026-07-10-beacon-streamworker-streamcore.md`. That audit supersedes
-the temporary "no source selected" state above without changing the prohibition against
-upstream runtime compatibility.
+See `docs/license-notes.md` for the repository licensing rule. The source decision does not
+change the prohibition against upstream runtime compatibility.
 
 ## Gate 3 Selected Primitives
 

@@ -20,8 +20,9 @@ Architecture Recovery Gates 0-2 define the current repository state:
 - The APK intentionally performs no media handoff during recovery. Generic Android
   codec, surface, and decoder primitives remain for the future StreamCore boundary.
 
-The next implementation gate is a source-audited Beacon StreamWorker/StreamCore vertical
-slice: fake transport proof first, then real H.264 video to the Android emulator.
+The approved Gates 3-5 implementation is a source-audited Beacon StreamWorker/StreamCore
+vertical slice: fake transport proof first, benchmark traffic through the production
+transport, then real H.264 video to the Android emulator.
 
 ## Architecture
 
@@ -192,5 +193,7 @@ removed compatibility paths and contracts instead of maintaining an exception le
 - Authoritative requirements: `docs/superpowers/specs/2026-06-03-personal-streaming-orchestrator-design.md`
 - Recovery inventory: `docs/source-audits/2026-07-10-beacon-architecture-recovery-inventory.md`
 - Gates 0-2 plan: `docs/superpowers/plans/2026-07-10-beacon-stream-architecture-recovery-gates-0-2.md`
+- Native streaming source audit: `docs/source-audits/2026-07-10-beacon-streamworker-streamcore.md`
+- Gates 3-5 plan: `docs/superpowers/plans/2026-07-10-beacon-stream-gates-3-5.md`
 - Source provenance: `docs/extraction-map.md`
 - Windows display boundary: `docs/windows-display-backend.md`
