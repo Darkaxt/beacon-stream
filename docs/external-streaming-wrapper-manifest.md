@@ -140,12 +140,40 @@ Runtime descriptor fields:
 | `endpoints` | object | Actual named endpoint map, such as `rtsp` and `input`. |
 | `metadata` | object | Optional string metadata surfaced in the stream connection descriptor. |
 | `diagnostics` | string array | Wrapper-supplied runtime status notes for diagnostics. |
+| `nativeSession` | object | Optional complete Moonlight native session contract. This contains per-session key material and is never copied into public stream or admin state. |
 
 Once present, the runtime session descriptor is treated as evidence from the started wrapper and takes precedence over static manifest connection fields. Explicit Beacon connection settings remain the fallback when no runtime descriptor has been written.
 
 Wrappers with stable connection details should advertise those details through explicit Beacon connection settings or manifest fields. That gives the client an immediate descriptor after launch while the runtime session descriptor can still refine or prove the running wrapper state later. Beacon intentionally does not wait on this file with a timeout-based launch gate.
 
 `Beacon.StreamingProbe` is the checked no-phone producer for this format. It writes the descriptor and can either exit with `--once` for standalone validation or stay alive until Beacon stops the wrapper process.
+
+## Native Moonlight Session
+
+When a wrapper has completed the host `/launch` or `/resume` exchange, it can add `nativeSession` to the runtime descriptor. Beacon validates every field before retaining it in a private per-session store. The owning client receives it as a top-level `nativeSession` sibling of `stream` from `POST /clients/{clientId}/launch` and `GET /clients/{clientId}/stream`.
+
+| Field | Wire value | Native destination |
+| --- | --- | --- |
+| `address` | Non-empty host name or address | `SERVER_INFORMATION.address` |
+| `serverAppVersion` | Non-empty version string | `SERVER_INFORMATION.serverInfoAppVersion` |
+| `serverGfeVersion` | Optional version string | `SERVER_INFORMATION.serverInfoGfeVersion` |
+| `rtspSessionUrl` | Absolute `rtsp://` URI | `SERVER_INFORMATION.rtspSessionUrl` |
+| `serverCodecModeSupport` | Positive 32-bit integer | `SERVER_INFORMATION.serverCodecModeSupport` |
+| `width`, `height`, `fps` | Positive integers | `STREAM_CONFIGURATION.width`, `height`, `fps` |
+| `bitrateKbps` | Positive integer | `STREAM_CONFIGURATION.bitrate` |
+| `packetSize` | Integer from 1 through 65535 | `STREAM_CONFIGURATION.packetSize` |
+| `streamingMode` | `local`, `remote`, or `auto` | `STREAM_CFG_LOCAL`, `STREAM_CFG_REMOTE`, or `STREAM_CFG_AUTO` |
+| `audioConfiguration` | `stereo`, `5.1`, or `7.1` | Corresponding `AUDIO_CONFIGURATION_*` value |
+| `videoFormat` | `h264`, `h264-high8-444`, `hevc`, `hevc-main10`, `hevc-rext8-444`, `hevc-rext10-444`, `av1-main8`, `av1-main10`, `av1-high8-444`, or `av1-high10-444` | Corresponding `VIDEO_FORMAT_*` bit |
+| `clientRefreshRateX100` | Positive integer | `STREAM_CONFIGURATION.clientRefreshRateX100` |
+| `colorSpace` | `rec601`, `rec709`, or `rec2020` | Corresponding `COLORSPACE_*` value |
+| `colorRange` | `limited` or `full` | Corresponding `COLOR_RANGE_*` value |
+| `encryptionMode` | `none`, `audio`, `video`, or `all` | Corresponding `ENCFLG_*` value |
+| `remoteInputAesKey`, `remoteInputAesIv` | Base64 that decodes to exactly 16 bytes | `STREAM_CONFIGURATION.remoteInputAesKey` and `remoteInputAesIv` |
+
+Beacon does not put this object in `StreamingSessionState`, `StreamingConnectionDescriptor`, `/admin/snapshot`, Cockpit state, diagnostics, process arguments, or environment variables. Stop and process-exit reconciliation remove the private copy. Validation errors identify the field but never include key or IV values.
+
+The current personal-use API scopes this response by the client id and its stored session plan. Pairing controls profile registration but does not yet issue a per-request bearer credential, so the server must remain on a trusted network until client request authentication is added.
 
 ## Probe Child Process Harness
 
@@ -178,3 +206,4 @@ When `ChildExecutablePath` is configured, Beacon preflights the child executable
 - Beacon treats `diagnostics` and wrapper stdout/stderr as evidence, not as a protocol to parse.
 - The manifest reports capability only. It does not make a non-HDR Windows display path HDR-capable by itself.
 - Runtime session descriptors are generated state. Beacon clears stale same-session descriptors before wrapper start and removes the descriptor when the stream stops or exits.
+- Native session key material is client-route-only state and must never be copied into public stream snapshots, admin state, diagnostics, arguments, or environment variables.

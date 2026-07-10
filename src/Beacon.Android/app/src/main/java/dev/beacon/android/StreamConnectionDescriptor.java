@@ -6,6 +6,9 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 
+import dev.beacon.streaming.moonlight.MoonlightNativeSessionPlan;
+
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -18,25 +21,37 @@ public final class StreamConnectionDescriptor {
         "",
         "",
         Collections.emptyList(),
-        Collections.emptyMap());
+        Collections.emptyMap(),
+        false,
+        null,
+        "");
 
     private final boolean present;
     private final String protocol;
     private final String launchUri;
     private final List<Endpoint> endpoints;
     private final Map<String, String> metadata;
+    private final boolean nativeSessionProvided;
+    private final MoonlightNativeSessionPlan nativeSession;
+    private final String nativeSessionDiagnostic;
 
     private StreamConnectionDescriptor(
         boolean present,
         String protocol,
         String launchUri,
         List<Endpoint> endpoints,
-        Map<String, String> metadata) {
+        Map<String, String> metadata,
+        boolean nativeSessionProvided,
+        MoonlightNativeSessionPlan nativeSession,
+        String nativeSessionDiagnostic) {
         this.present = present;
         this.protocol = protocol;
         this.launchUri = launchUri;
         this.endpoints = Collections.unmodifiableList(new ArrayList<>(endpoints));
         this.metadata = Collections.unmodifiableMap(new LinkedHashMap<>(metadata));
+        this.nativeSessionProvided = nativeSessionProvided;
+        this.nativeSession = nativeSession;
+        this.nativeSessionDiagnostic = nativeSessionDiagnostic;
     }
 
     public static StreamConnectionDescriptor extract(String responseBody) {
@@ -57,12 +72,18 @@ public final class StreamConnectionDescriptor {
                 return EMPTY;
             }
 
+            String protocol = stringProperty(connection, "protocol");
+            NativeSessionExtraction nativeSession = nativeSession(root, protocol);
+
             return new StreamConnectionDescriptor(
                 true,
-                stringProperty(connection, "protocol"),
+                protocol,
                 stringProperty(connection, "launchUri"),
                 endpoints(connection),
-                metadata(connection));
+                metadata(connection),
+                nativeSession.provided,
+                nativeSession.plan,
+                nativeSession.diagnostic);
         } catch (IllegalStateException | UnsupportedOperationException | JsonParseException ex) {
             return EMPTY;
         }
@@ -86,6 +107,22 @@ public final class StreamConnectionDescriptor {
 
     public Map<String, String> metadata() {
         return metadata;
+    }
+
+    public boolean nativeSessionProvided() {
+        return nativeSessionProvided;
+    }
+
+    public boolean nativeSessionValid() {
+        return nativeSession != null;
+    }
+
+    public MoonlightNativeSessionPlan nativeSession() {
+        return nativeSession;
+    }
+
+    public String nativeSessionDiagnostic() {
+        return nativeSessionDiagnostic;
     }
 
     public String metadataValue(String key) {
@@ -177,6 +214,85 @@ public final class StreamConnectionDescriptor {
         return result;
     }
 
+    private static NativeSessionExtraction nativeSession(JsonObject root, String protocol) {
+        if (!root.has("nativeSession") || root.get("nativeSession").isJsonNull()) {
+            return NativeSessionExtraction.absent();
+        }
+        if (!root.get("nativeSession").isJsonObject()) {
+            return NativeSessionExtraction.invalid("nativeSession must be an object.");
+        }
+        if (!"gamestream".equalsIgnoreCase(protocol)) {
+            return NativeSessionExtraction.invalid(
+                "nativeSession requires stream.connection.protocol=gamestream.");
+        }
+
+        JsonObject descriptor = root.getAsJsonObject("nativeSession");
+        try {
+            MoonlightNativeSessionPlan plan = MoonlightNativeSessionPlan.create(
+                requiredString(descriptor, "address"),
+                requiredString(descriptor, "serverAppVersion"),
+                optionalString(descriptor, "serverGfeVersion"),
+                requiredString(descriptor, "rtspSessionUrl"),
+                requiredInt(descriptor, "serverCodecModeSupport"),
+                requiredInt(descriptor, "width"),
+                requiredInt(descriptor, "height"),
+                requiredInt(descriptor, "fps"),
+                requiredInt(descriptor, "bitrateKbps"),
+                requiredInt(descriptor, "packetSize"),
+                requiredString(descriptor, "streamingMode"),
+                requiredString(descriptor, "audioConfiguration"),
+                requiredString(descriptor, "videoFormat"),
+                requiredInt(descriptor, "clientRefreshRateX100"),
+                requiredString(descriptor, "colorSpace"),
+                requiredString(descriptor, "colorRange"),
+                requiredString(descriptor, "encryptionMode"),
+                requiredString(descriptor, "remoteInputAesKey"),
+                requiredString(descriptor, "remoteInputAesIv"));
+            return NativeSessionExtraction.valid(plan);
+        } catch (IllegalArgumentException ex) {
+            return NativeSessionExtraction.invalid(ex.getMessage() == null
+                ? "nativeSession is invalid."
+                : ex.getMessage());
+        }
+    }
+
+    private static String requiredString(JsonObject object, String propertyName) {
+        if (!object.has(propertyName)
+            || object.get(propertyName).isJsonNull()
+            || !object.get(propertyName).isJsonPrimitive()
+            || !object.getAsJsonPrimitive(propertyName).isString()) {
+            throw new IllegalArgumentException(propertyName + " must be a string.");
+        }
+
+        String value = object.get(propertyName).getAsString().trim();
+        if (value.isEmpty()) {
+            throw new IllegalArgumentException(propertyName + " is required.");
+        }
+        return value;
+    }
+
+    private static String optionalString(JsonObject object, String propertyName) {
+        if (!object.has(propertyName) || object.get(propertyName).isJsonNull()) {
+            return null;
+        }
+        return requiredString(object, propertyName);
+    }
+
+    private static int requiredInt(JsonObject object, String propertyName) {
+        if (!object.has(propertyName)
+            || object.get(propertyName).isJsonNull()
+            || !object.get(propertyName).isJsonPrimitive()
+            || !object.getAsJsonPrimitive(propertyName).isNumber()) {
+            throw new IllegalArgumentException(propertyName + " must be an integer.");
+        }
+
+        try {
+            return new BigDecimal(object.get(propertyName).getAsString()).intValueExact();
+        } catch (ArithmeticException | NumberFormatException ex) {
+            throw new IllegalArgumentException(propertyName + " must be a 32-bit integer.");
+        }
+    }
+
     public static final class Endpoint {
         private final String role;
         private final String uri;
@@ -192,6 +308,33 @@ public final class StreamConnectionDescriptor {
 
         public String uri() {
             return uri;
+        }
+    }
+
+    private static final class NativeSessionExtraction {
+        private final boolean provided;
+        private final MoonlightNativeSessionPlan plan;
+        private final String diagnostic;
+
+        private NativeSessionExtraction(
+            boolean provided,
+            MoonlightNativeSessionPlan plan,
+            String diagnostic) {
+            this.provided = provided;
+            this.plan = plan;
+            this.diagnostic = diagnostic;
+        }
+
+        private static NativeSessionExtraction absent() {
+            return new NativeSessionExtraction(false, null, "");
+        }
+
+        private static NativeSessionExtraction valid(MoonlightNativeSessionPlan plan) {
+            return new NativeSessionExtraction(true, plan, "");
+        }
+
+        private static NativeSessionExtraction invalid(String diagnostic) {
+            return new NativeSessionExtraction(true, null, diagnostic);
         }
     }
 }

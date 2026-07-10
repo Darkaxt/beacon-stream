@@ -10,5 +10,26 @@
   },
   "diagnostics": [
     "runtime descriptor ready"
-  ]
+  ],
+  "nativeSession": {
+    "address": "127.0.0.1",
+    "serverAppVersion": "7.1.431.0",
+    "serverGfeVersion": null,
+    "rtspSessionUrl": "rtsp://127.0.0.1:48010/session/42",
+    "serverCodecModeSupport": 769,
+    "width": 2560,
+    "height": 1600,
+    "fps": 120,
+    "bitrateKbps": 65000,
+    "packetSize": 1024,
+    "streamingMode": "local",
+    "audioConfiguration": "stereo",
+    "videoFormat": "hevc-main10",
+    "clientRefreshRateX100": 12000,
+    "colorSpace": "rec2020",
+    "colorRange": "full",
+    "encryptionMode": "all",
+    "remoteInputAesKey": "AAECAwQFBgcICQoLDA0ODw==",
+    "remoteInputAesIv": "EBESExQVFhcYGRobHB0eHw=="
+  }
 }

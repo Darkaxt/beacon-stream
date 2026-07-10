@@ -836,6 +836,55 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task OwningClientReceivesNativeSessionWithoutExposingSecretsInPublicState()
+    {
+        MoonlightNativeSessionDescriptor nativeSession = CreateNativeSession();
+        var backend = new NativeSessionStreamingBackend(nativeSession);
+        WebApplicationFactory<Program> nativeSessionFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IStreamingBackend>(backend);
+            }));
+        HttpClient client = nativeSessionFactory.CreateClient();
+
+        HttpResponseMessage launch = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
+        {
+            gameId = "steam-shortcut:3767414131"
+        });
+        HttpResponseMessage status = await client.GetAsync("/clients/z-fold-7/stream");
+        HttpResponseMessage snapshot = await client.GetAsync("/admin/snapshot");
+        HttpResponseMessage stop = await client.PostAsJsonAsync("/clients/z-fold-7/stream/stop", new { });
+        HttpResponseMessage stoppedStatus = await client.GetAsync("/clients/z-fold-7/stream");
+
+        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, status.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, snapshot.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, stop.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, stoppedStatus.StatusCode);
+
+        using JsonDocument launchJson = await JsonDocument.ParseAsync(await launch.Content.ReadAsStreamAsync());
+        using JsonDocument statusJson = await JsonDocument.ParseAsync(await status.Content.ReadAsStreamAsync());
+        using JsonDocument stoppedStatusJson = await JsonDocument.ParseAsync(await stoppedStatus.Content.ReadAsStreamAsync());
+        JsonElement launchNativeSession = launchJson.RootElement.GetProperty("nativeSession");
+        JsonElement statusNativeSession = statusJson.RootElement.GetProperty("nativeSession");
+        Assert.Equal(nativeSession.Address, launchNativeSession.GetProperty("address").GetString());
+        Assert.Equal(nativeSession.RemoteInputAesKey, launchNativeSession.GetProperty("remoteInputAesKey").GetString());
+        Assert.Equal(nativeSession.RemoteInputAesIv, launchNativeSession.GetProperty("remoteInputAesIv").GetString());
+        Assert.Equal(nativeSession.RemoteInputAesKey, statusNativeSession.GetProperty("remoteInputAesKey").GetString());
+        Assert.Equal(JsonValueKind.Null, stoppedStatusJson.RootElement.GetProperty("nativeSession").ValueKind);
+
+        string publicStream = statusJson.RootElement.GetProperty("stream").GetRawText();
+        string snapshotBody = await snapshot.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(nativeSession.RemoteInputAesKey, publicStream, StringComparison.Ordinal);
+        Assert.DoesNotContain(nativeSession.RemoteInputAesIv, publicStream, StringComparison.Ordinal);
+        Assert.DoesNotContain("remoteInputAesKey", snapshotBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("remoteInputAesIv", snapshotBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(nativeSession.RemoteInputAesKey, snapshotBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(nativeSession.RemoteInputAesIv, snapshotBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task LaunchWithStreamingProbePublishesRuntimeDescriptorAndDisconnectStopsProcess()
     {
         string descriptorRoot = Path.Combine(Path.GetTempPath(), $"beacon-streaming-smoke-{Guid.NewGuid():N}");
@@ -1574,6 +1623,28 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         return executablePath;
     }
 
+    private static MoonlightNativeSessionDescriptor CreateNativeSession() =>
+        new(
+            "10.0.2.2",
+            "7.1.431.0",
+            "3.27.0.120",
+            "rtsp://10.0.2.2:48010/session/123",
+            0x0301,
+            2560,
+            1600,
+            120,
+            45000,
+            1024,
+            "local",
+            "stereo",
+            "hevc-main10",
+            12000,
+            "rec2020",
+            "full",
+            "all",
+            Convert.ToBase64String(Enumerable.Range(0, 16).Select(value => (byte)value).ToArray()),
+            Convert.ToBase64String(Enumerable.Range(16, 16).Select(value => (byte)value).ToArray()));
+
     private static string GetCommandPromptExecutablePath()
     {
         string executablePath = Path.Combine(
@@ -1708,5 +1779,52 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             Batches.Add(batch);
             return Task.FromResult(ClientInputResult.Ok(batch.Events.Count));
         }
+    }
+
+    private sealed class NativeSessionStreamingBackend(MoonlightNativeSessionDescriptor nativeSession) : IStreamingBackend
+    {
+        private readonly FakeStreamingBackend inner = new();
+        private readonly Dictionary<string, MoonlightNativeSessionDescriptor> nativeSessions =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        public Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken) =>
+            inner.GetHealthAsync(cancellationToken);
+
+        public Task<StreamingPreflightResult> CheckReadinessAsync(
+            SessionPlan plan,
+            CancellationToken cancellationToken) =>
+            inner.CheckReadinessAsync(plan, cancellationToken);
+
+        public async Task<StreamingStartResult> StartAsync(SessionPlan plan, CancellationToken cancellationToken)
+        {
+            StreamingStartResult result = await inner.StartAsync(plan, cancellationToken);
+            if (result.Success)
+            {
+                nativeSessions[plan.SessionId] = nativeSession;
+            }
+
+            return result;
+        }
+
+        public async Task<StreamingStopResult> StopAsync(string sessionId, CancellationToken cancellationToken)
+        {
+            StreamingStopResult result = await inner.StopAsync(sessionId, cancellationToken);
+            if (result.Success)
+            {
+                nativeSessions.Remove(sessionId);
+            }
+
+            return result;
+        }
+
+        public Task<StreamingSessionState?> GetSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+            inner.GetSessionAsync(sessionId, cancellationToken);
+
+        public Task<MoonlightNativeSessionDescriptor?> GetNativeSessionAsync(
+            string sessionId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(nativeSessions.GetValueOrDefault(sessionId));
+
+        public IReadOnlyList<StreamingSessionState> GetSessions() => inner.GetSessions();
     }
 }

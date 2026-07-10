@@ -56,6 +56,14 @@ public sealed class ExternalStreamingManifestContractTests
         Assert.Equal("already-paired", descriptor.Metadata["pairing"]);
         Assert.NotNull(descriptor.Diagnostics);
         Assert.Contains("runtime descriptor ready", descriptor.Diagnostics);
+        Assert.NotNull(descriptor.NativeSession);
+        Assert.True(descriptor.NativeSession.Validate().Success);
+        Assert.Equal(2560, descriptor.NativeSession.Width);
+        Assert.Equal(1600, descriptor.NativeSession.Height);
+        Assert.Equal(120, descriptor.NativeSession.Fps);
+        Assert.Equal("hevc-main10", descriptor.NativeSession.VideoFormat);
+        Assert.Equal("AAECAwQFBgcICQoLDA0ODw==", descriptor.NativeSession.RemoteInputAesKey);
+        Assert.Equal("EBESExQVFhcYGRobHB0eHw==", descriptor.NativeSession.RemoteInputAesIv);
     }
 
     private static string FindRepositoryRoot()
