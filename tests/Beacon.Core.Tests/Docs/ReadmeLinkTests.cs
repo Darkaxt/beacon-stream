@@ -21,6 +21,22 @@ public sealed class ReadmeLinkTests
         Assert.Empty(missing);
     }
 
+    [Fact]
+    public void ReadmeReferencesApprovedNativeStreamingAuditAndPlan()
+    {
+        string root = FindRepositoryRoot();
+        string readme = File.ReadAllText(Path.Combine(root, "README.md"));
+
+        Assert.Contains(
+            "docs/source-audits/2026-07-10-beacon-streamworker-streamcore.md",
+            readme,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "docs/superpowers/plans/2026-07-10-beacon-stream-gates-3-5.md",
+            readme,
+            StringComparison.Ordinal);
+    }
+
     private static string FindRepositoryRoot()
     {
         DirectoryInfo? current = new(AppContext.BaseDirectory);

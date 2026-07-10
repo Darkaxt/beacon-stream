@@ -19,7 +19,6 @@ public sealed class ArchitectureRecoveryBoundaryTests
 
     private static readonly string[] ForbiddenDirectories =
     [
-        "src/Beacon.Platform.Windows/Streaming",
         "src/Beacon.StreamingProbe",
         "tests/Beacon.StreamingProbe.Tests",
         "src/Beacon.Android/streaming-moonlight"
@@ -27,6 +26,9 @@ public sealed class ArchitectureRecoveryBoundaryTests
 
     private static readonly string[] ScannedRoots =
     [
+        "contracts",
+        "native",
+        "scripts",
         "src",
         "tests"
     ];
@@ -34,6 +36,7 @@ public sealed class ArchitectureRecoveryBoundaryTests
     private static readonly HashSet<string> ScannedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".c",
+        ".cmake",
         ".cpp",
         ".cs",
         ".csproj",
@@ -43,6 +46,7 @@ public sealed class ArchitectureRecoveryBoundaryTests
         ".json",
         ".kt",
         ".ps1",
+        ".proto",
         ".ts",
         ".tsx",
         ".txt",
@@ -52,9 +56,50 @@ public sealed class ArchitectureRecoveryBoundaryTests
     };
 
     private static readonly Regex CompatibilityPattern = new(
-        "Moonlight|GameStream|RTSP|RTP|ExternalProcessStreaming|StreamingWrapper|" +
+        "Apollo|Sunshine|Moonlight|GameStream|RTSP|RTP|ExternalProcessStreaming|StreamingWrapper|" +
         "WrapperChild|RuntimeDescriptor|LaunchUri|nativeSession",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly NativeBoundaryRule[] NativeBoundaryRules =
+    [
+        new(
+            "MsQuic",
+            new Regex("MsQuic|HQUIC|QUIC_[A-Z0-9_]", RegexOptions.CultureInvariant),
+            [
+                "src/Beacon.StreamProtocol",
+                "src/Beacon.StreamWorker",
+                "src/Beacon.Android/app/src/main/cpp",
+                "native",
+                "scripts",
+                "tests/Beacon.StreamProtocol.Tests",
+                "tests/Beacon.StreamWorker.Tests"
+            ]),
+        new(
+            "NVENC",
+            new Regex("NvEncodeAPI|NV_ENC_[A-Z0-9_]", RegexOptions.CultureInvariant),
+            [
+                "src/Beacon.StreamWorker",
+                "tests/Beacon.StreamWorker.Tests"
+            ]),
+        new(
+            "Windows Graphics Capture",
+            new Regex(
+                "Windows\\.Graphics\\.Capture|GraphicsCapture(Item|Session)|Direct3D11CaptureFramePool",
+                RegexOptions.CultureInvariant),
+            [
+                "src/Beacon.StreamWorker",
+                "tests/Beacon.StreamWorker.Tests"
+            ]),
+        new(
+            "Android MediaCodec",
+            new Regex("android\\.media\\.MediaCodec|MediaCodec", RegexOptions.CultureInvariant),
+            [
+                "src/Beacon.Android/app/src/main/java",
+                "src/Beacon.Android/app/src/main/cpp",
+                "src/Beacon.Android/app/src/test",
+                "src/Beacon.Android/app/src/androidTest"
+            ])
+    ];
 
     [Fact]
     public void RecoveryAuthorityAndProtectedBoundariesExist()
@@ -87,6 +132,11 @@ public sealed class ArchitectureRecoveryBoundaryTests
         foreach (string relativeRoot in ScannedRoots)
         {
             string path = ToPlatformPath(root, relativeRoot);
+            if (!Directory.Exists(path))
+            {
+                continue;
+            }
+
             foreach (string file in EnumerateSourceFiles(path))
             {
                 if (CompatibilityPattern.IsMatch(Path.GetFileName(file))
@@ -98,6 +148,42 @@ public sealed class ArchitectureRecoveryBoundaryTests
         }
 
         Assert.Empty(matches.Order());
+    }
+
+    [Fact]
+    public void NativeStreamingApisRemainInsideSelectedWorkerAndStreamCoreBoundaries()
+    {
+        string root = FindRepositoryRoot();
+        var violations = new List<string>();
+
+        foreach (string relativeRoot in ScannedRoots)
+        {
+            string path = ToPlatformPath(root, relativeRoot);
+            if (!Directory.Exists(path))
+            {
+                continue;
+            }
+
+            foreach (string file in EnumerateSourceFiles(path))
+            {
+                string relativePath = ToRepositoryRelativePath(root, file);
+                string contents = File.ReadAllText(file);
+                foreach (NativeBoundaryRule rule in NativeBoundaryRules)
+                {
+                    if (rule.Pattern.IsMatch(Path.GetFileName(file)) || rule.Pattern.IsMatch(contents))
+                    {
+                        bool allowed = rule.AllowedPrefixes.Any(prefix =>
+                            relativePath.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase));
+                        if (!allowed)
+                        {
+                            violations.Add($"{rule.Name}: {relativePath}");
+                        }
+                    }
+                }
+            }
+        }
+
+        Assert.Empty(violations.Order());
     }
 
     private static IEnumerable<string> EnumerateSourceFiles(string root) =>
@@ -146,4 +232,9 @@ public sealed class ArchitectureRecoveryBoundaryTests
 
         throw new InvalidOperationException("Could not locate repository root.");
     }
+
+    private sealed record NativeBoundaryRule(
+        string Name,
+        Regex Pattern,
+        IReadOnlyList<string> AllowedPrefixes);
 }
