@@ -186,3 +186,27 @@ The following evidence must remain green through every deletion slice:
 - Fake-host control-plane tests remain usable.
 - Windows host streaming fails closed with one explicit StreamWorker-not-implemented diagnostic.
 - The repository is ready for a focused upstream primitive audit and a separate Gate 3 StreamWorker/StreamCore plan.
+
+## Final Gates 0–2 Evidence
+
+Recovery landed through two synchronized pull requests:
+
+- PR #123, merged as `7bd6abf`, removed the compatibility architecture and restored the Beacon-owned boundaries.
+- PR #124, merged as `a1075da`, removed the dead Android dispatcher found by the post-merge refactor audit.
+- Both duplicate CI matrices passed `.NET`, Android, and Client Lab for both pull requests.
+
+The final local validation matrix on synchronized `main` established:
+
+- `dotnet restore`, format verification, and warnings-as-errors build passed with zero warnings and zero errors.
+- 222 .NET tests passed across Core, Server, Windows platform, Cockpit, FakeEndpoint, DisplayProbe, and GameProbe.
+- Android unit tests and `assembleDebug` passed after all compatibility modules and submodules were removed.
+- Client Lab lint and 11 tests passed; the complete Playwright control-plane flow passed.
+- The FakeEndpoint completed its full 14-operation no-phone flow.
+- DisplayProbe reported SudoVDA protocol `0.2.1`, mirror disabled, and verified physical primary `\\.\DISPLAY5` at `2560x1600@240`.
+- GameProbe discovered 36 games with one non-fatal diagnostic.
+- The Android emulator completed hello, catalog, capability/telemetry reporting, beacon, planning, launch, pointer, keyboard, stop, disconnect, quit, and emergency restore through the single control-plane route. The selected plan preserved `2560x1600@120`.
+- Static boundary searches found no production compatibility route, external streaming process, runtime descriptor, launch URI, or streaming submodule.
+
+During the second emulator pass, repeated `uiautomator` hierarchy requests caused an Android **system-process** ANR and left `emulator-5554` offline after reboot. Beacon remained the top resumed activity, its process stayed alive, and logcat contained no Beacon fatal exception or Beacon ANR. This is an emulator-harness limitation to repair before the next dynamic Android gate; it is not evidence of an APK regression.
+
+The final recovery tree was clean and synchronized at `a1075da`. Gate 3 starts from that state and cannot reintroduce any deleted route.

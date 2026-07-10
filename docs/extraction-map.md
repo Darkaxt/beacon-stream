@@ -43,3 +43,21 @@ mature implementations at the primitive level and record, for every copied or ad
 - tests proving the primitive works through the Beacon-owned contract.
 
 See `docs/license-notes.md` for the repository licensing rule.
+
+The completed Gate 3 source decision is recorded in
+`docs/source-audits/2026-07-10-beacon-streamworker-streamcore.md`. That audit supersedes
+the temporary "no source selected" state above without changing the prohibition against
+upstream runtime compatibility.
+
+## Gate 3 Selected Primitives
+
+| Source | Beacon destination | License | Reuse decision |
+| --- | --- | --- | --- |
+| Sunshine `40ae6c8`, `src/platform/windows/display_wgc.cpp` and `display.h` | Future `src/Beacon.StreamWorker/src/capture` | GPL-3.0 | Adapt only monitor selection, free-threaded frame-pool, D3D11 Surface access, and recreation lifecycle into a smaller Beacon-owned WGC boundary. |
+| Sunshine `40ae6c8`, `src/platform/windows/display_vram.cpp` | Future `src/Beacon.StreamWorker/src/video` | GPL-3.0 | Reference D3D11-resident texture ownership; implement an original narrow `ID3D11VideoProcessor` BGRA-to-NV12 converter without Sunshine/FFmpeg policy. |
+| Sunshine `40ae6c8`, `src/nvenc/nvenc_base.cpp` and `nvenc_d3d11_native.cpp` | Future `src/Beacon.StreamWorker/src/video` | GPL-3.0 | Adapt NVENC resource and cleanup lifecycle; remove Boost, FFmpeg, upstream protocol, codec selection, and policy. |
+| microsoft/msquic `v2.5.9` (`87b5308`) | Future native StreamProtocol, StreamWorker, and Android StreamCore builds | MIT | Link the library as the single internal Beacon QUIC implementation; expose no MsQuic type above the native transport boundary. |
+| FFmpeg/nv-codec-headers `15ee327` | Future vendored native include directory | Header-specific permissive notice | Vendor only required NVENC headers and preserve their notice; load the installed NVIDIA runtime library. |
+| protocolbuffers/protobuf `v32.1` (`7fcfd66`) | Future generated Worker IPC and stream-control contracts | BSD-3-Clause | Generate typed C#/C++ messages from Beacon-owned schemas; no upstream application contract is imported. |
+| Sunshine `40ae6c8`, `src/platform/windows/audio.cpp` and `src/audio.cpp`; xiph/opus `v1.6.1` (`22244de`) | Deferred Worker/StreamCore audio boundaries | GPL-3.0 / BSD-3-Clause | Reference/adapt event-driven WASAPI and Opus primitives only after the H.264 gate; no audio code lands in Gate 3. |
+| Android `MediaCodec` platform API and retained Beacon codec classes | Future `BeaconStreamCore` Java decoder boundary | Android platform / Beacon GPL-3.0 | Keep and adapt the existing Beacon asynchronous Surface decoder; native transport delivers complete Beacon access units through direct JNI buffers. |
