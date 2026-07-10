@@ -1,944 +1,555 @@
 # Personal Streaming Orchestrator Design
 
+Status: authoritative architecture-recovery revision, 2026-07-10
+
 ## Purpose
 
-Build a new personal game-streaming system from scratch, using proven pieces from Sunshine, Apollo, Vibeshine, Vibepollo, and the Apollo rescue work as source material. The goal is not to make a heavier Apollo fork. The goal is a simpler, server-authoritative architecture where the Windows server knows each client in advance, prepares the right virtual desktop before a session starts, selects the best streaming plan from capabilities and live telemetry, and exposes a clean WPF control surface.
+Beacon Stream is a personal Windows game-streaming system with one server-owned product architecture and one thin Android client. Beacon replaces Apollo/Sunshine as the installed server product. It may reuse carefully extracted implementation primitives from Sunshine, Apollo, their forks, Moonlight, and related projects when that is the strongest engineering choice, but it does not preserve compatibility with their control planes, settings, pairing, application model, or streaming protocols.
 
-The Android APK must be thin for execution but useful for preflight control. It identifies the device, edits only that device's server-side client profile, reports live capabilities and telemetry, receives a server-computed session plan, and then streams/decodes/input-forwards according to that plan.
+The Windows server knows registered clients before launch, measures their current network and hardware behavior, computes one complete session plan, prepares the correct virtual desktop, launches the selected Windows application, and owns the stream until verified cleanup. The Android APK identifies itself, benchmarks the current endpoint, selects an application from the server catalog, presents the stream, forwards input, and exposes only local interaction settings.
+
+This document replaces compatibility-first assumptions introduced during the first 120 pull requests. Where an older plan, README statement, test, or implementation contradicts this document, this document wins.
 
 ## Core Thesis
 
-The current Apollo/Artemis model pushes too much important information into connection-time negotiation. The client reports settings while Apollo is already preparing display topology, encoder state, virtual display state, app launch, and stream transport. This creates race windows and duplicate configuration.
+The product must not accumulate layers around Apollo, Sunshine, GameStream, Moonlight, wrappers, runtime descriptor files, or alternate Android routes. Those approaches duplicate ownership and retain failure modes that Beacon exists to remove.
 
-The new system must invert that model:
+The intended lifecycle is:
 
 ```text
-Client identifies itself
--> server loads client profile
--> server observes live endpoint/network facts
--> server computes a session plan
--> server prepares virtual desktop and launch environment
--> client starts stream using the plan
+APK identifies itself
+-> Beacon loads server-owned client policy
+-> APK runs required network and hardware benchmark phases
+-> Beacon computes one executable session plan
+-> Beacon prepares and verifies the client's virtual desktop
+-> Beacon starts its bundled StreamWorker with that immutable plan
+-> Beacon launches the selected Windows application on the leased display
+-> APK connects to StreamWorker using one Beacon session ticket
+-> StreamWorker captures, encodes, transports, and accepts input
+-> Beacon stops and restores the session through verified compensating actions
 ```
 
-The server owns desired state. The client reports facts and preferences. The server computes executable state.
+The server owns desired and executable state. The APK reports facts, benchmark measurements, local user intent, and input. The APK does not negotiate or reinterpret stream policy.
 
 ## Project Identity And Repository
 
-The project name is **Beacon Stream**. The product can be shortened to **Beacon** where that reads better in UI, service names, and logs.
+- Product name: **Beacon Stream**, shortened to **Beacon** in UI and service names.
+- Public repository: `Darkaxt/beacon-stream`.
+- Beacon is not an Apollo, Sunshine, Artemis, or Moonlight fork as a product.
+- The repository remains GPL-3.0 compatible because upstream GPL source may be adapted.
+- Every copied or adapted source boundary must be recorded with origin, revision, license, retained behavior, removed behavior, and local ownership.
+- Upstream projects are implementation evidence and source material, not runtime dependencies or architecture authorities.
 
-The name is intentional: the client continuously announces presence and intent to the server before a session starts. This is related to the "beaconing client" idea from the Apollo/Artemis debugging work, not a new dependency on Apollo, Artemis, Sunshine, or Moonlight infrastructure.
+## Architecture Invariants
 
-Repository and namespace decisions:
+These invariants are non-negotiable.
 
-- Create a new public GitHub repository: `Darkaxt/beacon-stream`.
-- Do not make this project an Apollo fork. Keep the Apollo fork only for Apollo-specific fixes.
-- Use a public GPL-3.0 license from day one if any Sunshine, Apollo, Vibeshine, or Vibepollo code is copied or adapted.
-- Keep copied source, wrapped source, and rewritten source clearly documented in the extraction map.
-- Use project names such as `Beacon.Server`, `Beacon.Core`, `Beacon.Desktop`, `Beacon.ClientLab`, and `Beacon.Android`.
+1. Beacon exposes one production control plane and one production streaming path.
+2. Apollo, Sunshine, Moonlight, Artemis, Vibepollo, and Vibeshine compatibility is not a product requirement.
+3. No separately installed upstream server is required for Beacon to stream.
+4. Beacon Core contains no upstream-protocol-specific session types.
+5. The APK contains one streaming implementation, not native, Java, fallback, wrapper, and intent routes in parallel.
+6. The production host data plane is a bundled Beacon component controlled through a versioned private contract.
+7. Fake implementations exist only for deterministic tests and use the same Beacon-owned contracts.
+8. Display, application, session, and recovery ownership remain in Beacon Service, never in StreamWorker or the APK.
+9. Benchmark measurements are facts. Only Beacon Service selects streaming settings.
+10. New feature work remains frozen until architecture recovery and one Beacon-owned emulator vertical slice pass their acceptance gates.
 
-The project is allowed to reuse proven implementation pieces, but it is not constrained by the current Sunshine, Apollo, Artemis, Vibeshine, or Vibepollo architecture. Those projects are inputs, not the architecture.
+## Product Components
 
-## Non-Goals For Version 1
+### Beacon Service
 
-- No global server settings edited from the APK.
-- No per-game virtual desktop overrides.
-- No fully bespoke streaming stack at the start.
-- No settings explosion copied from Vibepollo/Vibeshine.
-- No requirement to support arbitrary public users or unknown device classes.
-- No requirement to preserve Apollo's current web UI model.
-- No requirement to keep Artemis as the primary configuration source.
-- No requirement to make HDR a hard blocker. HDR is a capability to detect, report truthfully, and use when available.
-- No requirement for the virtual desktop resolution to match a game's internal render resolution.
-- No requirement for a real Android phone during the first implementation milestones.
+Beacon Service is the authoritative Windows service and control plane.
+
+Responsibilities:
+
+- Registered client identity and credentials.
+- Server-owned client policies.
+- Network and hardware benchmark orchestration and storage.
+- Session planning.
+- Per-client virtual-display creation, activation, persistence, cleanup, and recovery.
+- Game and Windows application discovery, artwork, selection, and launch.
+- Process and window ownership.
+- StreamWorker lifecycle and private IPC.
+- Session tickets and public client API.
+- Operational journal, health, diagnostics, and recovery.
+
+Beacon Service does not capture or encode frames in its managed service process. Native streaming failures must not crash or corrupt the policy owner.
+
+### Beacon StreamWorker
+
+StreamWorker is a bundled, headless, policy-free native worker. It is part of Beacon, not a user-configured external backend.
+
+Responsibilities:
+
+- Capture the display selected by the immutable session plan.
+- Convert and encode video using the selected GPU path.
+- Capture and encode the selected audio mix.
+- Run the single Beacon streaming transport.
+- Receive and validate client input for the active session.
+- Publish structured readiness, measurements, state transitions, and failures to Beacon Service.
+- Stop deterministically when Beacon closes the session or the private IPC channel ends.
+
+StreamWorker must not:
+
+- Discover or launch games.
+- Create, remove, make primary, mirror, or restore displays.
+- Read client profiles or global settings.
+- Select codecs, resolution, FPS, bitrate, HDR, or recovery policy.
+- Expose an Apollo/Sunshine web UI, app list, pairing endpoint, or configuration file.
+- Poll descriptor files or supervise another streaming server.
+
+### Beacon StreamCore
+
+StreamCore is the single native data-plane library packaged in the APK.
+
+Responsibilities:
+
+- Authenticate the Beacon session ticket.
+- Receive, decrypt, reorder, recover, and decode Beacon media.
+- Present video and audio.
+- Forward input through the active Beacon session.
+- Report stream measurements and decoder state.
+- Stop and release all native resources deterministically.
+
+StreamCore may adapt proven upstream algorithms or implementation primitives, but its public API and wire contract are Beacon-owned. It must not expose upstream discovery, pairing, app launch, settings, or compatibility APIs.
+
+### Beacon Android APK
+
+The APK is a thin, policy-free client around StreamCore.
+
+User-visible responsibilities:
+
+- Register and authenticate with Beacon.
+- Show connection and benchmark state.
+- Run automatic and manual network/hardware benchmarks.
+- Show the server-owned Windows application/game catalog.
+- Select and launch one entry.
+- Present the active stream.
+- Forward touch, keyboard, mouse, and controller input supported by the device.
+- Stop the session.
+- Request owning-session emergency recovery.
+- Edit local-only interaction and presentation settings.
+
+The APK has no streaming settings page. It cannot choose or edit resolution, refresh rate, FPS, bitrate, codec, HDR, audio mode, transport, display mode, virtual-display lifecycle, recovery policy, or server-global settings.
+
+Allowed local settings include:
+
+- Touch layout and gesture mapping.
+- Controller overlay and button mapping.
+- Haptics.
+- Local UI density and theme.
+- Wake lock behavior.
+- Decoder diagnostics overlay visibility.
+- Accessibility behavior that does not change server stream policy.
+
+### Beacon Cockpit
+
+The WPF cockpit is the local administrative UI for Beacon Service.
+
+Responsibilities:
+
+- Registered clients and server-owned policies.
+- Benchmark history and planner decisions.
+- Active sessions, displays, applications, and StreamWorker state.
+- Game and application catalog.
+- Global streaming limits and server capabilities.
+- Recovery actions.
+- Logs and diagnostics.
+
+The cockpit contains no duplicate policy. It calls Beacon Service APIs.
+
+### Client Lab And Fake Endpoint
+
+Client Lab and the CLI fake endpoint remain development tools. They simulate APK control-plane behavior and benchmark reports without creating a second production client protocol.
 
 ## Requirement Register
 
-This section is the implementation contract. If a later plan contradicts this register, the register wins unless it is explicitly revised.
+This register is the implementation contract.
 
-### Project Scope
+### Project And Workflow
 
-- `REQ-PROJ-001`: Beacon Stream is personal-use first. It must optimize for one trusted Windows server and known personal clients before supporting arbitrary users.
-- `REQ-PROJ-002`: The first known endpoint is the Z Fold 7 profile, but the design must support more registered clients later.
-- `REQ-PROJ-003`: The project must be built as a new public repository, not as a long-lived Apollo fork.
-- `REQ-PROJ-004`: The project must stay source-license honest. Any copied or adapted GPL source keeps the project GPL-3.0 compatible.
-- `REQ-PROJ-005`: The first implementation target is the control plane and fake pipeline. Real streaming backend and real Android APK are later milestones.
-- `REQ-PROJ-006`: Existing projects are lego pieces. Do not inherit settings-heavy UX or architecture constraints just because they exist upstream.
-- `REQ-PROJ-007`: Milestone 0 must begin by creating the public `Darkaxt/beacon-stream` remote repository with `gh`.
-- `REQ-PROJ-008`: The working tree must be initialized from or immediately connected to that remote before substantial implementation starts.
+- `REQ-PROJ-001`: Beacon is personal-use first and optimizes for one trusted Windows host and known personal clients.
+- `REQ-PROJ-002`: Z Fold 7 is the first real endpoint, while identity and policy storage support additional registered clients.
+- `REQ-PROJ-003`: Beacon remains a new public repository, not a long-lived upstream fork.
+- `REQ-PROJ-004`: Source provenance and GPL obligations must remain explicit for every adapted upstream component.
+- `REQ-PROJ-005`: Existing projects are source material only; their product boundaries and compatibility requirements do not carry into Beacon.
+- `REQ-PROJ-006`: Documentation, contracts, tests, and code must agree after every synced checkpoint.
+- `REQ-SYNC-001`: Work follows implement, static/dynamic validation, sync, refactor, static/dynamic validation, sync.
+- `REQ-SYNC-002`: A sync is a coherent commit pushed to GitHub with passing required checks.
+- `REQ-SYNC-003`: No substantial validated objective work remains local across context compaction.
+- `REQ-SYNC-004`: Architecture recovery uses small deletion or boundary-repair slices, each independently validated before merging.
+- `REQ-SYNC-005`: A green test suite does not justify retaining code that violates an architecture invariant.
 
-### Implementation And Sync Workflow
+### Product Boundary
 
-- `REQ-SYNC-001`: Ongoing implementation must follow this loop: implement, validate static and dynamic checks, sync, refactor, validate static and dynamic checks again, sync.
-- `REQ-SYNC-002`: Sync means commit a coherent checkpoint locally and push it to the GitHub remote.
-- `REQ-SYNC-003`: The first sync must happen immediately after the remote repository and initial scaffold are created.
-- `REQ-SYNC-004`: No substantial objective work may remain local-only across context compactions.
-- `REQ-SYNC-005`: `gh` is the required tool for creating the remote GitHub repository and the preferred tool for later GitHub operations.
-- `REQ-SYNC-006`: Each synced checkpoint must keep docs, implementation, and validation status aligned with what actually landed.
+- `REQ-BOUND-001`: Beacon must stream with Apollo and Sunshine absent and stopped.
+- `REQ-BOUND-002`: Beacon must not implement Apollo, Sunshine, GameStream, Moonlight, or Artemis compatibility as a product feature.
+- `REQ-BOUND-003`: Beacon must not expose upstream pairing, app-list, launch, cancel, RTSP, NVHTTP, runtime-descriptor, or wrapper-manifest contracts.
+- `REQ-BOUND-004`: Beacon must ship one production StreamWorker and one APK StreamCore path.
+- `REQ-BOUND-005`: The user must not select a streaming backend, compatibility mode, wrapper, or protocol.
+- `REQ-BOUND-006`: Diagnostic fake streaming must implement Beacon contracts and must not introduce a second client route.
+- `REQ-BOUND-007`: Upstream source may be retained only when it is the best implementation primitive after removing upstream policy and compatibility surfaces.
+- `REQ-BOUND-008`: Retained upstream code must be owned by a narrow Beacon adapter or module with explicit tests and provenance.
 
-### Control Plane Ownership
+### Server And Client Ownership
 
-- `REQ-CTRL-001`: The server is the source of truth for desired state.
-- `REQ-CTRL-002`: The APK reports identity, facts, capabilities, preferences, telemetry, and user intent.
-- `REQ-CTRL-003`: The APK must be able to update its own basic server-side client profile before starting a connection or launch.
-- `REQ-CTRL-004`: The APK must not edit global server settings in version 1.
-- `REQ-CTRL-005`: The APK must not edit per-game virtual desktop behavior in version 1.
-- `REQ-CTRL-006`: Client-local input and UI settings stay on the client.
-- `REQ-CTRL-007`: Anything that affects virtual desktop behavior is server-side state.
-- `REQ-CTRL-008`: The server must compute a complete effective session plan before display topology, app launch, or streaming starts.
-- `REQ-CTRL-009`: The client consumes the session plan. It must not reinterpret display topology, codec, FPS, or recovery policy locally.
-- `REQ-CTRL-010`: The WPF cockpit may edit server-global settings, client profiles, recovery actions, and diagnostics because it is a local server-admin surface.
-- `REQ-CTRL-011`: APK profile patches must be server-validated against an explicit allowlist.
-- `REQ-CTRL-012`: Display mode, blackout, mirror prohibition, persistence, destruction, restore, and recovery safety policies are WPF/server-admin controlled in version 1.
-- `REQ-CTRL-013`: Until the APK implements native streaming from endpoint maps, a successful launch response with endpoints but no launch URI must be surfaced as an explicit client diagnostic instead of silently doing nothing.
-- `REQ-CTRL-014`: An actively beaconing client must be able to ask the server to prepare its own display lease before app launch without making that display primary; an explicit inactive beacon must evaluate the server-owned display cleanup gate without timers or background watchdogs.
+- `REQ-CTRL-001`: Beacon Service is the sole source of truth for desired and executable session state.
+- `REQ-CTRL-002`: Beacon computes a complete immutable session plan before display activation, app launch, or StreamWorker start.
+- `REQ-CTRL-003`: The APK reports identity, capabilities, benchmark facts, local user intent, stream health, and input.
+- `REQ-CTRL-004`: The APK cannot edit server streaming policy or global settings.
+- `REQ-CTRL-005`: The APK cannot reinterpret codec, resolution, FPS, bitrate, HDR, audio, transport, display, or recovery decisions.
+- `REQ-CTRL-006`: Local interaction settings remain in the APK and never affect the server session plan except by reporting device capability constraints.
+- `REQ-CTRL-007`: The WPF cockpit is the only version-one UI for editing server-global and server-owned per-client streaming policy.
+- `REQ-CTRL-008`: Anything that affects virtual desktop behavior is server-owned.
+- `REQ-CTRL-009`: The APK may select a catalog application and request launch, stop, and owning-session emergency recovery.
+- `REQ-CTRL-010`: StreamWorker executes an immutable plan and cannot mutate server policy.
 
-### Client Profile
+### Client Registration And Security
 
-- `REQ-PROFILE-001`: Each registered client has a server-side client profile.
-- `REQ-PROFILE-002`: The profile stores preferred virtual desktop resolution, refresh rate, HDR preference, codec preference, quality/latency preference, optional bitrate cap, audio mode, display behavior policy, and disconnect/end-session preference.
-- `REQ-PROFILE-003`: The Z Fold 7 default profile must prefer `2560x1600` and `120 Hz` where the backend can support it.
-- `REQ-PROFILE-004`: The profile must preserve 16:10 intent. It must not silently collapse `2560x1600` into `2560x1440`.
-- `REQ-PROFILE-005`: The profile must support a policy for using a virtual-primary display while keeping the physical display extended or restored.
-- `REQ-PROFILE-006`: The profile must support physical-display-blackout as an optional policy, and blackout must have a recovery path.
-- `REQ-PROFILE-007`: The APK stores touch layout, multitouch gestures, controller overlay, haptics, local UI density, wake lock, local theme, and local decoder UI preferences locally.
+- `REQ-SEC-001`: Every APK installation has a stable Beacon client identity and server-issued credential.
+- `REQ-SEC-002`: Registration requires explicit approval from the trusted Windows host.
+- `REQ-SEC-003`: Control-plane traffic and stream setup are authenticated and encrypted.
+- `REQ-SEC-004`: Stream tickets are single-use, short-lived, bound to client id, session id, plan revision, and StreamWorker instance.
+- `REQ-SEC-005`: Ticket expiry is a security validity rule, not a session cancellation timeout.
+- `REQ-SEC-006`: Private keys, credentials, session tickets, and media keys never appear in public API snapshots, logs, exception text, or `ToString()` output.
+- `REQ-SEC-007`: Owning-client actions are scoped to that client's active session.
+- `REQ-SEC-008`: The local cockpit may perform broader administrative recovery with UAC elevation when required.
+
+### Network Fingerprint And Benchmark Triggers
+
+- `REQ-BENCH-001`: The APK provides automatic and manual network and hardware benchmarks.
+- `REQ-BENCH-002`: Beacon defines the versioned benchmark suite and interprets all results.
+- `REQ-BENCH-003`: The APK reports raw measurements and capability evidence; it does not recommend or select streaming settings.
+- `REQ-BENCH-004`: The APK listens to platform network-change callbacks instead of polling on a timer.
+- `REQ-BENCH-005`: A network fingerprint includes every available non-secret discriminator needed to distinguish materially different paths: transport type, server route/address, local network prefix, Wi-Fi band/channel, link-speed bucket, and a locally salted hash of SSID/BSSID when Android permits access.
+- `REQ-BENCH-006`: Raw SSID and BSSID values must not leave the APK or appear in logs.
+- `REQ-BENCH-007`: A full automatic benchmark runs when the network fingerprint, device capability revision, Android version, APK version, display-mode inventory, codec inventory, or benchmark schema changes.
+- `REQ-BENCH-008`: Every launch runs a lightweight session preflight so congestion changes on the same network are measured.
+- `REQ-BENCH-009`: A manual Benchmark action always permits a new full run.
+- `REQ-BENCH-010`: Benchmark state and results are stored server-side by client, network fingerprint, hardware revision, benchmark schema, and execution timestamp.
+- `REQ-BENCH-011`: Automatic benchmark triggers are event-driven and must not use a periodic watchdog.
+
+### Network Benchmark
+
+- `REQ-NET-001`: The benchmark measures round-trip latency, jitter, downstream packet loss, control-path upstream behavior, sustainable downstream throughput, burst handling, and reordering.
+- `REQ-NET-002`: Benchmark traffic uses the same Beacon transport implementation and encryption path as production streaming.
+- `REQ-NET-003`: A benchmark round uses explicit packet counts, byte counts, sequence numbers, and a versioned measurement interval.
+- `REQ-NET-004`: A measurement interval ending records missing packets as loss; it does not cancel or crash the benchmark process.
+- `REQ-NET-005`: User cancellation and connection loss end a benchmark with an explicit incomplete result rather than a fabricated recommendation.
+- `REQ-NET-006`: Beacon retains raw measurements and the planner decision derived from them.
+- `REQ-NET-007`: The planner must distinguish measured sustainable throughput from transient link speed advertised by Android.
+- `REQ-NET-008`: The session plan must explain bitrate, FPS, transport-recovery, and latency selections using current measurements.
+
+### Hardware Benchmark
+
+- `REQ-HW-001`: Passive capability inventory records decoder codec, profile, level, bit depth, maximum advertised size/rate, low-latency evidence, display modes, HDR types, and audio output capabilities.
+- `REQ-HW-002`: Active decoder tests use versioned Beacon-provided media vectors and the production StreamCore decode/presentation path.
+- `REQ-HW-003`: Active tests measure successful configuration, sustained decoded FPS, decode latency, presentation latency when observable, dropped frames, output errors, and thermal-state change.
+- `REQ-HW-004`: Candidate tests cover H.264, HEVC, and AV1 only where the device advertises the required decoder profile.
+- `REQ-HW-005`: Candidate tests cover 8-bit and 10-bit paths separately.
+- `REQ-HW-006`: HDR capability requires decoder evidence, 10-bit vector success, Android display HDR evidence, and successful HDR presentation mode activation.
+- `REQ-HW-007`: Full calibration includes sustained workloads long enough to expose thermal throttling and unstable advertised modes.
+- `REQ-HW-008`: The planner must reject a mode that the active benchmark cannot sustain even if Android advertises it.
+- `REQ-HW-009`: Hardware benchmark failures are facts and must not crash the APK or alter server policy directly.
+- `REQ-HW-010`: Emulator benchmarks are valid for protocol and lifecycle testing but cannot certify physical-device HDR, thermal, touch, controller, or radio behavior.
+
+### Session Planning
+
+- `REQ-PLAN-001`: The plan includes client id, app id, display identity, display mode, resolution, refresh rate, stream FPS, codec/profile/bit depth, bitrate, HDR state, audio mode, transport parameters, input capabilities, benchmark evidence revision, and recovery policy.
+- `REQ-PLAN-002`: The Z Fold 7 policy may target `2560x1600` and `120 Hz`; the planner must never silently replace 16:10 intent with `2560x1440`.
+- `REQ-PLAN-003`: Stream resolution and game render resolution are separate concepts; Beacon does not force a game's internal rendering setting.
+- `REQ-PLAN-004`: The planner chooses settings from server capabilities, client policy, current benchmark evidence, application constraints, and server load.
+- `REQ-PLAN-005`: The plan records a human-readable reason for every downgrade or fallback.
+- `REQ-PLAN-006`: If an explicitly required capability cannot be provided, launch fails before display or application side effects.
+- `REQ-PLAN-007`: The APK receives the executable plan for display and diagnostics but cannot modify it.
 
 ### Virtual Display Lifecycle
 
-- `REQ-DISP-001`: Virtual desktop identity is per client. Do not reuse one virtual display across multiple clients.
-- `REQ-DISP-002`: A client must be able to have one leased virtual display prepared for that client's session lifecycle.
-- `REQ-DISP-003`: The leased display must be created or verified during preflight before app launch, not after the stream has already started.
-- `REQ-DISP-004`: Launches for a client must bind to that client's leased virtual display.
-- `REQ-DISP-005`: Disconnect alone must not imply virtual display teardown.
-- `REQ-DISP-006`: Stream stop and display cleanup are separate operations.
-- `REQ-DISP-007`: Remove a client virtual display only when the client is no longer active **AND** no owned app, child process, or tracked window remains for that client.
-- `REQ-DISP-008`: No timeout may replace the `client inactive AND nothing owned remains` rule.
-- `REQ-DISP-009`: Manual recovery can override lifecycle rules when explicitly requested by the user from WPF or by the owning APK emergency action.
-- `REQ-DISP-010`: Mirror mode is prohibited by default.
-- `REQ-DISP-011`: The server must never silently fall back to streaming or launching on the physical display when the requested virtual display is unavailable.
-- `REQ-DISP-012`: If the virtual display is unavailable, the server must attempt safe preflight repair before failing.
-- `REQ-DISP-013`: If repair fails, the failure must be explicit and diagnostic, not hidden behind a generic launch error.
-- `REQ-DISP-014`: The server must verify that the physical display is primary again after session end or recovery.
-- `REQ-DISP-015`: Physical-primary restore must be reconciled and retried when Windows reports a stale or wrong topology.
-- `REQ-DISP-016`: The server must prevent the laptop panel from being stranded as inactive when no session owns that state.
-- `REQ-DISP-017`: The server must support keeping the virtual display present while an owned app still runs there, without stealing the laptop's main display.
-- `REQ-DISP-018`: Display topology decisions must be logged with before/after state, selected display id, resolution, refresh, primary flag, HDR flag, and reason.
+- `REQ-DISP-001`: Virtual-display identity is per client and never shared across clients.
+- `REQ-DISP-002`: Active client presence may prepare or verify its leased display without making it primary.
+- `REQ-DISP-003`: Launch activates the already-prepared display selected by the plan.
+- `REQ-DISP-004`: Launches bind to the owning client's leased display.
+- `REQ-DISP-005`: Mirror mode is prohibited unless a future specification explicitly adds it.
+- `REQ-DISP-006`: Beacon never silently captures or launches on the physical display when the planned virtual display is unavailable.
+- `REQ-DISP-007`: Preflight attempts safe repair before failing display readiness.
+- `REQ-DISP-008`: Stream disconnect alone does not imply display teardown.
+- `REQ-DISP-009`: Stream stop and display cleanup are separate operations.
+- `REQ-DISP-010`: Remove a leased display only when the client is inactive **AND** no owned process, child process, or tracked window remains.
+- `REQ-DISP-011`: No timeout replaces the inactive-client **AND** no-owned-work cleanup gate.
+- `REQ-DISP-012`: Physical-primary restore is verified and reconciled, not a one-shot best-effort call.
+- `REQ-DISP-013`: The laptop panel cannot remain inactive when no session owns that state.
+- `REQ-DISP-014`: An owned application may keep the virtual display alive without keeping it primary or stealing the physical desktop.
+- `REQ-DISP-015`: Before/after topology, display id, resolution, refresh, primary state, HDR state, and reason are journaled for every topology operation.
 
 ### Session Ownership And Cleanup
 
-- `REQ-SESS-001`: A session owns the process launched by the orchestrator.
-- `REQ-SESS-002`: A session owns child processes of the launched process when they can be traced.
-- `REQ-SESS-003`: A session must classify new top-level windows that appeared after session start and are still on that client's virtual display as session-owned unless an exclusion rule says otherwise.
-- `REQ-SESS-004`: Unrelated processes or unrelated update windows must not block cleanup.
-- `REQ-SESS-005`: Quit-session behavior must close or terminate only owned session work unless the user explicitly requests a broader recovery action.
-- `REQ-SESS-006`: Disconnect/reconnect without launching a new app must keep session state coherent and must not churn displays.
-- `REQ-SESS-007`: Launch-app, close-app, disconnect must restore the physical desktop once the owned app/window/process set is empty.
-- `REQ-SESS-008`: App launch and stream startup failures must not leave the physical display inactive or the system in mirror mode.
-- `REQ-SESS-009`: A disconnect request that explicitly reports the client is no longer active must evaluate the same server-owned cleanup gate as quit; default, empty, or no-body disconnect remains active-client and retains the display lease.
+- `REQ-SESS-001`: A session owns the process launched by Beacon.
+- `REQ-SESS-002`: A session owns traceable child processes.
+- `REQ-SESS-003`: A session may own new top-level windows created after launch and remaining on its leased display.
+- `REQ-SESS-004`: Unrelated processes and unrelated update windows cannot block cleanup.
+- `REQ-SESS-005`: Quit closes or terminates only owned session work unless the user explicitly selects a broader administrative recovery action.
+- `REQ-SESS-006`: Disconnect and reconnect without a new app launch preserve coherent ownership and avoid display churn.
+- `REQ-SESS-007`: Once the client is inactive and the owned set is empty, Beacon stops StreamWorker, restores physical primary, and removes the eligible lease.
+- `REQ-SESS-008`: Launch or streaming failure executes compensating actions in reverse order and verifies the final physical state.
+- `REQ-SESS-009`: Default disconnect retains active-client state; explicit inactive disconnect evaluates the same cleanup gate as quit.
+- `REQ-SESS-010`: StreamWorker exit is an observed session failure, not proof that display or application cleanup succeeded.
 
-### Display Modes
+### Game And Application Collection
 
-- `REQ-MODE-001`: The standard remote-gaming mode is virtual display primary for the game/session.
-- `REQ-MODE-002`: The physical display must become secondary/extended or restored according to server policy, not disappear accidentally.
-- `REQ-MODE-003`: Physical-display blackout may exist as a mode, but it must be optional, visible in the plan, and recoverable.
-- `REQ-MODE-004`: If blackout is enabled, the owning APK and WPF cockpit must both be able to request emergency restore.
-- `REQ-MODE-005`: The server must explain whether it selected virtual-primary, extended, blackout, or SDR fallback and why.
+- `REQ-GAME-001`: The APK selects applications from one server-owned normalized catalog.
+- `REQ-GAME-002`: Providers include Steam official games, Steam non-Steam shortcuts, Heroic, Hydra, and manual Windows entries.
+- `REQ-GAME-003`: Steam non-Steam shortcuts use the correct 64-bit `steam://rungameid/...` identity.
+- `REQ-GAME-004`: External games injected into Steam launch without duplicate manual streaming-server mappings.
+- `REQ-GAME-005`: Catalog entries contain launch identity, source, installed state, artwork, and process-tracking hints.
+- `REQ-GAME-006`: Catalog entries do not own display or streaming policy in version one.
+- `REQ-GAME-007`: SteamGridDB is used when available and configured.
+- `REQ-GAME-008`: Multiple exact-name artwork candidates are evaluated until usable artwork is found.
+- `REQ-GAME-009`: Missing external artwork produces a readable generated title cover.
+- `REQ-GAME-010`: Automatic discovery deduplicates obsolete manual mappings.
+
+### Streaming Data Plane
+
+- `REQ-STREAM-001`: The product exposes one versioned Beacon streaming protocol between StreamWorker and StreamCore.
+- `REQ-STREAM-002`: The protocol is private to Beacon version one and carries no upstream compatibility guarantee.
+- `REQ-STREAM-003`: The session handshake authenticates a single-use Beacon ticket before media or input is accepted.
+- `REQ-STREAM-004`: Video, audio, control, input, metrics, and shutdown belong to one coherent session lifecycle.
+- `REQ-STREAM-005`: Media transport supports ordered frame reconstruction, bounded reordering, explicit loss evidence, and recovery suitable for low-latency gaming.
+- `REQ-STREAM-006`: Reliable control must not cause video head-of-line blocking.
+- `REQ-STREAM-007`: The protocol supports H.264 first, then HEVC and AV1 through the same contract rather than alternate routes.
+- `REQ-STREAM-008`: The protocol supports SDR first and extends the same path to 10-bit HDR.
+- `REQ-STREAM-009`: Audio and input use the same authenticated session identity as video.
+- `REQ-STREAM-010`: Stream state changes are event-driven; no descriptor polling, startup sleep, cancellation timeout, or watchdog owns lifecycle.
+- `REQ-STREAM-011`: StreamWorker readiness is acknowledged over private IPC before Beacon publishes a connectable session.
+- `REQ-STREAM-012`: StreamCore stop releases transport, decoder, audio, input, Surface, and native resources exactly once.
+- `REQ-STREAM-013`: No launch URI, Android intent, endpoint-role map, RTSP session URL, wrapper manifest, or runtime descriptor file appears in the production client contract.
+- `REQ-STREAM-014`: Low-level transport libraries may be reused internally, but users and higher-level Beacon modules see only the Beacon protocol.
 
 ### HDR
 
-- `REQ-HDR-001`: HDR is best-effort capability work, not a version 1 stability blocker.
-- `REQ-HDR-002`: HDR must be represented as an explicit client preference with at least `off`, `prefer`, and `require` modes.
-- `REQ-HDR-003`: In `off`, the server must select SDR even if HDR is possible.
-- `REQ-HDR-004`: In `prefer`, the server must select HDR only if the full chain reports support; otherwise it must select SDR and explain why.
-- `REQ-HDR-005`: In `require`, the server must fail before launch if HDR cannot be provided.
-- `REQ-HDR-006`: The full HDR chain is: virtual display driver capability, Windows Advanced Color exposure, capture path, encoder 10-bit support, protocol metadata, client decoder support, and client display support.
-- `REQ-HDR-007`: The virtual display driver must truthfully report HDR/WCG capability. Do not fake success in Apollo/Beacon if Windows still reports SDR only.
-- `REQ-HDR-008`: If Windows or the driver reports no HDR capability, log the missing boundary and continue SDR unless the profile requires HDR.
-- `REQ-HDR-009`: HDR negotiation must not destabilize display creation, topology restore, or stream startup.
-- `REQ-HDR-010`: The planner must include HDR status and reason in the effective session plan.
-
-### Network And Stream Planning
-
-- `REQ-NET-001`: The server must estimate endpoint capabilities, endpoint load, and network quality before launch when the required facts are available.
-- `REQ-NET-002`: The client must report live telemetry such as RTT, packet loss estimate, Wi-Fi band if available, decode capability, current screen mode, battery, thermal hints, and local decoder load if known.
-- `REQ-NET-003`: The server must choose codec, FPS, bitrate, transport, and congestion policy from client profile plus live telemetry.
-- `REQ-NET-004`: Version 1 does not need full live network adaptation to prove the architecture, but the planner must be testable with fake telemetry profiles.
-- `REQ-NET-005`: The plan must make 120 FPS explicit when requested and supported.
-- `REQ-NET-006`: Sunshine/GameStream-compatible endpoint metadata may be derived from a server-owned host plus base-port profile. Explicit per-role endpoint settings and runtime wrapper descriptors must override derived metadata, and Beacon must not generate a client launch URI from the profile unless a wrapper contract explicitly provides one.
-- `REQ-NET-007`: A wrapper harness that supervises a child streaming process must fail before publishing runtime descriptor evidence when the child executable is unavailable, and it must exit when the child exits before Beacon stops the wrapper.
-- `REQ-NET-008`: Server-owned external-process configuration must be able to pass a wrapper child executable and arguments into the wrapper, and missing configured child executables must fail streaming preflight before display or app side effects.
-- `REQ-NET-009`: Admin and Cockpit streaming health must expose wrapper child executable configuration, availability, path, and whether child arguments are configured so wrapper handoff mistakes are visible before launch and phone testing.
-- `REQ-NET-010`: Wrapper child arguments without a wrapper child executable path are invalid configuration. They must make health not ready, fail streaming preflight before display or app side effects, and must not be passed as orphan child environment state.
-
-### Game Library And Launch
-
-- `REQ-GAME-001`: Game collection integration is first-class from the beginning.
-- `REQ-GAME-002`: Providers include Steam official apps, Steam non-Steam shortcuts, Heroic, Hydra, and manual entries.
-- `REQ-GAME-003`: Steam non-Steam shortcuts must use the correct 64-bit `steam://rungameid/...` value.
-- `REQ-GAME-004`: External games injected into Steam must launch from the normalized collection without manual Apollo/Sunshine mapping.
-- `REQ-GAME-005`: Game profiles in version 1 may include launch identity, source, cover, installed state, and process tracking hints.
-- `REQ-GAME-006`: Game profiles in version 1 must not include display topology policy.
-- `REQ-GAME-007`: Artwork must use SteamGridDB when available.
-- `REQ-GAME-008`: SteamGridDB search must handle multiple exact-name candidates and choose the first candidate with usable artwork.
-- `REQ-GAME-009`: If external artwork is unavailable, generate a readable fallback cover from the title.
-- `REQ-GAME-010`: The library must not duplicate old hand-mapped Steam games from Apollo/Sunshine config when automatic discovery already covers them.
+- `REQ-HDR-001`: HDR is best-effort capability work and cannot destabilize SDR sessions.
+- `REQ-HDR-002`: Server policy supports `off`, `prefer`, and `require`.
+- `REQ-HDR-003`: `off` selects SDR even if the chain supports HDR.
+- `REQ-HDR-004`: `prefer` selects HDR only when every required boundary is proven; otherwise it selects SDR and records the missing boundary.
+- `REQ-HDR-005`: `require` fails before launch when the complete chain is unavailable.
+- `REQ-HDR-006`: The complete chain is driver/virtual display, Windows Advanced Color, capture, 10-bit conversion, encoder, Beacon protocol metadata, decoder, and client display presentation.
+- `REQ-HDR-007`: Beacon never fabricates HDR capability when Windows or Android reports SDR.
+- `REQ-HDR-008`: HDR activation and fallback reasons appear in the plan and operational journal.
 
 ### Recovery And Diagnostics
 
-- `REQ-REC-001`: Recovery is a first-class feature.
-- `REQ-REC-002`: The WPF cockpit must expose restore physical primary, move windows back, close windows on virtual display, terminate owned processes on virtual display, remove virtual display lease, stop stream, and reset topology actions.
-- `REQ-REC-003`: WPF recovery actions must support UAC elevation when needed.
-- `REQ-REC-004`: Moving windows back must support minimizing moved windows so recovery does not flood the physical desktop.
-- `REQ-REC-005`: The APK may call emergency actions for its own active session.
-- `REQ-REC-006`: The WPF cockpit may perform broader local admin recovery than the APK.
-- `REQ-REC-007`: Recovery tooling is a user escape hatch. It must not become a substitute for correct orchestrator lifecycle behavior.
-- `REQ-REC-008`: Logs must expose display API access failures, driver readiness, virtual display creation result, topology changes, restore attempts, stream backend failures, and selected repair actions.
-- `REQ-REC-009`: Error messages must be clear, but root fixes and safe auto-repair are preferred over merely surfacing nicer errors.
-- `REQ-REC-010`: Admin diagnostics must expose the stream backend's advertised connection protocol, launch URI when available, static endpoint map, and wrapper child readiness so wrapper/client handoff mistakes are visible before phone testing.
+- `REQ-REC-001`: Recovery remains a first-class product capability, not a substitute for correct lifecycle behavior.
+- `REQ-REC-002`: Cockpit actions include stop stream, restore physical primary, move and minimize windows, close windows, terminate owned processes, remove a lease, and reset topology.
+- `REQ-REC-003`: Owning APK emergency actions include stop and restore for its active session.
+- `REQ-REC-004`: Cockpit recovery supports UAC elevation when the target process or display action requires it.
+- `REQ-REC-005`: Diagnostics expose benchmark evidence, plan decisions, display readiness, topology transitions, StreamWorker readiness, capture/encoder selection, media health, input health, and cleanup results.
+- `REQ-REC-006`: Errors identify the failing ownership boundary and the attempted compensating action.
+- `REQ-REC-007`: Root repair and safe automatic recovery take priority over merely improving error text.
+- `REQ-REC-008`: Operational snapshots contain generic Beacon state and no wrapper-specific or upstream-protocol-specific fields.
 
-### Testing Without Phone
+### Testing Without A Phone
 
-- `REQ-TEST-001`: Most development and validation must not require the real phone.
-- `REQ-TEST-002`: Build a Client Lab web app that simulates a remote client control plane.
-- `REQ-TEST-003`: Client Lab must simulate hello, profile fetch, allowed profile patch, capability report, telemetry report, active and inactive beacon, plan request, launch request, disconnect, reconnect, quit, and emergency restore.
-- `REQ-TEST-004`: Client Lab must include a Z Fold 7 profile with `2560x1600` and `120 Hz`.
-- `REQ-TEST-005`: Client Lab must be browser-testable with Playwright.
-- `REQ-TEST-006`: A CLI fake endpoint must exist for automated tests and scripted sequences.
-- `REQ-TEST-007`: The orchestrator must use interfaces for display, streaming, game library, process/window tracking, and telemetry so fake backends can test policy deterministically.
-- `REQ-TEST-008`: Fast tests must validate planner decisions, profile validation, display lifecycle policy, cleanup rules, recovery sequencing, and game library normalization.
-- `REQ-TEST-009`: Real Windows/SudoVDA integration tests must be separated from fast tests and manually runnable.
-- `REQ-TEST-010`: Real phone testing must be final confirmation for decoder compatibility, input/touch behavior, actual stream quality, real telemetry quality, and human experience.
+- `REQ-TEST-001`: Most development and validation uses fakes, Client Lab, CLI simulation, Windows probes, and Android emulator.
+- `REQ-TEST-002`: Client Lab simulates registration, benchmark inventory/results, catalog selection, launch, input, disconnect, reconnect, stop, and emergency recovery.
+- `REQ-TEST-003`: A fake Z Fold 7 profile preserves `2560x1600` and `120 Hz` intent.
+- `REQ-TEST-004`: Fast tests cover planning, benchmark interpretation, display lifecycle, ownership cleanup, recovery sequencing, and catalog normalization.
+- `REQ-TEST-005`: StreamWorker and StreamCore have deterministic in-memory transport boundaries for packet loss, reordering, cancellation, and lifecycle tests.
+- `REQ-TEST-006`: Android emulator runs the real APK, StreamCore, Surface decoder, benchmark workflow, catalog selection, launch, stop, and reconnect.
+- `REQ-TEST-007`: Real Windows display integration tests remain explicit and manually runnable because they change topology.
+- `REQ-TEST-008`: A production vertical-slice test runs with Apollo and Sunshine stopped and proves Beacon-owned capture to emulator presentation.
+- `REQ-TEST-009`: Physical phone testing is reserved for final decoder quality, 120 Hz, HDR, thermals, Wi-Fi behavior, touch, controllers, audio, and human experience.
+- `REQ-TEST-010`: Static checks prevent upstream compatibility types, wrapper configuration, and duplicate Android routes from re-entering protected boundaries.
 
-### First Milestone Limits
+## Beacon Session Contract
 
-- `REQ-M0-001`: Milestone 0 and Milestone 1 must not implement the real streaming backend.
-- `REQ-M0-002`: Milestone 0 and Milestone 1 must not implement the real Android APK.
-- `REQ-M0-003`: Milestone 0 and Milestone 1 must create the extraction map, architecture docs, core contracts, fake backends, fake endpoint, planner tests, and profile tests.
-- `REQ-M0-004`: No source from Sunshine, Apollo, Vibeshine, or Vibepollo may be copied before the license/source boundary is documented.
+Beacon Service creates two representations from one immutable plan:
 
-## Product Shape
+1. A private StreamWorker command containing capture target, encoder/audio configuration, transport policy, input permissions, benchmark mode, and session identity.
+2. A public APK session envelope containing Beacon protocol version, worker address, single-use ticket, selected media facts, and plan explanation.
 
-The system has four major layers.
+Neither representation contains user-editable policy. The public envelope contains no executable path, upstream protocol field, launch URI, app-list id, wrapper state, or long-lived secret.
 
-### Windows Orchestrator Service
-
-The service is the source of truth. It owns client profiles, game libraries, virtual display lifecycle, session planning, process tracking, telemetry, and recovery actions.
-
-Responsibilities:
-
-- Client registry and pairing.
-- Server-side client profiles.
-- Capability and telemetry ingestion.
-- Effective session plan generation.
-- Virtual display creation, activation, persistence, teardown, and restore.
-- App/game discovery and launch.
-- Session ownership and process/window tracking.
-- Streaming backend integration.
-- Logs, diagnostics, and recovery endpoints.
-
-### WPF Control App
-
-The WPF app is the local cockpit. It replaces the need to manage a complex web UI and a separate rescue helper.
-
-Responsibilities:
-
-- Show clients and their profiles.
-- Show active leases, sessions, displays, and apps.
-- Browse normalized game collections.
-- Show planner decisions and why they were made.
-- Edit server-global settings.
-- Edit client profiles locally.
-- Run recovery actions: restore physical primary, move windows back, close/terminate stranded apps, remove virtual displays, stop sessions.
-- Inspect logs and diagnostics.
-
-The WPF app talks to the orchestrator API. It must not contain core policy that the service also needs.
-
-### Thin Android APK
-
-The APK is not read-only, but it is scoped. In version 1 it may edit only the current device's basic server-side client profile. It may not edit global server settings or per-game display behavior.
-
-Responsibilities:
-
-- Identify the device.
-- Authenticate to the server.
-- Fetch its server-side client profile.
-- Let the user edit basic client preferences before launch.
-- Store only local interaction settings.
-- Report capabilities and live telemetry.
-- Request a session plan.
-- Start/stop stream.
-- Forward input.
-- Trigger emergency restore/terminate commands.
-
-Client-local settings stay local:
-
-- Touch layout.
-- Multitouch gestures.
-- Controller overlay.
-- Haptics.
-- Local UI density.
-- Wake lock.
-- Client-side decoder UI preferences.
-
-The owning APK may edit only these server-side client settings because they affect server planning and are safe to scope to one client:
-
-- Preferred virtual desktop resolution.
-- Preferred virtual desktop refresh rate.
-- HDR preference.
-- Codec preference.
-- Quality/latency preference.
-- Optional bitrate cap.
-- Audio mode preference.
-- Disconnect/end-session preference when it does not change display topology policy.
-
-### Native Streaming Core
-
-This is where existing projects provide useful pieces. It must be headless and policy-free.
-
-Candidate source material:
-
-- Sunshine: streaming protocol, capture, encode, audio, input, and stable backend primitives.
-- Apollo: virtual display integration, SudoVDA usage, dynamic app discovery, client-aware display lessons.
-- Vibeshine/Vibepollo: research material only. Cherry-pick specific, verified improvements. Do not inherit their settings-heavy product model.
-- ApolloDisplayRescue: seed concepts for WPF recovery and window/display control.
-
-## Setting Ownership
-
-### Server Global Settings
-
-Editable only from WPF or local server admin tools.
-
-Examples:
-
-- Driver paths and installation state.
-- Encoder backend availability.
-- Library provider setup.
-- SteamGridDB or other API keys.
-- Storage paths.
-- Default cleanup policy.
-- Pairing policy.
-- Service startup behavior.
-- Logging and diagnostics.
-- Recovery safety rules.
-
-### Server-Side Client Profile
-
-Stored on the server. Editable from WPF. Editable from the owning APK only through an explicit version 1 allowlist.
-
-APK-editable in version 1:
-
-- Preferred virtual desktop resolution.
-- Preferred virtual desktop refresh rate.
-- HDR preference.
-- Codec preference.
-- Quality/latency preference.
-- Optional bitrate cap.
-- Audio mode preference.
-- Disconnect/end-session preference when it does not change display topology policy.
-
-WPF/server-admin only in version 1:
-
-- Display mode policy.
-- Physical display blackout policy.
-- Mirror mode prohibition.
-- Virtual display persistence policy.
-- Virtual display destruction policy.
-- Restore physical primary policy.
-- Recovery safety rules.
-
-Example with both APK-editable preferences and WPF/admin-only policy fields:
-
-```json
-{
-  "clientId": "z-fold-7",
-  "display": {
-    "preferredResolution": "2560x1600",
-    "preferredRefreshHz": 120,
-    "hdrPreference": "prefer",
-    "mode": "virtual-primary",
-    "restorePhysicalDisplayOnEnd": true,
-    "forbidMirrorMode": true
-  },
-  "stream": {
-    "qualityMode": "auto",
-    "codecPreference": "auto",
-    "bitrateCapMbps": null
-  },
-  "audio": {
-    "mode": "stereo"
-  },
-  "session": {
-    "keepAppRunningOnDisconnect": false,
-    "allowEmergencyRestoreFromClient": true
-  }
-}
-```
-
-### Client-Local Settings
-
-Stored only in the APK.
-
-Examples:
-
-- Touch/multitouch mapping.
-- Controller overlay layout.
-- Haptic strength.
-- Local client theme.
-- Local stream UI preferences.
-- Local decoder debugging overlay.
-
-## Virtual Desktop Rule
-
-Anything that affects virtual desktop behavior is server-owned state.
-
-This includes:
-
-- Resolution and refresh.
-- HDR/SDR preference and fallback.
-- Primary vs extended behavior.
-- Physical display blackout behavior.
-- Mirror mode prohibition.
-- Virtual display persistence.
-- Creation timing.
-- Destruction rules.
-- Restore physical primary policy.
-- Per-client display identity.
-- Window cleanup and migration rules.
-- Emergency restore behavior.
-
-The server must preserve the requested aspect-ratio intent. For the Z Fold 7 profile, `2560x1600` is not interchangeable with `2560x1440`. If the requested mode cannot be created, the planner must repair or fail explicitly; it must not silently collapse to a 16:9 mode or fall back to the physical display.
-
-Version 1 must not support per-game virtual desktop overrides. Games can choose internal render resolution in their own settings. The server prepares one stable virtual desktop for the client profile, and games run inside that desktop. Active beacon may create or verify this display as extended/non-primary; launch is the point where the server applies the session display mode such as virtual-primary.
-
-## HDR Capability Model
-
-HDR support is possible only when the whole path supports it:
+The startup transaction is:
 
 ```text
-Virtual display driver advertises HDR/WCG correctly
--> Windows exposes Advanced Color on that display
--> capture path preserves HDR/10-bit data
--> encoder supports HEVC Main10, AV1 10-bit, or another required 10-bit format
--> protocol carries HDR metadata
--> client decoder supports the selected HDR format
--> client panel or TV can render the HDR mode
+validate benchmark evidence
+-> compute immutable plan
+-> prepare/verify display
+-> start StreamWorker
+-> wait for IPC readiness event
+-> activate planned display
+-> launch selected application
+-> issue single-use APK ticket
+-> accept authenticated StreamCore session
 ```
 
-Beacon must model HDR as:
-
-- `off`: force SDR.
-- `prefer`: use HDR only if the full chain reports support, otherwise continue SDR with a clear reason.
-- `require`: fail before launch if HDR cannot be provided.
-
-HDR must not be treated as a late toggle after display and stream setup. The planner decides HDR before launch, records the decision in the session plan, and logs the first missing boundary when HDR is unavailable.
-
-## Planner Hierarchy
-
-Version 1 planner hierarchy:
-
-```text
-Server global constraints
--> client profile
--> live client capabilities
--> live network telemetry
--> effective session plan
-```
-
-Game profile chooses what to launch. It does not choose monitor topology.
-
-## Session Plan
-
-The effective session plan is generated by the server before launch.
-
-Example:
-
-```json
-{
-  "sessionId": "2026-06-03T00:00:00Z-zfold7-dispatch",
-  "clientId": "z-fold-7",
-  "appId": "steam-shortcut:3767414131",
-  "display": {
-    "displayId": "client-z-fold-7",
-    "resolution": "2560x1600",
-    "refreshHz": 120,
-    "hdrPreference": "prefer",
-    "hdr": false,
-    "hdrMode": "sdr",
-    "mode": "virtual-primary",
-    "reason": "HDR disabled because the virtual display does not report HDR capability"
-  },
-  "stream": {
-    "codec": "av1",
-    "fps": 120,
-    "initialBitrateMbps": 65,
-    "transport": "lan-direct",
-    "congestionPolicy": "adaptive"
-  },
-  "audio": {
-    "mode": "stereo"
-  },
-  "recovery": {
-    "restorePhysicalDisplayOnEnd": true,
-    "allowClientAbort": true,
-    "terminateOwnedAppOnQuit": true
-  }
-}
-```
-
-The APK consumes this plan. It does not reinterpret it.
-
-## Client Lifecycle
-
-### Profile Sync
-
-```text
-APK starts
--> POST /clients/hello
--> server identifies client
--> server returns client profile, server capabilities, and editable fields
--> APK may PATCH /clients/{id}/profile
--> server validates and stores allowed fields
-```
-
-### Preflight
-
-```text
-APK reports live capabilities and telemetry
--> server updates endpoint facts
--> APK asks for a plan for selected app
--> server returns effective plan and explanations
-```
-
-Live telemetry examples:
-
-- RTT.
-- Packet loss estimate.
-- Wi-Fi band if available.
-- Decode capability.
-- Current screen mode.
-- Battery and thermal hints.
-- Local decoder load if known.
-
-### Launch
-
-```text
-APK accepts plan
--> server ensures virtual display
--> server applies topology
--> server launches app
--> streaming backend starts
--> APK connects to stream
-```
+Failure runs compensating actions for only the steps that succeeded, in reverse order. Cleanup verification is part of the operation result.
 
-### Disconnect
+## Benchmark Lifecycle
 
-Disconnect does not automatically imply display teardown.
+### Full Calibration
 
-The server evaluates owned state:
+Full calibration is automatically triggered by a material network/hardware/schema change and manually available from the APK. It contains:
 
-- Is the client still active?
-- Is a session still active?
-- Is the launched app or child process still running?
-- Are there new top-level windows on the client's virtual desktop?
-- Did the user request quit, keep running, or emergency restore?
+1. Passive device and display capability inventory.
+2. Reliable transfer of versioned decode vectors.
+3. Local decode/presentation tests to isolate hardware behavior.
+4. Production-transport network rounds.
+5. End-to-end streamed decode rounds through StreamWorker and StreamCore.
+6. Sustained candidate workloads for thermal stability.
+7. Server-side scoring and persistence.
 
-Version 1 must keep the lifecycle simple:
+### Session Preflight
 
-```text
-Remove virtual desktop only when:
-client is no longer active
-AND no owned app/process/window remains
-```
+Every launch performs a short current-path measurement using the production transport. It verifies that the selected plan still fits current RTT, jitter, loss, throughput, decoder, display, and thermal facts. A failed preflight causes Beacon to recompute or reject the plan before display and application side effects.
 
-Manual rescue can override this.
+### Benchmark Result Ownership
 
-## Game Collection Integration
+The APK displays progress and factual results. Beacon Service stores raw evidence, evaluates candidate modes, and records the selected plan. A client-side score is never authoritative.
 
-Game/library integration must be built in from the beginning.
+## Source Reuse Rules
 
-Providers:
+Candidate upstream primitives include:
 
-- Steam official apps.
-- Steam non-Steam shortcuts.
-- Heroic.
-- Hydra.
-- Manual entries.
+- Windows DXGI/WGC capture.
+- GPU texture conversion and scaling.
+- NVENC, AMF, Quick Sync, Media Foundation, and software encoding adapters.
+- Audio capture and encoding.
+- Packetization, FEC, congestion, jitter, and frame-recovery algorithms.
+- Android codec and rendering adapters.
+- Windows input injection and controller support.
+- SudoVDA integration and topology lessons.
 
-Normalized game model:
+Each candidate is classified before retention:
 
-```json
-{
-  "id": "steam-shortcut:3767414131",
-  "title": "Dispatch",
-  "source": "steam-shortcut",
-  "launch": {
-    "type": "steam-rungameid",
-    "command": "steam://rungameid/16180920483166814208"
-  },
-  "artwork": {
-    "coverPath": "C:/ProgramData/Orchestrator/artwork/dispatch.png",
-    "source": "steamgriddb"
-  },
-  "installed": true
-}
-```
+- `keep`: already generic and aligned.
+- `adapt`: valuable primitive with upstream policy or protocol removed.
+- `replace`: required capability with an unsuitable implementation.
+- `delete`: compatibility, duplicate, dead, or transitional infrastructure.
 
-Version 1 game profiles must not include display policy. They may include launch identity, source, cover, installed state, and process tracking hints.
+No source is retained merely because tests already exist or implementation effort was previously spent.
 
-Steam non-Steam shortcuts must use the stored 32-bit `appid` from `shortcuts.vdf`; the normalized launch URI is derived as `((uint)appid << 32) | 0x02000000` and emitted as `steam://rungameid/{value}`. The implementation must not rely on title/path CRC reconstruction because modern Steam shortcut ids can drift from that older calculation.
+## Architecture Recovery Program
 
-`Beacon.GameProbe` is the no-phone validation path for this layer. It must scan local providers read-only, print a human table or JSON snapshot, and provide a `steam-shortcuts <path>` command for checking one `shortcuts.vdf` file directly.
+### Recovery Gate 0: Freeze And Inventory
 
-## Recovery Model
+- Freeze new product features.
+- Remove the unsynced Apollo host-provisioning work.
+- Produce a source and dependency inventory for Core, Server, Platform.Windows, Cockpit, Android, probes, tests, and documentation.
+- Classify each streaming-related component as keep, adapt, replace, or delete.
+- Add protected-boundary checks before destructive refactoring.
 
-Recovery must be first-class, not an afterthought.
+### Recovery Gate 1: Restore Core Boundaries
 
-Server actions:
+- Remove `MoonlightNativeSessionDescriptor` and every upstream-protocol type from Beacon Core.
+- Replace wrapper-shaped health and session contracts with small Beacon-owned records.
+- Remove launch URIs, endpoint-role maps, manifests, descriptor files, wrapper child configuration, and external-process production modes.
+- Keep fake implementations behind the same target contracts.
 
-- Restore physical desktop primary.
-- Move all windows from virtual displays back to physical display.
-- Close windows on a virtual display.
-- Terminate owned processes on a virtual display.
-- Remove virtual display lease.
-- Stop active stream.
-- Reset topology to a known-good state.
+### Recovery Gate 2: Collapse Android To One Path
 
-The APK may call emergency actions for its own active session. The WPF app can run broader local admin recovery.
+- Remove Java GameStream RTSP/RTP/UDP/depacketization routes.
+- Remove the Moonlight compatibility module and native session mapping.
+- Preserve generic MediaCodec, Surface, audio, input, lifecycle, benchmark, catalog, and control-plane primitives when they remain aligned.
+- Introduce one empty/fake StreamCore boundary before real transport implementation.
 
-## Source Project Reuse Strategy
+### Recovery Gate 3: Define Worker And Protocol
 
-### Sunshine
+- Complete the upstream primitive audit.
+- Define versioned Service-to-Worker IPC and Worker-to-StreamCore contracts.
+- Build StreamWorker and StreamCore as Beacon-owned modules.
+- Prove startup, readiness, stop, crash isolation, and secret redaction using deterministic fakes.
 
-Use as the primary reference for stable streaming primitives:
+### Recovery Gate 4: Benchmark Vertical Slice
 
-- GameStream-compatible protocol pieces.
-- Capture and encode pipeline.
-- Audio and input plumbing.
-- RTSP/session mechanics.
+- Implement automatic network/hardware change detection.
+- Implement manual benchmark.
+- Run benchmark traffic through the production Beacon transport boundary.
+- Store and interpret raw results in Beacon Service.
+- Verify the workflow in Client Lab and Android emulator.
 
-### Apollo
+### Recovery Gate 5: Minimal Real Stream
 
-Use as the primary reference for:
+- Capture one planned display.
+- Encode H.264 SDR.
+- Stream through the single Beacon protocol.
+- Decode and present through StreamCore on `emulator-5554`.
+- Select and launch one server-catalog application.
+- Stop, reconnect, and restore without Apollo or Sunshine running.
 
-- SudoVDA integration.
-- Virtual display behavior.
-- Client-aware display lease lessons.
-- Dynamic Steam/external app discovery.
-- Practical Windows topology recovery lessons.
+Only after Gate 5 passes may work resume on audio, richer input, HEVC/AV1, HDR, physical-device validation, and UI refinement.
 
-### Vibeshine/Vibepollo
+## Deletion Targets
 
-Use as research only:
+The following are explicit removal targets unless the recovery inventory proves a small generic primitive can be extracted first:
 
-- Inspect targeted driver or HDR changes.
-- Inspect any useful decoder/client capability handling.
-- Avoid inheriting broad settings complexity.
-
-### ApolloDisplayRescue
-
-Use as a seed for:
-
-- WPF display/window enumeration.
-- Move/close/terminate actions.
-- Physical primary restore.
-- UAC elevation support.
-
-## Testing Without The Phone
-
-The project must be designed so most tests do not require the real Z Fold 7.
-
-### Client Lab Web App And Fake Endpoint Simulator
-
-Build a local Client Lab web app and a CLI simulator that behave like the APK control plane. The web app is for interactive testing, screenshots, and browser-driven flows. The CLI simulator is for deterministic automated tests and scripted reproductions.
-
-Both simulator surfaces must support:
-
-- `hello`.
-- Fetch profile.
-- Patch allowed client profile fields.
-- Submit capabilities.
-- Submit telemetry samples.
-- Report active and inactive beacon.
-- Request session plan.
-- Request launch.
-- Request disconnect.
-- Request reconnect.
-- Request quit.
-- Request emergency restore.
-
-It must use recorded profiles, for example:
-
-```json
-{
-  "clientId": "z-fold-7",
-  "name": "Z Fold 7",
-  "screenModes": [
-    {"width": 2560, "height": 1600, "refreshHz": 120},
-    {"width": 2560, "height": 1600, "refreshHz": 60},
-    {"width": 1920, "height": 1200, "refreshHz": 60}
-  ],
-  "decoders": {
-    "h264": true,
-    "hevc": true,
-    "av1": true,
-    "hdr10": true
-  }
-}
-```
-
-The simulator must be runnable from CLI, from tests, and through the Client Lab web app. It must be able to replay realistic sequences:
-
-- Connect with good LAN telemetry.
-- Connect with poor network telemetry.
-- Change profile before launch.
-- Disconnect and reconnect.
-- Quit session while app is still running.
-- Emergency restore.
-
-### Fake Backends
-
-The orchestrator must depend on interfaces, not concrete Windows side effects.
-
-Important fake backends:
-
-- Fake display backend.
-- Fake streaming backend.
-- Fake game library provider.
-- Fake process/window tracker.
-- Fake telemetry source.
-
-This allows deterministic tests for:
-
-- Planner decisions.
-- Profile validation.
-- Display lifecycle policy.
-- Session cleanup rules.
-- Recovery action sequencing.
-- Game library normalization.
-
-### Windows Display Integration Tests
-
-A smaller set of tests must use the real Windows display backend and SudoVDA, but still not require the phone.
-
-These tests can verify:
-
-- Create virtual display for a fake client.
-- Apply `2560x1600@120`.
-- Prevent mirror mode.
-- Make virtual display primary.
-- Restore physical primary.
-- Remove virtual display.
-- Detect/report HDR capability truthfully.
-
-These tests must be manually runnable and clearly separated from fast unit tests.
-
-### Streaming Backend Contract Tests
-
-The first streaming backend can be tested with a loopback or fake consumer before the APK exists.
-
-Contract assertions:
-
-- Given a session plan, backend receives the expected codec/FPS/bitrate/display id.
-- Backend reports started/stopped state.
-- Backend can be stopped independently of display cleanup.
-- Backend errors are surfaced to the orchestrator without leaving topology unmanaged.
-
-### APK Tests Without Physical Phone
-
-Before using the real phone:
-
-- JVM tests for profile patching logic.
-- Android emulator tests for UI/profile editing if useful.
-- Contract tests using recorded server responses.
-- Decoder/input behavior can be deferred until real-device testing.
-
-The APK must not be required for:
-
-- Planner correctness.
-- Game library correctness.
-- Display lifecycle correctness.
-- Recovery correctness.
-- Profile persistence correctness.
-
-### Network Testing Without Phone
-
-Version 1 does not need real network adaptation to prove the architecture. The simulator can submit telemetry profiles:
-
-- Excellent LAN.
-- Congested LAN.
-- High RTT.
-- Packet loss.
-- Low bitrate cap.
-- Thermal/battery constrained endpoint.
-
-The planner must produce different initial bitrate/codec/fps recommendations and explain the reason.
-
-### Acceptance Gates
-
-Before real phone testing:
-
-- Fake Z Fold 7 can register and fetch profile.
-- Fake Z Fold 7 can patch allowed client settings.
-- Server rejects global-setting edits from fake APK.
-- Server computes a complete session plan before launch.
-- Planner preserves `2560x1600` intent and does not silently choose `2560x1440`.
-- Planner exposes 120 FPS/refresh decisions when requested and supported.
-- Fake display backend verifies correct virtual display lifecycle.
-- Fake display backend verifies disconnect alone does not tear down the display.
-- Fake display backend verifies display removal requires client inactive **AND** no owned work remains.
-- Fake display backend verifies mirror mode and physical-display fallback are not silently selected.
-- Real Windows display backend can create and restore a virtual display without a stream.
-- Real Windows display backend verifies physical primary restore with reconciliation, not a one-shot best-effort call.
-- Real Windows display backend reports HDR capability truthfully.
-- Game library scan resolves Steam, Steam shortcuts, Heroic, and Hydra entries into one normalized collection.
-- Recovery actions work from WPF or a local test client.
-
-Real phone testing must be reserved for:
-
-- Decoder compatibility.
-- Input/touch behavior.
-- Actual stream quality.
-- Real telemetry quality.
-- Human experience.
-
-## Implementation Milestones
-
-### Milestone 0: Source Audit And Extraction Map
-
-Audit Sunshine, Apollo, Vibeshine, Vibepollo, and current rescue helper code. Decide which modules are copied, wrapped, rewritten, or ignored.
-
-Deliverables:
-
-- New public `Darkaxt/beacon-stream` repository created with `gh`.
-- Local working tree connected to the GitHub remote before substantial implementation.
-- First pushed checkpoint after the initial scaffold.
-- GPL-3.0 license unless the extraction map proves no GPL source will be copied or adapted.
-- Initial monorepo structure and README.
-- Extraction map.
-- License notes.
-- Backend interface draft.
-- Known risky areas.
-
-### Milestone 1: Orchestrator Skeleton
-
-Build the service core with no real streaming.
-
-Deliverables:
-
-- Client registry.
-- Client profile store.
-- Client Lab web app.
-- CLI fake endpoint simulator.
-- Session planner.
-- Fake display/stream/game/process backends.
-- Unit tests for planning and profile validation.
-- Tests that prove the phone is not required for profile, planner, lifecycle, and recovery policy validation.
-
-### Milestone 2: Display Lifecycle
-
-Integrate real Windows virtual display backend.
-
-Deliverables:
-
-- Create per-client virtual display.
-- Apply client mode.
-- Make primary for session.
-- Restore physical primary.
-- Remove display under server-owned lifecycle rules.
-- Manual recovery actions.
-
-### Milestone 3: Game Collection
-
-Build normalized game library.
-
-Deliverables:
-
-- Steam official apps.
-- Steam non-Steam shortcuts with correct `rungameid`.
-- Heroic.
-- Hydra.
-- SteamGridDB covers.
-- Generated fallback covers.
-- Launch intent model.
-
-### Milestone 4: WPF Cockpit
-
-Build the local management UI.
-
-Deliverables:
-
-- Clients view.
-- Session/display view.
-- Game library view.
-- Planner decision view.
-- Recovery actions.
-- Logs/diagnostics.
-
-### Milestone 5: Streaming Backend Integration
-
-Wrap a proven streaming backend behind the orchestrator.
-
-Deliverables:
-
-- Start stream from session plan.
-- Stop stream without losing display ownership.
-- Report backend state.
-- Surface errors.
-- Keep enough Moonlight/GameStream compatibility if useful.
-
-### Milestone 6: Thin APK
-
-Build the Android client.
-
-Deliverables:
-
-- Pair/register.
-- Fetch/edit own client profile.
-- Report capabilities/telemetry.
-- Show game collection from server.
-- Request plan and launch.
-- Stream/decode/input.
-- Emergency restore command.
-
-## Key Design Decisions
-
-- Project name is Beacon Stream.
-- Repository target is a new public `Darkaxt/beacon-stream` repo.
-- The remote repository is created with `gh` at the start of Milestone 0.
-- Work is synced to GitHub after every validated checkpoint to survive context compaction.
-- License defaults to GPL-3.0 when Sunshine/Apollo-family source is reused.
-- The system is personal-use first.
-- Server owns desired state.
-- APK edits only its own basic server-side client profile in version 1.
-- APK stores only local interaction/UI settings.
-- Virtual desktop behavior is always server-owned.
-- Version 1 has no per-game virtual desktop overrides.
-- Game library is first-class from the beginning.
-- Testing must be possible mostly through fake endpoint and fake backends.
-- Real phone testing must be a final confirmation path, not the main development loop.
-
-## Risks
-
-- Streaming backend extraction may be more coupled than expected.
-- Native capture/encode/input pieces may resist clean isolation.
-- SudoVDA/HDR behavior may still be limited by driver capability, Windows Advanced Color exposure, capture format, encoder format, protocol metadata, or Android decoder/display support.
-- Windows display topology can behave differently under real user sessions than in tests.
-- Android client still needs real-device validation for decoder/input quality.
-- If reused source is published, licenses must be respected carefully.
-
-## Weekend GO Criteria
-
-This project is worth starting if the accepted first target is:
-
-- Beacon Stream as a new public repository.
-- Remote repository created through `gh` before substantial implementation.
-- Validated checkpoints synced to GitHub throughout the work.
-- GPL-3.0-compatible source strategy before copying any upstream code.
-- Personal-use only.
-- One primary endpoint first: Z Fold 7.
-- Server-authoritative control plane first.
-- Client Lab web app and fake endpoint simulator required from day one.
-- WPF cockpit and thin APK follow after the orchestrator is testable.
-- Existing projects are treated as lego pieces, not as architecture constraints.
-
-If those are acceptable, the next artifact is an implementation plan for Milestone 0 and Milestone 1 only.
+- `ExternalProcessStreamingBackend` and external wrapper configuration.
+- `Beacon.StreamingProbe` as a wrapper/child-process harness.
+- Wrapper manifest and runtime descriptor contracts.
+- `MoonlightNativeSessionDescriptor` and public `nativeSession` responses.
+- GameStream/Moonlight endpoint maps, RTSP URLs, launch URIs, and Android intent fallback.
+- Java GameStream RTSP, RTP, UDP, depacketization, and replacement route.
+- Vendored Moonlight compatibility modules and their pairing/session assumptions.
+- Apollo host identity, pairing, app-list, launch, and cancel work.
+- Backend selection UI/configuration whose only purpose is compatibility or wrappers.
+- Tests and documentation that assert removed compatibility behavior rather than target Beacon behavior.
+
+## Non-Goals For Version One
+
+- Apollo, Sunshine, Moonlight, GameStream, Artemis, Vibepollo, or Vibeshine compatibility.
+- User-selectable streaming backends or transports.
+- A generic plugin ecosystem.
+- Multiple simultaneous production transport implementations.
+- APK editing of stream, display, or server policy.
+- Per-game display-topology overrides.
+- Internet relay, public matchmaking, or arbitrary untrusted users.
+- Browser streaming.
+- Mirror mode.
+- Full live adaptation before the initial benchmark-driven planner is stable.
+- HDR as a blocker for stable SDR streaming.
+
+## Acceptance Gates
+
+### Architecture Recovery
+
+- Beacon Core contains no Moonlight, GameStream, Apollo, Sunshine, RTSP, wrapper, manifest, launch-URI, or external-process streaming contract.
+- Production server registration exposes one Beacon StreamWorker path.
+- Generic health and session records contain no wrapper-specific fields.
+- The APK has one StreamCore route and no compatibility fallback.
+- Compatibility configuration is absent from checked settings, environment variables, WPF, and diagnostics.
+- All retained upstream code has provenance and a narrow Beacon-owned boundary.
+- Existing control-plane, display, game-library, ownership, recovery, and local-settings behavior remains covered while obsolete compatibility tests are removed.
+
+### Benchmark
+
+- Emulator and fake clients can complete full and preflight benchmark workflows.
+- Network-change events automatically invalidate the appropriate benchmark fingerprint.
+- Manual benchmark always starts a new run.
+- Hardware and network raw evidence reaches Beacon Service without client-side policy selection.
+- Planner decisions cite the benchmark evidence revision.
+- The APK exposes no stream-setting controls.
+
+### Minimal Beacon-Owned Stream
+
+- Apollo and Sunshine processes are stopped.
+- APK selects an application from the Beacon catalog.
+- Beacon computes a complete plan before side effects.
+- Beacon prepares the correct per-client display without mirror or physical fallback.
+- StreamWorker reports ready through private IPC.
+- Emulator authenticates with one Beacon ticket and shows moving H.264 video from the planned display.
+- Stop and reconnect use the same path without parallel fallback.
+- Session cleanup restores verified physical-primary state under the server-owned **inactive AND no-owned-work** rule.
+- Logs and snapshots expose Beacon state without secrets or compatibility artifacts.
+
+### Physical Device Final Confirmation
+
+- Z Fold 7 benchmark selects a sustainable network/hardware profile.
+- `2560x1600` intent is preserved.
+- 120 FPS is selected only when the complete measured path sustains it.
+- Touch, controller, keyboard, audio, thermals, Wi-Fi behavior, HDR, and human experience are validated on hardware.
+
+## Definition Of Completion
+
+Beacon version one is complete when it can be installed without Apollo or Sunshine, register the APK, automatically benchmark the current network and hardware, show the normalized Windows app/game catalog, compute a server-owned plan, create and activate the correct per-client virtual display, launch the selected application, stream through one Beacon-owned data plane, accept client input, stop or recover safely, and restore the laptop to a verified physical-primary state.
+
+No compatibility layer, wrapper mode, alternate Android route, or client-side streaming policy is required to achieve that result.
