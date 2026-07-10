@@ -216,7 +216,7 @@ public static class ClientEndpoints
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
-            MoonlightNativeSessionDescriptor? nativeSession = await streaming.GetNativeSessionAsync(
+            StreamingClientSessionSnapshot? clientSession = await streaming.GetClientSessionAsync(
                 planResult.Plan.SessionId,
                 cancellationToken);
 
@@ -226,8 +226,8 @@ public static class ClientEndpoints
                 displayId = leaseResult.Lease.DisplayId,
                 state = "streaming",
                 launch = launchResult.State,
-                stream = streamResult.Session,
-                nativeSession
+                stream = clientSession?.Session ?? streamResult.Session,
+                nativeSession = clientSession?.NativeSession
             });
         });
 
@@ -243,13 +243,17 @@ public static class ClientEndpoints
                 return Results.NotFound(new { error = $"Client '{clientId}' has no session plan." });
             }
 
-            StreamingSessionState? stream = await streaming.GetSessionAsync(plan.SessionId, cancellationToken);
-            MoonlightNativeSessionDescriptor? nativeSession = stream is null
-                ? null
-                : await streaming.GetNativeSessionAsync(plan.SessionId, cancellationToken);
-            return stream is null
+            StreamingClientSessionSnapshot? clientSession = await streaming.GetClientSessionAsync(
+                plan.SessionId,
+                cancellationToken);
+            return clientSession is null
                 ? Results.NotFound(new { error = $"Stream session '{plan.SessionId}' is not running." })
-                : Results.Ok(new { clientId, stream, nativeSession });
+                : Results.Ok(new
+                {
+                    clientId,
+                    stream = clientSession.Session,
+                    nativeSession = clientSession.NativeSession
+                });
         });
 
         clients.MapPost("/{clientId}/stream/stop", async (

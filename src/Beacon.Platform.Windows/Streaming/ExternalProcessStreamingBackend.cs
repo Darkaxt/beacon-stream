@@ -482,15 +482,28 @@ public sealed class ExternalProcessStreamingBackend(
         string sessionId,
         CancellationToken cancellationToken)
     {
+        StreamingClientSessionSnapshot? snapshot = await GetClientSessionAsync(sessionId, cancellationToken);
+        return snapshot?.NativeSession;
+    }
+
+    public async Task<StreamingClientSessionSnapshot?> GetClientSessionAsync(
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
         StreamingSessionState? session = await GetSessionAsync(sessionId, cancellationToken);
-        if (session is null || !session.State.Equals("running", StringComparison.OrdinalIgnoreCase))
+        if (session is null)
         {
             return null;
         }
 
         lock (gate)
         {
-            return nativeSessions.GetValueOrDefault(sessionId);
+            MoonlightNativeSessionDescriptor? nativeSession = session.State.Equals(
+                "running",
+                StringComparison.OrdinalIgnoreCase)
+                ? nativeSessions.GetValueOrDefault(sessionId)
+                : null;
+            return new StreamingClientSessionSnapshot(session, nativeSession);
         }
     }
 
@@ -1035,18 +1048,7 @@ public sealed class ExternalProcessStreamingBackend(
         if (!read.Success || read.Descriptor is null)
         {
             string error = read.Error ?? $"External streaming session descriptor '{descriptorPath}' is invalid.";
-            StreamingSessionState failed = session with { Error = error };
-            lock (gate)
-            {
-                nativeSessions.Remove(session.SessionId);
-                processDiagnostics.Add($"{session.SessionId}: {error}");
-                if (sessions.ContainsKey(session.SessionId))
-                {
-                    sessions[session.SessionId] = failed;
-                }
-            }
-
-            return failed;
+            return RecordRuntimeDescriptorFailure(session, error);
         }
 
         MoonlightNativeSessionDescriptor? nativeSession = read.Descriptor.NativeSession;
@@ -1056,18 +1058,7 @@ public sealed class ExternalProcessStreamingBackend(
             if (!validation.Success)
             {
                 string error = $"External streaming native session descriptor is invalid: {validation.Error}";
-                StreamingSessionState failed = session with { Error = error };
-                lock (gate)
-                {
-                    nativeSessions.Remove(session.SessionId);
-                    processDiagnostics.Add($"{session.SessionId}: {error}");
-                    if (sessions.ContainsKey(session.SessionId))
-                    {
-                        sessions[session.SessionId] = failed;
-                    }
-                }
-
-                return failed;
+                return RecordRuntimeDescriptorFailure(session, error);
             }
         }
 
@@ -1095,6 +1086,24 @@ public sealed class ExternalProcessStreamingBackend(
         }
 
         return refreshed;
+    }
+
+    private StreamingSessionState RecordRuntimeDescriptorFailure(
+        StreamingSessionState session,
+        string error)
+    {
+        StreamingSessionState failed = session with { Error = error };
+        lock (gate)
+        {
+            nativeSessions.Remove(session.SessionId);
+            processDiagnostics.Add($"{session.SessionId}: {error}");
+            if (sessions.ContainsKey(session.SessionId))
+            {
+                sessions[session.SessionId] = failed;
+            }
+        }
+
+        return failed;
     }
 
     private void DeleteRuntimeDescriptor(string? descriptorPath)

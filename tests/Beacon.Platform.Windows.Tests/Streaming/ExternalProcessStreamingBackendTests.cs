@@ -740,9 +740,14 @@ public sealed class ExternalProcessStreamingBackendTests
 
         StreamingStartResult start = await backend.StartAsync(plan, CancellationToken.None);
         MoonlightNativeSessionDescriptor? provisioned = await backend.GetNativeSessionAsync(plan.SessionId, CancellationToken.None);
+        StreamingClientSessionSnapshot? clientSnapshot = await backend.GetClientSessionAsync(
+            plan.SessionId,
+            CancellationToken.None);
 
         Assert.True(start.Success);
         Assert.Equal(nativeSession, provisioned);
+        Assert.Equal(nativeSession, clientSnapshot?.NativeSession);
+        Assert.Equal("gamestream", clientSnapshot?.Session.Connection?.Protocol);
         string publicSessionJson = System.Text.Json.JsonSerializer.Serialize(start.Session);
         Assert.DoesNotContain(nativeSession.RemoteInputAesKey, publicSessionJson, StringComparison.Ordinal);
         Assert.DoesNotContain(nativeSession.RemoteInputAesIv, publicSessionJson, StringComparison.Ordinal);
@@ -750,6 +755,11 @@ public sealed class ExternalProcessStreamingBackendTests
         await backend.StopAsync(plan.SessionId, CancellationToken.None);
 
         Assert.Null(await backend.GetNativeSessionAsync(plan.SessionId, CancellationToken.None));
+        StreamingClientSessionSnapshot? stoppedSnapshot = await backend.GetClientSessionAsync(
+            plan.SessionId,
+            CancellationToken.None);
+        Assert.Equal("stopped", stoppedSnapshot?.Session.State);
+        Assert.Null(stoppedSnapshot?.NativeSession);
     }
 
     [Fact]

@@ -20,8 +20,26 @@ public interface IStreamingBackend
         return Task.FromResult<MoonlightNativeSessionDescriptor?>(null);
     }
 
+    async Task<StreamingClientSessionSnapshot?> GetClientSessionAsync(
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        StreamingSessionState? session = await GetSessionAsync(sessionId, cancellationToken);
+        if (session is null)
+        {
+            return null;
+        }
+
+        MoonlightNativeSessionDescriptor? nativeSession = await GetNativeSessionAsync(sessionId, cancellationToken);
+        return new StreamingClientSessionSnapshot(session, nativeSession);
+    }
+
     IReadOnlyList<StreamingSessionState> GetSessions();
 }
+
+public sealed record StreamingClientSessionSnapshot(
+    StreamingSessionState Session,
+    MoonlightNativeSessionDescriptor? NativeSession);
 
 public sealed record StreamingBackendHealth(
     bool Ready,
