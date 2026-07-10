@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = 'Beacon.Android'
 include ':app'
+include ':streaming-moonlight'

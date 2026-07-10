@@ -22,6 +22,8 @@ Milestone 108 groups H.264 RTP packets that share an RTP timestamp into one Anne
 
 Milestone 109 stops any active GameStream video session and RTSP session before a replacement start attempts a new session, so a failed replacement cannot leave stale video state running. It also adds a no-phone JVM loopback test that drives the production RTSP setup, dynamic RTP lease, UDP packet source, H.264 access-unit provider, and RTP video consumer with queued H.264 RTP datagrams. It does not add a full Android instrumentation suite, real encoder integration, jitter timing, retransmission, HEVC/AV1 depacketization, audio/control RTP processing, input protocol support, controller, or native touch/gesture protocol support.
 
+Milestone 110 introduces a separate Android `streaming-moonlight` library built from pinned `moonlight-common-c` and Mbed TLS submodules. Emulator instrumentation proves that the APK loads and invokes the mature native transport core. Production GameStream routing remains on the existing path until Beacon can provide a complete server-owned native session descriptor; audio/video renderer and native input migration remain subsequent work.
+
 Milestone 67 adds explicit inactive-client disconnect cleanup: empty/default disconnects retain the display lease for reconnect, while `clientActive: false` disconnects evaluate the server-owned cleanup gate and remove the lease only when no owned work remains.
 
 Milestone 68 adds explicit client beacon lease preparation: active beacon prepares the per-client display lease before launch, while inactive beacon evaluates the same server-owned cleanup gate without timers or watchdogs.
@@ -288,6 +290,7 @@ Milestone 8 adds `WindowsSessionActivityInspector`, which can inspect launched-p
 Android client checks:
 
 ```powershell
+git submodule update --init --recursive
 & "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.14.1-bin\baw1sv0jfoi8rxs14qo3h49cs\gradle-8.14.1\bin\gradle.bat" --no-daemon -p src\Beacon.Android test assembleDebug
 ```
 
@@ -298,7 +301,14 @@ adb -s emulator-5554 install -r src\Beacon.Android\app\build\outputs\apk\debug\a
 adb -s emulator-5554 shell am start -W -n dev.beacon.android/.BeaconActivity
 ```
 
-`Beacon.Android` is a thin Java APK shell for the client control plane. It can identify the device, patch only APK-allowed client profile fields, fetch and show the server-owned game catalog, report device-derived decoder capability facts and telemetry facts, request/launch a server plan, delegate the server-provided `stream.connection.launchUri` through Android `ACTION_VIEW` on the Activity UI thread, start an in-app diagnostic native stream for explicitly supported `beacon-test` endpoint-only descriptors, render the `beacon-test://pattern/color-bars` stream as an in-app color-bars surface, own a lifecycle-retained GameStream RTSP socket session for endpoint-only GameStream/Moonlight descriptors, stop/disconnect/quit, forward pointer input including batched multi-pointer touch events, send a simple Escape keyboard press, manage APK-local touch layout, multitouch, controller overlay marker, haptics, UI density, theme, wake-lock, and decoder overlay controls, and call owning-client emergency restore. Plan and launch actions send the profile patch, capabilities, and telemetry first so the server can compute the stream plan from the current client facts. Display behavior policy still belongs to Beacon Server, not the APK. It does not implement complete real GameStream RTP media decode, default Moonlight/Sunshine media streaming, controller protocol, or native touch/gesture protocol support yet.
+The Android native-core build requires NDK `27.0.12077973` and CMake `3.22.1`. CI checks out the recursive native submodules and builds all Android ABIs. Run the native instrumentation proof on the emulator without involving a connected phone:
+
+```powershell
+$env:ANDROID_SERIAL='emulator-5554'
+& "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.14.1-bin\baw1sv0jfoi8rxs14qo3h49cs\gradle-8.14.1\bin\gradle.bat" --no-daemon -p src\Beacon.Android :app:connectedDebugAndroidTest
+```
+
+`Beacon.Android` is a thin Java APK shell for the client control plane. It can identify the device, patch only APK-allowed client profile fields, fetch and show the server-owned game catalog, report device-derived decoder capability facts and telemetry facts, request/launch a server plan, delegate the server-provided `stream.connection.launchUri` through Android `ACTION_VIEW` on the Activity UI thread, start an in-app diagnostic native stream for explicitly supported `beacon-test` endpoint-only descriptors, render the `beacon-test://pattern/color-bars` stream as an in-app color-bars surface, own a lifecycle-retained GameStream RTSP socket session for endpoint-only GameStream/Moonlight descriptors, stop/disconnect/quit, forward pointer input including batched multi-pointer touch events, send a simple Escape keyboard press, manage APK-local touch layout, multitouch, controller overlay marker, haptics, UI density, theme, wake-lock, and decoder overlay controls, and call owning-client emergency restore. Plan and launch actions send the profile patch, capabilities, and telemetry first so the server can compute the stream plan from the current client facts. Display behavior policy still belongs to Beacon Server, not the APK. The APK now packages a headless Moonlight native core and reports its load readiness in the decoder diagnostic overlay, but it does not route production sessions through that core until the server supplies the complete native session contract. It therefore still does not claim complete real GameStream media, controller, or native touch/gesture support.
 
 Capability reporting uses Android `MediaCodecList` through a fakeable probe boundary. The APK reports H.264, HEVC, AV1, low-latency decoder evidence, current screen mode, and conservative HDR10 support when both decoder and screen HDR evidence are present. `virtualDisplayHdrSupported` remains false until the server-side Windows display chain proves that boundary.
 
@@ -321,6 +331,8 @@ Client input uses `POST /clients/{clientId}/input`. The server resolves the acti
 See:
 
 - `docs/superpowers/specs/2026-06-03-personal-streaming-orchestrator-design.md`
+- `docs/superpowers/plans/2026-07-10-beacon-stream-milestone-110-moonlight-native-core.md`
+- `docs/source-audits/2026-07-10-moonlight-native-core.md`
 - `docs/superpowers/plans/2026-07-07-beacon-stream-milestone-0-1.md`
 - `docs/superpowers/plans/2026-07-07-beacon-stream-milestone-2-display-lifecycle.md`
 - `docs/superpowers/plans/2026-07-07-beacon-stream-milestone-3-game-collection.md`
