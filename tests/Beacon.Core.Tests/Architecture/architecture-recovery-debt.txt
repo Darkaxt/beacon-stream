@@ -1,1 +1,0 @@
-# No reviewed compatibility debt remains after Recovery Gate 2.

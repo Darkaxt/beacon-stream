@@ -126,13 +126,7 @@ test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit,
           initialBitrateMbps: 65,
           transport: 'lan-direct',
           state: 'running',
-          error: null,
-          connection: {
-            protocol: 'beacon-fake',
-            launchUri: 'beacon-fake://stream/z-fold-7-steam-shortcut:3767414131',
-            endpoints: [{ role: 'control', uri: 'beacon-fake://stream/z-fold-7-steam-shortcut:3767414131' }],
-            metadata: { displayId: 'client-z-fold-7' }
-          }
+          error: null
         }
       })
     });
@@ -196,7 +190,6 @@ test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit,
   await page.getByRole('button', { name: 'Launch' }).click();
   await expect(page.getByText('streaming client-z-fold-7')).toBeVisible();
   await expect(page.getByText('running av1 120fps')).toBeVisible();
-  await expect(page.getByText('beacon-fake://stream/z-fold-7-steam-shortcut:3767414131')).toBeVisible();
   expect(capabilityBodies).toHaveLength(2);
   expect(telemetryBodies).toHaveLength(2);
 

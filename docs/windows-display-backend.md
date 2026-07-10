@@ -44,7 +44,7 @@ $env:BEACON_HOST_MODE='windows'
 dotnet run --project src\Beacon.Server
 ```
 
-In Windows host mode, the server registers `WindowsDisplayBackend`, `WindowsGameLauncher`, and `WindowsSessionActivityInspector`. Launch endpoints can create virtual displays and start applications. The streaming backend remains fake until a real wrapper is selected explicitly. `/admin/snapshot` exposes `host.mode` and the selected backend names so the active composition is visible before testing.
+In Windows host mode, the server registers `WindowsDisplayBackend`, `WindowsGameLauncher`, and `WindowsSessionActivityInspector`. The media boundary is `UnavailableStreamingBackend` until Beacon StreamWorker is implemented, so launch preflight fails before virtual-display or application side effects instead of fabricating a stream. `/admin/snapshot` exposes `host.mode` and the active boundary names so the composition is visible before testing.
 
 ## Manual Recovery Actions
 

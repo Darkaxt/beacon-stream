@@ -17,23 +17,18 @@ public sealed class ArchitectureRecoveryBoundaryTests
         "src/Beacon.Android/app/src/main/java/dev/beacon/android"
     ];
 
-    private static readonly string[] CompatibilityRoots =
+    private static readonly string[] ForbiddenDirectories =
     [
         "src/Beacon.Platform.Windows/Streaming",
         "src/Beacon.StreamingProbe",
-        "tests/Beacon.StreamingProbe.Tests"
+        "tests/Beacon.StreamingProbe.Tests",
+        "src/Beacon.Android/streaming-moonlight"
     ];
 
     private static readonly string[] ScannedRoots =
     [
-        "src/Beacon.Core",
-        "src/Beacon.Server",
-        "src/Beacon.Cockpit",
-        "src/Beacon.Android/app/src",
-        "tests/Beacon.Core.Tests",
-        "tests/Beacon.Server.Tests",
-        "tests/Beacon.Cockpit.Tests",
-        "tests/Beacon.Platform.Windows.Tests"
+        "src",
+        "tests"
     ];
 
     private static readonly HashSet<string> ScannedExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -47,13 +42,18 @@ public sealed class ArchitectureRecoveryBoundaryTests
         ".java",
         ".json",
         ".kt",
+        ".ps1",
+        ".ts",
+        ".tsx",
         ".txt",
+        ".yml",
+        ".yaml",
         ".xml"
     };
 
     private static readonly Regex CompatibilityPattern = new(
-        "Moonlight|GameStream|Rtsp|Rtp|ExternalProcess|Wrapper|RuntimeDescriptor|" +
-        "LaunchUri|nativeSession|beacon-test|BeaconTest",
+        "Moonlight|GameStream|RTSP|RTP|ExternalProcessStreaming|StreamingWrapper|" +
+        "WrapperChild|RuntimeDescriptor|LaunchUri|nativeSession",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     [Fact]
@@ -75,93 +75,34 @@ public sealed class ArchitectureRecoveryBoundaryTests
     }
 
     [Fact]
-    public void CompatibilityDebtMatchesTheReviewedSnapshot()
+    public void RuntimeAndTestsContainNoCompatibilityPathsOrTokens()
     {
         string root = FindRepositoryRoot();
-        string snapshotPath = Path.Combine(
-            root,
-            "tests/Beacon.Core.Tests/Architecture/architecture-recovery-debt.txt");
-        Assert.True(File.Exists(snapshotPath), "The reviewed architecture debt snapshot is missing.");
-
-        var expected = File.ReadAllLines(snapshotPath)
-            .Where(line => !string.IsNullOrWhiteSpace(line))
-            .Where(line => !line.TrimStart().StartsWith('#'))
-            .Select(NormalizeRelativePath)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        HashSet<string> actual = FindCompatibilityDebt(root);
-
-        string[] added = actual.Except(expected, StringComparer.OrdinalIgnoreCase).Order().ToArray();
-        string[] removed = expected.Except(actual, StringComparer.OrdinalIgnoreCase).Order().ToArray();
-
-        Assert.True(
-            actual.SetEquals(expected),
-            $"Architecture debt changed.{Environment.NewLine}" +
-            $"Added: {string.Join(", ", added)}{Environment.NewLine}" +
-            $"Removed but not acknowledged: {string.Join(", ", removed)}");
-    }
-
-    [Fact]
-    public void AndroidContainsNoCompatibilityPathsOrTokens()
-    {
-        string root = FindRepositoryRoot();
-        string androidSource = ToPlatformPath(root, "src/Beacon.Android/app/src");
-
-        Assert.False(Directory.Exists(ToPlatformPath(root, "src/Beacon.Android/streaming-moonlight")));
-
-        string[] matches = EnumerateSourceFiles(androidSource)
-            .Where(file => CompatibilityPattern.IsMatch(Path.GetFileName(file))
-                || CompatibilityPattern.IsMatch(File.ReadAllText(file)))
-            .Select(file => ToRepositoryRelativePath(root, file))
-            .Order()
-            .ToArray();
-
-        Assert.Empty(matches);
-    }
-
-    private static HashSet<string> FindCompatibilityDebt(string root)
-    {
-        var matches = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (string relativeRoot in CompatibilityRoots)
+        foreach (string relativeRoot in ForbiddenDirectories)
         {
-            string path = ToPlatformPath(root, relativeRoot);
-            if (!Directory.Exists(path))
-            {
-                continue;
-            }
-
-            foreach (string file in EnumerateSourceFiles(path))
-            {
-                matches.Add(ToRepositoryRelativePath(root, file));
-            }
+            Assert.False(Directory.Exists(ToPlatformPath(root, relativeRoot)), relativeRoot);
         }
 
+        var matches = new List<string>();
         foreach (string relativeRoot in ScannedRoots)
         {
             string path = ToPlatformPath(root, relativeRoot);
-            if (!Directory.Exists(path))
-            {
-                continue;
-            }
-
             foreach (string file in EnumerateSourceFiles(path))
             {
-                if (CompatibilityPattern.IsMatch(File.ReadAllText(file)))
+                if (CompatibilityPattern.IsMatch(Path.GetFileName(file))
+                    || CompatibilityPattern.IsMatch(File.ReadAllText(file)))
                 {
                     matches.Add(ToRepositoryRelativePath(root, file));
                 }
             }
         }
 
-        return matches;
+        Assert.Empty(matches.Order());
     }
 
     private static IEnumerable<string> EnumerateSourceFiles(string root) =>
         Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
             .Where(path => ScannedExtensions.Contains(Path.GetExtension(path)))
-            .Where(path => !path.EndsWith(
-                "architecture-recovery-debt.txt",
-                StringComparison.OrdinalIgnoreCase))
             .Where(path => !path.EndsWith(
                 "ArchitectureRecoveryBoundaryTests.cs",
                 StringComparison.OrdinalIgnoreCase))
@@ -174,10 +115,11 @@ public sealed class ArchitectureRecoveryBoundaryTests
             segment.Equals("bin", StringComparison.OrdinalIgnoreCase)
             || segment.Equals("obj", StringComparison.OrdinalIgnoreCase)
             || segment.Equals("build", StringComparison.OrdinalIgnoreCase)
+            || segment.Equals("coverage", StringComparison.OrdinalIgnoreCase)
+            || segment.Equals("dist", StringComparison.OrdinalIgnoreCase)
+            || segment.Equals("node_modules", StringComparison.OrdinalIgnoreCase)
             || segment.Equals(".cxx", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals(".gradle", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals("mbedtls", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals("moonlight-common-c", StringComparison.OrdinalIgnoreCase));
+            || segment.Equals(".gradle", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string ToRepositoryRelativePath(string root, string path) =>
