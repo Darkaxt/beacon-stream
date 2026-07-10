@@ -25,6 +25,8 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import dev.beacon.streaming.moonlight.MoonlightNativeCore;
+
 public final class BeaconActivity extends Activity {
     private static final String[] LOCAL_THEME_VALUES = new String[] { "system", "dark", "light" };
     private static final String[] TOUCH_LAYOUT_VALUES = new String[] { "default", "compact", "edge" };
@@ -495,7 +497,8 @@ public final class BeaconActivity extends Activity {
         decoderDebugOverlay.setText(
             "Decoder load " + textValue(decoderLoadPercent) +
                 "% | bandwidth " + textValue(estimatedBandwidthMbps) +
-                " Mbps | thermal " + textValue(thermalState));
+                " Mbps | thermal " + textValue(thermalState) +
+                " | Moonlight core " + (MoonlightNativeCore.isAvailable() ? "ready" : "unavailable"));
     }
 
     private void updateControllerOverlay() {
