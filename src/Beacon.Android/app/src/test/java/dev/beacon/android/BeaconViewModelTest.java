@@ -127,6 +127,34 @@ public final class BeaconViewModelTest {
     }
 
     @Test
+    public void launchStartsNativeSessionBeforeDelegatingFallbackLaunchUri() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(200, validNativeSessionResponse());
+        RecordingStreamConnectionLauncher launcher = new RecordingStreamConnectionLauncher();
+        RecordingNativeStreamClient nativeStreamClient = new RecordingNativeStreamClient(
+            NativeStreamStartResult.started(
+                "Native Moonlight stream started.",
+                NativeStreamPresentation.encodedVideo(
+                    "rtsp://10.0.2.2:48010/session/123",
+                    "moonlight-native",
+                    2560,
+                    1600,
+                    120)));
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7",
+            "http://server",
+            service,
+            launcher,
+            nativeStreamClient);
+
+        model.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+
+        assertEquals("", launcher.launchedUri);
+        assertTrue(nativeStreamClient.startedConnection.nativeSessionValid());
+        assertEquals("encoded-video", model.latestNativeStreamPresentation().kind());
+    }
+
+    @Test
     public void launchDoesNotDelegateConnectionUriWhenServerLaunchFails() throws Exception {
         FakeService service = new FakeService();
         service.next = new BeaconApiClient.BeaconResult(
@@ -292,6 +320,31 @@ public final class BeaconViewModelTest {
 
     private static BeaconApiClient.ClientTelemetry defaultTelemetry() {
         return new BeaconApiClient.ClientTelemetry(8, 0.0, 20, 120, "wifi-7", 80, "nominal");
+    }
+
+    private static String validNativeSessionResponse() {
+        return "{" +
+            "\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"launchUri\":\"moonlight://fallback\"}}," +
+            "\"nativeSession\":{" +
+            "\"address\":\"10.0.2.2\"," +
+            "\"serverAppVersion\":\"7.1.431.0\"," +
+            "\"serverGfeVersion\":\"3.27.0.120\"," +
+            "\"rtspSessionUrl\":\"rtsp://10.0.2.2:48010/session/123\"," +
+            "\"serverCodecModeSupport\":769," +
+            "\"width\":2560," +
+            "\"height\":1600," +
+            "\"fps\":120," +
+            "\"bitrateKbps\":45000," +
+            "\"packetSize\":1024," +
+            "\"streamingMode\":\"local\"," +
+            "\"audioConfiguration\":\"stereo\"," +
+            "\"videoFormat\":\"hevc-main10\"," +
+            "\"clientRefreshRateX100\":12000," +
+            "\"colorSpace\":\"rec2020\"," +
+            "\"colorRange\":\"full\"," +
+            "\"encryptionMode\":\"all\"," +
+            "\"remoteInputAesKey\":\"AAECAwQFBgcICQoLDA0ODw==\"," +
+            "\"remoteInputAesIv\":\"EBESExQVFhcYGRobHB0eHw==\"}}";
     }
 
     private static final class RecordingStreamConnectionLauncher implements StreamConnectionLauncher {

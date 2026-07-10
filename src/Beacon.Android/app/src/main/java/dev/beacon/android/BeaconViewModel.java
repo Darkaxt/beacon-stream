@@ -150,7 +150,9 @@ public final class BeaconViewModel {
             clearNativeStream();
             StreamConnectionDescriptor connection = StreamConnectionDescriptor.extract(result.body());
             String launchUri = connection.launchUri();
-            if (!launchUri.isEmpty()) {
+            if (connection.nativeSessionProvided()) {
+                startNativeStream(connection);
+            } else if (!launchUri.isEmpty()) {
                 connectionLauncher.launch(launchUri);
             } else {
                 startNativeStream(connection);
