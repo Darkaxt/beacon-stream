@@ -204,6 +204,8 @@ public sealed class ArchitectureRecoveryBoundaryTests
             || segment.Equals("coverage", StringComparison.OrdinalIgnoreCase)
             || segment.Equals("dist", StringComparison.OrdinalIgnoreCase)
             || segment.Equals("node_modules", StringComparison.OrdinalIgnoreCase)
+            || segment.Equals("out", StringComparison.OrdinalIgnoreCase)
+            || segment.Equals("_deps", StringComparison.OrdinalIgnoreCase)
             || segment.Equals(".cxx", StringComparison.OrdinalIgnoreCase)
             || segment.Equals(".gradle", StringComparison.OrdinalIgnoreCase));
     }

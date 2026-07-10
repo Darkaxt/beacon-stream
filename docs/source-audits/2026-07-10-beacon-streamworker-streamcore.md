@@ -36,7 +36,9 @@ narrow internal interfaces:
 - Windows 11 with Windows SDK `10.0.26100.0` and `10.0.22621.0` available.
 - NVIDIA GeForce RTX 4090 Laptop GPU with driver `610.47` and Intel UHD Graphics.
 - SudoVDA provides the per-client virtual monitor selected by Beacon Service.
-- The target Android API floor is 26; the primary device is a Z Fold 7.
+- The current Java-only APK floor is API 26. Pinned MsQuic builds quictls for Android API 29,
+  so StreamCore raises the production APK floor to API 29 when native transport lands. The
+  primary device is a Z Fold 7.
 - FFmpeg 8.0.1 is installed locally, but Beacon will not ship or execute FFmpeg for the
   first path. Its backend breadth and GPL distribution surface are unnecessary here.
 
@@ -51,6 +53,8 @@ different capture, encoder, transport, or display.
 | microsoft/msquic `v2.5.9` | `87b53085d76bd7920d490a6f226c9999b6614d14` | MIT | Build and package as the single QUIC implementation on Windows and Android. |
 | FFmpeg/nv-codec-headers | `15ee32753c92faddbabbff11676779618fc6db7e` | permissive header notice | Vendor the required NVENC API headers with notice; load `nvEncodeAPI64.dll` at runtime. |
 | protocolbuffers/protobuf `v32.1` | `7fcfd66022455635fa29af92987cdc0967efd4f3` | BSD-3-Clause | Generate typed Worker IPC and reliable stream-control messages from Beacon-owned schemas. |
+| quictls/openssl (MsQuic `v2.5.9` gitlink) | `ff36838bb69801cad56823159a036977bcbe5c75` | Apache-2.0 | Build MsQuic's non-Windows TLS dependency at its audited gitlink revision for Android; never fetch a floating submodule. |
+| microsoft/xdp-for-windows (MsQuic `v2.5.9` gitlink) | `f23b1fb4d492d9c20bcd7767bba2278f94355df8` | MIT | Materialize headers required by the pinned Windows MsQuic platform build; Beacon does not enable or expose XDP. |
 | xiph/opus `v1.6.1` | `22244de5a79bd1d6d623c32e72bf1954b56235be` | BSD-3-Clause | Deferred audio encoder/decoder dependency after the H.264 gate. |
 
 Dependencies are fetched or vendored at exact revisions into ordinary directories. No Git
@@ -158,9 +162,11 @@ Why:
   <https://microsoft.github.io/msquic/msquicdocs/docs/api/QUIC_CONNECTION_EVENT.html>.
 
 The first Gate 3 task must compile pinned MsQuic for Windows x64 and Android arm64/x86_64,
-then prove encrypted stream and datagram interoperability between host and emulator. MsQuic
-lists Android as best-effort, so this proof is a blocking foundation check, not an assumption
-buried beneath product code.
+then prove encrypted stream and datagram interoperability between host and emulator. The
+Windows build uses MSVC/Schannel. The Android cross-build runs under Linux (CI and local WSL)
+with the Linux Android NDK and the pinned quictls source because MsQuic's own build tooling
+rejects Android cross-builds from a Windows host. MsQuic lists Android as best-effort, so this
+proof is a blocking foundation check, not an assumption buried beneath product code.
 
 Beacon persists one server identity certificate. The paired APK pins its public-key
 fingerprint. The authenticated control plane issues an opaque random session ticket; Beacon
@@ -318,3 +324,23 @@ Beacon/StreamCore state and structured diagnostics.
 The repository may proceed to Gate 3 using only these boundaries. Any source substitution,
 new fallback, or compatibility route requires an updated audit and architecture test before
 implementation.
+
+## Gate 3 Platform Proof Evidence
+
+The first Gate 3 implementation slice validated the transport choice rather than assuming it:
+
+- Visual Studio 17.14/MSVC 14.44 built pinned MsQuic `v2.5.9` with Schannel as a shared
+  library; Beacon's API lifecycle test loaded the adjacent built DLL and passed.
+- Google NDK r27d (`27.3.13750724`) was installed under WSL from the published Linux archive
+  after verifying SHA-1 `22105e410cf29afcf163760cc95522b9fb981121`.
+- WSL built the same StreamProtocol graph and pinned quictls dependency for Android x86_64
+  and arm64-v8a at API 29 with Beacon code under warnings-as-errors.
+- The x86_64 API lifecycle executable ran successfully on `emulator-5554`; arm64 output was
+  verified as an AArch64 Android ELF for the physical target.
+- `test-msquic-emulator-interop.ps1` created a temporary Schannel certificate, waited on the
+  server readiness event, connected the Android client through `10.0.2.2`, and proved one TLS
+  QUIC reliable-stream payload plus one QUIC datagram payload. Both peers reported success,
+  and the temporary certificate was removed.
+
+No product session, ticket, media packet, fallback transport, or APK native route is added by
+this proof. Those remain test-first work in the following Gate 3 slices.
