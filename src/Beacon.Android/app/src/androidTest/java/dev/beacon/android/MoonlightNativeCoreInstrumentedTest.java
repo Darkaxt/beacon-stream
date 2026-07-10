@@ -1,8 +1,12 @@
 package dev.beacon.android;
 
+import android.graphics.SurfaceTexture;
+import android.view.Surface;
+
 import junit.framework.TestCase;
 
 import dev.beacon.streaming.moonlight.MoonlightNativeCore;
+import dev.beacon.streaming.moonlight.MoonlightNativeConnection;
 import dev.beacon.streaming.moonlight.MoonlightNativeSessionPlan;
 
 public final class MoonlightNativeCoreInstrumentedTest extends TestCase {
@@ -10,6 +14,7 @@ public final class MoonlightNativeCoreInstrumentedTest extends TestCase {
         assertTrue(MoonlightNativeCore.isAvailable());
         assertEquals("moonlight-common-c", MoonlightNativeCore.identity());
         assertEquals("platform initialization", MoonlightNativeCore.stageName(1));
+        assertEquals("LiStartConnection", MoonlightNativeConnection.bindingIdentity());
     }
 
     public void testOwningClientResponseMapsIntoNativePlan() {
@@ -46,5 +51,26 @@ public final class MoonlightNativeCoreInstrumentedTest extends TestCase {
         assertEquals(120, plan.fps());
         assertEquals(MoonlightNativeSessionPlan.VIDEO_FORMAT_H265_MAIN10, plan.supportedVideoFormats());
         assertEquals(MoonlightNativeSessionPlan.ENCFLG_ALL, plan.encryptionFlags());
+    }
+
+    public void testNativeVideoRendererConfiguresRealMediaCodecSurface() {
+        SurfaceTexture texture = new SurfaceTexture(0);
+        Surface surface = new Surface(texture);
+        MoonlightMediaCodecVideoRenderer renderer = new MoonlightMediaCodecVideoRenderer(
+            new AndroidMediaCodecFactory(),
+            () -> surface);
+        try {
+            int result = renderer.setup(
+                MoonlightNativeSessionPlan.VIDEO_FORMAT_H264,
+                1280,
+                720,
+                60);
+
+            assertEquals(renderer.diagnostic(), 0, result);
+        } finally {
+            renderer.cleanup();
+            surface.release();
+            texture.release();
+        }
     }
 }

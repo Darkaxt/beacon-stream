@@ -14,7 +14,11 @@ set(USE_MBEDTLS ON CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 add_subdirectory(moonlight-common-c EXCLUDE_FROM_ALL)
 
-add_library(beacon-moonlight-core SHARED moonlight_native_core.c)
+add_library(
+    beacon-moonlight-core
+    SHARED
+    moonlight_native_core.c
+    moonlight_native_connection.c)
 target_include_directories(
     beacon-moonlight-core
     PRIVATE moonlight-common-c/src)

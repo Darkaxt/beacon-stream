@@ -4,7 +4,7 @@
 
 Beacon will use `moonlight-stream/moonlight-common-c` as its Android GameStream transport core instead of completing the partial Java RTSP/RTP implementation as a bespoke protocol stack.
 
-Beacon remains responsible for client identity, profile ownership, display leases, launch policy, session planning, diagnostics, and recovery. The native core remains headless and policy-free. A later milestone will give it a complete server-provisioned session descriptor before the active GameStream route is migrated.
+Beacon remains responsible for client identity, profile ownership, display leases, launch policy, session planning, diagnostics, and recovery. The native core remains headless and policy-free. Milestone 111 supplies the complete server-provisioned session descriptor, and Milestone 112 routes it through the active APK native GameStream video path.
 
 ## Sources Reviewed
 
@@ -25,10 +25,13 @@ The existing Beacon Java path already proves server descriptors, RTSP sequencing
 ## Imported Boundary
 
 - `src/Beacon.Android/streaming-moonlight` is a dedicated Android library.
-- The module builds the pinned native core with Mbed TLS and exposes only a small Beacon-owned JNI availability surface in Milestone 110.
+- The module builds the pinned native core with Mbed TLS and exposes a small Beacon-owned JNI availability surface in Milestone 110.
+- Milestone 111 maps the owning-client server response into strict public `SERVER_INFORMATION` and `STREAM_CONFIGURATION` values without moving policy into JNI.
+- Milestone 112 calls `LiStartConnection`, forwards connection and video callbacks through Beacon-owned Java interfaces, and submits native decode units into a bounded Surface-backed `MediaCodec` queue.
 - The module does not contain Beacon profiles, display policy, game collection behavior, or UI settings.
 - The APK reports whether the native library loaded through its existing decoder diagnostics.
-- Production GameStream routing remains unchanged until the server can provide every native connection input explicitly.
+- A validated `nativeSession` takes precedence over fallback URI and partial Java RTSP/RTP routes; descriptors without it preserve the earlier behavior.
+- Server-owned pairing and `/launch` provisioning remain outside this milestone, so this audit does not claim a live Apollo stream yet.
 
 ## License And Update Policy
 

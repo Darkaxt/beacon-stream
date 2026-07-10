@@ -1,5 +1,10 @@
 package dev.beacon.android;
 
+import dev.beacon.streaming.moonlight.MoonlightConnectionListener;
+import dev.beacon.streaming.moonlight.MoonlightNativeSessionPlan;
+import dev.beacon.streaming.moonlight.MoonlightNativeStartResult;
+import dev.beacon.streaming.moonlight.MoonlightVideoRenderer;
+
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -90,6 +95,30 @@ public final class AndroidNativeStreamClientFactoryTest {
         assertTrue(result.success());
         assertEquals("encoded-video", result.presentation().kind());
         assertEquals(1, decoder.startCount);
+        assertEquals(0, rtspClient.startCount);
+    }
+
+    @Test
+    public void nativeSessionRouteRunsBeforeLegacyGameStreamRouteAndStopsCleanly() {
+        RecordingRtspSessionClient rtspClient = new RecordingRtspSessionClient(
+            GameStreamRtspSessionResult.started("legacy RTSP should not start"));
+        RecordingMoonlightConnection moonlightConnection = new RecordingMoonlightConnection();
+        RecordingMoonlightRenderer renderer = new RecordingMoonlightRenderer();
+        NativeStreamClient client = AndroidNativeStreamClientFactory.create(
+            new RecordingEncodedVideoDecoder(EncodedVideoDecodeResult.failed("unused")),
+            rtspClient,
+            null,
+            moonlightConnection,
+            () -> renderer);
+
+        NativeStreamStartResult result = client.start(MoonlightNativeStreamClientTest.validConnection());
+        client.stop();
+
+        assertTrue(result.success());
+        assertEquals("encoded-video", result.presentation().kind());
+        assertEquals(1, moonlightConnection.startCount);
+        assertEquals(1, moonlightConnection.stopCount);
+        assertEquals(1, renderer.cleanupCount);
         assertEquals(0, rtspClient.startCount);
     }
 
@@ -189,6 +218,63 @@ public final class AndroidNativeStreamClientFactoryTest {
 
         @Override
         public void stop() {
+        }
+    }
+
+    private static final class RecordingMoonlightConnection implements MoonlightStreamConnection {
+        private int startCount;
+        private int stopCount;
+
+        @Override
+        public MoonlightNativeStartResult start(
+            MoonlightNativeSessionPlan plan,
+            MoonlightVideoRenderer renderer,
+            MoonlightConnectionListener listener) {
+            startCount++;
+            return MoonlightNativeStartResult.started();
+        }
+
+        @Override
+        public void stop() {
+            stopCount++;
+        }
+    }
+
+    private static final class RecordingMoonlightRenderer implements MoonlightVideoRenderer {
+        private int cleanupCount;
+
+        @Override
+        public int capabilities() {
+            return 0;
+        }
+
+        @Override
+        public int setup(int videoFormat, int width, int height, int fps) {
+            return DR_OK;
+        }
+
+        @Override
+        public void start() {
+        }
+
+        @Override
+        public void stop() {
+        }
+
+        @Override
+        public void cleanup() {
+            cleanupCount++;
+        }
+
+        @Override
+        public int submitDecodeUnit(
+            byte[] data,
+            int length,
+            int bufferType,
+            int frameType,
+            int frameNumber,
+            long presentationTimeUs) {
+            return DR_OK;
         }
     }
 }

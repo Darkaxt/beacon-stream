@@ -144,6 +144,28 @@ public final class EncodedVideoStreamPlan {
             diagnostic);
     }
 
+    public static EncodedVideoStreamPlan nativeMoonlight(String codec, int width, int height, int fps) {
+        String normalizedCodec = normalize(codec);
+        if (!validCodec(normalizedCodec)) {
+            throw new IllegalArgumentException("Unsupported native Moonlight codec '" + codec + "'.");
+        }
+        if (width <= 0 || height <= 0 || fps <= 0) {
+            throw new IllegalArgumentException("Native Moonlight video dimensions and frame rate must be positive.");
+        }
+
+        return new EncodedVideoStreamPlan(
+            true,
+            "moonlight-native://video",
+            "",
+            "",
+            normalizedCodec,
+            "annex-b",
+            width,
+            height,
+            fps,
+            "");
+    }
+
     public boolean supportedProtocol() {
         return supportedProtocol;
     }

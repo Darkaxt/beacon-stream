@@ -14,6 +14,28 @@ public final class AndroidNativeStreamClientFactory {
         EncodedVideoDecoder encodedVideoDecoder,
         GameStreamRtspSessionClient gameStreamRtspSessionClient,
         GameStreamVideoSessionClient gameStreamVideoSessionClient) {
+        return create(
+            encodedVideoDecoder,
+            gameStreamRtspSessionClient,
+            gameStreamVideoSessionClient,
+            null,
+            null);
+    }
+
+    static NativeStreamClient create(
+        EncodedVideoDecoder encodedVideoDecoder,
+        GameStreamRtspSessionClient gameStreamRtspSessionClient,
+        GameStreamVideoSessionClient gameStreamVideoSessionClient,
+        MoonlightStreamConnection moonlightConnection,
+        MoonlightVideoRendererFactory moonlightRendererFactory) {
+        if (moonlightConnection != null && moonlightRendererFactory != null) {
+            return new DiagnosticNativeStreamClient(new NativeStreamClientRouter(
+                new MoonlightNativeStreamClient(moonlightConnection, moonlightRendererFactory),
+                new EncodedVideoNativeStreamClient(encodedVideoDecoder),
+                new BeaconTestNativeStreamClient(),
+                new GameStreamNativeStreamClient(gameStreamRtspSessionClient, gameStreamVideoSessionClient)));
+        }
+
         return new DiagnosticNativeStreamClient(new NativeStreamClientRouter(
             new EncodedVideoNativeStreamClient(encodedVideoDecoder),
             new BeaconTestNativeStreamClient(),

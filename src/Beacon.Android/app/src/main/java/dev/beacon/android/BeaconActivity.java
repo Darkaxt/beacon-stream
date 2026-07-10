@@ -546,7 +546,9 @@ public final class BeaconActivity extends Activity {
                 surfaceProvider,
                 new HttpEncodedVideoSampleProviderFactory(serverUrl)),
             AndroidNativeStreamClientFactory.socketRtspSessionClient(),
-            AndroidNativeStreamClientFactory.socketRtpVideoSessionClient(codecFactory, surfaceProvider));
+            AndroidNativeStreamClientFactory.socketRtpVideoSessionClient(codecFactory, surfaceProvider),
+            new JniMoonlightStreamConnection(),
+            () -> new MoonlightMediaCodecVideoRenderer(codecFactory, surfaceProvider));
     }
 
     private BeaconApiClient.ProfilePatch readPatch() {
