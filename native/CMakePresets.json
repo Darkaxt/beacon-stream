@@ -9,8 +9,7 @@
     {
       "name": "windows-x64",
       "displayName": "Windows x64",
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
+      "generator": "Ninja Multi-Config",
       "binaryDir": "${sourceDir}/out/build/windows-x64",
       "cacheVariables": {
         "BEACON_WITH_MSQUIC": "ON",
