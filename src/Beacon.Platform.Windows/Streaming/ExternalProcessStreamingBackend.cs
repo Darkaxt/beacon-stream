@@ -36,7 +36,8 @@ public sealed record ExternalStreamingSessionDescriptor(
     string? LaunchUri,
     IReadOnlyDictionary<string, string>? Endpoints,
     IReadOnlyDictionary<string, string>? Metadata,
-    IReadOnlyList<string>? Diagnostics);
+    IReadOnlyList<string>? Diagnostics,
+    MoonlightNativeSessionDescriptor? NativeSession = null);
 
 public sealed record ExternalStreamingManifestReadResult(bool Success, ExternalStreamingManifest? Manifest, string? Error)
 {
@@ -170,6 +171,7 @@ public sealed class ExternalProcessStreamingBackend(
     private readonly Dictionary<string, StreamingSessionState> sessions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ExternalStreamingProcess> processes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> sessionDescriptorPaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, MoonlightNativeSessionDescriptor> nativeSessions = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> processDiagnostics = [];
     private readonly IExternalStreamingManifestReader manifestReader = manifestReader ?? NoExternalStreamingManifestReader.Instance;
     private readonly IExternalStreamingSessionDescriptorStore sessionDescriptors =
@@ -453,6 +455,7 @@ public sealed class ExternalProcessStreamingBackend(
         {
             sessions[sessionId] = stopped;
             processes.Remove(sessionId);
+            nativeSessions.Remove(sessionId);
             if (sessionDescriptorPaths.Remove(sessionId, out string? path))
             {
                 descriptorPath = path;
@@ -472,6 +475,22 @@ public sealed class ExternalProcessStreamingBackend(
         lock (gate)
         {
             return Task.FromResult(sessions.GetValueOrDefault(sessionId));
+        }
+    }
+
+    public async Task<MoonlightNativeSessionDescriptor?> GetNativeSessionAsync(
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        StreamingSessionState? session = await GetSessionAsync(sessionId, cancellationToken);
+        if (session is null || !session.State.Equals("running", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        lock (gate)
+        {
+            return nativeSessions.GetValueOrDefault(sessionId);
         }
     }
 
@@ -532,6 +551,7 @@ public sealed class ExternalProcessStreamingBackend(
                 StreamingSessionState exited = session with { State = "exited", Error = error };
                 sessions[sessionId] = exited;
                 processes.Remove(sessionId);
+                nativeSessions.Remove(sessionId);
                 string diagnostic = $"{sessionId}: {error}";
                 processDiagnostics.Add(diagnostic);
                 processDiagnostics.AddRange(status.Diagnostics.Select(value => $"{sessionId}: {value}"));
@@ -1018,6 +1038,7 @@ public sealed class ExternalProcessStreamingBackend(
             StreamingSessionState failed = session with { Error = error };
             lock (gate)
             {
+                nativeSessions.Remove(session.SessionId);
                 processDiagnostics.Add($"{session.SessionId}: {error}");
                 if (sessions.ContainsKey(session.SessionId))
                 {
@@ -1028,6 +1049,28 @@ public sealed class ExternalProcessStreamingBackend(
             return failed;
         }
 
+        MoonlightNativeSessionDescriptor? nativeSession = read.Descriptor.NativeSession;
+        if (nativeSession is not null)
+        {
+            MoonlightNativeSessionValidationResult validation = nativeSession.Validate();
+            if (!validation.Success)
+            {
+                string error = $"External streaming native session descriptor is invalid: {validation.Error}";
+                StreamingSessionState failed = session with { Error = error };
+                lock (gate)
+                {
+                    nativeSessions.Remove(session.SessionId);
+                    processDiagnostics.Add($"{session.SessionId}: {error}");
+                    if (sessions.ContainsKey(session.SessionId))
+                    {
+                        sessions[session.SessionId] = failed;
+                    }
+                }
+
+                return failed;
+            }
+        }
+
         StreamingConnectionDescriptor? connection = CreateConnectionDescriptor(
             options,
             manifest: null,
@@ -1036,6 +1079,15 @@ public sealed class ExternalProcessStreamingBackend(
         StreamingSessionState refreshed = session with { Connection = connection, Error = null };
         lock (gate)
         {
+            if (nativeSession is null)
+            {
+                nativeSessions.Remove(session.SessionId);
+            }
+            else
+            {
+                nativeSessions[session.SessionId] = nativeSession;
+            }
+
             if (sessions.ContainsKey(session.SessionId))
             {
                 sessions[session.SessionId] = refreshed;

@@ -216,13 +216,18 @@ public static class ClientEndpoints
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
+            MoonlightNativeSessionDescriptor? nativeSession = await streaming.GetNativeSessionAsync(
+                planResult.Plan.SessionId,
+                cancellationToken);
+
             return Results.Ok(new
             {
                 clientId,
                 displayId = leaseResult.Lease.DisplayId,
                 state = "streaming",
                 launch = launchResult.State,
-                stream = streamResult.Session
+                stream = streamResult.Session,
+                nativeSession
             });
         });
 
@@ -239,9 +244,12 @@ public static class ClientEndpoints
             }
 
             StreamingSessionState? stream = await streaming.GetSessionAsync(plan.SessionId, cancellationToken);
+            MoonlightNativeSessionDescriptor? nativeSession = stream is null
+                ? null
+                : await streaming.GetNativeSessionAsync(plan.SessionId, cancellationToken);
             return stream is null
                 ? Results.NotFound(new { error = $"Stream session '{plan.SessionId}' is not running." })
-                : Results.Ok(new { clientId, stream });
+                : Results.Ok(new { clientId, stream, nativeSession });
         });
 
         clients.MapPost("/{clientId}/stream/stop", async (

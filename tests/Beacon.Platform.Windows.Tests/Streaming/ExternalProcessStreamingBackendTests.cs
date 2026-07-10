@@ -713,6 +713,74 @@ public sealed class ExternalProcessStreamingBackendTests
     }
 
     [Fact]
+    public async Task NativeSessionFromRuntimeDescriptorIsPrivateAndRemovedOnStop()
+    {
+        var descriptors = new FakeExternalStreamingSessionDescriptorStore();
+        var runner = new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]);
+        MoonlightNativeSessionDescriptor nativeSession = CreateNativeSession();
+        runner.OnStart = command =>
+        {
+            string descriptorPath = command.Environment["BEACON_STREAM_SESSION_DESCRIPTOR_PATH"];
+            descriptors.DescriptorsByPath[descriptorPath] = new ExternalStreamingSessionDescriptor(
+                "gamestream",
+                null,
+                new Dictionary<string, string>
+                {
+                    ["rtsp"] = nativeSession.RtspSessionUrl
+                },
+                new Dictionary<string, string>(),
+                ["native session ready"],
+                nativeSession);
+        };
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions("C:\\Tools\\sunshine-wrapper.exe"),
+            runner,
+            sessionDescriptors: descriptors);
+        SessionPlan plan = CreatePlan();
+
+        StreamingStartResult start = await backend.StartAsync(plan, CancellationToken.None);
+        MoonlightNativeSessionDescriptor? provisioned = await backend.GetNativeSessionAsync(plan.SessionId, CancellationToken.None);
+
+        Assert.True(start.Success);
+        Assert.Equal(nativeSession, provisioned);
+        string publicSessionJson = System.Text.Json.JsonSerializer.Serialize(start.Session);
+        Assert.DoesNotContain(nativeSession.RemoteInputAesKey, publicSessionJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(nativeSession.RemoteInputAesIv, publicSessionJson, StringComparison.Ordinal);
+
+        await backend.StopAsync(plan.SessionId, CancellationToken.None);
+
+        Assert.Null(await backend.GetNativeSessionAsync(plan.SessionId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task InvalidRuntimeNativeSessionRemovesPreviouslyCachedSecrets()
+    {
+        var descriptors = new FakeExternalStreamingSessionDescriptorStore();
+        var runner = new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]);
+        MoonlightNativeSessionDescriptor nativeSession = CreateNativeSession();
+        runner.OnStart = command =>
+        {
+            string descriptorPath = command.Environment["BEACON_STREAM_SESSION_DESCRIPTOR_PATH"];
+            descriptors.DescriptorsByPath[descriptorPath] = RuntimeDescriptor(nativeSession);
+        };
+        var backend = new ExternalProcessStreamingBackend(
+            new ExternalProcessStreamingOptions("C:\\Tools\\sunshine-wrapper.exe"),
+            runner,
+            sessionDescriptors: descriptors);
+        SessionPlan plan = CreatePlan();
+
+        await backend.StartAsync(plan, CancellationToken.None);
+        Assert.Equal(nativeSession, await backend.GetNativeSessionAsync(plan.SessionId, CancellationToken.None));
+        string descriptorPath = Assert.Single(runner.StartedCommands).Environment["BEACON_STREAM_SESSION_DESCRIPTOR_PATH"];
+        descriptors.DescriptorsByPath[descriptorPath] = RuntimeDescriptor(nativeSession with { RemoteInputAesKey = "invalid" });
+
+        StreamingSessionState? refreshed = await backend.GetSessionAsync(plan.SessionId, CancellationToken.None);
+
+        Assert.Contains("RemoteInputAesKey", refreshed?.Error, StringComparison.Ordinal);
+        Assert.Null(await backend.GetNativeSessionAsync(plan.SessionId, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task GetSessionRefreshesConnectionFromRuntimeDescriptorWrittenAfterStart()
     {
         var descriptors = new FakeExternalStreamingSessionDescriptorStore();
@@ -815,6 +883,41 @@ public sealed class ExternalProcessStreamingBackendTests
             "steam-shortcut:3767414131",
             new PlannedDisplay("client-z-fold-7", 2560, 1600, 120, "virtual-primary", HdrPreference.Prefer, false, "sdr", "HDR unavailable."),
             new PlannedStream("av1", 120, 65, "lan-direct", "adaptive"));
+
+    private static MoonlightNativeSessionDescriptor CreateNativeSession() =>
+        new(
+            Address: "127.0.0.1",
+            ServerAppVersion: "7.1.431.0",
+            ServerGfeVersion: "3.28.0.417",
+            RtspSessionUrl: "rtsp://127.0.0.1:48010/session/42",
+            ServerCodecModeSupport: 0x20200,
+            Width: 2560,
+            Height: 1600,
+            Fps: 120,
+            BitrateKbps: 65_000,
+            PacketSize: 1392,
+            StreamingMode: "local",
+            AudioConfiguration: "stereo",
+            VideoFormat: "h264",
+            ClientRefreshRateX100: 12_000,
+            ColorSpace: "rec709",
+            ColorRange: "limited",
+            EncryptionMode: "audio",
+            RemoteInputAesKey: Convert.ToBase64String(Enumerable.Range(0, 16).Select(value => (byte)value).ToArray()),
+            RemoteInputAesIv: Convert.ToBase64String(Enumerable.Range(16, 16).Select(value => (byte)value).ToArray()));
+
+    private static ExternalStreamingSessionDescriptor RuntimeDescriptor(
+        MoonlightNativeSessionDescriptor nativeSession) =>
+        new(
+            "gamestream",
+            null,
+            new Dictionary<string, string>
+            {
+                ["rtsp"] = nativeSession.RtspSessionUrl
+            },
+            new Dictionary<string, string>(),
+            ["native session ready"],
+            nativeSession);
 
     private sealed class FakeExternalStreamingProcessRunner : IExternalStreamingProcessRunner
     {

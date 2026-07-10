@@ -14,6 +14,12 @@ public interface IStreamingBackend
 
     Task<StreamingSessionState?> GetSessionAsync(string sessionId, CancellationToken cancellationToken);
 
+    Task<MoonlightNativeSessionDescriptor?> GetNativeSessionAsync(string sessionId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<MoonlightNativeSessionDescriptor?>(null);
+    }
+
     IReadOnlyList<StreamingSessionState> GetSessions();
 }
 
