@@ -51,6 +51,8 @@ The production media boundary has exactly two current implementations:
 - Node.js and pnpm
 - JDK 17 or newer, Android SDK 35, and Gradle 8.14.1
 - Android platform tools for emulator validation
+- Visual Studio C++ tools with CMake 3.25 or newer for StreamWorker builds
+- WSL2 Ubuntu for the reproducible local Linux/Android native cross-build
 - SudoVDA only when exercising the real display backend
 
 ## Server
@@ -161,6 +163,20 @@ Run Android checks:
 
 ```powershell
 gradle -p src\Beacon.Android test assembleDebug
+```
+
+Run the pinned native Windows and Android builds:
+
+```powershell
+.\scripts\build-native-windows.ps1
+.\scripts\build-native-android-wsl.ps1
+```
+
+With `emulator-5554` online, prove the encrypted reliable-stream and datagram exchange
+between the pinned Windows and Android MsQuic builds:
+
+```powershell
+.\scripts\test-msquic-emulator-interop.ps1
 ```
 
 Run Client Lab and browser checks:

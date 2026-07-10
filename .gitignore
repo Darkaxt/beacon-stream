@@ -317,6 +317,8 @@ node_modules/
 dist/
 playwright-report/
 test-results/
+native/_deps/
+native/out/
 
 # Visual Studio 6 build log
 *.plg

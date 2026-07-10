@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "toolchains": {
+    "androidNdk": {
+      "revision": "r27d",
+      "version": "27.3.13750724",
+      "linuxArchive": "https://dl.google.com/android/repository/android-ndk-r27d-linux.zip",
+      "linuxSha1": "22105e410cf29afcf163760cc95522b9fb981121"
+    }
+  },
+  "dependencies": {
+    "msquic": {
+      "repository": "https://github.com/microsoft/msquic.git",
+      "revision": "87b53085d76bd7920d490a6f226c9999b6614d14",
+      "ref": "87b53085d76bd7920d490a6f226c9999b6614d14",
+      "license": "MIT",
+      "path": "msquic"
+    },
+    "nv-codec-headers": {
+      "repository": "https://github.com/FFmpeg/nv-codec-headers.git",
+      "revision": "15ee32753c92faddbabbff11676779618fc6db7e",
+      "ref": "15ee32753c92faddbabbff11676779618fc6db7e",
+      "license": "Permissive header notice",
+      "path": "nv-codec-headers"
+    },
+    "opus": {
+      "repository": "https://github.com/xiph/opus.git",
+      "revision": "22244de5a79bd1d6d623c32e72bf1954b56235be",
+      "ref": "22244de5a79bd1d6d623c32e72bf1954b56235be",
+      "license": "BSD-3-Clause",
+      "path": "opus"
+    },
+    "protobuf": {
+      "repository": "https://github.com/protocolbuffers/protobuf.git",
+      "revision": "7fcfd66022455635fa29af92987cdc0967efd4f3",
+      "ref": "7fcfd66022455635fa29af92987cdc0967efd4f3",
+      "license": "BSD-3-Clause",
+      "path": "protobuf"
+    },
+    "quictls": {
+      "repository": "https://github.com/quictls/openssl.git",
+      "revision": "ff36838bb69801cad56823159a036977bcbe5c75",
+      "ref": "ff36838bb69801cad56823159a036977bcbe5c75",
+      "license": "Apache-2.0",
+      "path": "msquic/submodules/quictls"
+    },
+    "xdp-for-windows": {
+      "repository": "https://github.com/microsoft/xdp-for-windows.git",
+      "revision": "f23b1fb4d492d9c20bcd7767bba2278f94355df8",
+      "ref": "f23b1fb4d492d9c20bcd7767bba2278f94355df8",
+      "license": "MIT",
+      "path": "msquic/submodules/xdp-for-windows"
+    }
+  }
+}
