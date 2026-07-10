@@ -1,17 +1,42 @@
 package dev.beacon.android;
 
 public final class EncodedVideoDecodeRequest {
-    private final EncodedVideoStreamPlan plan;
+    private final String codec;
+    private final int width;
+    private final int height;
+    private final int fps;
+    private final EncodedVideoSampleProvider sampleProvider;
 
-    public EncodedVideoDecodeRequest(EncodedVideoStreamPlan plan) {
-        if (plan == null) {
-            throw new IllegalArgumentException("Encoded video stream plan is required.");
+    public EncodedVideoDecodeRequest(
+        String codec,
+        int width,
+        int height,
+        int fps,
+        EncodedVideoSampleProvider sampleProvider) {
+        if (codec == null || codec.isBlank()) {
+            throw new IllegalArgumentException("Encoded video codec is required.");
+        }
+        if (width <= 0 || height <= 0 || fps <= 0) {
+            throw new IllegalArgumentException("Encoded video dimensions and FPS must be positive.");
+        }
+        if (sampleProvider == null) {
+            throw new IllegalArgumentException("Encoded video sample provider is required.");
         }
 
-        this.plan = plan;
+        this.codec = codec.trim();
+        this.width = width;
+        this.height = height;
+        this.fps = fps;
+        this.sampleProvider = sampleProvider;
     }
 
-    public EncodedVideoStreamPlan plan() {
-        return plan;
-    }
+    public String codec() { return codec; }
+
+    public int width() { return width; }
+
+    public int height() { return height; }
+
+    public int fps() { return fps; }
+
+    public EncodedVideoSampleProvider sampleProvider() { return sampleProvider; }
 }

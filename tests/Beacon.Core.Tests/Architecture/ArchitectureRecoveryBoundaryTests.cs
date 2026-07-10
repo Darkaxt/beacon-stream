@@ -21,8 +21,7 @@ public sealed class ArchitectureRecoveryBoundaryTests
     [
         "src/Beacon.Platform.Windows/Streaming",
         "src/Beacon.StreamingProbe",
-        "tests/Beacon.StreamingProbe.Tests",
-        "src/Beacon.Android/streaming-moonlight"
+        "tests/Beacon.StreamingProbe.Tests"
     ];
 
     private static readonly string[] ScannedRoots =
@@ -86,6 +85,7 @@ public sealed class ArchitectureRecoveryBoundaryTests
 
         var expected = File.ReadAllLines(snapshotPath)
             .Where(line => !string.IsNullOrWhiteSpace(line))
+            .Where(line => !line.TrimStart().StartsWith('#'))
             .Select(NormalizeRelativePath)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         HashSet<string> actual = FindCompatibilityDebt(root);
@@ -98,6 +98,24 @@ public sealed class ArchitectureRecoveryBoundaryTests
             $"Architecture debt changed.{Environment.NewLine}" +
             $"Added: {string.Join(", ", added)}{Environment.NewLine}" +
             $"Removed but not acknowledged: {string.Join(", ", removed)}");
+    }
+
+    [Fact]
+    public void AndroidContainsNoCompatibilityPathsOrTokens()
+    {
+        string root = FindRepositoryRoot();
+        string androidSource = ToPlatformPath(root, "src/Beacon.Android/app/src");
+
+        Assert.False(Directory.Exists(ToPlatformPath(root, "src/Beacon.Android/streaming-moonlight")));
+
+        string[] matches = EnumerateSourceFiles(androidSource)
+            .Where(file => CompatibilityPattern.IsMatch(Path.GetFileName(file))
+                || CompatibilityPattern.IsMatch(File.ReadAllText(file)))
+            .Select(file => ToRepositoryRelativePath(root, file))
+            .Order()
+            .ToArray();
+
+        Assert.Empty(matches);
     }
 
     private static HashSet<string> FindCompatibilityDebt(string root)
@@ -117,9 +135,6 @@ public sealed class ArchitectureRecoveryBoundaryTests
                 matches.Add(ToRepositoryRelativePath(root, file));
             }
         }
-
-        AddSubmoduleMarker(root, matches, "src/Beacon.Android/streaming-moonlight/src/main/cpp/mbedtls");
-        AddSubmoduleMarker(root, matches, "src/Beacon.Android/streaming-moonlight/src/main/cpp/moonlight-common-c");
 
         foreach (string relativeRoot in ScannedRoots)
         {
@@ -163,17 +178,6 @@ public sealed class ArchitectureRecoveryBoundaryTests
             || segment.Equals(".gradle", StringComparison.OrdinalIgnoreCase)
             || segment.Equals("mbedtls", StringComparison.OrdinalIgnoreCase)
             || segment.Equals("moonlight-common-c", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static void AddSubmoduleMarker(
-        string root,
-        ISet<string> matches,
-        string relativePath)
-    {
-        if (Directory.Exists(ToPlatformPath(root, relativePath)))
-        {
-            matches.Add(NormalizeRelativePath(relativePath));
-        }
     }
 
     private static string ToRepositoryRelativePath(string root, string path) =>

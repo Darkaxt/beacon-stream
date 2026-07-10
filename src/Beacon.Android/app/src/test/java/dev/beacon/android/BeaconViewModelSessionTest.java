@@ -2,7 +2,6 @@ package dev.beacon.android;
 
 import org.junit.Test;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -24,215 +23,81 @@ public final class BeaconViewModelSessionTest {
     }
 
     @Test
-    public void identityChangeStopsPreviousNativeStream() throws Exception {
+    public void identityChangeReplacesControlPlaneModel() {
         RecordingModelFactory factory = new RecordingModelFactory();
         BeaconViewModelSession session = new BeaconViewModelSession(factory);
         BeaconViewModel first = session.get("z-fold-7", "http://server");
-        CreatedModel firstCreated = factory.created.get(0);
-        firstCreated.service.next = gameStreamResponse();
-        first.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
 
         BeaconViewModel second = session.get("z-fold-8", "http://server");
 
         assertNotSame(first, second);
-        assertEquals(1, firstCreated.nativeStreamClient.stopCount);
         assertEquals(2, factory.created.size());
     }
 
     @Test
-    public void identityChangeRecoversWhenPreviousNativeStreamStopFails() throws Exception {
-        RecordingModelFactory factory = new RecordingModelFactory(true);
-        BeaconViewModelSession session = new BeaconViewModelSession(factory);
-        BeaconViewModel first = session.get("z-fold-7", "http://server");
-        CreatedModel firstCreated = factory.created.get(0);
-        firstCreated.service.next = gameStreamResponse();
-        first.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
-
-        BeaconViewModel second = session.get("z-fold-8", "http://server");
-
-        assertNotSame(first, second);
-        assertEquals(1, firstCreated.nativeStreamClient.stopCount);
-        assertEquals(2, factory.created.size());
-    }
-
-    @Test
-    public void closeStopsActiveNativeStreamAndForcesNextCreate() throws Exception {
+    public void closeForcesNextIdentityLookupToCreate() {
         RecordingModelFactory factory = new RecordingModelFactory();
         BeaconViewModelSession session = new BeaconViewModelSession(factory);
         BeaconViewModel first = session.get("z-fold-7", "http://server");
-        CreatedModel firstCreated = factory.created.get(0);
-        firstCreated.service.next = gameStreamResponse();
-        first.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
 
         session.close();
         BeaconViewModel second = session.get("z-fold-7", "http://server");
 
         assertNotSame(first, second);
-        assertEquals(1, firstCreated.nativeStreamClient.stopCount);
         assertEquals(2, factory.created.size());
-    }
-
-    @Test
-    public void closeRecoversWhenActiveNativeStreamStopFails() throws Exception {
-        RecordingModelFactory factory = new RecordingModelFactory(true);
-        BeaconViewModelSession session = new BeaconViewModelSession(factory);
-        BeaconViewModel first = session.get("z-fold-7", "http://server");
-        CreatedModel firstCreated = factory.created.get(0);
-        firstCreated.service.next = gameStreamResponse();
-        first.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
-
-        session.close();
-        BeaconViewModel second = session.get("z-fold-7", "http://server");
-
-        assertNotSame(first, second);
-        assertEquals(1, firstCreated.nativeStreamClient.stopCount);
-        assertEquals(2, factory.created.size());
-    }
-
-    private static BeaconApiClient.BeaconResult gameStreamResponse() {
-        return new BeaconApiClient.BeaconResult(
-            200,
-            "{\"state\":\"streaming\",\"stream\":{\"connection\":{\"protocol\":\"gamestream\",\"endpoints\":[" +
-                "{\"role\":\"rtsp\",\"uri\":\"rtsp://127.0.0.1:48010/beacon/session\"}," +
-                "{\"role\":\"video\",\"uri\":\"udp://127.0.0.1:47998\"}," +
-                "{\"role\":\"control\",\"uri\":\"tcp://127.0.0.1:47999\"}," +
-                "{\"role\":\"audio\",\"uri\":\"udp://127.0.0.1:48000\"}]}}}");
     }
 
     private static final class RecordingModelFactory implements BeaconViewModelSession.Factory {
-        private final List<CreatedModel> created = new ArrayList<>();
-        private final boolean failOnStop;
-
-        private RecordingModelFactory() {
-            this(false);
-        }
-
-        private RecordingModelFactory(boolean failOnStop) {
-            this.failOnStop = failOnStop;
-        }
+        private final List<BeaconViewModel> created = new ArrayList<>();
 
         @Override
         public BeaconViewModel create(String clientId, String serverUrl) {
-            FakeService service = new FakeService();
-            RecordingNativeStreamClient nativeStreamClient = new RecordingNativeStreamClient(
-                NativeStreamStartResult.started("Native GameStream RTSP session started."),
-                failOnStop);
-            BeaconViewModel model = new BeaconViewModel(
-                clientId,
-                serverUrl,
-                service,
-                launchUri -> { },
-                nativeStreamClient);
-            created.add(new CreatedModel(model, service, nativeStreamClient));
+            BeaconViewModel model = new BeaconViewModel(clientId, serverUrl, new NoOpService());
+            created.add(model);
             return model;
         }
     }
 
-    private static final class CreatedModel {
-        private final BeaconViewModel model;
-        private final FakeService service;
-        private final RecordingNativeStreamClient nativeStreamClient;
-
-        private CreatedModel(
-            BeaconViewModel model,
-            FakeService service,
-            RecordingNativeStreamClient nativeStreamClient) {
-            this.model = model;
-            this.service = service;
-            this.nativeStreamClient = nativeStreamClient;
-        }
-    }
-
-    private static final class RecordingNativeStreamClient implements NativeStreamClient {
-        private final NativeStreamStartResult result;
-        private final boolean failOnStop;
-        private int stopCount;
-
-        private RecordingNativeStreamClient(NativeStreamStartResult result, boolean failOnStop) {
-            this.result = result;
-            this.failOnStop = failOnStop;
-        }
+    private static final class NoOpService implements BeaconViewModel.BeaconService {
+        private final BeaconApiClient.BeaconResult result = new BeaconApiClient.BeaconResult(200, "{}");
 
         @Override
-        public NativeStreamStartResult start(StreamConnectionDescriptor connection) {
-            return result;
-        }
+        public BeaconApiClient.BeaconResult hello() { return result; }
 
         @Override
-        public void stop() {
-            stopCount++;
-            if (failOnStop) {
-                throw new IllegalStateException("Native stream stop failed.");
-            }
-        }
-    }
-
-    private static final class FakeService implements BeaconViewModel.BeaconService {
-        private BeaconApiClient.BeaconResult next = new BeaconApiClient.BeaconResult(200, "{}");
+        public BeaconApiClient.BeaconResult patchProfile(BeaconApiClient.ProfilePatch patch) { return result; }
 
         @Override
-        public BeaconApiClient.BeaconResult hello() throws IOException {
-            return next;
-        }
+        public BeaconApiClient.BeaconResult reportCapabilities(BeaconApiClient.ClientCapabilities capabilities) { return result; }
 
         @Override
-        public BeaconApiClient.BeaconResult patchProfile(BeaconApiClient.ProfilePatch patch) throws IOException {
-            return next;
-        }
+        public BeaconApiClient.BeaconResult reportTelemetry(BeaconApiClient.ClientTelemetry telemetry) { return result; }
 
         @Override
-        public BeaconApiClient.BeaconResult reportCapabilities(BeaconApiClient.ClientCapabilities capabilities) throws IOException {
-            return next;
-        }
+        public BeaconApiClient.BeaconResult beacon(boolean active) { return result; }
 
         @Override
-        public BeaconApiClient.BeaconResult reportTelemetry(BeaconApiClient.ClientTelemetry telemetry) throws IOException {
-            return next;
-        }
+        public BeaconApiClient.BeaconResult games() { return result; }
 
         @Override
-        public BeaconApiClient.BeaconResult beacon(boolean active) throws IOException {
-            return next;
-        }
+        public BeaconApiClient.BeaconResult requestPlan(BeaconApiClient.GameSelection game) { return result; }
 
         @Override
-        public BeaconApiClient.BeaconResult games() throws IOException {
-            return next;
-        }
+        public BeaconApiClient.BeaconResult launch(BeaconApiClient.GameSelection game) { return result; }
 
         @Override
-        public BeaconApiClient.BeaconResult requestPlan(BeaconApiClient.GameSelection game) throws IOException {
-            return next;
-        }
+        public BeaconApiClient.BeaconResult sendInput(BeaconApiClient.InputBatch input) { return result; }
 
         @Override
-        public BeaconApiClient.BeaconResult launch(BeaconApiClient.GameSelection game) throws IOException {
-            return next;
-        }
+        public BeaconApiClient.BeaconResult stopStream() { return result; }
 
         @Override
-        public BeaconApiClient.BeaconResult sendInput(BeaconApiClient.InputBatch input) throws IOException {
-            return next;
-        }
+        public BeaconApiClient.BeaconResult disconnect() { return result; }
 
         @Override
-        public BeaconApiClient.BeaconResult stopStream() throws IOException {
-            return next;
-        }
+        public BeaconApiClient.BeaconResult quit(BeaconApiClient.QuitState state) { return result; }
 
         @Override
-        public BeaconApiClient.BeaconResult disconnect() throws IOException {
-            return next;
-        }
-
-        @Override
-        public BeaconApiClient.BeaconResult quit(BeaconApiClient.QuitState state) throws IOException {
-            return next;
-        }
-
-        @Override
-        public BeaconApiClient.BeaconResult emergencyRestore() throws IOException {
-            return next;
-        }
+        public BeaconApiClient.BeaconResult emergencyRestore() { return result; }
     }
 }

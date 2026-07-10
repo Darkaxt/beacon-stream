@@ -31,19 +31,9 @@ public final class BeaconViewModelSession {
     }
 
     public synchronized void close() {
-        if (activeModel == null) {
-            return;
-        }
-
-        BeaconViewModel model = activeModel;
         activeModel = null;
         activeClientId = "";
         activeServerUrl = "";
-        try {
-            model.stopNativeStream();
-        } catch (RuntimeException ignored) {
-            // Session cleanup must not leave Activity actions pinned to a stale model.
-        }
     }
 
     public interface Factory {
