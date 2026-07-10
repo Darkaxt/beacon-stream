@@ -17,31 +17,17 @@ public sealed class FakeStreamingBackend : IStreamingBackend
     public Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken) =>
         Task.FromResult(new StreamingBackendHealth(
             Ready: string.IsNullOrWhiteSpace(NextPreflightError),
-            Backend: "fake",
+            State: string.IsNullOrWhiteSpace(NextPreflightError) ? "ready" : "unavailable",
             Diagnostic: string.IsNullOrWhiteSpace(NextPreflightError)
                 ? "Fake streaming backend ready."
                 : NextPreflightError,
-            ExecutableConfigured: false,
-            ExecutableAvailable: false,
-            ExecutablePath: null,
-            WrapperChildExecutableConfigured: false,
-            WrapperChildExecutableAvailable: false,
-            WrapperChildExecutablePath: null,
-            WrapperChildArgumentsConfigured: false,
-            ManifestConfigured: false,
-            ManifestAvailable: false,
-            ManifestPath: null,
-            ManifestName: null,
-            Protocol: "beacon-fake",
-            LaunchUri: null,
-            Endpoints: [new StreamingEndpointDescriptor("control", "beacon-fake://health/control")],
-            Codecs: ["h264", "hevc", "av1"],
-            Transports: ["lan-direct", "relay"],
-            Encoders: ["fake"],
-            Capture: ["fake"],
-            MaxFps: 120,
-            MaxBitrateMbps: null,
-            Hdr10: false,
+            Capabilities: new(
+                Codecs: ["h264", "hevc", "av1"],
+                Encoders: ["fake"],
+                CaptureMethods: ["fake"],
+                MaxFps: 120,
+                MaxBitrateMbps: null,
+                Hdr10: false),
             ActiveSessions: sessions.Count,
             Diagnostics: []));
 
@@ -61,17 +47,6 @@ public sealed class FakeStreamingBackend : IStreamingBackend
             return Task.FromResult(StreamingStartResult.Fail(error));
         }
 
-        string launchUri = $"beacon-fake://stream/{plan.SessionId}";
-        var connection = new StreamingConnectionDescriptor(
-            "beacon-fake",
-            launchUri,
-            [new StreamingEndpointDescriptor("control", launchUri)],
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["displayId"] = plan.Display.DisplayId,
-                ["transport"] = plan.Stream.Transport
-            });
-
         var session = new StreamingSessionState(
             plan.SessionId,
             plan.ClientId.Value,
@@ -80,10 +55,8 @@ public sealed class FakeStreamingBackend : IStreamingBackend
             plan.Stream.Codec,
             plan.Stream.Fps,
             plan.Stream.InitialBitrateMbps,
-            plan.Stream.Transport,
             State: "running",
-            Error: null,
-            connection);
+            Error: null);
 
         sessions[plan.SessionId] = session;
         return Task.FromResult(StreamingStartResult.Ok(session));

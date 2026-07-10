@@ -5,10 +5,6 @@
     <ProjectReference Include="..\Beacon.Platform.Windows\Beacon.Platform.Windows.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Content Include="Assets\beacon-test-color-bars.h264" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>

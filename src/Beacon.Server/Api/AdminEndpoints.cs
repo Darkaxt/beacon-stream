@@ -92,7 +92,6 @@ public static class AdminEndpoints
                 host = new
                 {
                     mode = hostOptions.ModeName,
-                    streamingBackendMode = hostOptions.StreamingBackendModeName,
                     displayBackend = hostOptions.DisplayBackendName,
                     gameLauncher = hostOptions.GameLauncherName,
                     activityInspector = hostOptions.ActivityInspectorName,

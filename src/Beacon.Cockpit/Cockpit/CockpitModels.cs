@@ -74,18 +74,8 @@ public sealed record CockpitStreamSummary(
     string Codec,
     int Fps,
     int InitialBitrateMbps,
-    string Transport,
     string State,
-    string? Error,
-    CockpitStreamConnection? Connection);
-
-public sealed record CockpitStreamConnection(
-    string Protocol,
-    string? LaunchUri,
-    IReadOnlyList<CockpitStreamEndpoint> Endpoints,
-    IReadOnlyDictionary<string, string> Metadata);
-
-public sealed record CockpitStreamEndpoint(string Role, string Uri);
+    string? Error);
 
 public sealed record CockpitOwnershipSummary(
     string SessionId,
@@ -125,59 +115,36 @@ public sealed record CockpitDisplayPath(
 
 public sealed record CockpitStreamingHealth(
     bool Ready,
-    string Backend,
+    string State,
     string Diagnostic,
-    bool ExecutableConfigured,
-    bool ExecutableAvailable,
-    string? ExecutablePath,
-    bool WrapperChildExecutableConfigured,
-    bool WrapperChildExecutableAvailable,
-    string? WrapperChildExecutablePath,
-    bool WrapperChildArgumentsConfigured,
-    bool ManifestConfigured,
-    bool ManifestAvailable,
-    string? ManifestPath,
-    string? ManifestName,
-    string? Protocol,
-    string? LaunchUri,
-    IReadOnlyList<CockpitStreamEndpoint> Endpoints,
-    IReadOnlyList<string> Codecs,
-    IReadOnlyList<string> Transports,
-    IReadOnlyList<string> Encoders,
-    IReadOnlyList<string> Capture,
-    int? MaxFps,
-    int? MaxBitrateMbps,
-    bool Hdr10,
+    CockpitStreamingCapabilities Capabilities,
     int ActiveSessions,
     IReadOnlyList<string> Diagnostics)
 {
     public static CockpitStreamingHealth Unknown { get; } = new(
         Ready: false,
-        Backend: "unknown",
+        State: "unknown",
         Diagnostic: "Streaming health unavailable.",
-        ExecutableConfigured: false,
-        ExecutableAvailable: false,
-        ExecutablePath: null,
-        WrapperChildExecutableConfigured: false,
-        WrapperChildExecutableAvailable: false,
-        WrapperChildExecutablePath: null,
-        WrapperChildArgumentsConfigured: false,
-        ManifestConfigured: false,
-        ManifestAvailable: false,
-        ManifestPath: null,
-        ManifestName: null,
-        Protocol: null,
-        LaunchUri: null,
-        Endpoints: [],
-        Codecs: [],
-        Transports: [],
-        Encoders: [],
-        Capture: [],
-        MaxFps: null,
-        MaxBitrateMbps: null,
-        Hdr10: false,
+        Capabilities: CockpitStreamingCapabilities.None,
         ActiveSessions: 0,
         Diagnostics: []);
+}
+
+public sealed record CockpitStreamingCapabilities(
+    IReadOnlyList<string> Codecs,
+    IReadOnlyList<string> Encoders,
+    IReadOnlyList<string> CaptureMethods,
+    int? MaxFps,
+    int? MaxBitrateMbps,
+    bool Hdr10)
+{
+    public static CockpitStreamingCapabilities None { get; } = new(
+        Codecs: [],
+        Encoders: [],
+        CaptureMethods: [],
+        MaxFps: null,
+        MaxBitrateMbps: null,
+        Hdr10: false);
 }
 
 public sealed record CockpitInputHealth(

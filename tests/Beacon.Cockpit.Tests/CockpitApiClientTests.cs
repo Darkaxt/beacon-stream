@@ -32,15 +32,8 @@ public sealed class CockpitApiClientTests
                 "codec": "av1",
                 "fps": 120,
                 "initialBitrateMbps": 65,
-                "transport": "lan-direct",
                 "state": "running",
-                "error": null,
-                "connection": {
-                  "protocol": "beacon-fake",
-                  "launchUri": "beacon-fake://stream/z-fold-7-steam-shortcut:3767414131",
-                  "endpoints": [{ "role": "control", "uri": "beacon-fake://stream/z-fold-7-steam-shortcut:3767414131" }],
-                  "metadata": { "displayId": "client-z-fold-7" }
-                }
+                "error": null
               }],
               "ownership": [{ "sessionId": "z-fold-7-steam-shortcut:3767414131", "appId": "steam-shortcut:3767414131", "launchedProcessId": 4321, "launchedProcessRunning": false, "childProcessRunning": false, "ownedWindowRemaining": false, "reasons": [] }],
               "display": {
@@ -55,32 +48,16 @@ public sealed class CockpitApiClientTests
               },
               "streamingHealth": {
                 "ready": true,
-                "backend": "external-process",
-                "diagnostic": "External streaming backend ready.",
-                "executableConfigured": true,
-                "executableAvailable": true,
-                "executablePath": "C:\\Tools\\sunshine-wrapper.exe",
-                "wrapperChildExecutableConfigured": true,
-                "wrapperChildExecutableAvailable": true,
-                "wrapperChildExecutablePath": "C:\\Tools\\sunshine.exe",
-                "wrapperChildArgumentsConfigured": true,
-                "manifestConfigured": true,
-                "manifestAvailable": true,
-                "manifestPath": "C:\\Tools\\beacon-streaming.json",
-                "manifestName": "Sunshine bridge",
-                "protocol": "gamestream",
-                "launchUri": "moonlight://beacon/z-fold-7",
-                "endpoints": [
-                  { "role": "rtsp", "uri": "rtsp://127.0.0.1:48010" },
-                  { "role": "audio", "uri": "udp://127.0.0.1:48000" }
-                ],
-                "codecs": ["av1", "hevc"],
-                "transports": ["lan-direct"],
-                "encoders": ["nvenc"],
-                "capture": ["dxgi"],
-                "maxFps": 120,
-                "maxBitrateMbps": 150,
-                "hdr10": true,
+                "state": "ready",
+                "diagnostic": "Beacon StreamWorker ready.",
+                "capabilities": {
+                  "codecs": ["av1", "hevc"],
+                  "encoders": ["nvenc"],
+                  "captureMethods": ["dxgi"],
+                  "maxFps": 120,
+                  "maxBitrateMbps": 150,
+                  "hdr10": true
+                },
                 "activeSessions": 1,
                 "diagnostics": ["ready"]
               },
@@ -99,7 +76,7 @@ public sealed class CockpitApiClientTests
                 "severity": "error",
                 "category": "streaming",
                 "operation": "preflight",
-                "message": "External streaming manifest codec av1 is not supported.",
+                "message": "Beacon StreamWorker codec av1 is not supported.",
                 "clientId": "z-fold-7",
                 "sessionId": "session-1",
                 "displayId": "client-z-fold-7",
@@ -120,8 +97,6 @@ public sealed class CockpitApiClientTests
         Assert.Single(snapshot.Streams);
         Assert.Equal("running", snapshot.Streams[0].State);
         Assert.Equal("client-z-fold-7", snapshot.Streams[0].DisplayId);
-        Assert.Equal("beacon-fake", snapshot.Streams[0].Connection?.Protocol);
-        Assert.Equal("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", snapshot.Streams[0].Connection?.LaunchUri);
         Assert.Single(snapshot.Ownership);
         Assert.Equal(4321, snapshot.Ownership[0].LaunchedProcessId);
         Assert.True(snapshot.Display.DriverReady);
@@ -129,14 +104,11 @@ public sealed class CockpitApiClientTests
         Assert.Single(snapshot.Display.Paths);
         Assert.Equal(@"\\.\DISPLAY5", snapshot.Display.Paths[0].DisplayId);
         Assert.True(snapshot.StreamingHealth.Ready);
-        Assert.Equal("external-process", snapshot.StreamingHealth.Backend);
-        Assert.True(snapshot.StreamingHealth.WrapperChildExecutableConfigured);
-        Assert.True(snapshot.StreamingHealth.WrapperChildExecutableAvailable);
-        Assert.Equal("C:\\Tools\\sunshine.exe", snapshot.StreamingHealth.WrapperChildExecutablePath);
-        Assert.True(snapshot.StreamingHealth.WrapperChildArgumentsConfigured);
-        Assert.Equal(["av1", "hevc"], snapshot.StreamingHealth.Codecs);
-        Assert.Contains(snapshot.StreamingHealth.Endpoints, endpoint => endpoint.Role == "rtsp" && endpoint.Uri == "rtsp://127.0.0.1:48010");
-        Assert.True(snapshot.StreamingHealth.Hdr10);
+        Assert.Equal("ready", snapshot.StreamingHealth.State);
+        Assert.Equal(["av1", "hevc"], snapshot.StreamingHealth.Capabilities.Codecs);
+        Assert.Equal(["nvenc"], snapshot.StreamingHealth.Capabilities.Encoders);
+        Assert.Equal(["dxgi"], snapshot.StreamingHealth.Capabilities.CaptureMethods);
+        Assert.True(snapshot.StreamingHealth.Capabilities.Hdr10);
         Assert.True(snapshot.InputHealth.Ready);
         Assert.Equal("windows-sendinput", snapshot.InputHealth.Backend);
         Assert.Equal(["pointer", "keyboard"], snapshot.InputHealth.SupportedEventTypes);
