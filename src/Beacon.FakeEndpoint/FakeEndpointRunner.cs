@@ -1,5 +1,4 @@
 using System.Net.Http.Json;
-using System.Text.Json;
 
 namespace Beacon.FakeEndpoint;
 
@@ -29,9 +28,7 @@ public sealed record FakeEndpointScript(
     string? ThermalState,
     string AppId,
     string Title,
-    string Source,
-    bool RequireStreamConnection,
-    bool EndAfterStreamConnection)
+    string Source)
 {
     public static FakeEndpointScript CreateZFold7Default() =>
         new(
@@ -60,9 +57,7 @@ public sealed record FakeEndpointScript(
             ThermalState: "nominal",
             AppId: "steam-shortcut:3767414131",
             Title: "Dispatch",
-            Source: "steam-shortcut",
-            RequireStreamConnection: false,
-            EndAfterStreamConnection: false);
+            Source: "steam-shortcut");
 
     public FakeEndpointScript ApplyTelemetryProfile(string profile)
     {
@@ -152,7 +147,6 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
         }
 
         var operations = new List<string>();
-        string? validationError = null;
 
         bool ok =
             await SendAsync(HttpMethod.Post, "/clients/hello", new { clientId = script.ClientId, name = script.Name, pairingToken = script.PairingToken }, operations, cancellationToken) &&
@@ -164,16 +158,6 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/plan", CreatePlanRequest(script), operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/launch", CreatePlanRequest(script), operations, cancellationToken);
 
-        if (ok && (script.RequireStreamConnection || script.EndAfterStreamConnection))
-        {
-            (ok, validationError) = await VerifyStreamConnectionAsync(script, operations, cancellationToken);
-        }
-
-        if (ok && script.EndAfterStreamConnection)
-        {
-            return new FakeEndpointResult(true, operations, null);
-        }
-
         ok = ok &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/input", CreateInputSample(), operations, cancellationToken) &&
             await SendAsync(HttpMethod.Post, $"/clients/{script.ClientId}/disconnect", new { }, operations, cancellationToken) &&
@@ -184,7 +168,7 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
 
         return ok
             ? new FakeEndpointResult(true, operations, null)
-            : new FakeEndpointResult(false, operations, validationError ?? "Fake endpoint operation failed.");
+            : new FakeEndpointResult(false, operations, "Fake endpoint operation failed.");
     }
 
     private async Task<bool> SendAsync(
@@ -203,75 +187,6 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
         operations.Add($"{method.Method} {path}");
         return response.IsSuccessStatusCode;
     }
-
-    private async Task<(bool Success, string? Error)> VerifyStreamConnectionAsync(
-        FakeEndpointScript script,
-        List<string> operations,
-        CancellationToken cancellationToken)
-    {
-        string path = $"/clients/{script.ClientId}/stream";
-        using var request = new HttpRequestMessage(HttpMethod.Get, path);
-        using HttpResponseMessage response = await httpClient.SendAsync(request, cancellationToken);
-        operations.Add($"GET {path}");
-        if (!response.IsSuccessStatusCode)
-        {
-            return (false, $"Required stream connection check failed because GET {path} returned {(int)response.StatusCode}.");
-        }
-
-        string body = await response.Content.ReadAsStringAsync(cancellationToken);
-        try
-        {
-            using JsonDocument document = JsonDocument.Parse(body);
-            if (!TryGetConnection(document.RootElement, out JsonElement connection))
-            {
-                return (false, "Required stream connection check failed because stream.connection is missing.");
-            }
-
-            string? protocol = ReadString(connection, "protocol");
-            string? launchUri = ReadString(connection, "launchUri");
-            bool hasEndpoint = connection.TryGetProperty("endpoints", out JsonElement endpoints)
-                && endpoints.ValueKind == JsonValueKind.Array
-                && endpoints.GetArrayLength() > 0;
-
-            if (string.IsNullOrWhiteSpace(protocol))
-            {
-                return (false, "Required stream connection check failed because stream.connection.protocol is missing.");
-            }
-
-            if (string.IsNullOrWhiteSpace(launchUri) && !hasEndpoint)
-            {
-                return (false, "Required stream connection check failed because stream.connection has no launchUri or endpoints.");
-            }
-
-            operations.Add($"stream connection {protocol.Trim()}");
-            return (true, null);
-        }
-        catch (JsonException ex)
-        {
-            return (false, $"Required stream connection check failed because GET {path} returned invalid JSON: {ex.Message}");
-        }
-    }
-
-    private static bool TryGetConnection(JsonElement root, out JsonElement connection)
-    {
-        connection = default;
-        if (!root.TryGetProperty("stream", out JsonElement stream)
-            || stream.ValueKind != JsonValueKind.Object
-            || !stream.TryGetProperty("connection", out JsonElement candidate)
-            || candidate.ValueKind != JsonValueKind.Object)
-        {
-            return false;
-        }
-
-        connection = candidate;
-        return true;
-    }
-
-    private static string? ReadString(JsonElement element, string propertyName) =>
-        element.TryGetProperty(propertyName, out JsonElement property)
-        && property.ValueKind == JsonValueKind.String
-            ? property.GetString()
-            : null;
 
     private static object CreateProfilePatch(FakeEndpointScript script) =>
         new

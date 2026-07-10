@@ -43,7 +43,7 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
         }
 
         @Override
-        public void configure(EncodedVideoStreamPlan plan, Object surface, EncodedVideoSampleProvider sampleProvider) {
+        public void configure(EncodedVideoDecodeRequest request, Object surface, EncodedVideoSampleProvider sampleProvider) {
             if (!(surface instanceof Surface androidSurface)) {
                 throw new IllegalStateException("Encoded video surface is not an Android Surface.");
             }
@@ -53,8 +53,8 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
             }
 
             codec.setCallback(new QueueingCallback(sampleProvider));
-            MediaFormat format = MediaFormat.createVideoFormat(mimeType, plan.width(), plan.height());
-            format.setInteger(MediaFormat.KEY_FRAME_RATE, plan.fps());
+            MediaFormat format = MediaFormat.createVideoFormat(mimeType, request.width(), request.height());
+            format.setInteger(MediaFormat.KEY_FRAME_RATE, request.fps());
             codec.configure(format, androidSurface, null, 0);
         }
 

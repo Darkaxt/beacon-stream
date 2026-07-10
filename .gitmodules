@@ -1,6 +1,0 @@
-[submodule "src/Beacon.Android/streaming-moonlight/src/main/cpp/moonlight-common-c"]
-	path = src/Beacon.Android/streaming-moonlight/src/main/cpp/moonlight-common-c
-	url = https://github.com/moonlight-stream/moonlight-common-c.git
-[submodule "src/Beacon.Android/streaming-moonlight/src/main/cpp/mbedtls"]
-	path = src/Beacon.Android/streaming-moonlight/src/main/cpp/mbedtls
-	url = https://github.com/Mbed-TLS/mbedtls.git

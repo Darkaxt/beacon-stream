@@ -216,18 +216,13 @@ public static class ClientEndpoints
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
-            StreamingClientSessionSnapshot? clientSession = await streaming.GetClientSessionAsync(
-                planResult.Plan.SessionId,
-                cancellationToken);
-
             return Results.Ok(new
             {
                 clientId,
                 displayId = leaseResult.Lease.DisplayId,
                 state = "streaming",
                 launch = launchResult.State,
-                stream = clientSession?.Session ?? streamResult.Session,
-                nativeSession = clientSession?.NativeSession
+                stream = streamResult.Session
             });
         });
 
@@ -243,16 +238,15 @@ public static class ClientEndpoints
                 return Results.NotFound(new { error = $"Client '{clientId}' has no session plan." });
             }
 
-            StreamingClientSessionSnapshot? clientSession = await streaming.GetClientSessionAsync(
+            StreamingSessionState? streamSession = await streaming.GetSessionAsync(
                 plan.SessionId,
                 cancellationToken);
-            return clientSession is null
+            return streamSession is null
                 ? Results.NotFound(new { error = $"Stream session '{plan.SessionId}' is not running." })
                 : Results.Ok(new
                 {
                     clientId,
-                    stream = clientSession.Session,
-                    nativeSession = clientSession.NativeSession
+                    stream = streamSession
                 });
         });
 

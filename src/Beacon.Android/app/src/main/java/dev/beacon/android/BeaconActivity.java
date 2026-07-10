@@ -7,7 +7,6 @@ import android.view.Display;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
-import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.ArrayAdapter;
@@ -25,9 +24,9 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import dev.beacon.streaming.moonlight.MoonlightNativeCore;
-
 public final class BeaconActivity extends Activity {
+    private static final String MEDIA_RECOVERY_STATUS =
+        "StreamWorker recovery in progress; control-plane launch completed without media.";
     private static final String[] LOCAL_THEME_VALUES = new String[] { "system", "dark", "light" };
     private static final String[] TOUCH_LAYOUT_VALUES = new String[] { "default", "compact", "edge" };
     private static final String[] UI_DENSITY_VALUES = new String[] { "comfortable", "dense", "large" };
@@ -73,8 +72,6 @@ public final class BeaconActivity extends Activity {
     private EditText thermalState;
     private TextView decoderDebugOverlay;
     private TextView controllerOverlayMarker;
-    private SurfaceView encodedVideoSurfaceView;
-    private BeaconTestPatternView nativeStreamView;
     private TextView touchSurfaceView;
     private TextView status;
 
@@ -188,16 +185,6 @@ public final class BeaconActivity extends Activity {
             readCapabilities(),
             readTelemetry(),
             readGame())));
-        encodedVideoSurfaceView = new SurfaceView(this);
-        encodedVideoSurfaceView.setMinimumHeight(360);
-        encodedVideoSurfaceView.setLayoutParams(new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            360));
-        encodedVideoSurfaceView.setAlpha(0f);
-        encodedVideoSurfaceView.setVisibility(View.VISIBLE);
-        root.addView(encodedVideoSurfaceView);
-        nativeStreamView = new BeaconTestPatternView(this);
-        root.addView(nativeStreamView);
         root.addView(touchSurface());
         root.addView(button("Send Pointer", model -> model.sendInput(BeaconApiClient.InputBatch.pointerTap(1, 0.5, 0.5))));
         root.addView(button("Send Escape", model -> model.sendInput(BeaconApiClient.InputBatch.keyboardPress(2, "Escape", "Escape"))));
@@ -388,9 +375,12 @@ public final class BeaconActivity extends Activity {
             try {
                 action.run(model);
                 String error = model.latestError().isEmpty() ? "" : "\nError: " + model.latestError();
-                String nativeStream = model.latestNativeStream().isEmpty() ? "" : "\nNative stream: " + model.latestNativeStream();
-                updateNativeStreamPresentation(model.latestNativeStreamPresentation());
-                setStatus(model.status() + "\nGames: " + model.latestGames() + "\nPlan: " + model.latestPlan() + "\nStream: " + model.latestStream() + nativeStream + error);
+                String recovery = "Launch".equals(label) && model.latestError().isEmpty()
+                    ? "\n" + MEDIA_RECOVERY_STATUS
+                    : "";
+                setStatus(model.status() + "\nGames: " + model.latestGames() +
+                    "\nPlan: " + model.latestPlan() + "\nStream: " + model.latestStream() +
+                    recovery + error);
             } catch (IOException | RuntimeException ex) {
                 setStatus(label + " failed: " + ex.getMessage());
             }
@@ -404,26 +394,6 @@ public final class BeaconActivity extends Activity {
 
     private void setStatus(String value) {
         runOnUiThread(() -> status.setText(value));
-    }
-
-    private void updateNativeStreamPresentation(NativeStreamPresentation presentation) {
-        runOnUiThread(() -> {
-            NativeStreamPresentation safePresentation = presentation == null
-                ? NativeStreamPresentation.none()
-                : presentation;
-            boolean encodedVideoActive =
-                safePresentation.active() && "encoded-video".equalsIgnoreCase(safePresentation.kind());
-            if (encodedVideoSurfaceView != null) {
-                encodedVideoSurfaceView.setVisibility(View.VISIBLE);
-                encodedVideoSurfaceView.setAlpha(encodedVideoActive ? 1f : 0f);
-            }
-
-            if (nativeStreamView != null) {
-                boolean colorBarsActive =
-                    safePresentation.active() && "color-bars".equalsIgnoreCase(safePresentation.kind());
-                nativeStreamView.setPresentation(colorBarsActive ? safePresentation : NativeStreamPresentation.none());
-            }
-        });
     }
 
     private void saveLocalSettings() {
@@ -497,8 +467,7 @@ public final class BeaconActivity extends Activity {
         decoderDebugOverlay.setText(
             "Decoder load " + textValue(decoderLoadPercent) +
                 "% | bandwidth " + textValue(estimatedBandwidthMbps) +
-                " Mbps | thermal " + textValue(thermalState) +
-                " | Moonlight core " + (MoonlightNativeCore.isAvailable() ? "ready" : "unavailable"));
+                " Mbps | thermal " + textValue(thermalState));
     }
 
     private void updateControllerOverlay() {
@@ -530,25 +499,7 @@ public final class BeaconActivity extends Activity {
         return new BeaconViewModel(
             config.clientId(),
             config.serverUrl(),
-            new BeaconApiClient(config),
-            new DispatchingStreamConnectionLauncher(
-                new AndroidMainThreadDispatcher(this),
-                new AndroidIntentStreamConnectionLauncher(this)),
-            createNativeStreamClient(config.serverUrl()));
-    }
-
-    private NativeStreamClient createNativeStreamClient(String serverUrl) {
-        AndroidMediaCodecFactory codecFactory = new AndroidMediaCodecFactory();
-        AndroidSurfaceViewProvider surfaceProvider = new AndroidSurfaceViewProvider(encodedVideoSurfaceView);
-        return AndroidNativeStreamClientFactory.create(
-            new SurfaceEncodedVideoDecoder(
-                codecFactory,
-                surfaceProvider,
-                new HttpEncodedVideoSampleProviderFactory(serverUrl)),
-            AndroidNativeStreamClientFactory.socketRtspSessionClient(),
-            AndroidNativeStreamClientFactory.socketRtpVideoSessionClient(codecFactory, surfaceProvider),
-            new JniMoonlightStreamConnection(),
-            () -> new MoonlightMediaCodecVideoRenderer(codecFactory, surfaceProvider));
+            new BeaconApiClient(config));
     }
 
     private BeaconApiClient.ProfilePatch readPatch() {

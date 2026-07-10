@@ -18,17 +18,8 @@ public sealed class CockpitShellViewModelTests
                 "av1",
                 120,
                 65,
-                "lan-direct",
                 "running",
-                null,
-                new CockpitStreamConnection(
-                    "beacon-fake",
-                    "beacon-fake://stream/z-fold-7-steam-shortcut:3767414131",
-                    [new CockpitStreamEndpoint("control", "beacon-fake://stream/z-fold-7-steam-shortcut:3767414131")],
-                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                    {
-                        ["displayId"] = "client-z-fold-7"
-                    }))],
+                null)],
             [new CockpitOwnershipSummary(
                 "z-fold-7-steam-shortcut:3767414131",
                 "steam-shortcut:3767414131",
@@ -60,15 +51,17 @@ public sealed class CockpitShellViewModelTests
         Assert.True(viewModel.ProfileRestorePhysicalDisplayOnEnd);
         Assert.True(viewModel.ProfileForbidMirrorMode);
         Assert.Contains("steam-shortcut:3767414131", viewModel.Sessions);
-        Assert.Contains(viewModel.Streams, stream => stream.Contains("z-fold-7 steam-shortcut:3767414131 running av1 120fps", StringComparison.Ordinal));
-        Assert.Contains(viewModel.Streams, stream => stream.Contains("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", StringComparison.Ordinal));
+        Assert.Contains(
+            "z-fold-7-steam-shortcut:3767414131 steam-shortcut:3767414131 client-z-fold-7 av1 120fps 65Mbps running",
+            viewModel.Streams);
         Assert.Contains("steam-shortcut:3767414131 process=False child=False window=False", viewModel.Ownership);
         Assert.Contains("ready", viewModel.DisplayHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("physical primary verified", viewModel.DisplayHealthSummary, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("external-process", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("child executable available", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("1 active stream", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("2 endpoint", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ready", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("nvenc", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("dxgi", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("HDR10", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("1 active", viewModel.StreamingHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("windows-sendinput", viewModel.InputHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("tap", viewModel.InputHealthSummary, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("keyboard", viewModel.InputHealthSummary, StringComparison.OrdinalIgnoreCase);
@@ -352,33 +345,15 @@ public sealed class CockpitShellViewModelTests
     private static CockpitStreamingHealth CreateHealthyStreaming() =>
         new(
             Ready: true,
-            Backend: "external-process",
-            Diagnostic: "External streaming backend ready.",
-            ExecutableConfigured: true,
-            ExecutableAvailable: true,
-            ExecutablePath: "C:\\Tools\\sunshine-wrapper.exe",
-            WrapperChildExecutableConfigured: true,
-            WrapperChildExecutableAvailable: true,
-            WrapperChildExecutablePath: "C:\\Tools\\sunshine.exe",
-            WrapperChildArgumentsConfigured: true,
-            ManifestConfigured: true,
-            ManifestAvailable: true,
-            ManifestPath: "C:\\Tools\\beacon-streaming.json",
-            ManifestName: "Sunshine bridge",
-            Protocol: "gamestream",
-            LaunchUri: "moonlight://beacon/z-fold-7",
-            Endpoints:
-            [
-                new CockpitStreamEndpoint("rtsp", "rtsp://127.0.0.1:48010"),
-                new CockpitStreamEndpoint("audio", "udp://127.0.0.1:48000")
-            ],
-            Codecs: ["av1", "hevc"],
-            Transports: ["lan-direct"],
-            Encoders: ["nvenc"],
-            Capture: ["dxgi"],
-            MaxFps: 120,
-            MaxBitrateMbps: 150,
-            Hdr10: true,
+            State: "ready",
+            Diagnostic: "Beacon StreamWorker ready.",
+            Capabilities: new CockpitStreamingCapabilities(
+                Codecs: ["av1", "hevc"],
+                Encoders: ["nvenc"],
+                CaptureMethods: ["dxgi"],
+                MaxFps: 120,
+                MaxBitrateMbps: 150,
+                Hdr10: true),
             ActiveSessions: 1,
             Diagnostics: ["ready"]);
 

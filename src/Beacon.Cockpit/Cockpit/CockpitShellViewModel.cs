@@ -267,12 +267,8 @@ public sealed class CockpitShellViewModel : ObservableObject
         Replace(Clients, clientSummaries.Select(client => client.ClientId));
         Replace(Sessions, snapshot.Sessions.Select(session => session.AppId));
         Replace(Streams, snapshot.Streams.Select(stream =>
-        {
-            string connection = string.IsNullOrWhiteSpace(stream.Connection?.LaunchUri)
-                ? "no connection URI"
-                : stream.Connection.LaunchUri;
-            return $"{stream.ClientId} {stream.AppId} {stream.State} {stream.Codec} {stream.Fps}fps {connection}";
-        }));
+            $"{stream.SessionId} {stream.AppId} {stream.DisplayId} {stream.Codec} " +
+            $"{stream.Fps}fps {stream.InitialBitrateMbps}Mbps {stream.State}"));
         Replace(Ownership, snapshot.Ownership.Select(ownership =>
             $"{ownership.AppId} process={ownership.LaunchedProcessRunning} child={ownership.ChildProcessRunning} window={ownership.OwnedWindowRemaining}"));
         DisplayHealthSummary = FormatDisplayHealth(snapshot.Display);
@@ -494,24 +490,16 @@ public sealed class CockpitShellViewModel : ObservableObject
     private static string FormatStreamingHealth(CockpitStreamingHealth? streaming)
     {
         streaming ??= CockpitStreamingHealth.Unknown;
-        string state = streaming.Ready ? "ready" : "not ready";
-        string executable = streaming.ExecutableConfigured
-            ? streaming.ExecutableAvailable ? "executable available" : "executable missing"
-            : "no executable configured";
-        string wrapperChild = streaming.WrapperChildExecutableConfigured
-            ? streaming.WrapperChildExecutableAvailable ? "child executable available" : "child executable missing"
-            : streaming.WrapperChildArgumentsConfigured ? "child arguments without executable" : "no child executable configured";
-        if (streaming.WrapperChildExecutableConfigured && streaming.WrapperChildArgumentsConfigured)
-        {
-            wrapperChild = $"{wrapperChild}, child arguments configured";
-        }
-
-        string manifest = streaming.ManifestConfigured
-            ? streaming.ManifestAvailable ? "manifest available" : "manifest missing"
-            : "no manifest configured";
-        string active = streaming.ActiveSessions == 1 ? "1 active stream" : $"{streaming.ActiveSessions} active streams";
-        string endpoints = streaming.Endpoints.Count == 1 ? "1 endpoint" : $"{streaming.Endpoints.Count} endpoints";
-        return $"{streaming.Backend} {state}; {executable}; {wrapperChild}; {manifest}; {active}; {endpoints}; {streaming.Diagnostic}";
+        CockpitStreamingCapabilities capabilities = streaming.Capabilities ?? CockpitStreamingCapabilities.None;
+        string codecs = capabilities.Codecs.Count == 0 ? "none" : string.Join("/", capabilities.Codecs);
+        string encoders = capabilities.Encoders.Count == 0 ? "none" : string.Join("/", capabilities.Encoders);
+        string capture = capabilities.CaptureMethods.Count == 0 ? "none" : string.Join("/", capabilities.CaptureMethods);
+        string maxFps = capabilities.MaxFps?.ToString() ?? "unknown";
+        string maxBitrate = capabilities.MaxBitrateMbps is int bitrate ? $"{bitrate}Mbps" : "unknown";
+        string hdr = capabilities.Hdr10 ? "HDR10" : "SDR";
+        string active = $"{streaming.ActiveSessions} active";
+        return $"{streaming.State}: {streaming.Diagnostic}; {active}; codecs {codecs}; " +
+            $"encoders {encoders}; capture {capture}; max {maxFps}fps/{maxBitrate}; {hdr}";
     }
 
     private static string FormatInputHealth(CockpitInputHealth? input)

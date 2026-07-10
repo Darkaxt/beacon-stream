@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json;
 using Beacon.Core.Displays;
@@ -8,13 +7,9 @@ using Beacon.Core.Games;
 using Beacon.Core.Input;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
-using Beacon.FakeEndpoint;
-using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.Hosting;
-using Beacon.StreamingProbe;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -398,148 +393,8 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal("running", root.GetProperty("stream").GetProperty("state").GetString());
         Assert.Equal("av1", root.GetProperty("stream").GetProperty("codec").GetString());
         Assert.Equal(120, root.GetProperty("stream").GetProperty("fps").GetInt32());
-        JsonElement connection = root.GetProperty("stream").GetProperty("connection");
-        Assert.Equal("beacon-fake", connection.GetProperty("protocol").GetString());
-        Assert.Equal("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", connection.GetProperty("launchUri").GetString());
-        Assert.Equal("control", connection.GetProperty("endpoints")[0].GetProperty("role").GetString());
-    }
-
-    [Fact]
-    public async Task LaunchCanReturnBeaconTestEndpointOnlyStreamConnection()
-    {
-        WebApplicationFactory<Program> testPatternFactory = factory.WithWebHostBuilder(builder =>
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IStreamingBackend>();
-                services.AddSingleton<IStreamingBackend, BeaconTestStreamingBackend>();
-            }));
-        HttpClient client = testPatternFactory.CreateClient();
-
-        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
-        {
-            gameId = "steam-shortcut:3767414131"
-        });
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
-        JsonElement connection = document.RootElement.GetProperty("stream").GetProperty("connection");
-
-        Assert.Equal("beacon-test", connection.GetProperty("protocol").GetString());
-        Assert.True(connection.TryGetProperty("launchUri", out JsonElement launchUri));
-        Assert.Equal(JsonValueKind.Null, launchUri.ValueKind);
-        JsonElement endpoint = Assert.Single(connection.GetProperty("endpoints").EnumerateArray());
-        Assert.Equal("video", endpoint.GetProperty("role").GetString());
-        Assert.Equal("beacon-test://pattern/color-bars", endpoint.GetProperty("uri").GetString());
-        Assert.Equal("color-bars", connection.GetProperty("metadata").GetProperty("pattern").GetString());
-    }
-
-    [Fact]
-    public async Task LaunchCanReturnBeaconTestEncodedVideoStreamConnection()
-    {
-        WebApplicationFactory<Program> encodedVideoFactory = factory.WithWebHostBuilder(builder =>
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IStreamingBackend>();
-                services.AddSingleton(new BeaconTestStreamingOptions(BeaconTestStreamKind.EncodedVideo));
-                services.AddSingleton<IStreamingBackend, BeaconTestStreamingBackend>();
-            }));
-        HttpClient client = encodedVideoFactory.CreateClient();
-
-        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
-        {
-            gameId = "steam-shortcut:3767414131"
-        });
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
-        JsonElement stream = document.RootElement.GetProperty("stream");
-        JsonElement connection = stream.GetProperty("connection");
-
-        Assert.Equal("h264", stream.GetProperty("codec").GetString());
-        Assert.Equal(120, stream.GetProperty("fps").GetInt32());
-        Assert.Equal("beacon-test", connection.GetProperty("protocol").GetString());
-        Assert.True(connection.TryGetProperty("launchUri", out JsonElement launchUri));
-        Assert.Equal(JsonValueKind.Null, launchUri.ValueKind);
-        JsonElement[] endpoints = connection.GetProperty("endpoints").EnumerateArray().ToArray();
-        Assert.Equal(2, endpoints.Length);
-        JsonElement videoEndpoint = Assert.Single(endpoints, endpoint => endpoint.GetProperty("role").GetString() == "video");
-        Assert.Equal("/streams/beacon-test/color-bars.h264", videoEndpoint.GetProperty("uri").GetString());
-        JsonElement samplesEndpoint = Assert.Single(endpoints, endpoint => endpoint.GetProperty("role").GetString() == "samples");
-        Assert.Equal("/streams/beacon-test/color-bars.beacon-annexb", samplesEndpoint.GetProperty("uri").GetString());
-        JsonElement metadata = connection.GetProperty("metadata");
-        Assert.Equal("encoded-video", metadata.GetProperty("streamKind").GetString());
-        Assert.Equal("h264", metadata.GetProperty("codec").GetString());
-        Assert.Equal("annex-b", metadata.GetProperty("container").GetString());
-        Assert.Equal("beacon-annexb-samples", metadata.GetProperty("sampleTransport").GetString());
-        Assert.Equal("2560", metadata.GetProperty("width").GetString());
-        Assert.Equal("1600", metadata.GetProperty("height").GetString());
-        Assert.Equal("120", metadata.GetProperty("fps").GetString());
-    }
-
-    [Fact]
-    public async Task BeaconTestEncodedVideoAssetReturnsAnnexBBytes()
-    {
-        HttpClient client = factory.CreateClient();
-
-        HttpResponseMessage response = await client.GetAsync("/streams/beacon-test/color-bars.h264");
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal("video/H264", response.Content.Headers.ContentType?.MediaType);
-        byte[] bytes = await response.Content.ReadAsByteArrayAsync();
-        Assert.True(bytes.Length > 0);
-        Assert.Equal(0, bytes[0]);
-        Assert.Equal(0, bytes[1]);
-        Assert.Equal(0, bytes[2]);
-        Assert.Equal(1, bytes[3]);
-        Assert.True(CountAnnexBStartCodes(bytes) >= 4);
-    }
-
-    [Fact]
-    public async Task BeaconTestEncodedVideoSampleStreamReturnsFramedSamples()
-    {
-        HttpClient client = factory.CreateClient();
-
-        HttpResponseMessage response = await client.GetAsync("/streams/beacon-test/color-bars.beacon-annexb");
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal("application/vnd.beacon.annexb-samples", response.Content.Headers.ContentType?.MediaType);
-        byte[] bytes = await response.Content.ReadAsByteArrayAsync();
-        byte[] magic = Encoding.ASCII.GetBytes("BEACONANNEXB1\n");
-        Assert.True(bytes.AsSpan(0, magic.Length).SequenceEqual(magic));
-        Assert.True(CountBeaconSampleRecords(bytes) >= 2);
-    }
-
-    private static int CountAnnexBStartCodes(byte[] bytes)
-    {
-        int count = 0;
-        for (int index = 0; index <= bytes.Length - 4; index++)
-        {
-            if (bytes[index] == 0 && bytes[index + 1] == 0 && bytes[index + 2] == 0 && bytes[index + 3] == 1)
-            {
-                count++;
-            }
-        }
-
-        return count;
-    }
-
-    private static int CountBeaconSampleRecords(byte[] bytes)
-    {
-        int offset = Encoding.ASCII.GetByteCount("BEACONANNEXB1\n");
-        int count = 0;
-        while (offset + 12 <= bytes.Length)
-        {
-            long presentationTimeUs = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(offset, 8));
-            int sampleLength = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(offset + 8, 4));
-            Assert.True(presentationTimeUs >= 0);
-            Assert.True(sampleLength > 0);
-            offset += 12 + sampleLength;
-            Assert.True(offset <= bytes.Length);
-            count++;
-        }
-
-        Assert.Equal(bytes.Length, offset);
-        return count;
+        Assert.True(root.EnumerateObject().Select(property => property.Name).ToHashSet().SetEquals(
+            ["clientId", "displayId", "state", "launch", "stream"]));
     }
 
     [Fact]
@@ -629,7 +484,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     {
         var display = new FakeDisplayBackend();
         var launcher = new FakeGameLauncher();
-        var backend = new FakeStreamingBackend { NextPreflightError = "stream wrapper missing" };
+        var backend = new FakeStreamingBackend { NextPreflightError = "stream unavailable" };
         WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
@@ -649,60 +504,10 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         string body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("stream wrapper missing", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("stream unavailable", body, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(display.EnsureCalls);
         Assert.Empty(launcher.Requests);
     }
-
-    [Fact]
-    public async Task LaunchStopsBeforeDisplayLeaseWhenExternalManifestRejectsPlan()
-    {
-        var display = new FakeDisplayBackend();
-        var launcher = new FakeGameLauncher();
-        var runner = new FakeExternalStreamingProcessRunner(["C:\\Tools\\sunshine-wrapper.exe"]);
-        var reader = new FakeExternalStreamingManifestReader();
-        reader.Manifests["C:\\Tools\\beacon-streaming.json"] = new ExternalStreamingManifest(
-            "Sunshine bridge",
-            "gamestream",
-            null,
-            new Dictionary<string, string>(),
-            ["h264"],
-            60,
-            40,
-            Hdr10: false,
-            ["lan-direct"],
-            ["software"],
-            ["dxgi"],
-            ["AV1 disabled"]);
-        var backend = new ExternalProcessStreamingBackend(
-            new ExternalProcessStreamingOptions("C:\\Tools\\sunshine-wrapper.exe", ManifestPath: "C:\\Tools\\beacon-streaming.json"),
-            runner,
-            reader);
-        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IDisplayBackend>();
-                services.RemoveAll<IGameLauncher>();
-                services.RemoveAll<IStreamingBackend>();
-                services.AddSingleton<IDisplayBackend>(display);
-                services.AddSingleton<IGameLauncher>(launcher);
-                services.AddSingleton<IStreamingBackend>(backend);
-            }));
-        HttpClient client = failingFactory.CreateClient();
-
-        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
-        {
-            gameId = "steam-shortcut:3767414131"
-        });
-
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-        string body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("codec av1 is not supported", body, StringComparison.OrdinalIgnoreCase);
-        Assert.Empty(display.EnsureCalls);
-        Assert.Empty(launcher.Requests);
-        Assert.Empty(runner.StartedCommands);
-    }
-
     [Fact]
     public async Task DisconnectQuitAndEmergencyRestoreReturnExplicitRecoveryState()
     {
@@ -827,312 +632,9 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         using JsonDocument quitJson = await JsonDocument.ParseAsync(await quit.Content.ReadAsStreamAsync());
 
         Assert.Equal("running", statusJson.RootElement.GetProperty("stream").GetProperty("state").GetString());
-        JsonElement connection = statusJson.RootElement.GetProperty("stream").GetProperty("connection");
-        Assert.Equal("beacon-fake", connection.GetProperty("protocol").GetString());
-        Assert.Equal("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", connection.GetProperty("launchUri").GetString());
-        Assert.Equal("control", connection.GetProperty("endpoints")[0].GetProperty("role").GetString());
         Assert.Equal("stopped", stopJson.RootElement.GetProperty("stream").GetProperty("state").GetString());
         Assert.True(quitJson.RootElement.GetProperty("displayRemoved").GetBoolean());
     }
-
-    [Fact]
-    public async Task OwningClientReceivesNativeSessionWithoutExposingSecretsInPublicState()
-    {
-        MoonlightNativeSessionDescriptor nativeSession = CreateNativeSession();
-        var backend = new NativeSessionStreamingBackend(nativeSession);
-        WebApplicationFactory<Program> nativeSessionFactory = factory.WithWebHostBuilder(builder =>
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IStreamingBackend>();
-                services.AddSingleton<IStreamingBackend>(backend);
-            }));
-        HttpClient client = nativeSessionFactory.CreateClient();
-
-        HttpResponseMessage launch = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
-        {
-            gameId = "steam-shortcut:3767414131"
-        });
-        HttpResponseMessage status = await client.GetAsync("/clients/z-fold-7/stream");
-        HttpResponseMessage snapshot = await client.GetAsync("/admin/snapshot");
-        HttpResponseMessage stop = await client.PostAsJsonAsync("/clients/z-fold-7/stream/stop", new { });
-        HttpResponseMessage stoppedStatus = await client.GetAsync("/clients/z-fold-7/stream");
-
-        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, status.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, snapshot.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, stop.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, stoppedStatus.StatusCode);
-
-        using JsonDocument launchJson = await JsonDocument.ParseAsync(await launch.Content.ReadAsStreamAsync());
-        using JsonDocument statusJson = await JsonDocument.ParseAsync(await status.Content.ReadAsStreamAsync());
-        using JsonDocument stoppedStatusJson = await JsonDocument.ParseAsync(await stoppedStatus.Content.ReadAsStreamAsync());
-        JsonElement launchNativeSession = launchJson.RootElement.GetProperty("nativeSession");
-        JsonElement statusNativeSession = statusJson.RootElement.GetProperty("nativeSession");
-        Assert.Equal(nativeSession.Address, launchNativeSession.GetProperty("address").GetString());
-        Assert.Equal(nativeSession.RemoteInputAesKey, launchNativeSession.GetProperty("remoteInputAesKey").GetString());
-        Assert.Equal(nativeSession.RemoteInputAesIv, launchNativeSession.GetProperty("remoteInputAesIv").GetString());
-        Assert.Equal(nativeSession.RemoteInputAesKey, statusNativeSession.GetProperty("remoteInputAesKey").GetString());
-        Assert.Equal(JsonValueKind.Null, stoppedStatusJson.RootElement.GetProperty("nativeSession").ValueKind);
-
-        string publicStream = statusJson.RootElement.GetProperty("stream").GetRawText();
-        string snapshotBody = await snapshot.Content.ReadAsStringAsync();
-        Assert.DoesNotContain(nativeSession.RemoteInputAesKey, publicStream, StringComparison.Ordinal);
-        Assert.DoesNotContain(nativeSession.RemoteInputAesIv, publicStream, StringComparison.Ordinal);
-        Assert.DoesNotContain("remoteInputAesKey", snapshotBody, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("remoteInputAesIv", snapshotBody, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(nativeSession.RemoteInputAesKey, snapshotBody, StringComparison.Ordinal);
-        Assert.DoesNotContain(nativeSession.RemoteInputAesIv, snapshotBody, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task OwningClientUsesOneCoherentPublicAndPrivateSessionSnapshot()
-    {
-        MoonlightNativeSessionDescriptor nativeSession = CreateNativeSession() with { Address = "10.0.2.7" };
-        var backend = new CoherentNativeSessionStreamingBackend(nativeSession, "revision-7");
-        WebApplicationFactory<Program> coherentFactory = factory.WithWebHostBuilder(builder =>
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IStreamingBackend>();
-                services.AddSingleton<IStreamingBackend>(backend);
-            }));
-        HttpClient client = coherentFactory.CreateClient();
-
-        HttpResponseMessage launch = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
-        {
-            gameId = "steam-shortcut:3767414131"
-        });
-        HttpResponseMessage status = await client.GetAsync("/clients/z-fold-7/stream");
-
-        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, status.StatusCode);
-        using JsonDocument launchJson = await JsonDocument.ParseAsync(await launch.Content.ReadAsStreamAsync());
-        using JsonDocument statusJson = await JsonDocument.ParseAsync(await status.Content.ReadAsStreamAsync());
-        AssertCoherentNativeSession(launchJson.RootElement, "revision-7", "10.0.2.7");
-        AssertCoherentNativeSession(statusJson.RootElement, "revision-7", "10.0.2.7");
-        Assert.Equal(2, backend.CoherentReadCalls);
-    }
-
-    [Fact]
-    public async Task LaunchWithStreamingProbePublishesRuntimeDescriptorAndDisconnectStopsProcess()
-    {
-        string descriptorRoot = Path.Combine(Path.GetTempPath(), $"beacon-streaming-smoke-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(descriptorRoot);
-        var backend = new ExternalProcessStreamingBackend(
-            new ExternalProcessStreamingOptions(GetStreamingProbeExecutablePath()),
-            new WindowsExternalStreamingProcessRunner(),
-            sessionDescriptors: new WindowsExternalStreamingSessionDescriptorStore(descriptorRoot));
-        WebApplicationFactory<Program> streamingFactory = factory.WithWebHostBuilder(builder =>
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IStreamingBackend>();
-                services.AddSingleton<IStreamingBackend>(backend);
-            }));
-        HttpClient client = streamingFactory.CreateClient();
-
-        try
-        {
-            HttpResponseMessage launch = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
-            {
-                gameId = "steam-shortcut:3767414131"
-            });
-            Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
-            await WaitForStreamingDescriptorAsync(descriptorRoot);
-            HttpResponseMessage stream = await client.GetAsync("/clients/z-fold-7/stream");
-            HttpResponseMessage disconnect = await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
-
-            Assert.Equal(HttpStatusCode.OK, stream.StatusCode);
-            Assert.Equal(HttpStatusCode.OK, disconnect.StatusCode);
-
-            using JsonDocument streamJson = await JsonDocument.ParseAsync(await stream.Content.ReadAsStreamAsync());
-            JsonElement connection = streamJson.RootElement.GetProperty("stream").GetProperty("connection");
-            Assert.Equal("gamestream", connection.GetProperty("protocol").GetString());
-            Assert.Equal("Beacon.StreamingProbe", connection.GetProperty("metadata").GetProperty("wrapper").GetString());
-            Assert.Contains(
-                connection.GetProperty("endpoints").EnumerateArray(),
-                endpoint => endpoint.GetProperty("role").GetString() == "rtsp");
-
-            using JsonDocument disconnectJson = await JsonDocument.ParseAsync(await disconnect.Content.ReadAsStreamAsync());
-            Assert.Equal("stopped", disconnectJson.RootElement.GetProperty("stream").GetProperty("state").GetString());
-            Assert.Empty(Directory.EnumerateFiles(descriptorRoot));
-        }
-        finally
-        {
-            await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
-            if (Directory.Exists(descriptorRoot))
-            {
-                Directory.Delete(descriptorRoot, recursive: true);
-            }
-        }
-    }
-
-    [Fact]
-    public async Task LaunchWithStreamingProbeChildProcessReportsChildExit()
-    {
-        string descriptorRoot = Path.Combine(Path.GetTempPath(), $"beacon-streaming-child-smoke-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(descriptorRoot);
-        var backend = new ExternalProcessStreamingBackend(
-            new ExternalProcessStreamingOptions(
-                GetStreamingProbeExecutablePath(),
-                WrapperChildExecutablePath: GetCommandPromptExecutablePath(),
-                WrapperChildArguments: "/c exit 7"),
-            new WindowsExternalStreamingProcessRunner(),
-            sessionDescriptors: new WindowsExternalStreamingSessionDescriptorStore(descriptorRoot));
-        WebApplicationFactory<Program> streamingFactory = factory.WithWebHostBuilder(builder =>
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IStreamingBackend>();
-                services.AddSingleton<IStreamingBackend>(backend);
-            }));
-        HttpClient client = streamingFactory.CreateClient();
-
-        try
-        {
-            HttpResponseMessage launch = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
-            {
-                gameId = "steam-shortcut:3767414131"
-            });
-            Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
-            await WaitForStreamingDescriptorAsync(descriptorRoot);
-
-            HttpResponseMessage stream = await client.GetAsync("/clients/z-fold-7/stream");
-
-            Assert.Equal(HttpStatusCode.OK, stream.StatusCode);
-            using JsonDocument streamJson = await JsonDocument.ParseAsync(await stream.Content.ReadAsStreamAsync());
-            JsonElement streamState = streamJson.RootElement.GetProperty("stream");
-            Assert.Equal("exited", streamState.GetProperty("state").GetString());
-            Assert.Contains("7", streamState.GetProperty("error").GetString(), StringComparison.Ordinal);
-        }
-        finally
-        {
-            await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
-            if (Directory.Exists(descriptorRoot))
-            {
-                Directory.Delete(descriptorRoot, recursive: true);
-            }
-        }
-    }
-
-    [Fact]
-    public async Task FakeEndpointScriptCompletesAgainstStreamingProbeWrapper()
-    {
-        string descriptorRoot = Path.Combine(Path.GetTempPath(), $"beacon-fake-endpoint-wrapper-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(descriptorRoot);
-        var backend = new ExternalProcessStreamingBackend(
-            new ExternalProcessStreamingOptions(
-                GetStreamingProbeExecutablePath(),
-                ConnectionProtocol: "gamestream",
-                ConnectionLaunchUri: "moonlight://beacon/probe/z-fold-7-steam-shortcut%3A3767414131",
-                ConnectionEndpoints: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["rtsp"] = "rtsp://127.0.0.1:48010/beacon"
-                }),
-            new WindowsExternalStreamingProcessRunner(),
-            sessionDescriptors: new WindowsExternalStreamingSessionDescriptorStore(descriptorRoot));
-        WebApplicationFactory<Program> streamingFactory = factory.WithWebHostBuilder(builder =>
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IStreamingBackend>();
-                services.AddSingleton<IStreamingBackend>(backend);
-            }));
-        HttpClient client = streamingFactory.CreateClient();
-        var runner = new FakeEndpointRunner(client);
-        FakeEndpointScript script = FakeEndpointScript.CreateZFold7Default() with
-        {
-            RequireStreamConnection = true,
-            EndAfterStreamConnection = true
-        };
-
-        try
-        {
-            FakeEndpointResult result = await runner.RunAsync(script, CancellationToken.None);
-
-            Assert.True(result.Success, result.Error);
-            Assert.Contains("GET /clients/z-fold-7/stream", result.Operations);
-            Assert.Contains("stream connection gamestream", result.Operations);
-            await WaitForStreamingDescriptorAsync(descriptorRoot);
-
-            HttpResponseMessage stream = await client.GetAsync("/clients/z-fold-7/stream");
-            HttpResponseMessage disconnect = await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
-
-            Assert.Equal(HttpStatusCode.OK, stream.StatusCode);
-            Assert.Equal(HttpStatusCode.OK, disconnect.StatusCode);
-            using JsonDocument streamJson = await JsonDocument.ParseAsync(await stream.Content.ReadAsStreamAsync());
-            JsonElement connection = streamJson.RootElement.GetProperty("stream").GetProperty("connection");
-            Assert.Equal("Beacon.StreamingProbe", connection.GetProperty("metadata").GetProperty("wrapper").GetString());
-            Assert.Empty(Directory.EnumerateFiles(descriptorRoot));
-        }
-        finally
-        {
-            await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
-            if (Directory.Exists(descriptorRoot))
-            {
-                Directory.Delete(descriptorRoot, recursive: true);
-            }
-        }
-    }
-
-    [Fact]
-    public async Task FakeEndpointScriptCompletesAgainstStreamingProbeWithSunshineProfile()
-    {
-        string descriptorRoot = Path.Combine(Path.GetTempPath(), $"beacon-fake-endpoint-sunshine-profile-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(descriptorRoot);
-        var backend = new ExternalProcessStreamingBackend(
-            new ExternalProcessStreamingOptions(
-                GetStreamingProbeExecutablePath(),
-                SunshineProfile: new SunshineEndpointProfile("127.0.0.1", 47989)),
-            new WindowsExternalStreamingProcessRunner(),
-            sessionDescriptors: new WindowsExternalStreamingSessionDescriptorStore(descriptorRoot));
-        WebApplicationFactory<Program> streamingFactory = factory.WithWebHostBuilder(builder =>
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IStreamingBackend>();
-                services.AddSingleton<IStreamingBackend>(backend);
-            }));
-        HttpClient client = streamingFactory.CreateClient();
-        var runner = new FakeEndpointRunner(client);
-        FakeEndpointScript script = FakeEndpointScript.CreateZFold7Default() with
-        {
-            RequireStreamConnection = true,
-            EndAfterStreamConnection = true
-        };
-
-        try
-        {
-            FakeEndpointResult result = await runner.RunAsync(script, CancellationToken.None);
-
-            Assert.True(result.Success, result.Error);
-            Assert.Contains("GET /clients/z-fold-7/stream", result.Operations);
-            Assert.Contains("stream connection gamestream", result.Operations);
-            await WaitForStreamingDescriptorAsync(descriptorRoot);
-
-            HttpResponseMessage stream = await client.GetAsync("/clients/z-fold-7/stream");
-            HttpResponseMessage disconnect = await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
-
-            Assert.Equal(HttpStatusCode.OK, stream.StatusCode);
-            Assert.Equal(HttpStatusCode.OK, disconnect.StatusCode);
-            using JsonDocument streamJson = await JsonDocument.ParseAsync(await stream.Content.ReadAsStreamAsync());
-            JsonElement connection = streamJson.RootElement.GetProperty("stream").GetProperty("connection");
-            Assert.Equal("Beacon.StreamingProbe", connection.GetProperty("metadata").GetProperty("wrapper").GetString());
-            Assert.Contains(
-                connection.GetProperty("endpoints").EnumerateArray(),
-                endpoint => endpoint.GetProperty("role").GetString() == "rtsp"
-                    && endpoint.GetProperty("uri").GetString() == "rtsp://127.0.0.1:48010");
-            Assert.Contains(
-                connection.GetProperty("endpoints").EnumerateArray(),
-                endpoint => endpoint.GetProperty("role").GetString() == "audio"
-                    && endpoint.GetProperty("uri").GetString() == "udp://127.0.0.1:48000");
-            Assert.Empty(Directory.EnumerateFiles(descriptorRoot));
-        }
-        finally
-        {
-            await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
-            if (Directory.Exists(descriptorRoot))
-            {
-                Directory.Delete(descriptorRoot, recursive: true);
-            }
-        }
-    }
-
     [Fact]
     public async Task ClientStreamStopReturnsServiceUnavailableWhenBackendStopFails()
     {
@@ -1140,7 +642,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             builder.ConfigureServices(services =>
             {
                 services.RemoveAll<IStreamingBackend>();
-                services.AddSingleton<IStreamingBackend>(new FailingStopStreamingBackend("wrapper refused stop"));
+                services.AddSingleton<IStreamingBackend>(new FailingStopStreamingBackend("stream stop failed"));
             }));
         HttpClient client = failingFactory.CreateClient();
 
@@ -1150,7 +652,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, stop.StatusCode);
         string body = await stop.Content.ReadAsStringAsync();
-        Assert.Contains("wrapper refused stop", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("stream stop failed", body, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -1160,7 +662,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             builder.ConfigureServices(services =>
             {
                 services.RemoveAll<IStreamingBackend>();
-                services.AddSingleton<IStreamingBackend>(new FailingStopStreamingBackend("wrapper refused stop"));
+                services.AddSingleton<IStreamingBackend>(new FailingStopStreamingBackend("stream stop failed"));
             }));
         HttpClient client = failingFactory.CreateClient();
 
@@ -1170,7 +672,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, disconnect.StatusCode);
         string body = await disconnect.Content.ReadAsStringAsync();
-        Assert.Contains("wrapper refused stop", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("stream stop failed", body, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -1183,7 +685,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
                 services.RemoveAll<IDisplayBackend>();
                 services.RemoveAll<IStreamingBackend>();
                 services.AddSingleton<IDisplayBackend>(display);
-                services.AddSingleton<IStreamingBackend>(new FailingStopStreamingBackend("wrapper refused stop"));
+                services.AddSingleton<IStreamingBackend>(new FailingStopStreamingBackend("stream stop failed"));
             }));
         HttpClient client = failingFactory.CreateClient();
 
@@ -1193,7 +695,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, quit.StatusCode);
         string body = await quit.Content.ReadAsStringAsync();
-        Assert.Contains("wrapper refused stop", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("stream stop failed", body, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(display.RemoveCalls);
     }
 
@@ -1630,185 +1132,6 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
-
-    [Fact]
-    public async Task DescriptorChangeSignalToleratesLateSignalsAfterWaitCompletes()
-    {
-        var signal = new DescriptorChangeSignal();
-
-        Task wait = signal.ResetAndGetTask();
-        signal.Signal();
-        await wait;
-
-        signal.Signal();
-    }
-
-    private static string GetStreamingProbeExecutablePath()
-    {
-        string assemblyPath = typeof(StreamingProbeApp).Assembly.Location;
-        string executablePath = Path.ChangeExtension(assemblyPath, ".exe");
-        Assert.True(File.Exists(executablePath), $"Streaming probe executable was not copied to '{executablePath}'.");
-        return executablePath;
-    }
-
-    private static MoonlightNativeSessionDescriptor CreateNativeSession() =>
-        new(
-            "10.0.2.2",
-            "7.1.431.0",
-            "3.27.0.120",
-            "rtsp://10.0.2.2:48010/session/123",
-            0x0301,
-            2560,
-            1600,
-            120,
-            45000,
-            1024,
-            "local",
-            "stereo",
-            "hevc-main10",
-            12000,
-            "rec2020",
-            "full",
-            "all",
-            Convert.ToBase64String(Enumerable.Range(0, 16).Select(value => (byte)value).ToArray()),
-            Convert.ToBase64String(Enumerable.Range(16, 16).Select(value => (byte)value).ToArray()));
-
-    private static void AssertCoherentNativeSession(
-        JsonElement response,
-        string expectedRevision,
-        string expectedAddress)
-    {
-        Assert.Equal(
-            expectedRevision,
-            response.GetProperty("stream").GetProperty("connection").GetProperty("metadata").GetProperty("snapshot").GetString());
-        Assert.Equal(expectedAddress, response.GetProperty("nativeSession").GetProperty("address").GetString());
-    }
-
-    private static string GetCommandPromptExecutablePath()
-    {
-        string executablePath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-            "System32",
-            "cmd.exe");
-        Assert.True(File.Exists(executablePath), $"Command prompt executable was not found at '{executablePath}'.");
-        return executablePath;
-    }
-
-    private static async Task WaitForStreamingDescriptorAsync(string descriptorRoot)
-    {
-        if (HasReadableStreamingDescriptor(descriptorRoot))
-        {
-            return;
-        }
-
-        using var watcher = new FileSystemWatcher(descriptorRoot, "*.json");
-        var descriptorChanged = new DescriptorChangeSignal();
-        FileSystemEventHandler signal = (_, _) => descriptorChanged.Signal();
-        watcher.Created += signal;
-        watcher.Changed += signal;
-        watcher.EnableRaisingEvents = true;
-
-        while (true)
-        {
-            if (HasReadableStreamingDescriptor(descriptorRoot))
-            {
-                return;
-            }
-
-            Task wait = descriptorChanged.ResetAndGetTask();
-            if (HasReadableStreamingDescriptor(descriptorRoot))
-            {
-                return;
-            }
-
-            await wait;
-        }
-    }
-
-    private static bool HasReadableStreamingDescriptor(string descriptorRoot)
-    {
-        foreach (string path in Directory.EnumerateFiles(descriptorRoot, "*.json"))
-        {
-            try
-            {
-                using FileStream stream = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-                using JsonDocument document = JsonDocument.Parse(stream);
-                return document.RootElement.TryGetProperty("metadata", out JsonElement metadata)
-                    && metadata.TryGetProperty("wrapper", out JsonElement wrapper)
-                    && string.Equals(wrapper.GetString(), "Beacon.StreamingProbe", StringComparison.Ordinal);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-            {
-            }
-        }
-
-        return false;
-    }
-
-    private sealed class DescriptorChangeSignal
-    {
-        private readonly Lock gate = new();
-        private TaskCompletionSource change = NewChange();
-
-        public Task ResetAndGetTask()
-        {
-            lock (gate)
-            {
-                change = NewChange();
-                return change.Task;
-            }
-        }
-
-        public void Signal()
-        {
-            TaskCompletionSource snapshot;
-            lock (gate)
-            {
-                snapshot = change;
-            }
-
-            snapshot.TrySetResult();
-        }
-
-        private static TaskCompletionSource NewChange() =>
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-    }
-
-    private sealed class FakeExternalStreamingProcessRunner(IEnumerable<string>? existingFiles = null) : IExternalStreamingProcessRunner
-    {
-        private int nextProcessId = 1001;
-
-        public HashSet<string> ExistingFiles { get; } = new(existingFiles ?? [], StringComparer.OrdinalIgnoreCase);
-
-        public List<ExternalStreamingCommand> StartedCommands { get; } = [];
-
-        public bool FileExists(string path) => ExistingFiles.Contains(path);
-
-        public ExternalStreamingProcess Start(ExternalStreamingCommand command)
-        {
-            StartedCommands.Add(command);
-            return new ExternalStreamingProcess(nextProcessId++);
-        }
-
-        public ExternalStreamingProcessStatus GetStatus(ExternalStreamingProcess process) =>
-            ExternalStreamingProcessStatus.Running();
-
-        public ExternalStreamingProcessStopResult Stop(ExternalStreamingProcess process) =>
-            ExternalStreamingProcessStopResult.Ok();
-    }
-
-    private sealed class FakeExternalStreamingManifestReader : IExternalStreamingManifestReader
-    {
-        public Dictionary<string, ExternalStreamingManifest> Manifests { get; } = new(StringComparer.OrdinalIgnoreCase);
-
-        public bool FileExists(string path) => Manifests.ContainsKey(path);
-
-        public ExternalStreamingManifestReadResult Read(string path) =>
-            Manifests.TryGetValue(path, out ExternalStreamingManifest? manifest)
-                ? ExternalStreamingManifestReadResult.Ok(manifest)
-                : ExternalStreamingManifestReadResult.Fail($"External streaming manifest '{path}' does not exist.");
-    }
-
     private sealed class RecordingClientInputSink : IClientInputSink
     {
         public List<ClientInputBatch> Batches { get; } = [];
@@ -1818,106 +1141,5 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             Batches.Add(batch);
             return Task.FromResult(ClientInputResult.Ok(batch.Events.Count));
         }
-    }
-
-    private sealed class NativeSessionStreamingBackend(MoonlightNativeSessionDescriptor nativeSession) : IStreamingBackend
-    {
-        private readonly FakeStreamingBackend inner = new();
-        private readonly Dictionary<string, MoonlightNativeSessionDescriptor> nativeSessions =
-            new(StringComparer.OrdinalIgnoreCase);
-
-        public Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken) =>
-            inner.GetHealthAsync(cancellationToken);
-
-        public Task<StreamingPreflightResult> CheckReadinessAsync(
-            SessionPlan plan,
-            CancellationToken cancellationToken) =>
-            inner.CheckReadinessAsync(plan, cancellationToken);
-
-        public async Task<StreamingStartResult> StartAsync(SessionPlan plan, CancellationToken cancellationToken)
-        {
-            StreamingStartResult result = await inner.StartAsync(plan, cancellationToken);
-            if (result.Success)
-            {
-                nativeSessions[plan.SessionId] = nativeSession;
-            }
-
-            return result;
-        }
-
-        public async Task<StreamingStopResult> StopAsync(string sessionId, CancellationToken cancellationToken)
-        {
-            StreamingStopResult result = await inner.StopAsync(sessionId, cancellationToken);
-            if (result.Success)
-            {
-                nativeSessions.Remove(sessionId);
-            }
-
-            return result;
-        }
-
-        public Task<StreamingSessionState?> GetSessionAsync(string sessionId, CancellationToken cancellationToken) =>
-            inner.GetSessionAsync(sessionId, cancellationToken);
-
-        public Task<MoonlightNativeSessionDescriptor?> GetNativeSessionAsync(
-            string sessionId,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(nativeSessions.GetValueOrDefault(sessionId));
-
-        public IReadOnlyList<StreamingSessionState> GetSessions() => inner.GetSessions();
-    }
-
-    private sealed class CoherentNativeSessionStreamingBackend(
-        MoonlightNativeSessionDescriptor nativeSession,
-        string revision) : IStreamingBackend
-    {
-        private readonly FakeStreamingBackend inner = new();
-
-        public int CoherentReadCalls { get; private set; }
-
-        public Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken) =>
-            inner.GetHealthAsync(cancellationToken);
-
-        public Task<StreamingPreflightResult> CheckReadinessAsync(
-            SessionPlan plan,
-            CancellationToken cancellationToken) =>
-            inner.CheckReadinessAsync(plan, cancellationToken);
-
-        public Task<StreamingStartResult> StartAsync(SessionPlan plan, CancellationToken cancellationToken) =>
-            inner.StartAsync(plan, cancellationToken);
-
-        public Task<StreamingStopResult> StopAsync(string sessionId, CancellationToken cancellationToken) =>
-            inner.StopAsync(sessionId, cancellationToken);
-
-        public Task<StreamingSessionState?> GetSessionAsync(string sessionId, CancellationToken cancellationToken) =>
-            throw new InvalidOperationException("Client API must use the coherent session accessor.");
-
-        public Task<MoonlightNativeSessionDescriptor?> GetNativeSessionAsync(
-            string sessionId,
-            CancellationToken cancellationToken) =>
-            throw new InvalidOperationException("Client API must use the coherent session accessor.");
-
-        public async Task<StreamingClientSessionSnapshot?> GetClientSessionAsync(
-            string sessionId,
-            CancellationToken cancellationToken)
-        {
-            CoherentReadCalls++;
-            StreamingSessionState? session = await inner.GetSessionAsync(sessionId, cancellationToken);
-            if (session is null)
-            {
-                return null;
-            }
-
-            StreamingConnectionDescriptor connection = Assert.IsType<StreamingConnectionDescriptor>(session.Connection) with
-            {
-                Metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["snapshot"] = revision
-                }
-            };
-            return new StreamingClientSessionSnapshot(session with { Connection = connection }, nativeSession);
-        }
-
-        public IReadOnlyList<StreamingSessionState> GetSessions() => inner.GetSessions();
     }
 }

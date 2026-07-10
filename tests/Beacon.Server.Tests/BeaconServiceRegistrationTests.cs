@@ -1,3 +1,4 @@
+using System.Reflection;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
 using Beacon.Core.Input;
@@ -9,7 +10,6 @@ using Beacon.Platform.Windows.Games;
 using Beacon.Platform.Windows.Input;
 using Beacon.Platform.Windows.Recovery;
 using Beacon.Platform.Windows.Sessions;
-using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.Hosting;
 using Beacon.Server.State;
 using Microsoft.Extensions.Configuration;
@@ -27,12 +27,12 @@ public sealed class BeaconServiceRegistrationTests
         BeaconHostOptions options = provider.GetRequiredService<BeaconHostOptions>();
 
         Assert.Equal(BeaconHostMode.Fake, options.Mode);
-        Assert.Equal(BeaconStreamingBackendMode.Fake, options.StreamingBackendMode);
         Assert.Equal("fake", options.ModeName);
-        Assert.Equal("fake", options.StreamingBackendModeName);
+        Assert.Equal(nameof(FakeStreamingBackend), options.StreamingBackendName);
         Assert.IsType<FakeDisplayBackend>(provider.GetRequiredService<IDisplayBackend>());
         Assert.IsType<FakeGameLauncher>(provider.GetRequiredService<IGameLauncher>());
         Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+        Assert.Single(provider.GetServices<IStreamingBackend>());
         Assert.IsType<FakeSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
         Assert.IsType<NoOpClientInputSink>(provider.GetRequiredService<IClientInputSink>());
         ClientInputHealth inputHealth = provider.GetRequiredService<IClientInputHealthProvider>().GetHealth();
@@ -45,7 +45,7 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
-    public void WindowsRegistrationUsesWindowsHostBoundaries()
+    public void WindowsRegistrationUsesWindowsHostAndFailsClosedStreaming()
     {
         using ServiceProvider provider = BuildProvider(new KeyValuePair<string, string?>(
             BeaconServiceRegistration.HostModeConfigurationKey,
@@ -54,8 +54,8 @@ public sealed class BeaconServiceRegistrationTests
         BeaconHostOptions options = provider.GetRequiredService<BeaconHostOptions>();
 
         Assert.Equal(BeaconHostMode.Windows, options.Mode);
-        Assert.Equal(BeaconStreamingBackendMode.Fake, options.StreamingBackendMode);
         Assert.Equal("windows", options.ModeName);
+        Assert.Equal(nameof(UnavailableStreamingBackend), options.StreamingBackendName);
         Assert.IsType<WindowsDisplayApi>(provider.GetRequiredService<IWindowsDisplayApi>());
         Assert.IsType<WindowsDisplayBackend>(provider.GetRequiredService<IDisplayBackend>());
         Assert.IsType<WindowsRecoveryApi>(provider.GetRequiredService<IWindowsRecoveryApi>());
@@ -70,251 +70,24 @@ public sealed class BeaconServiceRegistrationTests
         Assert.Contains("tap", inputHealth.SupportedPointerActions);
         Assert.Contains("keyboard", inputHealth.SupportedEventTypes);
         Assert.Contains("press", inputHealth.SupportedKeyboardActions);
-        Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+        Assert.IsType<UnavailableStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+        Assert.Single(provider.GetServices<IStreamingBackend>());
     }
 
     [Fact]
-    public void ExternalProcessStreamingRegistrationUsesExplicitBackendAndOptions()
+    public void RegistrationExposesNoCompatibilityConfigurationConstants()
     {
-        using ServiceProvider provider = BuildProvider(
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "external-process"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey, "C:\\Tools\\beacon-stream-wrapper.exe"));
+        string[] values = typeof(BeaconServiceRegistration)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(field => field.IsLiteral && field.FieldType == typeof(string))
+            .Select(field => Assert.IsType<string>(field.GetRawConstantValue()))
+            .ToArray();
 
-        BeaconHostOptions options = provider.GetRequiredService<BeaconHostOptions>();
-
-        Assert.Equal(BeaconStreamingBackendMode.ExternalProcess, options.StreamingBackendMode);
-        Assert.Equal("external-process", options.StreamingBackendModeName);
-        Assert.IsType<ExternalProcessStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
-        Assert.IsType<WindowsExternalStreamingProcessRunner>(provider.GetRequiredService<IExternalStreamingProcessRunner>());
-        Assert.IsType<WindowsExternalStreamingSessionDescriptorStore>(provider.GetRequiredService<IExternalStreamingSessionDescriptorStore>());
-        Assert.Equal(
-            "C:\\Tools\\beacon-stream-wrapper.exe",
-            provider.GetRequiredService<ExternalProcessStreamingOptions>().ExecutablePath);
-    }
-
-    [Fact]
-    public void BeaconTestStreamingRegistrationUsesEndpointOnlyBackend()
-    {
-        using ServiceProvider provider = BuildProvider(new KeyValuePair<string, string?>(
-            BeaconServiceRegistration.StreamingBackendConfigurationKey,
-            "beacon-test"));
-
-        BeaconHostOptions options = provider.GetRequiredService<BeaconHostOptions>();
-
-        Assert.Equal(BeaconStreamingBackendMode.BeaconTest, options.StreamingBackendMode);
-        Assert.Equal("beacon-test", options.StreamingBackendModeName);
-        Assert.IsType<BeaconTestStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
-    }
-
-    [Fact]
-    public async Task BeaconTestStreamKindUsesConfiguration()
-    {
-        using ServiceProvider provider = BuildProvider(
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "beacon-test"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.BeaconTestStreamKindConfigurationKey, "encoded-video"));
-
-        var backend = Assert.IsType<BeaconTestStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
-        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
-
-        Assert.Equal(2, health.Endpoints.Count);
-        Assert.Contains(health.Endpoints, endpoint => endpoint.Role == "video" && endpoint.Uri == "/streams/beacon-test/color-bars.h264");
-        Assert.Contains(health.Endpoints, endpoint => endpoint.Role == "samples" && endpoint.Uri == "/streams/beacon-test/color-bars.beacon-annexb");
-        Assert.Contains("h264", health.Codecs);
-        Assert.Contains("beacon-test-encoded-video", health.Capture);
-    }
-
-    [Fact]
-    public async Task BeaconTestStreamKindUsesEnvironmentOverride()
-    {
-        IConfiguration configuration = CreateConfiguration(
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "beacon-test"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.BeaconTestStreamKindConfigurationKey, "color-bars"));
-
-        using ServiceProvider provider = new ServiceCollection()
-            .AddBeaconServices(
-                configuration,
-                environmentHostMode: null,
-                environmentBeaconTestStreamKind: "encoded-video")
-            .BuildServiceProvider();
-
-        var backend = Assert.IsType<BeaconTestStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
-        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
-
-        Assert.Equal(2, health.Endpoints.Count);
-        Assert.Contains(health.Endpoints, endpoint => endpoint.Role == "video" && endpoint.Uri == "/streams/beacon-test/color-bars.h264");
-        Assert.Contains(health.Endpoints, endpoint => endpoint.Role == "samples" && endpoint.Uri == "/streams/beacon-test/color-bars.beacon-annexb");
-    }
-
-    [Fact]
-    public void UnknownBeaconTestStreamKindFailsWithClearConfigurationError()
-    {
-        IConfiguration configuration = CreateConfiguration(
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "beacon-test"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.BeaconTestStreamKindConfigurationKey, "broken"));
-        var services = new ServiceCollection();
-
-        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
-            services.AddBeaconServices(configuration, environmentHostMode: null));
-
-        Assert.Contains("Unsupported Beacon test stream kind 'broken'", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("color-bars, encoded-video", exception.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void ExternalProcessConnectionOptionsUseConfiguration()
-    {
-        IConfiguration configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [BeaconServiceRegistration.StreamingBackendConfigurationKey] = "external-process",
-                [BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey] = "C:\\Tools\\sunshine-wrapper.exe",
-                ["Beacon:Streaming:ExternalProcess:Connection:Protocol"] = "gamestream",
-                ["Beacon:Streaming:ExternalProcess:Connection:LaunchUri"] = "moonlight://beacon/session",
-                ["Beacon:Streaming:ExternalProcess:Connection:Endpoints:rtsp"] = "rtsp://127.0.0.1:48010/beacon"
-            })
-            .Build();
-
-        using ServiceProvider provider = new ServiceCollection()
-            .AddBeaconServices(configuration, environmentHostMode: null)
-            .BuildServiceProvider();
-
-        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
-        Assert.Equal("gamestream", options.ConnectionProtocol);
-        Assert.Equal("moonlight://beacon/session", options.ConnectionLaunchUri);
-        Assert.Equal("rtsp://127.0.0.1:48010/beacon", options.ConnectionEndpoints?["rtsp"]);
-    }
-
-    [Fact]
-    public void ExternalProcessSunshineEndpointProfileUsesConfiguration()
-    {
-        IConfiguration configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [BeaconServiceRegistration.StreamingBackendConfigurationKey] = "external-process",
-                [BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey] = "C:\\Tools\\sunshine-wrapper.exe",
-                [BeaconServiceRegistration.ExternalStreamingConnectionSunshineHostConfigurationKey] = "192.168.1.50",
-                [BeaconServiceRegistration.ExternalStreamingConnectionSunshineBasePortConfigurationKey] = "48000"
-            })
-            .Build();
-
-        using ServiceProvider provider = new ServiceCollection()
-            .AddBeaconServices(configuration, environmentHostMode: null)
-            .BuildServiceProvider();
-
-        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
-        Assert.Equal("192.168.1.50", options.SunshineProfile?.Host);
-        Assert.Equal(48000, options.SunshineProfile?.BasePort);
-    }
-
-    [Fact]
-    public void ExternalProcessSunshineEndpointProfileUsesEnvironmentOverrides()
-    {
-        IConfiguration configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [BeaconServiceRegistration.StreamingBackendConfigurationKey] = "external-process",
-                [BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey] = "C:\\Tools\\sunshine-wrapper.exe",
-                [BeaconServiceRegistration.ExternalStreamingConnectionSunshineHostConfigurationKey] = "192.168.1.50",
-                [BeaconServiceRegistration.ExternalStreamingConnectionSunshineBasePortConfigurationKey] = "48000"
-            })
-            .Build();
-
-        using ServiceProvider provider = new ServiceCollection()
-            .AddBeaconServices(
-                configuration,
-                environmentHostMode: null,
-                environmentExternalStreamingConnectionSunshineHost: "10.0.0.20",
-                environmentExternalStreamingConnectionSunshineBasePort: "49000")
-            .BuildServiceProvider();
-
-        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
-        Assert.Equal("10.0.0.20", options.SunshineProfile?.Host);
-        Assert.Equal(49000, options.SunshineProfile?.BasePort);
-    }
-
-    [Fact]
-    public void ExternalProcessManifestPathUsesConfiguration()
-    {
-        using ServiceProvider provider = BuildProvider(
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "external-process"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey, "C:\\Tools\\sunshine-wrapper.exe"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingManifestConfigurationKey, "C:\\Tools\\beacon-streaming.json"));
-
-        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
-
-        Assert.Equal("C:\\Tools\\beacon-streaming.json", options.ManifestPath);
-        Assert.IsType<WindowsExternalStreamingManifestReader>(provider.GetRequiredService<IExternalStreamingManifestReader>());
-    }
-
-    [Fact]
-    public void ExternalProcessWrapperChildOptionsUseConfiguration()
-    {
-        using ServiceProvider provider = BuildProvider(
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "external-process"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey, "C:\\Tools\\beacon-streaming-probe.exe"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingWrapperChildExecutableConfigurationKey, "C:\\Tools\\sunshine.exe"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingWrapperChildArgumentsConfigurationKey, "--config sunshine.json"));
-
-        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
-
-        Assert.Equal("C:\\Tools\\sunshine.exe", options.WrapperChildExecutablePath);
-        Assert.Equal("--config sunshine.json", options.WrapperChildArguments);
-    }
-
-    [Fact]
-    public void ExternalProcessArgumentTemplateUsesConfiguration()
-    {
-        using ServiceProvider provider = BuildProvider(
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "external-process"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey, "C:\\Tools\\beacon-streaming-probe.exe"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingArgumentTemplateConfigurationKey, "--session {sessionId} --display {displayId}"));
-
-        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
-
-        Assert.Equal("--session {sessionId} --display {displayId}", options.ArgumentTemplate);
-    }
-
-    [Fact]
-    public void ExternalProcessWrapperChildOptionsUseEnvironmentOverrides()
-    {
-        IConfiguration configuration = CreateConfiguration(
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "external-process"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey, "C:\\Tools\\beacon-streaming-probe.exe"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingWrapperChildExecutableConfigurationKey, "C:\\Tools\\configured-sunshine.exe"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingWrapperChildArgumentsConfigurationKey, "--configured"));
-
-        using ServiceProvider provider = new ServiceCollection()
-            .AddBeaconServices(
-                configuration,
-                environmentHostMode: null,
-                environmentExternalStreamingWrapperChildExecutable: "C:\\Tools\\env-sunshine.exe",
-                environmentExternalStreamingWrapperChildArguments: "--env")
-            .BuildServiceProvider();
-
-        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
-
-        Assert.Equal("C:\\Tools\\env-sunshine.exe", options.WrapperChildExecutablePath);
-        Assert.Equal("--env", options.WrapperChildArguments);
-    }
-
-    [Fact]
-    public void ExternalProcessArgumentTemplateUsesEnvironmentOverride()
-    {
-        IConfiguration configuration = CreateConfiguration(
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.StreamingBackendConfigurationKey, "external-process"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingExecutableConfigurationKey, "C:\\Tools\\beacon-streaming-probe.exe"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.ExternalStreamingArgumentTemplateConfigurationKey, "--configured {sessionId}"));
-
-        using ServiceProvider provider = new ServiceCollection()
-            .AddBeaconServices(
-                configuration,
-                environmentHostMode: null,
-                environmentExternalStreamingArgumentTemplate: "--env {displayId}")
-            .BuildServiceProvider();
-
-        ExternalProcessStreamingOptions options = provider.GetRequiredService<ExternalProcessStreamingOptions>();
-
-        Assert.Equal("--env {displayId}", options.ArgumentTemplate);
+        Assert.DoesNotContain(values, value =>
+            value.StartsWith("Beacon:Streaming", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(values, value =>
+            value.StartsWith("BEACON_STREAMING", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("BEACON_EXTERNAL_STREAMING", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -348,18 +121,6 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
-    public void EnvironmentStreamingModeOverridesConfiguration()
-    {
-        IConfiguration configuration = CreateConfiguration(new KeyValuePair<string, string?>(
-            BeaconServiceRegistration.StreamingBackendConfigurationKey,
-            "fake"));
-
-        BeaconStreamingBackendMode mode = BeaconServiceRegistration.ResolveStreamingBackendMode(configuration, "beacon-test");
-
-        Assert.Equal(BeaconStreamingBackendMode.BeaconTest, mode);
-    }
-
-    [Fact]
     public void EnvironmentProfilePathAndPairingTokenOverrideConfiguration()
     {
         IConfiguration configuration = CreateConfiguration(
@@ -383,21 +144,6 @@ public sealed class BeaconServiceRegistrationTests
 
         Assert.Contains("Unsupported Beacon host mode 'broken'", exception.Message, StringComparison.Ordinal);
         Assert.Contains("fake, windows", exception.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void UnknownStreamingModeFailsWithClearConfigurationError()
-    {
-        IConfiguration configuration = CreateConfiguration(new KeyValuePair<string, string?>(
-            BeaconServiceRegistration.StreamingBackendConfigurationKey,
-            "broken"));
-        var services = new ServiceCollection();
-
-        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
-            services.AddBeaconServices(configuration, environmentHostMode: null));
-
-        Assert.Contains("Unsupported Beacon streaming backend 'broken'", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("fake, external-process, beacon-test", exception.Message, StringComparison.Ordinal);
     }
 
     private static ServiceProvider BuildProvider(params KeyValuePair<string, string?>[] values)

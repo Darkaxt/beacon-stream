@@ -34,7 +34,7 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.Equal("steam-shortcut:3767414131", root.GetProperty("ownership")[0].GetProperty("appId").GetString());
         Assert.False(root.GetProperty("ownership")[0].GetProperty("launchedProcessRunning").GetBoolean());
         Assert.Equal("fake", root.GetProperty("host").GetProperty("mode").GetString());
-        Assert.Equal("fake", root.GetProperty("host").GetProperty("streamingBackendMode").GetString());
+        Assert.False(root.GetProperty("host").TryGetProperty("streamingBackendMode", out _));
         Assert.Equal("FakeDisplayBackend", root.GetProperty("host").GetProperty("displayBackend").GetString());
         Assert.Equal("FakeStreamingBackend", root.GetProperty("host").GetProperty("streamingBackend").GetString());
         Assert.Equal("memory", root.GetProperty("profiles").GetProperty("store").GetString());
@@ -63,12 +63,14 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.True(root.GetProperty("display").GetProperty("physicalPrimaryVerified").GetBoolean());
         Assert.True(root.GetProperty("display").GetProperty("paths").GetArrayLength() > 0);
         Assert.True(root.GetProperty("streamingHealth").GetProperty("ready").GetBoolean());
-        Assert.Equal("fake", root.GetProperty("streamingHealth").GetProperty("backend").GetString());
+        Assert.Equal("ready", root.GetProperty("streamingHealth").GetProperty("state").GetString());
         Assert.Equal(1, root.GetProperty("streamingHealth").GetProperty("activeSessions").GetInt32());
         Assert.Contains(
-            root.GetProperty("streamingHealth").GetProperty("endpoints").EnumerateArray(),
-            endpoint => endpoint.GetProperty("role").GetString() == "control"
-                && endpoint.GetProperty("uri").GetString() == "beacon-fake://health/control");
+            "av1",
+            root.GetProperty("streamingHealth").GetProperty("capabilities").GetProperty("codecs")
+                .EnumerateArray()
+                .Select(value => value.GetString()));
+        Assert.False(root.GetProperty("streamingHealth").TryGetProperty("endpoints", out _));
     }
 
     [Fact]
@@ -252,35 +254,21 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
     }
 
     [Fact]
-    public async Task SnapshotIncludesWrapperChildStreamingHealthFields()
+    public async Task SnapshotIncludesStreamWorkerCapabilities()
     {
         var health = new StreamingBackendHealth(
             Ready: true,
-            Backend: "external-process",
-            Diagnostic: "External streaming backend ready.",
-            ExecutableConfigured: true,
-            ExecutableAvailable: true,
-            ExecutablePath: "C:\\Tools\\beacon-streaming-probe.exe",
-            WrapperChildExecutableConfigured: true,
-            WrapperChildExecutableAvailable: true,
-            WrapperChildExecutablePath: "C:\\Tools\\sunshine.exe",
-            WrapperChildArgumentsConfigured: true,
-            ManifestConfigured: false,
-            ManifestAvailable: false,
-            ManifestPath: null,
-            ManifestName: null,
-            Protocol: "gamestream",
-            LaunchUri: null,
-            Endpoints: [new StreamingEndpointDescriptor("rtsp", "rtsp://127.0.0.1:48010")],
-            Codecs: ["av1"],
-            Transports: ["lan-direct"],
-            Encoders: ["nvenc"],
-            Capture: ["dxgi"],
-            MaxFps: 120,
-            MaxBitrateMbps: 150,
-            Hdr10: false,
+            State: "ready",
+            Diagnostic: "Beacon StreamWorker ready.",
+            Capabilities: new(
+                Codecs: ["av1"],
+                Encoders: ["nvenc"],
+                CaptureMethods: ["dxgi"],
+                MaxFps: 120,
+                MaxBitrateMbps: 150,
+                Hdr10: true),
             ActiveSessions: 0,
-            Diagnostics: ["child process available"]);
+            Diagnostics: ["encoder verified"]);
         WebApplicationFactory<Program> childHealthFactory = factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
@@ -294,10 +282,19 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
         JsonElement streaming = document.RootElement.GetProperty("streamingHealth");
-        Assert.True(streaming.GetProperty("wrapperChildExecutableConfigured").GetBoolean());
-        Assert.True(streaming.GetProperty("wrapperChildExecutableAvailable").GetBoolean());
-        Assert.Equal("C:\\Tools\\sunshine.exe", streaming.GetProperty("wrapperChildExecutablePath").GetString());
-        Assert.True(streaming.GetProperty("wrapperChildArgumentsConfigured").GetBoolean());
+        Assert.True(streaming.GetProperty("ready").GetBoolean());
+        Assert.Equal("ready", streaming.GetProperty("state").GetString());
+        Assert.Equal("Beacon StreamWorker ready.", streaming.GetProperty("diagnostic").GetString());
+        JsonElement capabilities = streaming.GetProperty("capabilities");
+        Assert.Equal("av1", capabilities.GetProperty("codecs")[0].GetString());
+        Assert.Equal("nvenc", capabilities.GetProperty("encoders")[0].GetString());
+        Assert.Equal("dxgi", capabilities.GetProperty("captureMethods")[0].GetString());
+        Assert.Equal(120, capabilities.GetProperty("maxFps").GetInt32());
+        Assert.Equal(150, capabilities.GetProperty("maxBitrateMbps").GetInt32());
+        Assert.True(capabilities.GetProperty("hdr10").GetBoolean());
+        Assert.Equal("encoder verified", streaming.GetProperty("diagnostics")[0].GetString());
+        Assert.False(streaming.TryGetProperty("protocol", out _));
+        Assert.False(streaming.TryGetProperty("endpoints", out _));
     }
 
     [Fact]
@@ -323,7 +320,7 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
             builder.ConfigureServices(services =>
             {
                 services.RemoveAll<IStreamingBackend>();
-                services.AddSingleton<IStreamingBackend>(new FailingStopStreamingBackend("wrapper refused stop"));
+                services.AddSingleton<IStreamingBackend>(new FailingStopStreamingBackend("stream stop failed"));
             }));
         HttpClient client = failingFactory.CreateClient();
 
@@ -333,7 +330,7 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, stop.StatusCode);
         string body = await stop.Content.ReadAsStringAsync();
-        Assert.Contains("wrapper refused stop", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("stream stop failed", body, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

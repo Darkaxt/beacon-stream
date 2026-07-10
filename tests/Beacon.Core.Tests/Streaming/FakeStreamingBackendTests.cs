@@ -8,6 +8,26 @@ namespace Beacon.Core.Tests.Streaming;
 public sealed class FakeStreamingBackendTests
 {
     [Fact]
+    public async Task HealthReportsOnlyBeaconCapabilitiesAndState()
+    {
+        var backend = new FakeStreamingBackend();
+
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.True(health.Ready);
+        Assert.Equal("ready", health.State);
+        Assert.Equal("Fake streaming backend ready.", health.Diagnostic);
+        Assert.Equal(["h264", "hevc", "av1"], health.Capabilities.Codecs);
+        Assert.Equal(["fake"], health.Capabilities.Encoders);
+        Assert.Equal(["fake"], health.Capabilities.CaptureMethods);
+        Assert.Equal(120, health.Capabilities.MaxFps);
+        Assert.Null(health.Capabilities.MaxBitrateMbps);
+        Assert.False(health.Capabilities.Hdr10);
+        Assert.Equal(0, health.ActiveSessions);
+        Assert.Empty(health.Diagnostics);
+    }
+
+    [Fact]
     public async Task StartCreatesRunningSessionFromPlan()
     {
         var backend = new FakeStreamingBackend();
@@ -22,26 +42,20 @@ public sealed class FakeStreamingBackendTests
         Assert.Equal("client-z-fold-7", session.DisplayId);
         Assert.Equal("av1", session.Codec);
         Assert.Equal(120, session.Fps);
+        Assert.Equal(65, session.InitialBitrateMbps);
         Assert.Equal("running", session.State);
-        Assert.NotNull(session.Connection);
-        Assert.Equal("beacon-fake", session.Connection.Protocol);
-        Assert.Equal("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", session.Connection.LaunchUri);
-        StreamingEndpointDescriptor endpoint = Assert.Single(session.Connection.Endpoints);
-        Assert.Equal("control", endpoint.Role);
-        Assert.Equal("beacon-fake://stream/z-fold-7-steam-shortcut:3767414131", endpoint.Uri);
-        Assert.Equal("client-z-fold-7", session.Connection.Metadata["displayId"]);
         Assert.Single(backend.GetSessions());
     }
 
     [Fact]
     public async Task PreflightCanFailBeforeStart()
     {
-        var backend = new FakeStreamingBackend { NextPreflightError = "stream wrapper missing" };
+        var backend = new FakeStreamingBackend { NextPreflightError = "stream unavailable" };
 
         StreamingPreflightResult result = await backend.CheckReadinessAsync(CreatePlan(), CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Equal("stream wrapper missing", result.Error);
+        Assert.Equal("stream unavailable", result.Error);
         Assert.Empty(backend.GetSessions());
     }
 
@@ -89,5 +103,5 @@ public sealed class FakeStreamingBackendTests
                 HdrEnabled: false,
                 "sdr",
                 "HDR disabled because virtual display does not report HDR capability."),
-            Stream: new PlannedStream("av1", 120, 65, "lan-direct", "adaptive"));
+            Stream: new PlannedStream("av1", 120, 65, "beacon", "measured"));
 }
