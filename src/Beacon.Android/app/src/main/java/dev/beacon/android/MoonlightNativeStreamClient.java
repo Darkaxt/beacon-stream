@@ -11,8 +11,8 @@ final class MoonlightNativeStreamClient implements NativeStreamProtocolClient {
 
     private final MoonlightStreamConnection connection;
     private final MoonlightVideoRendererFactory rendererFactory;
-    private MoonlightVideoRenderer activeRenderer;
-    private boolean connectionOwned;
+    private final Object sessionGate = new Object();
+    private ActiveSession activeSession;
 
     MoonlightNativeStreamClient(
         MoonlightStreamConnection connection,
@@ -50,19 +50,32 @@ final class MoonlightNativeStreamClient implements NativeStreamProtocolClient {
             return NativeStreamStartResult.unsupported("Moonlight video renderer factory returned no renderer.");
         }
 
-        activeRenderer = renderer;
-        connectionOwned = true;
+        ActiveSession session = new ActiveSession(renderer);
+        synchronized (sessionGate) {
+            activeSession = session;
+        }
+
         MoonlightNativeStartResult nativeResult;
         try {
             nativeResult = connection.start(connectionDescriptor.nativeSession(), renderer, ConnectionListener);
         } catch (RuntimeException ex) {
-            releaseFailedStart(renderer);
+            releaseFailedStart(session);
             return NativeStreamStartResult.unsupported("Moonlight native connection failed: " + safeMessage(ex));
         }
 
         if (!nativeResult.success()) {
-            releaseFailedStart(renderer);
+            releaseFailedStart(session);
             return NativeStreamStartResult.unsupported(nativeResult.diagnostic());
+        }
+
+        boolean sessionStillActive;
+        synchronized (sessionGate) {
+            sessionStillActive = activeSession == session;
+        }
+        if (!sessionStillActive) {
+            session.cleanup();
+            return NativeStreamStartResult.unsupported(
+                "Moonlight native connection was stopped while starting.");
         }
 
         MoonlightNativeSessionPlan plan = connectionDescriptor.nativeSession();
@@ -78,32 +91,50 @@ final class MoonlightNativeStreamClient implements NativeStreamProtocolClient {
 
     @Override
     public void stop() {
-        MoonlightVideoRenderer renderer = activeRenderer;
-        boolean stopConnection = connectionOwned;
-        activeRenderer = null;
-        connectionOwned = false;
+        ActiveSession session;
+        synchronized (sessionGate) {
+            session = activeSession;
+            activeSession = null;
+        }
+        if (session == null) {
+            return;
+        }
 
         try {
-            if (stopConnection) {
-                connection.stop();
-            }
+            connection.stop();
         } finally {
-            if (renderer != null) {
-                renderer.cleanup();
-            }
+            session.cleanup();
         }
     }
 
-    private void releaseFailedStart(MoonlightVideoRenderer renderer) {
-        if (activeRenderer == renderer) {
-            activeRenderer = null;
+    private void releaseFailedStart(ActiveSession session) {
+        synchronized (sessionGate) {
+            if (activeSession == session) {
+                activeSession = null;
+            }
         }
-        connectionOwned = false;
-        renderer.cleanup();
+        session.cleanup();
     }
 
     private static String safeMessage(Throwable throwable) {
         String message = throwable.getMessage();
         return message == null || message.isBlank() ? throwable.getClass().getSimpleName() : message;
+    }
+
+    private static final class ActiveSession {
+        private final MoonlightVideoRenderer renderer;
+        private boolean cleaned;
+
+        private ActiveSession(MoonlightVideoRenderer renderer) {
+            this.renderer = renderer;
+        }
+
+        private synchronized void cleanup() {
+            if (cleaned) {
+                return;
+            }
+            cleaned = true;
+            renderer.cleanup();
+        }
     }
 }
