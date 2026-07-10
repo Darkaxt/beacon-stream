@@ -74,6 +74,21 @@ public final class MoonlightNativeStreamClientTest {
     }
 
     @Test
+    public void stopDuringNativeStartCannotReportReleasedSessionAsStarted() {
+        RecordingConnection connection = new RecordingConnection(MoonlightNativeStartResult.started());
+        RecordingRenderer renderer = new RecordingRenderer();
+        MoonlightNativeStreamClient client = new MoonlightNativeStreamClient(connection, () -> renderer);
+        connection.duringStart = client::stop;
+
+        NativeStreamStartResult result = client.start(validConnection());
+
+        assertFalse(result.success());
+        assertEquals("Moonlight native connection was stopped while starting.", result.diagnostic());
+        assertEquals(1, connection.stopCount);
+        assertEquals(1, renderer.cleanupCount);
+    }
+
+    @Test
     public void supportsOnlyConnectionsThatSupplyNativeSessionContract() {
         MoonlightNativeStreamClient client = new MoonlightNativeStreamClient(
             new RecordingConnection(MoonlightNativeStartResult.started()),
@@ -121,6 +136,7 @@ public final class MoonlightNativeStreamClientTest {
         private final MoonlightNativeStartResult result;
         private MoonlightNativeSessionPlan startedPlan;
         private MoonlightVideoRenderer startedRenderer;
+        private Runnable duringStart;
         private int startCount;
         private int stopCount;
 
@@ -136,6 +152,9 @@ public final class MoonlightNativeStreamClientTest {
             startCount++;
             startedPlan = plan;
             startedRenderer = renderer;
+            if (duringStart != null) {
+                duringStart.run();
+            }
             return result;
         }
 

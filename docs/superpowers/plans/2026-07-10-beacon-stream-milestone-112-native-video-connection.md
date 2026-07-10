@@ -60,3 +60,4 @@ Route a validated server-provisioned native session through `moonlight-common-c`
 - The Android build compiles the JNI bridge and `moonlight-common-c` for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`.
 - Emulator instrumentation on `emulator-5554` loads the native library, resolves the `LiStartConnection` binding, maps the owning-client response, and configures a real H.264 `MediaCodec` against an Android `Surface`.
 - Live Apollo streaming remains the next server-provisioning milestone; this implementation does not synthesize pairing credentials or claim end-to-end host video yet.
+- The post-sync lifecycle refactor replaces loose renderer/connection ownership flags with one identity-checked active session, so a stop during native start cannot return stale success or clean a newer session; renderer cleanup remains exactly once.
