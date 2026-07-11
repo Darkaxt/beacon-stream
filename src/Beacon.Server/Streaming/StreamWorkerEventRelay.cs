@@ -11,28 +11,122 @@ public sealed class StreamWorkerEventRelay(
     IClientInputSink inputSink,
     IDiagnosticEventSink diagnostics) : BackgroundService
 {
+    private readonly CancellationTokenSource relayCancellation = new();
+    private readonly TaskCompletionSource gracefulStopRequested =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly Lock stopGate = new();
+    private Task? stopTask;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await foreach (StreamWorkerEvent workerEvent in eventSource.Events.ReadAllAsync(stoppingToken))
+        using CancellationTokenRegistration stoppingRegistration = stoppingToken.Register(() =>
+        {
+            if (!gracefulStopRequested.Task.IsCompleted)
+            {
+                relayCancellation.Cancel();
+            }
+        });
+        try
+        {
+            while (true)
+            {
+                while (eventSource.Events.TryRead(out StreamWorkerEvent? workerEvent))
+                {
+                    await HandleAsync(workerEvent, relayCancellation.Token).ConfigureAwait(false);
+                }
+                if (gracefulStopRequested.Task.IsCompleted)
+                {
+                    return;
+                }
+
+                Task<bool> eventAvailable = eventSource.Events
+                    .WaitToReadAsync(relayCancellation.Token)
+                    .AsTask();
+                Task completed = await Task.WhenAny(
+                    eventAvailable,
+                    gracefulStopRequested.Task).ConfigureAwait(false);
+                if (completed == gracefulStopRequested.Task)
+                {
+                    relayCancellation.Cancel();
+                    await ObserveCancellationAsync(eventAvailable).ConfigureAwait(false);
+                    while (eventSource.Events.TryRead(out StreamWorkerEvent? workerEvent))
+                    {
+                        await HandleAsync(workerEvent, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    return;
+                }
+                if (!await eventAvailable.ConfigureAwait(false))
+                {
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (relayCancellation.IsCancellationRequested)
+        {
+        }
+    }
+
+    public override Task StopAsync(CancellationToken cancellationToken)
+    {
+        lock (stopGate)
+        {
+            return stopTask ??= StopCoreAsync(cancellationToken);
+        }
+    }
+
+    public override void Dispose()
+    {
+        relayCancellation.Cancel();
+        base.Dispose();
+        relayCancellation.Dispose();
+    }
+
+    private async Task StopCoreAsync(CancellationToken cancellationToken)
+    {
+        bool graceful = false;
+        if (eventSource is IStreamWorkerHost lifecycleHost)
         {
             try
             {
-                await RelayAsync(workerEvent, stoppingToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                throw;
+                await lifecycleHost.ShutdownAsync(cancellationToken).ConfigureAwait(false);
+                graceful = true;
             }
             catch (Exception)
             {
-                Publish(
-                    workerEvent is StreamWorkerInputReceived ? "input.dispatch_failed" : "worker.event_failed",
-                    workerEvent is StreamWorkerInputReceived
-                        ? "Worker input dispatch failed."
-                        : "Worker event handling failed.",
-                    workerEvent,
-                    DiagnosticSeverity.Error);
+                PublishShutdownFailure();
             }
+        }
+
+        if (graceful)
+        {
+            gracefulStopRequested.TrySetResult();
+        }
+        else
+        {
+            relayCancellation.Cancel();
+        }
+        await base.StopAsync(CancellationToken.None).ConfigureAwait(false);
+    }
+
+    private async Task HandleAsync(StreamWorkerEvent workerEvent, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await RelayAsync(workerEvent, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            Publish(
+                workerEvent is StreamWorkerInputReceived ? "input.dispatch_failed" : "worker.event_failed",
+                workerEvent is StreamWorkerInputReceived
+                    ? "Worker input dispatch failed."
+                    : "Worker event handling failed.",
+                workerEvent,
+                DiagnosticSeverity.Error);
         }
     }
 
@@ -155,6 +249,37 @@ public sealed class StreamWorkerEventRelay(
                 metadata: values));
         }
         catch (Exception)
+        {
+        }
+    }
+
+    private void PublishShutdownFailure()
+    {
+        try
+        {
+            diagnostics.Publish(DiagnosticEvent.Create(
+                DiagnosticSeverity.Error,
+                "stream-worker",
+                "worker.shutdown_failed",
+                "Worker shutdown failed.",
+                metadata: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["processGeneration"] = eventSource.CurrentProcessGeneration.ToString(
+                        CultureInfo.InvariantCulture)
+                }));
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private static async Task ObserveCancellationAsync(Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
         {
         }
     }
