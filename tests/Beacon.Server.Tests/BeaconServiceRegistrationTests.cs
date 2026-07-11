@@ -13,6 +13,7 @@ using Beacon.Platform.Windows.Sessions;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.Hosting;
 using Beacon.Server.State;
+using Beacon.Server.Security;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -42,7 +43,7 @@ public sealed class BeaconServiceRegistrationTests
         Assert.Contains("keyboard", inputHealth.SupportedEventTypes);
         Assert.Contains("press", inputHealth.SupportedKeyboardActions);
         Assert.IsType<InMemoryClientProfileRepository>(provider.GetRequiredService<IClientProfileRepository>());
-        Assert.False(provider.GetRequiredService<ClientPairingOptions>().Enabled);
+        Assert.IsType<ClientCredentialService>(provider.GetRequiredService<ClientCredentialService>());
     }
 
     [Fact]
@@ -92,24 +93,21 @@ public sealed class BeaconServiceRegistrationTests
         Assert.DoesNotContain(values, value =>
             value.StartsWith("BEACON_STREAMING", StringComparison.OrdinalIgnoreCase)
             || value.StartsWith("BEACON_EXTERNAL_STREAMING", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(values, value =>
+            value.Contains("Pairing", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public void ClientProfilesPathUsesFileRepositoryAndPairingToken()
+    public void ClientProfilesPathUsesFileRepository()
     {
         string profilePath = Path.Combine(Path.GetTempPath(), $"beacon-profiles-{Guid.NewGuid():N}.json");
         using ServiceProvider provider = BuildProvider(
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.ClientProfilesPathConfigurationKey, profilePath),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.PairingTokenConfigurationKey, "pair-me"));
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ClientProfilesPathConfigurationKey, profilePath));
 
         IClientProfileRepository repository = provider.GetRequiredService<IClientProfileRepository>();
-        ClientPairingOptions pairing = provider.GetRequiredService<ClientPairingOptions>();
 
         Assert.IsType<FileClientProfileRepository>(repository);
         Assert.Equal(profilePath, repository.Location);
-        Assert.True(pairing.Enabled);
-        Assert.True(pairing.Allows("pair-me"));
-        Assert.False(pairing.Allows("wrong"));
     }
 
     [Fact]
@@ -125,14 +123,12 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
-    public void EnvironmentProfilePathAndPairingTokenOverrideConfiguration()
+    public void EnvironmentProfilePathOverridesConfiguration()
     {
         IConfiguration configuration = CreateConfiguration(
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.ClientProfilesPathConfigurationKey, "config.json"),
-            new KeyValuePair<string, string?>(BeaconServiceRegistration.PairingTokenConfigurationKey, "config-token"));
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.ClientProfilesPathConfigurationKey, "config.json"));
 
         Assert.Equal("env.json", BeaconServiceRegistration.ResolveClientProfilesPath(configuration, "env.json"));
-        Assert.Equal("env-token", BeaconServiceRegistration.ResolvePairingToken(configuration, "env-token"));
     }
 
     [Fact]

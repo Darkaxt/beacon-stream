@@ -7,6 +7,9 @@ using Beacon.Core.Input;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Server.State;
+using Beacon.Server.Security;
+using Google.Protobuf;
+using WorkerAuthorizeTicket = Beacon.StreamWorker.Contracts.Worker.V1.AuthorizeTicket;
 
 namespace Beacon.Server.Api;
 
@@ -33,23 +36,56 @@ public static class ClientEndpoints
     {
         RouteGroupBuilder clients = endpoints.MapGroup("/clients");
 
-        clients.MapPost("/hello", (ClientHelloRequest request, InMemoryClientStore store, ClientPairingOptions pairing) =>
+        clients.MapPost("/hello", (
+            ClientHelloRequest request,
+            HttpContext context,
+            InMemoryClientStore store,
+            ClientCredentialService credentials,
+            BeaconSecurityPolicy security) =>
         {
             ClientProfile? existingProfile = store.GetProfile(request.ClientId);
-            if (existingProfile is null && !pairing.Allows(request.PairingToken))
+            if (security.IsTestHost(context))
             {
-                return Results.Json(
-                    new { error = $"Client '{request.ClientId}' is not registered. Pairing is required before this client can connect." },
-                    statusCode: StatusCodes.Status403Forbidden);
+                ClientProfile testProfile = existingProfile ?? store.RegisterProfile(request.ClientId, request.Name);
+                return Results.Ok(CreateHelloResponse(testProfile));
             }
 
-            ClientProfile profile = existingProfile ?? store.RegisterProfile(request.ClientId, request.Name);
+            string? submitted = BeaconSecurityMiddleware.ReadCredential(context.Request);
+            if (existingProfile is not null && credentials.Authenticate(request.ClientId, submitted))
+            {
+                return Results.Ok(CreateHelloResponse(existingProfile));
+            }
 
+            PendingClientRegistration pending = credentials.RequestRegistration(request.ClientId, request.Name);
+            return Results.Accepted($"/clients/registrations/{pending.RegistrationId}/completion", new
+            {
+                registrationId = pending.RegistrationId,
+                clientId = pending.ClientId,
+                state = "pending",
+            });
+        });
+
+        clients.MapGet("/registrations/{registrationId}/completion", async (
+            string registrationId,
+            ClientCredentialService credentials,
+            InMemoryClientStore store,
+            CancellationToken cancellationToken) =>
+        {
+            PendingClientRegistration? registration = credentials.GetRegistration(registrationId);
+            if (registration is null)
+            {
+                return Results.NotFound(new { error = "Client registration was not found." });
+            }
+            ApprovedClientCredential approved = await credentials.WaitForApprovalAsync(
+                registrationId,
+                cancellationToken);
+            ClientProfile profile = store.RegisterProfile(registration.ClientId, registration.Name);
             return Results.Ok(new
             {
-                clientId = profile.ClientId.Value,
+                clientId = approved.ClientId,
+                credential = approved.Credential,
                 profile,
-                editableFields = EditableFields
+                editableFields = EditableFields,
             });
         });
 
@@ -145,6 +181,8 @@ public static class ClientEndpoints
             IGameLauncher launcher,
             ISessionOwnershipTracker ownership,
             IStreamingBackend streaming,
+            IStreamSessionAuthorizer streamAuthorizer,
+            StreamTicketService streamTickets,
             CancellationToken cancellationToken) =>
         {
             ClientProfile? profile = clients.GetProfile(clientId);
@@ -203,9 +241,63 @@ public static class ClientEndpoints
 
             await ownership.RecordLaunchAsync(planResult.Plan, launchResult.State, cancellationToken);
 
+            IssuedStreamTicket issuedTicket;
+            try
+            {
+                StreamWorkerAuthorizationContext authorizationContext =
+                    await streamAuthorizer.GetContextAsync(cancellationToken);
+                issuedTicket = streamTickets.ReplaceForReconnect(
+                    clientId,
+                    planResult.Plan.SessionId,
+                    planResult.Plan.Revision,
+                    authorizationContext.WorkerInstanceId,
+                    DateTimeOffset.UtcNow,
+                    TimeSpan.FromMinutes(2));
+                foreach (PendingStreamTicketRevocation pendingRevocation in
+                    streamTickets.GetPendingWorkerRevocations(clientId, planResult.Plan.SessionId))
+                {
+                    StreamWorkerAuthorizationResult revocation = await streamAuthorizer.RevokeAsync(
+                        new StreamWorkerRevocation(
+                            pendingRevocation.SessionId,
+                            pendingRevocation.TicketHash),
+                        cancellationToken);
+                    if (!revocation.Success)
+                    {
+                        return Results.Problem(
+                            revocation.Error,
+                            statusCode: StatusCodes.Status503ServiceUnavailable);
+                    }
+                    streamTickets.MarkWorkerRevocationSent(pendingRevocation.TicketId);
+                }
+                WorkerAuthorizeTicket workerTicket = streamTickets.CreateWorkerAuthorization(issuedTicket.TicketId);
+                StreamWorkerAuthorizationResult authorization = await streamAuthorizer.AuthorizeAsync(
+                    new StreamWorkerAuthorization(
+                        planResult.Plan.SessionId,
+                        workerTicket.ClientId,
+                        workerTicket.PlanRevision,
+                        workerTicket.TicketHash.ToByteArray(),
+                        workerTicket.WorkerInstanceId.ToByteArray(),
+                        DateTimeOffset.FromUnixTimeMilliseconds(checked((long)workerTicket.ExpiresAtUnixMs))),
+                    cancellationToken);
+                if (!authorization.Success)
+                {
+                    streamTickets.Revoke(issuedTicket.TicketId);
+                    return Results.Problem(
+                        authorization.Error,
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                return Results.Problem(
+                    $"Stream ticket provisioning failed ({error.GetType().Name}).",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
             StreamingStartResult streamResult = await streaming.StartAsync(planResult.Plan, cancellationToken);
             if (!streamResult.Success || streamResult.Session is null)
             {
+                streamTickets.Revoke(issuedTicket.TicketId);
                 DisplayRestoreResult restore = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
                 string restoreStatus = restore.Success
                     ? "Physical primary restore requested after stream start failure."
@@ -222,7 +314,14 @@ public static class ClientEndpoints
                 displayId = leaseResult.Lease.DisplayId,
                 state = "streaming",
                 launch = launchResult.State,
-                stream = streamResult.Session
+                stream = streamResult.Session,
+                connection = new
+                {
+                    protocolVersion = 1,
+                    ticket = issuedTicket.Ticket,
+                    expiresAt = issuedTicket.ExpiresAt,
+                    planRevision = planResult.Plan.Revision,
+                },
             });
         });
 
@@ -486,7 +585,10 @@ public static class ClientEndpoints
         clients.MapPost("/{clientId}/reconnect", async (
             string clientId,
             InMemoryClientStore clients,
+            InMemorySessionStore sessions,
             DisplayLeaseManager leases,
+            IStreamSessionAuthorizer streamAuthorizer,
+            StreamTicketService streamTickets,
             CancellationToken cancellationToken) =>
         {
             ClientProfile? profile = clients.GetProfile(clientId);
@@ -501,7 +603,76 @@ public static class ClientEndpoints
                 return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
             }
 
-            return Results.Ok(new { clientId, displayId = leaseResult.Lease.DisplayId, state = "reconnected" });
+            SessionPlan? plan = sessions.Get(clientId);
+            if (plan is null)
+            {
+                return Results.Ok(new { clientId, displayId = leaseResult.Lease.DisplayId, state = "reconnected" });
+            }
+
+            try
+            {
+                StreamWorkerAuthorizationContext authorizationContext =
+                    await streamAuthorizer.GetContextAsync(cancellationToken);
+                IssuedStreamTicket replacement = streamTickets.ReplaceForReconnect(
+                    clientId,
+                    plan.SessionId,
+                    plan.Revision,
+                    authorizationContext.WorkerInstanceId,
+                    DateTimeOffset.UtcNow,
+                    TimeSpan.FromMinutes(2));
+                foreach (PendingStreamTicketRevocation pendingRevocation in
+                    streamTickets.GetPendingWorkerRevocations(clientId, plan.SessionId))
+                {
+                    StreamWorkerAuthorizationResult revocation = await streamAuthorizer.RevokeAsync(
+                        new StreamWorkerRevocation(
+                            pendingRevocation.SessionId,
+                            pendingRevocation.TicketHash),
+                        cancellationToken);
+                    if (!revocation.Success)
+                    {
+                        return Results.Problem(
+                            revocation.Error,
+                            statusCode: StatusCodes.Status503ServiceUnavailable);
+                    }
+                    streamTickets.MarkWorkerRevocationSent(pendingRevocation.TicketId);
+                }
+                WorkerAuthorizeTicket workerTicket = streamTickets.CreateWorkerAuthorization(replacement.TicketId);
+                StreamWorkerAuthorizationResult authorization = await streamAuthorizer.AuthorizeAsync(
+                    new StreamWorkerAuthorization(
+                        plan.SessionId,
+                        workerTicket.ClientId,
+                        workerTicket.PlanRevision,
+                        workerTicket.TicketHash.ToByteArray(),
+                        workerTicket.WorkerInstanceId.ToByteArray(),
+                        DateTimeOffset.FromUnixTimeMilliseconds(checked((long)workerTicket.ExpiresAtUnixMs))),
+                    cancellationToken);
+                if (!authorization.Success)
+                {
+                    streamTickets.Revoke(replacement.TicketId);
+                    return Results.Problem(
+                        authorization.Error,
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+                return Results.Ok(new
+                {
+                    clientId,
+                    displayId = leaseResult.Lease.DisplayId,
+                    state = "reconnected",
+                    connection = new
+                    {
+                        protocolVersion = 1,
+                        ticket = replacement.Ticket,
+                        expiresAt = replacement.ExpiresAt,
+                        planRevision = plan.Revision,
+                    },
+                });
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                return Results.Problem(
+                    $"Reconnect ticket provisioning failed ({error.GetType().Name}).",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
         });
 
         clients.MapPost("/{clientId}/quit", async (
@@ -618,6 +789,13 @@ public static class ClientEndpoints
 
         return new GameResolution(CreateRequestedGame(request), null);
     }
+
+    private static object CreateHelloResponse(ClientProfile profile) => new
+    {
+        clientId = profile.ClientId.Value,
+        profile,
+        editableFields = EditableFields,
+    };
 
     private static GameDescriptor CreateRequestedGame(PlanRequest request) =>
         new(
@@ -748,7 +926,7 @@ public static class ClientEndpoints
     }
 }
 
-public sealed record ClientHelloRequest(string ClientId, string? Name, string? PairingToken = null);
+public sealed record ClientHelloRequest(string ClientId, string? Name);
 
 internal sealed record GameResolution(GameDescriptor? Game, IResult? Error);
 

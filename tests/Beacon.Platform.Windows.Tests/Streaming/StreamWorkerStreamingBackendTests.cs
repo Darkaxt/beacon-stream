@@ -110,6 +110,8 @@ public sealed class StreamWorkerStreamingBackendTests
     {
         public bool IsReady { get; private set; } = true;
 
+        public ReadOnlyMemory<byte> WorkerInstanceId => new byte[] { 1, 2, 3 };
+
         public WorkerErrorCode NextError { get; set; } = WorkerErrorCode.None;
 
         public int ShutdownCalls { get; private set; }

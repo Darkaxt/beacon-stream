@@ -9,7 +9,18 @@ public sealed record CockpitSnapshot(
     CockpitStreamingHealth StreamingHealth,
     CockpitInputHealth InputHealth,
     CockpitGameSummary Games,
-    IReadOnlyList<CockpitDiagnosticEvent> Diagnostics);
+    IReadOnlyList<CockpitDiagnosticEvent> Diagnostics,
+    CockpitSecuritySummary? Security = null);
+
+public sealed record CockpitSecuritySummary(
+    string PublicKeyFingerprint,
+    IReadOnlyList<CockpitPendingRegistration> PendingRegistrations);
+
+public sealed record CockpitPendingRegistration(
+    string RegistrationId,
+    string ClientId,
+    string Name,
+    string State);
 
 public sealed record CockpitClientSummary(string ClientId, CockpitClientProfile Profile);
 

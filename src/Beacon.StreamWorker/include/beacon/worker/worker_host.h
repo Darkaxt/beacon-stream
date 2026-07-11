@@ -23,6 +23,7 @@ class WorkerHost {
   [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> dispatch(
       const v1::WorkerIpcEnvelope& request);
   [[nodiscard]] bool shutdown_requested() const noexcept;
+  [[nodiscard]] std::size_t authorized_ticket_count() const noexcept;
 
  private:
   [[nodiscard]] v1::WorkerIpcEnvelope response_envelope(
@@ -35,6 +36,10 @@ class WorkerHost {
       const v1::WorkerIpcEnvelope& request,
       v1::WorkerErrorCode error_code) const;
   [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> prepare(
+      const v1::WorkerIpcEnvelope& request);
+  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> authorize_ticket(
+      const v1::WorkerIpcEnvelope& request);
+  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> revoke_ticket(
       const v1::WorkerIpcEnvelope& request);
   [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> start_media(
       const v1::WorkerIpcEnvelope& request);
@@ -50,6 +55,7 @@ class WorkerHost {
   bool streaming_{};
   bool shutdown_requested_{};
   std::string session_id_;
+  std::vector<v1::AuthorizeTicket> authorized_tickets_;
 };
 
 }  // namespace beacon::worker

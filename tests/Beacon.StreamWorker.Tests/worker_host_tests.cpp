@@ -133,6 +133,31 @@ void prepared_session_emits_deterministic_fake_access_units() {
   }));
 }
 
+void ticket_authorization_is_hash_only_and_worker_bound() {
+  RecordingTransport transport;
+  WorkerHost host({std::byte{1}, std::byte{2}}, 42, transport);
+  auto authorize = command(25, "session-a");
+  auto* ticket = authorize.mutable_authorize_ticket();
+  ticket->set_ticket_hash(std::string(32, '\x5a'));
+  ticket->set_client_id("z-fold-7");
+  ticket->set_plan_revision(8);
+  ticket->set_expires_at_unix_ms(1'800'000'000'000ULL);
+  ticket->set_worker_instance_id("\x01\x02");
+
+  const auto accepted = host.dispatch(authorize);
+  auto revoke = command(26, "session-a");
+  revoke.mutable_revoke_ticket()->set_ticket_hash(std::string(32, '\x5a'));
+  const auto revoked = host.dispatch(revoke);
+  ticket->set_worker_instance_id("\x09");
+  const auto rejected = host.dispatch(authorize);
+
+  BEACON_TEST_REQUIRE(completion(accepted).worker_completion().succeeded());
+  BEACON_TEST_REQUIRE(completion(revoked).worker_completion().succeeded());
+  BEACON_TEST_REQUIRE(host.authorized_ticket_count() == 0);
+  BEACON_TEST_REQUIRE(!completion(rejected).worker_completion().succeeded());
+  BEACON_TEST_REQUIRE(host.authorized_ticket_count() == 0);
+}
+
 void explicit_shutdown_is_acknowledged_and_releases_once() {
   RecordingTransport transport;
   WorkerHost host({std::byte{1}}, 42, transport);
@@ -154,6 +179,7 @@ int main() {
   hello_and_ready_are_typed_and_instance_bound();
   unsupported_versions_receive_one_correlated_failure();
   prepared_session_emits_deterministic_fake_access_units();
+  ticket_authorization_is_hash_only_and_worker_bound();
   explicit_shutdown_is_acknowledged_and_releases_once();
   return 0;
 }

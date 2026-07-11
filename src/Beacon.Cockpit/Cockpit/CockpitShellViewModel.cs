@@ -10,6 +10,7 @@ public sealed class CockpitShellViewModel : ObservableObject
     private readonly RelayCommand removeSelectedClientDisplayLeaseCommand;
     private readonly RelayCommand saveSelectedClientProfileCommand;
     private readonly RelayCommand stopSelectedClientStreamCommand;
+    private readonly RelayCommand approveRegistrationCommand;
     private IReadOnlyList<CockpitClientSummary> clientSummaries = [];
     private int clientCount;
     private int sessionCount;
@@ -35,6 +36,7 @@ public sealed class CockpitShellViewModel : ObservableObject
     private string streamingHealthSummary = "Streaming health unknown.";
     private string inputHealthSummary = "Input health unknown.";
     private string statusMessage = "Ready.";
+    private string selectedRegistrationId = string.Empty;
 
     public CockpitShellViewModel(ICockpitApi api, string serverUrl = "http://localhost:5000")
     {
@@ -62,6 +64,10 @@ public sealed class CockpitShellViewModel : ObservableObject
             () => StopSelectedClientStreamAsync(CancellationToken.None),
             () => !string.IsNullOrWhiteSpace(SelectedClientId));
         StopSelectedClientStreamCommand = stopSelectedClientStreamCommand;
+        approveRegistrationCommand = new RelayCommand(
+            () => ApproveRegistrationAsync(CancellationToken.None),
+            () => !string.IsNullOrWhiteSpace(SelectedRegistrationId));
+        ApproveRegistrationCommand = approveRegistrationCommand;
     }
 
     public int ClientCount
@@ -230,6 +236,20 @@ public sealed class CockpitShellViewModel : ObservableObject
 
     public ObservableCollection<string> Diagnostics { get; } = [];
 
+    public ObservableCollection<CockpitPendingRegistration> PendingRegistrations { get; } = [];
+
+    public string SelectedRegistrationId
+    {
+        get => selectedRegistrationId;
+        set
+        {
+            if (SetProperty(ref selectedRegistrationId, value))
+            {
+                approveRegistrationCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
     public ICommand RefreshCommand { get; }
 
     public ICommand RestorePhysicalCommand { get; }
@@ -249,6 +269,8 @@ public sealed class CockpitShellViewModel : ObservableObject
     public ICommand SaveSelectedClientProfileCommand { get; }
 
     public ICommand StopSelectedClientStreamCommand { get; }
+
+    public ICommand ApproveRegistrationCommand { get; }
 
     public async Task RefreshAsync(CancellationToken cancellationToken)
     {
@@ -271,6 +293,17 @@ public sealed class CockpitShellViewModel : ObservableObject
             $"{stream.Fps}fps {stream.InitialBitrateMbps}Mbps {stream.State}"));
         Replace(Ownership, snapshot.Ownership.Select(ownership =>
             $"{ownership.AppId} process={ownership.LaunchedProcessRunning} child={ownership.ChildProcessRunning} window={ownership.OwnedWindowRemaining}"));
+        CockpitSecuritySummary security = snapshot.Security ?? new CockpitSecuritySummary(string.Empty, []);
+        Replace(PendingRegistrations, security.PendingRegistrations);
+        if (PendingRegistrations.Count == 0)
+        {
+            SelectedRegistrationId = string.Empty;
+        }
+        else if (string.IsNullOrWhiteSpace(SelectedRegistrationId)
+            || !PendingRegistrations.Any(value => value.RegistrationId == SelectedRegistrationId))
+        {
+            SelectedRegistrationId = PendingRegistrations[0].RegistrationId;
+        }
         DisplayHealthSummary = FormatDisplayHealth(snapshot.Display);
         StreamingHealthSummary = FormatStreamingHealth(snapshot.StreamingHealth);
         InputHealthSummary = FormatInputHealth(snapshot.InputHealth);
@@ -302,6 +335,25 @@ public sealed class CockpitShellViewModel : ObservableObject
         }
 
         StatusMessage = "Snapshot refreshed.";
+    }
+
+    public async Task ApproveRegistrationAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(SelectedRegistrationId))
+        {
+            StatusMessage = "Select a pending registration first.";
+            return;
+        }
+        try
+        {
+            await api.ApproveRegistrationAsync(SelectedRegistrationId, cancellationToken);
+            StatusMessage = "Client registration approved.";
+            await RefreshAsync(cancellationToken);
+        }
+        catch (Exception error)
+        {
+            StatusMessage = $"Registration approval failed: {error.Message}";
+        }
     }
 
     public async Task SaveSelectedClientProfileAsync(CancellationToken cancellationToken)
@@ -468,10 +520,10 @@ public sealed class CockpitShellViewModel : ObservableObject
         }
     }
 
-    private static void Replace(ObservableCollection<string> collection, IEnumerable<string> values)
+    private static void Replace<T>(ObservableCollection<T> collection, IEnumerable<T> values)
     {
         collection.Clear();
-        foreach (string value in values)
+        foreach (T value in values)
         {
             collection.Add(value);
         }

@@ -13,6 +13,7 @@ using Beacon.Platform.Windows.Recovery;
 using Beacon.Platform.Windows.Sessions;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.State;
+using Beacon.Server.Security;
 
 namespace Beacon.Server.Hosting;
 
@@ -22,8 +23,9 @@ public static class BeaconServiceRegistration
     public const string HostModeEnvironmentVariable = "BEACON_HOST_MODE";
     public const string ClientProfilesPathConfigurationKey = "Beacon:Profiles:Path";
     public const string ClientProfilesPathEnvironmentVariable = "BEACON_CLIENT_PROFILES_PATH";
-    public const string PairingTokenConfigurationKey = "Beacon:Pairing:Token";
-    public const string PairingTokenEnvironmentVariable = "BEACON_PAIRING_TOKEN";
+    public const string SecurityTestHostConfigurationKey = "Beacon:Security:TestHost";
+    public const string SecurityIdentityPathConfigurationKey = "Beacon:Security:IdentityPath";
+    public const string SecurityCredentialsPathConfigurationKey = "Beacon:Security:CredentialsPath";
 
     public static IServiceCollection AddBeaconServices(
         this IServiceCollection services,
@@ -31,22 +33,24 @@ public static class BeaconServiceRegistration
         services.AddBeaconServices(
             configuration,
             Environment.GetEnvironmentVariable(HostModeEnvironmentVariable),
-            Environment.GetEnvironmentVariable(ClientProfilesPathEnvironmentVariable),
-            Environment.GetEnvironmentVariable(PairingTokenEnvironmentVariable));
+            Environment.GetEnvironmentVariable(ClientProfilesPathEnvironmentVariable));
 
     public static IServiceCollection AddBeaconServices(
         this IServiceCollection services,
         IConfiguration configuration,
         string? environmentHostMode,
-        string? environmentClientProfilesPath = null,
-        string? environmentPairingToken = null)
+        string? environmentClientProfilesPath = null)
     {
         BeaconHostMode mode = ResolveHostMode(configuration, environmentHostMode);
         services.AddSingleton(BeaconHostOptions.Create(mode));
         services.AddSingleton<IClientProfileRepository>(_ =>
             CreateClientProfileRepository(configuration, environmentClientProfilesPath));
-        services.AddSingleton(new ClientPairingOptions(
-            ResolvePairingToken(configuration, environmentPairingToken)));
+        BeaconSecurityOptions securityOptions = CreateSecurityOptions(configuration);
+        services.AddSingleton(securityOptions);
+        services.AddSingleton<BeaconSecurityPolicy>();
+        services.AddSingleton(_ => new BeaconServerIdentity(securityOptions.IdentityPath));
+        services.AddSingleton(_ => new ClientCredentialService(securityOptions.CredentialsPath));
+        services.AddSingleton<StreamTicketService>();
         services.AddSingleton<InMemoryDiagnosticEventJournal>();
         services.AddSingleton<IDiagnosticEventSink>(sp =>
             sp.GetRequiredService<InMemoryDiagnosticEventJournal>());
@@ -133,10 +137,12 @@ public static class BeaconServiceRegistration
             services.AddSingleton<StreamWorkerProcessHost>();
             services.AddSingleton<IStreamWorkerHost>(sp =>
                 sp.GetRequiredService<StreamWorkerProcessHost>());
+            services.AddSingleton<IStreamSessionAuthorizer, StreamWorkerSessionAuthorizer>();
             services.AddSingleton<IStreamingBackend, StreamWorkerStreamingBackend>();
             return;
         }
 
+        services.AddSingleton<IStreamSessionAuthorizer, FakeStreamSessionAuthorizer>();
         services.AddSingleton<IStreamingBackend, FakeStreamingBackend>();
     }
 
@@ -186,10 +192,18 @@ public static class BeaconServiceRegistration
             ? configuration[ClientProfilesPathConfigurationKey]
             : environmentClientProfilesPath;
 
-    public static string? ResolvePairingToken(
-        IConfiguration configuration,
-        string? environmentPairingToken) =>
-        string.IsNullOrWhiteSpace(environmentPairingToken)
-            ? configuration[PairingTokenConfigurationKey]
-            : environmentPairingToken;
+    private static BeaconSecurityOptions CreateSecurityOptions(IConfiguration configuration)
+    {
+        bool? testHost = bool.TryParse(configuration[SecurityTestHostConfigurationKey], out bool configured)
+            ? configured
+            : null;
+        string root = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Beacon Stream");
+        string identityPath = configuration[SecurityIdentityPathConfigurationKey]
+            ?? Path.Combine(root, "server-identity.pfx");
+        string credentialsPath = configuration[SecurityCredentialsPathConfigurationKey]
+            ?? Path.Combine(root, "client-credentials.json");
+        return new BeaconSecurityOptions(testHost, identityPath, credentialsPath);
+    }
 }

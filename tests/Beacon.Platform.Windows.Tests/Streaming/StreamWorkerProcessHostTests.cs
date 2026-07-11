@@ -3,6 +3,7 @@ using System.Security.Principal;
 using System.IO.Pipes;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.StreamWorker.Contracts.Worker.V1;
+using Beacon.Core.Streaming;
 
 namespace Beacon.Platform.Windows.Tests.Streaming;
 
@@ -52,6 +53,23 @@ public sealed class StreamWorkerProcessHostTests
 
         await host.EnsureReadyAsync(CancellationToken.None);
         int processId = host.ProcessId;
+        var authorizer = new StreamWorkerSessionAuthorizer(host);
+        StreamWorkerAuthorizationContext authorizationContext =
+            await authorizer.GetContextAsync(CancellationToken.None);
+        StreamWorkerAuthorizationResult authorization = await authorizer.AuthorizeAsync(
+            new StreamWorkerAuthorization(
+                "integration-session",
+                "z-fold-7",
+                1,
+                Enumerable.Repeat((byte)0x5a, 32).ToArray(),
+                authorizationContext.WorkerInstanceId,
+                DateTimeOffset.UtcNow.AddMinutes(2)),
+            CancellationToken.None);
+        StreamWorkerAuthorizationResult revocation = await authorizer.RevokeAsync(
+            new StreamWorkerRevocation(
+                "integration-session",
+                Enumerable.Repeat((byte)0x5a, 32).ToArray()),
+            CancellationToken.None);
         StreamWorkerCommandResponse prepare = await host.SendAsync(
             Prepare("integration-session"),
             CancellationToken.None);
@@ -71,6 +89,8 @@ public sealed class StreamWorkerProcessHostTests
             CancellationToken.None);
 
         Assert.True(host.IsReady);
+        Assert.True(authorization.Success);
+        Assert.True(revocation.Success);
         Assert.True(prepare.Completion.WorkerCompletion.Succeeded);
         Assert.True(start.Completion.WorkerCompletion.Succeeded);
         Assert.True(stop.Completion.WorkerCompletion.Succeeded);

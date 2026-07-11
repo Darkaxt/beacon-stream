@@ -8,6 +8,7 @@ using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Server.Hosting;
 using Beacon.Server.State;
+using Beacon.Server.Security;
 
 namespace Beacon.Server.Api;
 
@@ -16,6 +17,25 @@ public static class AdminEndpoints
     public static IEndpointRouteBuilder MapAdminEndpoints(this IEndpointRouteBuilder endpoints)
     {
         RouteGroupBuilder admin = endpoints.MapGroup("/admin");
+
+        admin.MapPost("/registrations/{registrationId}/approve", (
+            string registrationId,
+            ClientCredentialService credentials) =>
+        {
+            try
+            {
+                credentials.Approve(registrationId);
+                return Results.Ok(new { registrationId, approved = true });
+            }
+            catch (KeyNotFoundException)
+            {
+                return Results.NotFound(new { error = "Client registration was not found." });
+            }
+            catch (InvalidOperationException error)
+            {
+                return Results.Conflict(new { error = error.Message });
+            }
+        });
 
         admin.MapGet("/snapshot", async (
             InMemoryClientStore clients,
@@ -26,7 +46,8 @@ public static class AdminEndpoints
             IDisplayBackend displayBackend,
             IClientInputHealthProvider inputHealthProvider,
             BeaconHostOptions hostOptions,
-            ClientPairingOptions pairingOptions,
+            ClientCredentialService clientCredentials,
+            BeaconServerIdentity serverIdentity,
             IDiagnosticEventSource diagnostics,
             CancellationToken cancellationToken) =>
         {
@@ -100,8 +121,18 @@ public static class AdminEndpoints
                 profiles = new
                 {
                     store = clients.ProfileStoreKind,
-                    location = clients.ProfileStoreLocation,
-                    pairingEnabled = pairingOptions.Enabled
+                    location = clients.ProfileStoreLocation
+                },
+                security = new
+                {
+                    publicKeyFingerprint = serverIdentity.PublicKeyFingerprint,
+                    pendingRegistrations = clientCredentials.GetPendingRegistrations().Select(registration => new
+                    {
+                        registrationId = registration.RegistrationId,
+                        clientId = registration.ClientId,
+                        name = registration.Name,
+                        state = registration.State.ToString().ToLowerInvariant(),
+                    }),
                 },
                 streamingHealth,
                 inputHealth,
