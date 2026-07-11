@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -363,6 +364,66 @@ void secure_clear_observes_zeroes_before_pending_bytes_are_released() {
   BEACON_TEST_REQUIRE(pending.empty());
 }
 
+struct ProtocolWipeObservation {
+  std::size_t nonempty_wipes{};
+  bool all_zero{true};
+};
+
+void observe_protocol_wipe(std::span<const std::byte> bytes,
+                           void *context) noexcept {
+  auto &observation = *static_cast<ProtocolWipeObservation *>(context);
+  if (bytes.empty()) {
+    return;
+  }
+  ++observation.nonempty_wipes;
+  observation.all_zero =
+      observation.all_zero &&
+      std::ranges::all_of(bytes,
+                          [](std::byte value) { return value == std::byte{}; });
+}
+
+void oversized_partial_authentication_is_wiped_before_buffer_reuse() {
+  AuthorizedQuicTicketStore store;
+  ProtocolWipeObservation observation;
+  QuicSessionProtocol protocol(store, observe_protocol_wipe, &observation);
+  const std::array partial_auth{std::byte{0x01}, std::byte{0x7f},
+                                std::byte{0x55}};
+  BEACON_TEST_REQUIRE(
+      !protocol.receive(QuicPeerStreamRole::session, partial_auth, 1'000)
+           .close_connection);
+
+  const std::vector oversized(
+      static_cast<std::size_t>(
+          beacon::worker::maximum_stream_message_bytes) +
+          5U,
+      std::byte{0x33});
+  BEACON_TEST_REQUIRE(
+      protocol.receive(QuicPeerStreamRole::session, oversized, 1'000)
+          .close_connection);
+  BEACON_TEST_REQUIRE(observation.nonempty_wipes == 1);
+  BEACON_TEST_REQUIRE(observation.all_zero);
+}
+
+void malformed_authentication_is_wiped_before_logical_clear() {
+  AuthorizedQuicTicketStore store;
+  ProtocolWipeObservation observation;
+  QuicSessionProtocol protocol(store, observe_protocol_wipe, &observation);
+  const std::array malformed_length{std::byte{0x00}, std::byte{0x00},
+                                    std::byte{0x00}, std::byte{0x00}};
+  BEACON_TEST_REQUIRE(
+      protocol.receive(QuicPeerStreamRole::session, malformed_length, 1'000)
+          .close_connection);
+
+  const std::array malformed_frame{std::byte{0x00}, std::byte{0x00},
+                                   std::byte{0x00}, std::byte{0x01},
+                                   std::byte{0xff}};
+  BEACON_TEST_REQUIRE(
+      protocol.receive(QuicPeerStreamRole::session, malformed_frame, 1'000)
+          .close_connection);
+  BEACON_TEST_REQUIRE(observation.nonempty_wipes == 2);
+  BEACON_TEST_REQUIRE(observation.all_zero);
+}
+
 void unauthenticated_data_and_oversized_frames_fail_closed() {
   AuthorizedQuicTicketStore store;
   QuicSessionProtocol protocol(store);
@@ -397,6 +458,8 @@ int main() {
   reset_and_fresh_authentication_allocate_a_new_generation();
   stale_old_connection_receive_does_not_touch_current_protocol_state();
   secure_clear_observes_zeroes_before_pending_bytes_are_released();
+  oversized_partial_authentication_is_wiped_before_buffer_reuse();
+  malformed_authentication_is_wiped_before_logical_clear();
   unauthenticated_data_and_oversized_frames_fail_closed();
   return 0;
 }

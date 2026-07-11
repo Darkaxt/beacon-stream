@@ -84,6 +84,8 @@ enum class QuicListenerFaultPoint {
   connection_context_allocation,
   event_serialization,
   datagram_context_allocation,
+  disconnect_event_construction,
+  disconnect_event_publication,
 };
 
 using QuicListenerFaultInjector =
@@ -99,6 +101,7 @@ struct QuicListenerMetrics {
   std::uint64_t feedback_messages{};
   std::uint32_t smoothed_rtt_us{};
   std::uint32_t path_mtu{};
+  std::uint64_t closed_connection_handles{};
 };
 
 class QuicListener final : public IWorkerMediaTransport {

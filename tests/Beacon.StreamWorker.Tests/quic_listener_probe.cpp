@@ -836,6 +836,69 @@ bool callback_fault_is_contained(
              beacon::worker::QuicListenerFailure::callback_exception;
 }
 
+bool disconnect_callback_fault_is_contained(
+    const std::wstring &identity_path,
+    const beacon::worker::TicketHash &fingerprint,
+    beacon::worker::QuicListenerFaultPoint target,
+    std::string_view raw_ticket) {
+  beacon::worker::AuthorizedQuicTicketStore tickets;
+  beacon::worker::AuthorizedQuicTicket ticket{
+      .hash = beacon::worker::hash_stream_ticket(
+          {reinterpret_cast<const std::byte *>(raw_ticket.data()),
+           raw_ticket.size()}),
+      .client_id = "z-fold-7",
+      .session_id = "session-a",
+      .plan_revision = 8,
+      .expires_at_unix_ms = std::numeric_limits<std::uint64_t>::max(),
+  };
+  if (!tickets.authorize(std::move(ticket))) {
+    return false;
+  }
+
+  auto injected = std::make_shared<std::atomic_bool>(false);
+  beacon::worker::QuicListener listener(
+      identity_path, tickets,
+      [target, injected](beacon::worker::QuicListenerFaultPoint point) {
+        bool expected = false;
+        if (point == target &&
+            injected->compare_exchange_strong(expected, true)) {
+          throw std::bad_alloc{};
+        }
+      });
+  if (!listener.configure_listener("127.0.0.1", 0) ||
+      !listener.open_connection()) {
+    return false;
+  }
+
+  ClientState client;
+  client.expected_fingerprint = fingerprint;
+  client.raw_ticket = raw_ticket;
+  client.send_data_after_auth = false;
+  if (!start_client(client, listener.local_port())) {
+    stop_client(client);
+    return false;
+  }
+  {
+    std::unique_lock lock{client.mutex};
+    client.changed.wait(lock, [&client] {
+      return client.authenticated || client.failed || client.connection_closed;
+    });
+    if (!client.authenticated || client.failed) {
+      lock.unlock();
+      stop_client(client);
+      return false;
+    }
+  }
+  stop_client(client);
+  listener.wait_until_disconnected();
+  listener.close_connection();
+  listener.shutdown();
+  return injected->load() &&
+         listener.failure() ==
+             beacon::worker::QuicListenerFailure::callback_exception &&
+         listener.metrics().closed_connection_handles == 1;
+}
+
 } // namespace
 
 int wmain(int argument_count, wchar_t **arguments) {
@@ -886,6 +949,16 @@ int wmain(int argument_count, wchar_t **arguments) {
           beacon::worker::QuicListenerFaultPoint::datagram_context_allocation,
           "loopback-ticket-datagram-fault", true))
     return 26;
+  if (!disconnect_callback_fault_is_contained(
+          arguments[1], expected_fingerprint,
+          beacon::worker::QuicListenerFaultPoint::disconnect_event_construction,
+          "loopback-ticket-disconnect-construction-fault"))
+    return 27;
+  if (!disconnect_callback_fault_is_contained(
+          arguments[1], expected_fingerprint,
+          beacon::worker::QuicListenerFaultPoint::disconnect_event_publication,
+          "loopback-ticket-disconnect-publication-fault"))
+    return 28;
 
   beacon::worker::AuthorizedQuicTicketStore retry_tickets;
   beacon::worker::AuthorizedQuicTicket retry_ticket{
@@ -1183,7 +1256,8 @@ int wmain(int argument_count, wchar_t **arguments) {
   listener.close_connection();
   listener.shutdown();
   std::printf("BEACON_QUIC_LOOPBACK_OK %u CERT_PIN_OK ALPN_VERSION_OK "
-              "REPLAY_RECONNECT_OK CALLBACK_FAULTS_OK\n",
+              "REPLAY_RECONNECT_OK CALLBACK_FAULTS_OK "
+              "DISCONNECT_FAULTS_OK\n",
               static_cast<unsigned int>(packets.size()));
   return 0;
 }

@@ -2,6 +2,7 @@
 
 #include "beacon/stream/transport.h"
 #include "beacon/worker/quic_listener.h"
+#include "beacon/worker/secure_bytes.h"
 #include "stream_control.pb.h"
 
 #include <cstddef>
@@ -61,7 +62,11 @@ classify_peer_stream(std::uint64_t stream_id) noexcept;
 
 class QuicSessionProtocol {
 public:
-  explicit QuicSessionProtocol(AuthorizedQuicTicketStore &authorized_tickets);
+  explicit QuicSessionProtocol(
+      AuthorizedQuicTicketStore &authorized_tickets,
+      SecureClearObserver session_wipe_observer = nullptr,
+      void *session_wipe_context = nullptr);
+  ~QuicSessionProtocol();
 
   void set_maximum_datagram_bytes(std::uint16_t value) noexcept;
   void begin_connection(std::uint64_t connection_generation);
@@ -72,9 +77,12 @@ public:
   receive(QuicPeerStreamRole role, std::span<const std::byte> bytes,
           std::uint64_t now_unix_ms);
   [[nodiscard]] bool authenticated() const noexcept;
-  void reset();
+  void reset() noexcept;
 
 private:
+  void clear_stream_bytes() noexcept;
+  void consume_session_prefix(std::size_t bytes) noexcept;
+
   AuthorizedQuicTicketStore &authorized_tickets_;
   std::vector<std::byte> session_bytes_;
   std::vector<std::byte> input_bytes_;
@@ -87,6 +95,8 @@ private:
   std::uint64_t current_generation_{};
   std::uint64_t next_generation_{};
   std::uint64_t active_connection_generation_{};
+  SecureClearObserver session_wipe_observer_{};
+  void *session_wipe_context_{};
   bool authenticated_{};
   bool started_{};
 };

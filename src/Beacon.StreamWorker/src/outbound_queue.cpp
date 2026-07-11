@@ -9,22 +9,32 @@ namespace {
 
 constexpr std::size_t worker_frame_prefix_bytes = 4;
 
-std::optional<std::size_t>
+struct SerializedBatchSize {
+  WorkerOutboundEnqueueResult result{WorkerOutboundEnqueueResult::accepted};
+  std::size_t bytes{};
+};
+
+SerializedBatchSize
 serialized_batch_bytes(const WorkerOutboundBatch &batch) {
-  std::size_t result = 0;
+  std::size_t bytes = 0;
   for (const auto &envelope : batch) {
     const auto message_bytes = envelope.ByteSizeLong();
+    if (message_bytes > maximum_worker_message_bytes) {
+      return {.result = WorkerOutboundEnqueueResult::message_size_exceeded};
+    }
     if (message_bytes >
         std::numeric_limits<std::size_t>::max() - worker_frame_prefix_bytes) {
-      return std::nullopt;
+      return {.result =
+                  WorkerOutboundEnqueueResult::byte_capacity_exceeded};
     }
     const auto frame_bytes = message_bytes + worker_frame_prefix_bytes;
-    if (result > std::numeric_limits<std::size_t>::max() - frame_bytes) {
-      return std::nullopt;
+    if (bytes > std::numeric_limits<std::size_t>::max() - frame_bytes) {
+      return {.result =
+                  WorkerOutboundEnqueueResult::byte_capacity_exceeded};
     }
-    result += frame_bytes;
+    bytes += frame_bytes;
   }
-  return result;
+  return {.bytes = bytes};
 }
 
 } // namespace
@@ -36,15 +46,15 @@ WorkerOutboundEnqueueResult
 WorkerOutboundQueue::enqueue(WorkerOutboundBatch batch) noexcept {
   try {
     const auto bytes = serialized_batch_bytes(batch);
-    if (!bytes) {
-      return WorkerOutboundEnqueueResult::byte_capacity_exceeded;
+    if (bytes.result != WorkerOutboundEnqueueResult::accepted) {
+      return bytes.result;
     }
     if (batch.empty()) {
       return WorkerOutboundEnqueueResult::accepted;
     }
     return enqueue_item({.kind = WorkerOutboundBatchKind::regular,
                          .batch = std::move(batch),
-                         .serialized_bytes = *bytes});
+                         .serialized_bytes = bytes.bytes});
   } catch (...) {
     return WorkerOutboundEnqueueResult::serialization_failure;
   }
@@ -54,12 +64,12 @@ WorkerOutboundEnqueueResult
 WorkerOutboundQueue::enqueue_terminal(WorkerOutboundBatch batch) noexcept {
   try {
     const auto bytes = serialized_batch_bytes(batch);
-    if (!bytes) {
-      return WorkerOutboundEnqueueResult::byte_capacity_exceeded;
+    if (bytes.result != WorkerOutboundEnqueueResult::accepted) {
+      return bytes.result;
     }
     return enqueue_item({.kind = WorkerOutboundBatchKind::terminal,
                          .batch = std::move(batch),
-                         .serialized_bytes = *bytes});
+                         .serialized_bytes = bytes.bytes});
   } catch (...) {
     return WorkerOutboundEnqueueResult::serialization_failure;
   }

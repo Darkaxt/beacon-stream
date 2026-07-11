@@ -112,7 +112,10 @@ git push -u origin codex/beacon-gate3-validation
 
 Add tests that authenticate/start a session and assert one numbered synthetic access-unit
 marker datagram carrying protocol IDR/end flags. The marker is explicitly non-decodable and
-must not be described as valid H.264 or encoding proof;
+must not be described as valid H.264 or encoding proof. Marker emission publishes
+`MediaEvidence` with sequence, presentation timestamp, and datagram byte count and updates
+only the listener's observed MsQuic send-state counters. WorkerHost `MediaMetrics` encoded,
+dropped, and byte fields remain zero because no encoding occurs;
 then assert input, feedback, disconnect, and media evidence become request-id-zero IPC events.
 The central expectations are:
 

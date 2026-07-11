@@ -391,9 +391,11 @@ public:
       }
     }
     close_connection();
-    std::lock_guard lock{mutex_};
-    clear_pending_session_bytes();
-    shutdown_ = true;
+    {
+      std::lock_guard lock{mutex_};
+      clear_pending_session_bytes();
+      shutdown_ = true;
+    }
     release_msquic_state();
   }
 
@@ -461,6 +463,27 @@ private:
   struct ConnectionContext {
     Impl *owner{};
     std::uint64_t connection_generation{};
+  };
+
+  struct ConnectionShutdownCompleteGuard {
+    ConnectionShutdownCompleteGuard(Impl *owner_value,
+                                    HQUIC connection_value,
+                                    ConnectionContext *context_value) noexcept
+        : owner(owner_value), connection(connection_value),
+          context(context_value) {}
+
+    ~ConnectionShutdownCompleteGuard() noexcept {
+      owner->complete_connection_shutdown(connection, context);
+    }
+
+    ConnectionShutdownCompleteGuard(
+        const ConnectionShutdownCompleteGuard &) = delete;
+    ConnectionShutdownCompleteGuard &operator=(
+        const ConnectionShutdownCompleteGuard &) = delete;
+
+    Impl *owner{};
+    HQUIC connection{};
+    ConnectionContext *context{};
   };
 
   struct PeerStreamContext {
@@ -539,6 +562,23 @@ private:
       api_->ConnectionShutdown(connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE,
                                5);
     }
+  }
+
+  void complete_connection_shutdown(HQUIC connection,
+                                    ConnectionContext *context) noexcept {
+    if (api_ != nullptr) {
+      api_->ConnectionClose(connection);
+    }
+    try {
+      std::lock_guard lock{mutex_};
+      ++metrics_.closed_connection_handles;
+      if (connection_ == connection) {
+        connection_ = nullptr;
+      }
+    } catch (...) {
+    }
+    changed_.notify_all();
+    delete context;
   }
 
   void append_pending_event(v1::WorkerIpcEnvelope event) {
@@ -1091,38 +1131,43 @@ private:
       break;
     }
     case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE: {
-      bool current = false;
-      {
-        std::lock_guard lock{self.mutex_};
-        current = self.connection_ == connection &&
-                  self.current_connection_generation_ ==
-                      connection_generation;
-        if (current) {
-          self.transport_state_.closed();
-          self.session_stream_ = nullptr;
-          if (self.current_generation_ != 0) {
-            self.append_pending_event(make_transport_disconnected_event(
-                self.current_session_id_, self.current_generation_));
+      ConnectionShutdownCompleteGuard completion_guard{
+          &self, connection, connection_context};
+      try {
+        bool current = false;
+        std::string disconnected_session_id;
+        std::uint64_t disconnected_generation = 0;
+        {
+          std::lock_guard lock{self.mutex_};
+          current = self.connection_ == connection &&
+                    self.current_connection_generation_ ==
+                        connection_generation;
+          if (current) {
+            self.session_stream_ = nullptr;
+            disconnected_session_id = std::move(self.current_session_id_);
+            disconnected_generation = self.current_generation_;
+            self.current_generation_ = 0;
+            self.clear_pending_session_bytes();
+            self.protocol_.reset();
+            self.current_connection_generation_ = 0;
+            self.transport_state_.closed();
           }
-          self.current_session_id_.clear();
-          self.current_generation_ = 0;
-          self.clear_pending_session_bytes();
-          self.protocol_.reset();
-          self.current_connection_generation_ = 0;
         }
-      }
-      if (current) {
-        self.drain_pending_events();
-      }
-      self.api_->ConnectionClose(connection);
-      {
-        std::lock_guard lock{self.mutex_};
-        if (self.connection_ == connection) {
-          self.connection_ = nullptr;
+        if (current && disconnected_generation != 0) {
+          self.inject_fault(
+              QuicListenerFaultPoint::disconnect_event_construction);
+          auto disconnected = make_transport_disconnected_event(
+              disconnected_session_id, disconnected_generation);
+          self.inject_fault(
+              QuicListenerFaultPoint::disconnect_event_publication);
+          self.append_pending_event(std::move(disconnected));
         }
+        if (current) {
+          self.drain_pending_events();
+        }
+      } catch (...) {
+        self.record_callback_exception(connection, false);
       }
-      self.changed_.notify_all();
-      delete connection_context;
       break;
     }
       default:

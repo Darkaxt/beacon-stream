@@ -68,8 +68,11 @@ Add a focused `SyntheticMediaSource` invoked by `QuicListener` from an accepted
   authenticated session generation.
 - It uses the existing 40-byte media datagram header and the real `QuicListener::send` path.
 - Chunk size is bounded by the negotiated QUIC datagram maximum.
-- It updates encoded-frame, sent-datagram, dropped-frame, and byte metrics through existing
-  typed metrics.
+- It publishes `MediaEvidence` with the marker sequence, presentation timestamp, and datagram
+  byte count. `QuicListenerMetrics` records the real MsQuic datagram send states observed for
+  the marker.
+- It does not increment WorkerHost `MediaMetrics.encoded_frames`, `dropped_frames`, or
+  `bytes_sent`; the marker is not encoded media and those fields remain zero in Gate 3.
 - Stop, disconnect, session failure, and Worker shutdown release it exactly once.
 - A fresh-ticket reconnect creates an explicit monotonic session generation and emits a new
   access unit. Session id, plan revision, ticket sequence, and native handles are not used as

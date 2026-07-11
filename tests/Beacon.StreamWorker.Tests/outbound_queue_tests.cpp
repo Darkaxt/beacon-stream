@@ -1,4 +1,5 @@
 #include "beacon/worker/outbound_queue.h"
+#include "beacon/worker/worker_ipc_limits.h"
 #include "beacon/worker/worker_events.h"
 
 #include "../Beacon.StreamProtocol.Tests/test_failure.h"
@@ -37,6 +38,42 @@ std::size_t serialized_bytes(const WorkerOutboundBatch &batch) {
     result += 4 + envelope.ByteSizeLong();
   }
   return result;
+}
+
+template <typename Message>
+void resize_string_field_to_serialized_size(Message &message,
+                                            std::string *field,
+                                            std::size_t target_bytes) {
+  for (std::size_t attempt = 0; attempt < 8; ++attempt) {
+    const auto current = message.ByteSizeLong();
+    if (current == target_bytes) {
+      return;
+    }
+    if (current < target_bytes) {
+      field->append(target_bytes - current, 'x');
+    } else {
+      BEACON_TEST_REQUIRE(field->size() >= current - target_bytes);
+      field->resize(field->size() - (current - target_bytes));
+    }
+  }
+  BEACON_TEST_REQUIRE(message.ByteSizeLong() == target_bytes);
+}
+
+WorkerIpcEnvelope sized_response(std::size_t target_bytes) {
+  auto value = response(80, 1);
+  resize_string_field_to_serialized_size(
+      value, value.mutable_session_id(), target_bytes);
+  return value;
+}
+
+stream_v1::InputStreamEnvelope sized_input(std::size_t target_bytes) {
+  stream_v1::InputStreamEnvelope input;
+  input.set_protocol_version(1);
+  input.set_sequence(1);
+  input.mutable_input_batch();
+  resize_string_field_to_serialized_size(
+      input, input.mutable_session_id(), target_bytes);
+  return input;
 }
 
 void worker_events_are_uncorrelated_typed_and_generation_bound() {
@@ -289,6 +326,55 @@ void oversized_batch_and_terminal_fail_without_partial_admission() {
                       WorkerOutboundEnqueueResult::byte_capacity_exceeded);
 }
 
+void per_envelope_pipe_limit_is_exact_and_batch_atomic() {
+  const auto maximum = static_cast<std::size_t>(
+      beacon::worker::maximum_worker_message_bytes);
+  auto exact = sized_response(maximum);
+  auto oversized = sized_response(maximum + 1U);
+  WorkerOutboundQueue queue(WorkerOutboundQueueLimits{
+      .maximum_items = 4,
+      .maximum_serialized_bytes = maximum * 3U,
+      .terminal_reserved_bytes = 0,
+  });
+
+  BEACON_TEST_REQUIRE(exact.ByteSizeLong() == maximum);
+  BEACON_TEST_REQUIRE(queue.enqueue({std::move(exact)}) ==
+                      WorkerOutboundEnqueueResult::accepted);
+  BEACON_TEST_REQUIRE(queue.enqueue({response(81, 1), std::move(oversized)}) ==
+                      WorkerOutboundEnqueueResult::message_size_exceeded);
+
+  WorkerOutboundQueue terminal_queue;
+  BEACON_TEST_REQUIRE(
+      terminal_queue.enqueue_terminal({sized_response(maximum + 1U)}) ==
+      WorkerOutboundEnqueueResult::message_size_exceeded);
+  terminal_queue.close();
+  BEACON_TEST_REQUIRE(!terminal_queue.wait_pop());
+
+  queue.close();
+  const auto admitted = queue.wait_pop();
+  BEACON_TEST_REQUIRE(admitted && admitted->batch.size() == 1);
+  BEACON_TEST_REQUIRE(!queue.wait_pop());
+}
+
+void input_received_wrapper_overhead_is_rejected_before_pipe_write() {
+  const auto maximum = static_cast<std::size_t>(
+      beacon::worker::maximum_worker_message_bytes);
+  auto input = sized_input(maximum);
+  BEACON_TEST_REQUIRE(input.ByteSizeLong() == maximum);
+  auto event = beacon::worker::make_input_received_event(1, input);
+  BEACON_TEST_REQUIRE(event.ByteSizeLong() > maximum);
+
+  WorkerOutboundQueue queue(WorkerOutboundQueueLimits{
+      .maximum_items = 2,
+      .maximum_serialized_bytes = event.ByteSizeLong() + 4U,
+      .terminal_reserved_bytes = 0,
+  });
+  BEACON_TEST_REQUIRE(queue.enqueue({std::move(event)}) ==
+                      WorkerOutboundEnqueueResult::message_size_exceeded);
+  queue.close();
+  BEACON_TEST_REQUIRE(!queue.wait_pop());
+}
+
 } // namespace
 
 int main() {
@@ -299,5 +385,7 @@ int main() {
   count_capacity_reserves_one_atomic_terminal_batch();
   serialized_byte_capacity_is_exact_and_batch_atomic();
   oversized_batch_and_terminal_fail_without_partial_admission();
+  per_envelope_pipe_limit_is_exact_and_batch_atomic();
+  input_received_wrapper_overhead_is_rejected_before_pipe_write();
   return 0;
 }

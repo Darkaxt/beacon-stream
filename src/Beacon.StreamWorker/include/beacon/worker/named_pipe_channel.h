@@ -1,5 +1,6 @@
 #pragma once
 
+#include "beacon/worker/worker_ipc_limits.h"
 #include "worker_ipc.pb.h"
 
 #include <atomic>
@@ -11,8 +12,6 @@
 #include <vector>
 
 namespace beacon::worker {
-
-inline constexpr std::uint32_t maximum_worker_message_bytes = 1024U * 1024U;
 
 enum class FrameDecodeStatus {
   success,

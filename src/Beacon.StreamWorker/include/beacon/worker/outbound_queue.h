@@ -1,5 +1,6 @@
 #pragma once
 
+#include "beacon/worker/worker_ipc_limits.h"
 #include "worker_ipc.pb.h"
 
 #include <condition_variable>
@@ -36,6 +37,7 @@ enum class WorkerOutboundEnqueueResult {
   terminal_pending,
   count_capacity_exceeded,
   byte_capacity_exceeded,
+  message_size_exceeded,
   serialization_failure,
   allocation_failure,
 };
