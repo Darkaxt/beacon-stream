@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <mutex>
 #include <string>
@@ -360,7 +361,7 @@ void stop_client(ClientState &state, std::uint64_t error_code = 0) {
 } // namespace
 
 int wmain(int argument_count, wchar_t **arguments) {
-  if (argument_count != 3)
+  if (argument_count != 4)
     return 64;
   beacon::worker::TicketHash expected_fingerprint{};
   const std::wstring fingerprint_wide{arguments[2]};
@@ -373,6 +374,51 @@ int wmain(int argument_count, wchar_t **arguments) {
   }
   if (!decode_fingerprint(fingerprint, expected_fingerprint))
     return 66;
+
+  beacon::worker::AuthorizedQuicTicketStore retry_tickets;
+  beacon::worker::AuthorizedQuicTicket retry_ticket{
+      .hash = beacon::worker::hash_stream_ticket(
+          {reinterpret_cast<const std::byte *>(kRawTicket.data()),
+           kRawTicket.size()}),
+      .client_id = "z-fold-7",
+      .session_id = "session-a",
+      .plan_revision = 8,
+      .expires_at_unix_ms = std::numeric_limits<std::uint64_t>::max(),
+  };
+  if (!retry_tickets.authorize(std::move(retry_ticket)))
+    return 67;
+  beacon::worker::QuicListener retry_listener(arguments[3], retry_tickets);
+  if (!retry_listener.configure_listener("127.0.0.1", 0) ||
+      retry_listener.open_connection() ||
+      retry_listener.failure() !=
+          beacon::worker::QuicListenerFailure::identity_import)
+    return 68;
+  std::error_code copy_error;
+  std::filesystem::copy_file(arguments[1], arguments[3],
+                             std::filesystem::copy_options::overwrite_existing,
+                             copy_error);
+  if (copy_error || !retry_listener.open_connection() ||
+      retry_listener.failure() != beacon::worker::QuicListenerFailure::none)
+    return 69;
+  ClientState retry_client;
+  retry_client.expected_fingerprint = expected_fingerprint;
+  retry_client.send_data_after_auth = false;
+  if (!start_client(retry_client, retry_listener.local_port()))
+    return 70;
+  {
+    std::unique_lock lock{retry_client.mutex};
+    retry_client.changed.wait(lock, [&retry_client] {
+      return retry_client.authenticated || retry_client.failed ||
+             retry_client.connection_closed;
+    });
+    if (retry_client.failed || !retry_client.authenticated ||
+        !retry_client.certificate_seen)
+      return 71;
+  }
+  stop_client(retry_client);
+  retry_listener.wait_until_disconnected();
+  retry_listener.close_connection();
+  retry_listener.shutdown();
 
   beacon::worker::AuthorizedQuicTicketStore tickets;
   beacon::worker::AuthorizedQuicTicket ticket{

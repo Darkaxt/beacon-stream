@@ -347,6 +347,11 @@ public:
     close_connection();
     std::lock_guard lock{mutex_};
     shutdown_ = true;
+    release_msquic_state();
+  }
+
+private:
+  void release_msquic_state() noexcept {
     if (configuration_ != nullptr) {
       api_->ConfigurationClose(configuration_);
       configuration_ = nullptr;
@@ -370,7 +375,6 @@ public:
     }
   }
 
-private:
   struct DatagramSendContext {
     explicit DatagramSendContext(std::vector<std::byte> payload,
                                  std::uint64_t value)
@@ -516,6 +520,7 @@ private:
     if (QUIC_FAILED(registration_status)) {
       set_failure(QuicListenerFailure::registration_open,
                   status_code(registration_status));
+      release_msquic_state();
       return false;
     }
 
@@ -537,9 +542,11 @@ private:
     if (QUIC_FAILED(configuration_status)) {
       set_failure(QuicListenerFailure::configuration_open,
                   status_code(configuration_status));
+      release_msquic_state();
       return false;
     }
     if (!load_identity()) {
+      release_msquic_state();
       return false;
     }
     QUIC_CREDENTIAL_CONFIG credentials{};
@@ -551,6 +558,7 @@ private:
     if (QUIC_FAILED(credential_status)) {
       set_failure(QuicListenerFailure::credential_load,
                   status_code(credential_status));
+      release_msquic_state();
       return false;
     }
     failure_ = QuicListenerFailure::none;
@@ -629,21 +637,21 @@ private:
     if (key_container_name_.empty()) {
       return;
     }
+    const auto container_name = std::exchange(key_container_name_, {});
+    const auto provider_name = std::exchange(key_provider_name_, {});
     NCRYPT_PROV_HANDLE provider = 0;
-    if (NCryptOpenStorageProvider(&provider, key_provider_name_.c_str(), 0) !=
+    if (NCryptOpenStorageProvider(&provider, provider_name.c_str(), 0) !=
         ERROR_SUCCESS) {
       return;
     }
     NCRYPT_KEY_HANDLE key = 0;
-    if (NCryptOpenKey(provider, &key, key_container_name_.c_str(), 0, 0) ==
+    if (NCryptOpenKey(provider, &key, container_name.c_str(), 0, 0) ==
         ERROR_SUCCESS) {
       if (NCryptDeleteKey(key, 0) != ERROR_SUCCESS) {
         NCryptFreeObject(key);
       }
     }
     NCryptFreeObject(provider);
-    key_container_name_.clear();
-    key_provider_name_.clear();
   }
 
   static std::uint64_t status_code(QUIC_STATUS status) noexcept {

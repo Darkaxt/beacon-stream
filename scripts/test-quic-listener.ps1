@@ -10,6 +10,7 @@ if (-not (Test-Path -LiteralPath $probe)) {
 }
 
 $identityPath = Join-Path ([IO.Path]::GetTempPath()) "beacon-quic-listener-$([Guid]::NewGuid().ToString('N')).pfx"
+$retryIdentityPath = Join-Path ([IO.Path]::GetTempPath()) "beacon-quic-listener-retry-$([Guid]::NewGuid().ToString('N')).pfx"
 try {
     $key = [Security.Cryptography.RSA]::Create(3072)
     try {
@@ -50,7 +51,8 @@ try {
         $key.Dispose()
     }
 
-    $output = & $probe $identityPath $fingerprint
+    [IO.File]::WriteAllBytes($retryIdentityPath, [byte[]](1, 2, 3, 4))
+    $output = & $probe $identityPath $fingerprint $retryIdentityPath
     $probeExitCode = $LASTEXITCODE
     if ($probeExitCode -ne 0 -or
         $output -notmatch '^BEACON_QUIC_LOOPBACK_OK 3 CERT_PIN_OK ALPN_VERSION_OK REPLAY_RECONNECT_OK$') {
@@ -60,4 +62,5 @@ try {
 }
 finally {
     Remove-Item -LiteralPath $identityPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $retryIdentityPath -Force -ErrorAction SilentlyContinue
 }
