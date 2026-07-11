@@ -1,3 +1,4 @@
+using System.Reflection;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
 using Beacon.Core.Input;
@@ -110,6 +111,39 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public void RegistrationExposesOnlyApprovedStreamingConfigurationConstants()
+    {
+        string[] values = typeof(BeaconServiceRegistration)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(field => field.IsLiteral && field.FieldType == typeof(string))
+            .Select(field => Assert.IsType<string>(field.GetRawConstantValue()))
+            .ToArray();
+        string[] approvedStreamingValues =
+        [
+            BeaconServiceRegistration.StreamingModeConfigurationKey,
+            BeaconServiceRegistration.StreamWorkerPathConfigurationKey,
+            BeaconServiceRegistration.StreamingModeEnvironmentVariable,
+            BeaconServiceRegistration.StreamWorkerPathEnvironmentVariable
+        ];
+        string[] streamingValues = values
+            .Where(value =>
+                value.StartsWith("Beacon:Streaming", StringComparison.OrdinalIgnoreCase)
+                || value.StartsWith("BEACON_STREAMING", StringComparison.OrdinalIgnoreCase)
+                || value.StartsWith("BEACON_STREAM_WORKER", StringComparison.OrdinalIgnoreCase)
+                || value.StartsWith("BEACON_EXTERNAL_STREAMING", StringComparison.OrdinalIgnoreCase))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(approvedStreamingValues.Order(StringComparer.Ordinal), streamingValues);
+        Assert.DoesNotContain(values, value =>
+            value.Contains("Pairing", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(values, value =>
+            value.StartsWith("Beacon:Streaming:ExternalProcess", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("ExternalWrapper", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("BEACON_EXTERNAL_STREAMING_", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void ClientProfilesPathUsesFileRepository()
     {
         string profilePath = Path.Combine(Path.GetTempPath(), $"beacon-profiles-{Guid.NewGuid():N}.json");
@@ -132,6 +166,27 @@ public sealed class BeaconServiceRegistrationTests
         BeaconHostMode mode = BeaconServiceRegistration.ResolveHostMode(configuration, "windows");
 
         Assert.Equal(BeaconHostMode.Windows, mode);
+    }
+
+    [Fact]
+    public void EnvironmentStreamingModeOverridesConfiguration()
+    {
+        var services = new ServiceCollection();
+        services.AddBeaconServices(
+            CreateConfiguration(new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.StreamingModeConfigurationKey,
+                "worker")),
+            environmentHostMode: null,
+            environmentStreamingMode: "fake");
+        using ServiceProvider provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true
+        });
+
+        Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+        Assert.Empty(provider.GetServices<IStreamWorkerHost>());
+        Assert.Single(provider.GetServices<IStreamingBackend>());
     }
 
     [Fact]
