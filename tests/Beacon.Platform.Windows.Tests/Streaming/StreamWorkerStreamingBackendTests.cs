@@ -51,6 +51,25 @@ public sealed class StreamWorkerStreamingBackendTests
     }
 
     [Fact]
+    public async Task LegacyStartMediaReplacementIsShutDownBeforeGenerationFailure()
+    {
+        var host = new LegacyRecordingStreamWorkerHost
+        {
+            ReplaceAfter = WorkerIpcEnvelope.BodyOneofCase.StartMedia
+        };
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        StreamingStartResult result = await backend.StartAsync(CreatePlan(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("Beacon StreamWorker generation changed during stream start.", result.Error);
+        Assert.Equal(1, host.ShutdownCalls);
+        Assert.False(host.IsReady);
+        Assert.False(host.MediaStarted);
+        Assert.Empty(backend.GetSessions());
+    }
+
+    [Fact]
     public async Task WorkerExitBetweenPrepareAndStartDoesNotCreateOrUseReplacement()
     {
         var host = new RecordingStreamWorkerHost { ExitAfterPrepare = true };
@@ -632,6 +651,8 @@ public sealed class StreamWorkerStreamingBackendTests
 
         public bool MediaStarted { get; private set; }
 
+        public int ShutdownCalls { get; private set; }
+
         public List<WorkerIpcEnvelope> Commands { get; } = [];
 
         public Task EnsureReadyAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -671,7 +692,9 @@ public sealed class StreamWorkerStreamingBackendTests
 
         public Task ShutdownAsync(CancellationToken cancellationToken)
         {
+            ShutdownCalls++;
             IsReady = false;
+            MediaStarted = false;
             return Task.CompletedTask;
         }
     }

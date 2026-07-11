@@ -691,18 +691,17 @@ public sealed class StreamWorkerStreamingBackend : IStreamingBackend, IStreamWor
                     throw new StreamWorkerGenerationChangedException(expectedProcessGeneration);
                 }
 
-                StreamWorkerCommandResponse response = await host.SendAsync(
-                    command,
-                    cancellationToken).ConfigureAwait(false);
-                byte[] after = host.WorkerInstanceId.ToArray();
-                if (!host.IsReady || !after.AsSpan().SequenceEqual(before))
+                StreamWorkerCommandResponse response;
+                try
                 {
-                    if (after.Length > 0)
-                    {
-                        _ = CaptureGeneration(after);
-                    }
-                    throw new StreamWorkerGenerationChangedException(expectedProcessGeneration);
+                    response = await host.SendAsync(command, cancellationToken).ConfigureAwait(false);
                 }
+                catch
+                {
+                    await FailIfGenerationChangedAsync(before, expectedProcessGeneration).ConfigureAwait(false);
+                    throw;
+                }
+                await FailIfGenerationChangedAsync(before, expectedProcessGeneration).ConfigureAwait(false);
                 return response;
             }
             finally
@@ -734,6 +733,33 @@ public sealed class StreamWorkerStreamingBackend : IStreamingBackend, IStreamWor
                     processGeneration++;
                 }
                 return processGeneration;
+            }
+        }
+
+        private async Task FailIfGenerationChangedAsync(
+            byte[] before,
+            long expectedProcessGeneration)
+        {
+            byte[] after = host.WorkerInstanceId.ToArray();
+            bool identityChanged = !after.AsSpan().SequenceEqual(before);
+            if (identityChanged)
+            {
+                if (after.Length > 0)
+                {
+                    _ = CaptureGeneration(after);
+                }
+                try
+                {
+                    await host.ShutdownAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                finally
+                {
+                    throw new StreamWorkerGenerationChangedException(expectedProcessGeneration);
+                }
+            }
+            if (!host.IsReady)
+            {
+                throw new StreamWorkerGenerationChangedException(expectedProcessGeneration);
             }
         }
     }

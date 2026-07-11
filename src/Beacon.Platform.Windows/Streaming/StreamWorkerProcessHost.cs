@@ -57,8 +57,10 @@ public sealed class StreamWorkerProcessHost :
     private readonly StreamWorkerProcessHostOptions options;
     private readonly IStreamWorkerLaunchFactory launchFactory;
     private readonly SemaphoreSlim lifecycleGate = new(1, 1);
-    private readonly StreamWorkerEventBuffer eventBuffer = new(capacity: 64);
+    private readonly StreamWorkerEventBuffer eventBuffer;
     private readonly CancellationTokenSource disposal = new();
+    private readonly Func<long, Task> beforeProcessExitPublication;
+    private readonly Action<long>? processExitPublicationStarted;
     private ActiveWorker? activeWorker;
     private int disposed;
 
@@ -79,9 +81,22 @@ public sealed class StreamWorkerProcessHost :
     internal StreamWorkerProcessHost(
         StreamWorkerProcessHostOptions options,
         IStreamWorkerLaunchFactory launchFactory)
+        : this(options, launchFactory, eventCapacity: 64)
+    {
+    }
+
+    internal StreamWorkerProcessHost(
+        StreamWorkerProcessHostOptions options,
+        IStreamWorkerLaunchFactory launchFactory,
+        int eventCapacity,
+        Func<long, Task>? beforeProcessExitPublication = null,
+        Action<long>? processExitPublicationStarted = null)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         this.launchFactory = launchFactory ?? throw new ArgumentNullException(nameof(launchFactory));
+        eventBuffer = new StreamWorkerEventBuffer(eventCapacity);
+        this.beforeProcessExitPublication = beforeProcessExitPublication ?? (_ => Task.CompletedTask);
+        this.processExitPublicationStarted = processExitPublicationStarted;
     }
 
     public bool IsReady =>
@@ -234,9 +249,19 @@ public sealed class StreamWorkerProcessHost :
             launch = launchFactory.Launch(options);
             long processGeneration = eventBuffer.ActivateNextGeneration();
             Task<int> processExit = ObserveExitAsync(launch.Process);
-            var pending = new ActiveWorker(processGeneration, launch, processExit, Client: null);
+            var publicationArmed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Task processExitPublication = PublishProcessExitAsync(
+                processExit,
+                processGeneration,
+                publicationArmed.Task);
+            var pending = new ActiveWorker(
+                processGeneration,
+                launch,
+                processExit,
+                processExitPublication,
+                Client: null);
             Volatile.Write(ref activeWorker, pending);
-            _ = PublishProcessExitAsync(processExit, processGeneration);
+            publicationArmed.SetResult();
 
             using var connectionCancellation = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken,
@@ -319,12 +344,31 @@ public sealed class StreamWorkerProcessHost :
         }
         eventBuffer.Deactivate(old.ProcessGeneration);
         old.Launch.Terminate();
-        if (old.Client is not null)
+        try
         {
-            await old.Client.DisposeAsync().ConfigureAwait(false);
+            if (old.Client is not null)
+            {
+                await old.Client.DisposeAsync().ConfigureAwait(false);
+            }
         }
-        _ = await old.ProcessExit.ConfigureAwait(false);
-        await old.Launch.DisposeAsync().ConfigureAwait(false);
+        finally
+        {
+            try
+            {
+                try
+                {
+                    _ = await old.ProcessExit.ConfigureAwait(false);
+                }
+                finally
+                {
+                    await old.ProcessExitPublication.ConfigureAwait(false);
+                }
+            }
+            finally
+            {
+                await old.Launch.DisposeAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     private static async Task<int> ObserveExitAsync(Process process)
@@ -333,19 +377,18 @@ public sealed class StreamWorkerProcessHost :
         return process.ExitCode;
     }
 
-    private async Task PublishProcessExitAsync(Task<int> exit, long processGeneration)
+    private async Task PublishProcessExitAsync(
+        Task<int> exit,
+        long processGeneration,
+        Task publicationArmed)
     {
-        try
-        {
-            int exitCode = await exit.ConfigureAwait(false);
-            await eventBuffer.PublishProcessExitedAsync(processGeneration, exitCode).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (Volatile.Read(ref disposed) != 0)
-        {
-        }
-        catch (ChannelClosedException) when (Volatile.Read(ref disposed) != 0)
-        {
-        }
+        await publicationArmed.ConfigureAwait(false);
+        int exitCode = await exit.ConfigureAwait(false);
+        await beforeProcessExitPublication(processGeneration).ConfigureAwait(false);
+        await eventBuffer.PublishProcessExitedAsync(
+            processGeneration,
+            exitCode,
+            () => processExitPublicationStarted?.Invoke(processGeneration)).ConfigureAwait(false);
     }
 
     private static async Task ObserveCompletionAsync(Task task)
@@ -363,6 +406,7 @@ public sealed class StreamWorkerProcessHost :
         long ProcessGeneration,
         IStreamWorkerLaunch Launch,
         Task<int> ProcessExit,
+        Task ProcessExitPublication,
         StreamWorkerNamedPipeClient? Client);
 }
 
@@ -514,7 +558,10 @@ internal sealed class StreamWorkerEventBuffer : IAsyncDisposable
     public bool IsCurrentGeneration(long generation) =>
         generation > 0 && CurrentGeneration == generation;
 
-    public async ValueTask PublishProcessExitedAsync(long generation, int exitCode)
+    public async ValueTask PublishProcessExitedAsync(
+        long generation,
+        int exitCode,
+        Action? publicationStarted = null)
     {
         lock (exitGate)
         {
@@ -526,9 +573,11 @@ internal sealed class StreamWorkerEventBuffer : IAsyncDisposable
 
         try
         {
-            await channel.Writer.WriteAsync(
+            ValueTask write = channel.Writer.WriteAsync(
                 new StreamWorkerProcessExited(generation, exitCode),
-                disposal.Token).ConfigureAwait(false);
+                disposal.Token);
+            publicationStarted?.Invoke();
+            await write.ConfigureAwait(false);
         }
         catch (ChannelClosedException) when (disposal.IsCancellationRequested)
         {

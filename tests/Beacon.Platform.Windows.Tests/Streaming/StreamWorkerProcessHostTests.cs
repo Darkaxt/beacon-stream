@@ -222,6 +222,99 @@ public sealed class StreamWorkerProcessHostTests
         await eventSource.Events.Completion;
         Assert.True(eventSource.Events.Completion.IsCompletedSuccessfully);
     }
+
+    [Fact]
+    public async Task DisposeAwaitsSchedulingDelayedExitPublicationBeforeCompletingEvents()
+    {
+        await using ConnectedStreams streams = await ConnectedStreams.CreateAsync();
+        TestLaunch launch = TestLaunch.Waiting(streams.Service);
+        var publicationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowPublication = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task worker = RunGracefulShutdownWorkerAsync(streams.Worker, launch);
+        var host = new StreamWorkerProcessHost(
+            new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
+            new QueueLaunchFactory(launch),
+            eventCapacity: 64,
+            beforeProcessExitPublication: async _ =>
+            {
+                publicationEntered.SetResult();
+                await allowPublication.Task;
+            });
+        var eventSource = (IGenerationBoundStreamWorkerHost)host;
+        await host.EnsureReadyAsync(CancellationToken.None);
+
+        Task disposal = host.DisposeAsync().AsTask();
+        await publicationEntered.Task;
+
+        Assert.False(disposal.IsCompleted);
+        Assert.False(eventSource.Events.Completion.IsCompleted);
+
+        allowPublication.SetResult();
+        Assert.IsType<StreamWorkerProcessExited>(await eventSource.Events.ReadAsync());
+        await disposal;
+        await worker;
+        await eventSource.Events.Completion;
+    }
+
+    [Fact]
+    public async Task DisposeAwaitsBackpressuredExitPublicationBeforeCompletingEvents()
+    {
+        await using ConnectedStreams streams = await ConnectedStreams.CreateAsync();
+        TestLaunch launch = TestLaunch.Waiting(streams.Service);
+        var publicationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowPublication = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var exitWriteStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task worker = Task.Run(async () =>
+        {
+            await WriteAsync(streams.Worker, Hello(checked((uint)launch.Process.Id), 1));
+            await WriteAsync(streams.Worker, Ready(1));
+            WorkerIpcEnvelope prepare = await ReadAsync(streams.Worker);
+            await WriteAsync(streams.Worker, new WorkerIpcEnvelope
+            {
+                ProtocolVersion = ProtocolVersion.Current,
+                SessionId = prepare.SessionId,
+                TransportAuthenticated = new TransportAuthenticated
+                {
+                    SessionGeneration = 1,
+                    MaximumDatagramBytes = 1200
+                }
+            });
+            await WriteAsync(streams.Worker, Completion(prepare));
+            WorkerIpcEnvelope shutdown = await ReadAsync(streams.Worker);
+            await WriteAsync(streams.Worker, Completion(shutdown));
+            launch.Terminate();
+        });
+        var host = new StreamWorkerProcessHost(
+            new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
+            new QueueLaunchFactory(launch),
+            eventCapacity: 1,
+            beforeProcessExitPublication: async _ =>
+            {
+                publicationEntered.SetResult();
+                await allowPublication.Task;
+            },
+            processExitPublicationStarted: _ => exitWriteStarted.SetResult());
+        var eventSource = (IGenerationBoundStreamWorkerHost)host;
+        await host.EnsureReadyAsync(CancellationToken.None);
+        _ = await eventSource.SendAsync(
+            eventSource.CurrentProcessGeneration,
+            Prepare("session"),
+            CancellationToken.None);
+
+        Task disposal = host.DisposeAsync().AsTask();
+        await publicationEntered.Task;
+        allowPublication.SetResult();
+        await exitWriteStarted.Task;
+
+        Assert.False(disposal.IsCompleted);
+        Assert.False(eventSource.Events.Completion.IsCompleted);
+        Assert.IsType<StreamWorkerTransportAuthenticated>(await eventSource.Events.ReadAsync());
+        Assert.IsType<StreamWorkerProcessExited>(await eventSource.Events.ReadAsync());
+        await disposal;
+        await worker;
+        await eventSource.Events.Completion;
+    }
+
     [Fact]
     public async Task EventReaderIsStableAcrossMonotonicWorkerReplacement()
     {
@@ -473,6 +566,27 @@ public sealed class StreamWorkerProcessHostTests
         await stream.ReadExactlyAsync(frame.AsMemory(sizeof(uint)));
         return ProtobufLengthFrameCodec.Decode(frame, WorkerIpcEnvelope.Parser);
     }
+
+    private static WorkerIpcEnvelope Completion(WorkerIpcEnvelope request) => new()
+    {
+        ProtocolVersion = ProtocolVersion.Current,
+        RequestId = request.RequestId,
+        SessionId = request.SessionId,
+        WorkerCompletion = new WorkerCompletion
+        {
+            Succeeded = true,
+            ErrorCode = WorkerErrorCode.None
+        }
+    };
+
+    private static Task RunGracefulShutdownWorkerAsync(Stream stream, TestLaunch launch) => Task.Run(async () =>
+    {
+        await WriteAsync(stream, Hello(checked((uint)launch.Process.Id), 1));
+        await WriteAsync(stream, Ready(1));
+        WorkerIpcEnvelope shutdown = await ReadAsync(stream);
+        await WriteAsync(stream, Completion(shutdown));
+        launch.Terminate();
+    });
 
     private sealed class QueueLaunchFactory(params IStreamWorkerLaunch[] launches) : IStreamWorkerLaunchFactory
     {
