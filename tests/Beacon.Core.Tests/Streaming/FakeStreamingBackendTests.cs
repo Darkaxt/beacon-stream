@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 using Beacon.Core.Sessions;
@@ -30,7 +31,7 @@ public sealed class FakeStreamingBackendTests
     [Fact]
     public async Task StartCreatesRunningSessionFromPlan()
     {
-        var backend = new FakeStreamingBackend();
+        var backend = new FakeStreamingBackend { ActiveListenerPort = 51234 };
         SessionPlan plan = CreatePlan();
 
         StreamingStartResult result = await backend.StartAsync(plan, CancellationToken.None);
@@ -43,6 +44,7 @@ public sealed class FakeStreamingBackendTests
         Assert.Equal("av1", session.Codec);
         Assert.Equal(120, session.Fps);
         Assert.Equal(65, session.InitialBitrateMbps);
+        Assert.Equal(51234, session.ActiveListenerPort);
         Assert.Equal("running", session.State);
         Assert.Single(backend.GetSessions());
     }
@@ -86,6 +88,73 @@ public sealed class FakeStreamingBackendTests
         Assert.Null(result.Session);
         Assert.Equal("encoder unavailable", result.Error);
         Assert.Empty(backend.GetSessions());
+    }
+
+    [Fact]
+    public async Task StopFailureReturnsDiagnosticAndKeepsRunningState()
+    {
+        var backend = new FakeStreamingBackend
+        {
+            ActiveListenerPort = 51234,
+            NextStopError = "worker stop unavailable",
+        };
+        SessionPlan plan = CreatePlan();
+        Assert.True((await backend.StartAsync(plan, CancellationToken.None)).Success);
+
+        StreamingStopResult result = await backend.StopAsync(plan.SessionId, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("worker stop unavailable", result.Error);
+        Assert.Equal("running", (await backend.GetSessionAsync(plan.SessionId, CancellationToken.None))?.State);
+    }
+
+    [Fact]
+    public async Task SuccessfulStartsUseDeterministicPerInstanceRuntimeGenerations()
+    {
+        var backend = new FakeStreamingBackend();
+        var secondBackend = new FakeStreamingBackend();
+        SessionPlan plan = CreatePlan();
+
+        StreamingSessionState first = Assert.IsType<StreamingSessionState>(
+            (await backend.StartAsync(plan, CancellationToken.None)).Session);
+        Assert.Equal(47998, first.ActiveListenerPort);
+        Assert.Equal(Guid.Parse("00000000-0000-0000-0000-000000000001"), first.RuntimeGeneration);
+        Assert.DoesNotContain(
+            "runtimeGeneration",
+            JsonSerializer.Serialize(first),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.True((await backend.StopAsync(plan.SessionId, CancellationToken.None)).Success);
+
+        StreamingSessionState second = Assert.IsType<StreamingSessionState>(
+            (await backend.StartAsync(plan, CancellationToken.None)).Session);
+        StreamingSessionState otherFirst = Assert.IsType<StreamingSessionState>(
+            (await secondBackend.StartAsync(plan, CancellationToken.None)).Session);
+
+        Assert.Equal(Guid.Parse("00000000-0000-0000-0000-000000000002"), second.RuntimeGeneration);
+        Assert.Equal(first.RuntimeGeneration, otherFirst.RuntimeGeneration);
+    }
+
+    [Fact]
+    public async Task ConditionalStopRejectsReplacementRuntimeGeneration()
+    {
+        var backend = new FakeStreamingBackend();
+        SessionPlan plan = CreatePlan();
+        StreamingSessionState runtimeA = Assert.IsType<StreamingSessionState>(
+            (await backend.StartAsync(plan, CancellationToken.None)).Session);
+        StreamingSessionState runtimeB = Assert.IsType<StreamingSessionState>(
+            (await backend.StartAsync(plan, CancellationToken.None)).Session);
+
+        StreamingStopResult stopped = await backend.StopRuntimeAsync(
+            plan.SessionId,
+            runtimeA.RuntimeGeneration,
+            CancellationToken.None);
+
+        StreamingSessionState current = Assert.IsType<StreamingSessionState>(
+            await backend.GetSessionAsync(plan.SessionId, CancellationToken.None));
+        Assert.False(stopped.Success);
+        Assert.Contains("runtime generation changed", stopped.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(runtimeB.RuntimeGeneration, current.RuntimeGeneration);
+        Assert.Equal("running", current.State);
     }
 
     private static SessionPlan CreatePlan() =>

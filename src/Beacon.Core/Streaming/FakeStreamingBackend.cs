@@ -1,14 +1,22 @@
+using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using Beacon.Core.Sessions;
 
 namespace Beacon.Core.Streaming;
 
 public sealed class FakeStreamingBackend : IStreamingBackend
 {
-    private readonly Dictionary<string, StreamingSessionState> sessions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, StreamingSessionState> sessions =
+        new(StringComparer.OrdinalIgnoreCase);
+    private long nextRuntimeGeneration;
 
     public string? NextStartError { get; set; }
 
     public string? NextPreflightError { get; set; }
+
+    public string? NextStopError { get; set; }
+
+    public int ActiveListenerPort { get; set; } = 47998;
 
     public List<string> StartCalls { get; } = [];
 
@@ -56,23 +64,53 @@ public sealed class FakeStreamingBackend : IStreamingBackend
             plan.Stream.Fps,
             plan.Stream.InitialBitrateMbps,
             State: "running",
-            Error: null);
+            Error: null,
+            ActiveListenerPort: ActiveListenerPort,
+            RuntimeGeneration: CreateRuntimeGeneration());
 
         sessions[plan.SessionId] = session;
         return Task.FromResult(StreamingStartResult.Ok(session));
     }
 
-    public Task<StreamingStopResult> StopAsync(string sessionId, CancellationToken cancellationToken)
+    public Task<StreamingStopResult> StopAsync(
+        string sessionId,
+        CancellationToken cancellationToken) =>
+        StopCore(sessionId, expectedGeneration: null);
+
+    public Task<StreamingStopResult> StopRuntimeAsync(
+        string sessionId,
+        Guid expectedGeneration,
+        CancellationToken cancellationToken) =>
+        StopCore(sessionId, expectedGeneration);
+
+    private Task<StreamingStopResult> StopCore(string sessionId, Guid? expectedGeneration)
     {
         StopCalls.Add(sessionId);
+
+        if (!string.IsNullOrWhiteSpace(NextStopError))
+        {
+            string error = NextStopError;
+            NextStopError = null;
+            return Task.FromResult(StreamingStopResult.Fail(error));
+        }
 
         if (!sessions.TryGetValue(sessionId, out StreamingSessionState? session))
         {
             return Task.FromResult(StreamingStopResult.Fail($"Stream session '{sessionId}' is not running."));
         }
+        if (expectedGeneration.HasValue
+            && session.RuntimeGeneration != expectedGeneration.Value)
+        {
+            return Task.FromResult(StreamingStopResult.Fail(
+                $"Stream session '{sessionId}' runtime generation changed before compensation."));
+        }
 
-        StreamingSessionState stopped = session with { State = "stopped" };
-        sessions[sessionId] = stopped;
+        StreamingSessionState stopped = session with { State = "stopped", ActiveListenerPort = null };
+        if (!sessions.TryUpdate(sessionId, stopped, session))
+        {
+            return Task.FromResult(StreamingStopResult.Fail(
+                $"Stream session '{sessionId}' runtime changed while stopping."));
+        }
         return Task.FromResult(StreamingStopResult.Ok(stopped));
     }
 
@@ -84,4 +122,12 @@ public sealed class FakeStreamingBackend : IStreamingBackend
             .OrderBy(session => session.ClientId, StringComparer.OrdinalIgnoreCase)
             .ThenBy(session => session.SessionId, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+
+    private Guid CreateRuntimeGeneration()
+    {
+        long generation = Interlocked.Increment(ref nextRuntimeGeneration);
+        Span<byte> value = stackalloc byte[16];
+        BinaryPrimitives.WriteInt64BigEndian(value[8..], generation);
+        return new Guid(value);
+    }
 }

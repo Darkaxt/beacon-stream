@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Beacon.Core.Streaming;
 
 public sealed record StreamingSessionState(
@@ -9,4 +11,6 @@ public sealed record StreamingSessionState(
     int Fps,
     int InitialBitrateMbps,
     string State,
-    string? Error);
+    string? Error,
+    int? ActiveListenerPort = null,
+    [property: JsonIgnore] Guid RuntimeGeneration = default);

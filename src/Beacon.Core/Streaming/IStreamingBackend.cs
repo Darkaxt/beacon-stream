@@ -12,6 +12,13 @@ public interface IStreamingBackend
 
     Task<StreamingStopResult> StopAsync(string sessionId, CancellationToken cancellationToken);
 
+    Task<StreamingStopResult> StopRuntimeAsync(
+        string sessionId,
+        Guid expectedGeneration,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(StreamingStopResult.Fail(
+            $"Stream session '{sessionId}' generation-aware stop is unavailable."));
+
     Task<StreamingSessionState?> GetSessionAsync(string sessionId, CancellationToken cancellationToken);
 
     IReadOnlyList<StreamingSessionState> GetSessions();

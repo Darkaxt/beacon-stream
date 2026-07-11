@@ -225,6 +225,8 @@ ctest --preset windows-x64-debug --output-on-failure
 
 **Files:**
 
+- Modify: `contracts/worker_ipc.proto`
+- Modify: Worker/Service streaming state and launch/reconnect API tests
 - Create: `src/Beacon.Android/app/src/main/cpp/CMakeLists.txt`
 - Create: `src/Beacon.Android/app/src/main/cpp/streamcore/*`
 - Create: `src/Beacon.Android/app/src/main/java/dev/beacon/android/BeaconStreamCore.java`
@@ -236,6 +238,11 @@ ctest --preset windows-x64-debug --output-on-failure
 - [ ] Write failing JNI/native tests for lifecycle, certificate pin, ticket handoff,
   control/input/feedback stream routing, frame callback thread ownership, Surface replacement,
   connection loss, explicit stop, and release exactly once.
+- [ ] Return the actual ephemeral Worker listener port through a typed Worker IPC event and
+  the launch/reconnect connection grant. Include the session id, pinned server public-key
+  fingerprint, authoritative selected-video mode needed by the native StartSession handshake,
+  and plan explanation; derive the host from the already configured control-plane route. Never guess a
+  fixed port or reintroduce an endpoint-role map, launch URI, descriptor, or polling path.
 - [ ] Build native MsQuic/Protobuf into the APK for x86_64 emulator and arm64 physical target.
 - [ ] Connect the native assembler to a fake Java encoded-frame sink first. Do not invoke
   MediaCodec or add a second route in this task.

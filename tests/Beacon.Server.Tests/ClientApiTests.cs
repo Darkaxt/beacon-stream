@@ -10,6 +10,8 @@ using Beacon.Core.Input;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Server.Hosting;
+using Beacon.Server.Security;
+using Beacon.Server.State;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -426,6 +428,10 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     [Fact]
     public async Task LaunchStartsStreamingBackendWithSessionPlan()
     {
+        FakeStreamingBackend backend = Assert.IsType<FakeStreamingBackend>(
+            factory.Services.GetRequiredService<IStreamingBackend>());
+        backend.ActiveListenerPort = 51234;
+        BeaconServerIdentity identity = factory.Services.GetRequiredService<BeaconServerIdentity>();
         HttpClient client = factory.CreateClient();
         await client.PostAsJsonAsync("/clients/z-fold-7/capabilities", new
         {
@@ -452,6 +458,22 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal("av1", root.GetProperty("stream").GetProperty("codec").GetString());
         Assert.Equal(120, root.GetProperty("stream").GetProperty("fps").GetInt32());
         Assert.Equal(1, root.GetProperty("connection").GetProperty("protocolVersion").GetInt32());
+        JsonElement connection = root.GetProperty("connection");
+        Assert.Equal("z-fold-7-steam-shortcut:3767414131", connection.GetProperty("sessionId").GetString());
+        Assert.Equal(51234, connection.GetProperty("port").GetInt32());
+        Assert.Equal(identity.PublicKeyFingerprint, connection.GetProperty("publicKeyFingerprint").GetString());
+        SessionPlan savedPlan = Assert.IsType<SessionPlan>(
+            factory.Services.GetRequiredService<InMemorySessionStore>().Get("z-fold-7"));
+        Assert.Equal(
+            $"{savedPlan.Display.Reason} {savedPlan.Stream.Reason}",
+            connection.GetProperty("planExplanation").GetString());
+        JsonElement selectedVideo = connection.GetProperty("selectedVideo");
+        Assert.Equal("av1", selectedVideo.GetProperty("codec").GetString());
+        Assert.Equal(2560, selectedVideo.GetProperty("width").GetInt32());
+        Assert.Equal(1600, selectedVideo.GetProperty("height").GetInt32());
+        Assert.Equal(120, selectedVideo.GetProperty("framesPerSecondNumerator").GetInt32());
+        Assert.Equal(1, selectedVideo.GetProperty("framesPerSecondDenominator").GetInt32());
+        Assert.Equal("sdr", selectedVideo.GetProperty("dynamicRange").GetString());
         ulong planRevision = root.GetProperty("connection").GetProperty("planRevision").GetUInt64();
         Assert.NotEqual(0UL, planRevision);
         byte[] publicTicket = Convert.FromBase64String(Assert.IsType<string>(
@@ -464,6 +486,12 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal(planRevision, privateAuthorization.PlanRevision);
         Assert.Equal(32, privateAuthorization.TicketHash.Length);
         Assert.False(CryptographicOperations.FixedTimeEquals(publicTicket, privateAuthorization.TicketHash));
+        Assert.True(connection.EnumerateObject().Select(property => property.Name).ToHashSet().SetEquals(
+            ["protocolVersion", "ticket", "expiresAt", "planRevision", "planExplanation", "sessionId", "port", "publicKeyFingerprint", "selectedVideo"]));
+        string responseJson = root.GetRawText();
+        Assert.DoesNotContain(identity.IdentityPath, responseJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("privateKey", responseJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("runtimeGeneration", responseJson, StringComparison.OrdinalIgnoreCase);
         Assert.True(root.EnumerateObject().Select(property => property.Name).ToHashSet().SetEquals(
             ["clientId", "displayId", "state", "launch", "stream", "connection"]));
     }
@@ -554,6 +582,87 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task LaunchReturnsServiceUnavailableWhenStreamingRuntimeHasNoActivePort()
+    {
+        var backend = new FakeStreamingBackend { ActiveListenerPort = 0 };
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IStreamingBackend>(backend);
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/launch",
+            new { gameId = "steam-shortcut:3767414131" });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        string body = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("\"port\":0", body, StringComparison.Ordinal);
+        Assert.Equal(["z-fold-7-steam-shortcut:3767414131"], backend.StopCalls);
+        Assert.Contains("Streaming runtime stopped after invalid metadata.", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LaunchReportsFailedStopCompensationForInvalidRuntimeMetadata()
+    {
+        var backend = new FakeStreamingBackend
+        {
+            ActiveListenerPort = 0,
+            NextStopError = "worker stop unavailable",
+        };
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IStreamingBackend>(backend);
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/launch",
+            new { gameId = "steam-shortcut:3767414131" });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        string body = await response.Content.ReadAsStringAsync();
+        Assert.Equal(["z-fold-7-steam-shortcut:3767414131"], backend.StopCalls);
+        Assert.Contains(
+            "Streaming runtime stop compensation failed after invalid metadata: worker stop unavailable.",
+            body,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LaunchCompensationDoesNotStopReplacementRuntime()
+    {
+        var backend = new ReplacingInvalidStartStreamingBackend();
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.AddSingleton<IStreamingBackend>(backend);
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/launch",
+            new { gameId = "steam-shortcut:3767414131" });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(0, backend.PublicStopCalls);
+        Assert.Equal(1, backend.ConditionalStopCalls);
+        StreamingSessionState current = Assert.IsType<StreamingSessionState>(
+            await backend.GetSessionAsync("z-fold-7-steam-shortcut:3767414131", CancellationToken.None));
+        Assert.Equal(backend.ReplacementGeneration, current.RuntimeGeneration);
+        Assert.Equal("running", current.State);
+        Assert.Contains(
+            "runtime generation changed before compensation",
+            await response.Content.ReadAsStringAsync(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task LaunchStopsBeforeDisplayLeaseWhenStreamingPreflightFails()
     {
         var display = new FakeDisplayBackend();
@@ -585,7 +694,8 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     [Fact]
     public async Task DisconnectQuitAndEmergencyRestoreReturnExplicitRecoveryState()
     {
-        HttpClient client = factory.CreateClient();
+        WebApplicationFactory<Program> recoveryFactory = factory.WithWebHostBuilder(_ => { });
+        HttpClient client = recoveryFactory.CreateClient();
 
         HttpResponseMessage disconnect = await client.PostAsJsonAsync("/clients/z-fold-7/disconnect", new { });
         HttpResponseMessage reconnect = await client.PostAsJsonAsync("/clients/z-fold-7/reconnect", new { });
@@ -596,7 +706,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         HttpResponseMessage restore = await client.PostAsJsonAsync("/clients/z-fold-7/emergency-restore", new { });
 
         Assert.Equal(HttpStatusCode.OK, disconnect.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, reconnect.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, reconnect.StatusCode);
         Assert.Equal(HttpStatusCode.OK, quit.StatusCode);
         Assert.Equal(HttpStatusCode.OK, restore.StatusCode);
 
@@ -606,8 +716,11 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         using JsonDocument restoreJson = await JsonDocument.ParseAsync(await restore.Content.ReadAsStreamAsync());
 
         Assert.True(disconnectJson.RootElement.GetProperty("leaseRetained").GetBoolean());
-        Assert.Equal("reconnected", reconnectJson.RootElement.GetProperty("state").GetString());
-        Assert.Equal("client-z-fold-7", reconnectJson.RootElement.GetProperty("displayId").GetString());
+        Assert.Equal(503, reconnectJson.RootElement.GetProperty("status").GetInt32());
+        Assert.Contains(
+            "no session plan",
+            reconnectJson.RootElement.GetProperty("detail").GetString(),
+            StringComparison.OrdinalIgnoreCase);
         Assert.True(quitJson.RootElement.GetProperty("cleanupEvaluated").GetBoolean());
         Assert.True(quitJson.RootElement.GetProperty("displayRemoved").GetBoolean());
         Assert.True(restoreJson.RootElement.GetProperty("recovered").GetBoolean());
@@ -617,6 +730,10 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     [Fact]
     public async Task ReconnectReplacesUnusedStreamTicketWithoutStoppingSession()
     {
+        FakeStreamingBackend backend = Assert.IsType<FakeStreamingBackend>(
+            factory.Services.GetRequiredService<IStreamingBackend>());
+        backend.ActiveListenerPort = 51235;
+        BeaconServerIdentity identity = factory.Services.GetRequiredService<BeaconServerIdentity>();
         HttpClient client = factory.CreateClient();
         HttpResponseMessage launch = await client.PostAsJsonAsync(
             "/clients/z-fold-7/launch",
@@ -640,9 +757,108 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
 
         Assert.NotEqual(first, replacement);
         Assert.Equal("reconnected", reconnectJson.RootElement.GetProperty("state").GetString());
+        JsonElement launchConnection = launchJson.RootElement.GetProperty("connection");
+        JsonElement reconnectConnection = reconnectJson.RootElement.GetProperty("connection");
+        Assert.Equal(launchConnection.GetProperty("sessionId").GetString(), reconnectConnection.GetProperty("sessionId").GetString());
+        Assert.Equal(51235, reconnectConnection.GetProperty("port").GetInt32());
+        Assert.Equal(launchConnection.GetProperty("port").GetInt32(), reconnectConnection.GetProperty("port").GetInt32());
+        Assert.Equal(identity.PublicKeyFingerprint, reconnectConnection.GetProperty("publicKeyFingerprint").GetString());
+        Assert.Equal(
+            launchConnection.GetProperty("planExplanation").GetString(),
+            reconnectConnection.GetProperty("planExplanation").GetString());
+        Assert.Equal(
+            launchConnection.GetProperty("selectedVideo").GetRawText(),
+            reconnectConnection.GetProperty("selectedVideo").GetRawText());
         FakeStreamSessionAuthorizer authorizer = Assert.IsType<FakeStreamSessionAuthorizer>(
             factory.Services.GetRequiredService<IStreamSessionAuthorizer>());
         Assert.True(authorizer.Revocations.Count >= 2);
+    }
+
+    [Fact]
+    public async Task ReconnectRejectsAndRevokesTicketForSamePortAbaRuntimeReplacement()
+    {
+        var backend = new FakeStreamingBackend { ActiveListenerPort = 51235 };
+        var authorizer = new ReplacingOnSecondAuthorizationAuthorizer();
+        WebApplicationFactory<Program> raceFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.RemoveAll<IStreamSessionAuthorizer>();
+                services.AddSingleton<IStreamingBackend>(backend);
+                services.AddSingleton<IStreamSessionAuthorizer>(authorizer);
+            }));
+        HttpClient client = raceFactory.CreateClient();
+        HttpResponseMessage launch = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/launch",
+            new { gameId = "steam-shortcut:3767414131" });
+        authorizer.BeforeSecondAuthorization = async () =>
+        {
+            SessionPlan plan = Assert.IsType<SessionPlan>(
+                raceFactory.Services.GetRequiredService<InMemorySessionStore>().Get("z-fold-7"));
+            Assert.True((await backend.StopAsync(plan.SessionId, CancellationToken.None)).Success);
+            backend.ActiveListenerPort = 51235;
+            Assert.True((await backend.StartAsync(plan, CancellationToken.None)).Success);
+        };
+
+        HttpResponseMessage reconnect = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/reconnect",
+            new { });
+
+        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, reconnect.StatusCode);
+        Assert.DoesNotContain("\"connection\"", await reconnect.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.Equal(2, authorizer.Revocations.Count);
+        StreamingSessionState runtime = Assert.IsType<StreamingSessionState>(
+            await backend.GetSessionAsync("z-fold-7-steam-shortcut:3767414131", CancellationToken.None));
+        Assert.Equal(51235, runtime.ActiveListenerPort);
+    }
+
+    [Fact]
+    public async Task ReconnectReturnsServiceUnavailableWhenPlanHasNoActiveStreamingRuntime()
+    {
+        var backend = new FakeStreamingBackend();
+        var display = new FakeDisplayBackend();
+        WebApplicationFactory<Program> inactiveFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.RemoveAll<IDisplayBackend>();
+                services.AddSingleton<IStreamingBackend>(backend);
+                services.AddSingleton<IDisplayBackend>(display);
+            }));
+        HttpClient client = inactiveFactory.CreateClient();
+        HttpResponseMessage plan = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/plan",
+            new { gameId = "steam-shortcut:3767414131" });
+
+        HttpResponseMessage reconnect = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/reconnect",
+            new { });
+
+        Assert.Equal(HttpStatusCode.OK, plan.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, reconnect.StatusCode);
+        Assert.Empty(backend.GetSessions());
+        Assert.Empty(display.EnsureCalls);
+    }
+
+    [Fact]
+    public async Task ReconnectReturnsServiceUnavailableWhenNoSessionPlanExists()
+    {
+        var display = new FakeDisplayBackend();
+        WebApplicationFactory<Program> inactiveFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.AddSingleton<IDisplayBackend>(display);
+            }));
+        HttpClient client = inactiveFactory.CreateClient();
+
+        HttpResponseMessage reconnect = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/reconnect",
+            new { });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, reconnect.StatusCode);
+        Assert.Empty(display.EnsureCalls);
     }
 
     [Fact]
@@ -1246,5 +1462,99 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             Batches.Add(batch);
             return Task.FromResult(ClientInputResult.Ok(batch.Events.Count));
         }
+    }
+
+    private sealed class ReplacingOnSecondAuthorizationAuthorizer : IStreamSessionAuthorizer
+    {
+        private static readonly byte[] WorkerInstanceId = [0x52, 0x41, 0x43, 0x45];
+        private int authorizationCount;
+
+        public Func<Task>? BeforeSecondAuthorization { get; set; }
+
+        public List<StreamWorkerRevocation> Revocations { get; } = [];
+
+        public Task<StreamWorkerAuthorizationContext> GetContextAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new StreamWorkerAuthorizationContext((byte[])WorkerInstanceId.Clone()));
+
+        public async Task<StreamWorkerAuthorizationResult> AuthorizeAsync(
+            StreamWorkerAuthorization authorization,
+            CancellationToken cancellationToken)
+        {
+            authorizationCount++;
+            if (authorizationCount == 2 && BeforeSecondAuthorization is not null)
+            {
+                await BeforeSecondAuthorization();
+            }
+            return StreamWorkerAuthorizationResult.Accepted;
+        }
+
+        public Task<StreamWorkerAuthorizationResult> RevokeAsync(
+            StreamWorkerRevocation revocation,
+            CancellationToken cancellationToken)
+        {
+            Revocations.Add(revocation);
+            return Task.FromResult(StreamWorkerAuthorizationResult.Accepted);
+        }
+    }
+
+    private sealed class ReplacingInvalidStartStreamingBackend : IStreamingBackend
+    {
+        private readonly FakeStreamingBackend inner = new();
+
+        public int PublicStopCalls { get; private set; }
+
+        public int ConditionalStopCalls { get; private set; }
+
+        public Guid ReplacementGeneration { get; private set; }
+
+        public Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken) =>
+            inner.GetHealthAsync(cancellationToken);
+
+        public Task<StreamingPreflightResult> CheckReadinessAsync(
+            SessionPlan plan,
+            CancellationToken cancellationToken) =>
+            inner.CheckReadinessAsync(plan, cancellationToken);
+
+        public async Task<StreamingStartResult> StartAsync(
+            SessionPlan plan,
+            CancellationToken cancellationToken)
+        {
+            inner.ActiveListenerPort = 0;
+            StreamingStartResult invalid = await inner.StartAsync(plan, cancellationToken);
+            inner.ActiveListenerPort = 47998;
+            StreamingStartResult replacement = await inner.StartAsync(plan, cancellationToken);
+            ReplacementGeneration = replacement.Session!.RuntimeGeneration;
+            return invalid;
+        }
+
+        public Task<StreamingStopResult> StopAsync(
+            string sessionId,
+            CancellationToken cancellationToken)
+        {
+            PublicStopCalls++;
+            return inner.StopAsync(sessionId, cancellationToken);
+        }
+
+        public async Task<StreamingStopResult> StopRuntimeAsync(
+            string sessionId,
+            Guid expectedGeneration,
+            CancellationToken cancellationToken)
+        {
+            ConditionalStopCalls++;
+            StreamingSessionState? current = await inner.GetSessionAsync(sessionId, cancellationToken);
+            if (current?.RuntimeGeneration != expectedGeneration)
+            {
+                return StreamingStopResult.Fail(
+                    $"Stream session '{sessionId}' runtime generation changed before compensation.");
+            }
+            return await inner.StopAsync(sessionId, cancellationToken);
+        }
+
+        public Task<StreamingSessionState?> GetSessionAsync(
+            string sessionId,
+            CancellationToken cancellationToken) =>
+            inner.GetSessionAsync(sessionId, cancellationToken);
+
+        public IReadOnlyList<StreamingSessionState> GetSessions() => inner.GetSessions();
     }
 }
