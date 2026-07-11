@@ -108,12 +108,25 @@ there is no periodic drain loop.
 
 ### 4. Managed Worker Event Stream
 
-`StreamWorkerNamedPipeClient` routes `request_id > 0` envelopes to correlated requests and
-`request_id == 0` envelopes to a bounded asynchronous event channel.
+`StreamWorkerNamedPipeClient` routes `request_id > 0` envelopes only to correlated requests.
+It translates allowlisted `request_id == 0` envelopes immediately into a Platform-owned,
+protocol-neutral `StreamWorkerEvent` model. Raw Worker protobuf events do not cross into
+Server.
 
-`StreamWorkerProcessHost` exposes the current Worker event stream through
-`IStreamWorkerHost`. Worker replacement closes the old generation before publishing the new
-one, so stale events cannot cross process generations.
+`StreamWorkerProcessHost` owns one fixed-capacity event channel for its entire lifetime and
+exposes its reader through `IStreamWorkerHost`. Each initialized Worker receives an explicit
+monotonic process generation. Worker replacement does not complete the stable channel; old
+process/session generations are rejected before relay work.
+
+Core's protocol-neutral input model represents pointer action and wheel delta, keyboard scan
+code and state, controller control/value, and touch rational coordinates/pressure. It does
+not import Worker protobuf contracts. Platform translation retains exact input values only
+until forwarding and gives every input value a redacted diagnostic representation.
+
+`StreamWorkerStreamingBackend` remains authoritative for runtime ownership. It atomically
+binds Worker authentication generation to the current Service runtime generation and
+validates process generation, session id, Worker session generation, and Service runtime
+generation before accepting later events.
 
 A hosted `StreamWorkerEventRelay` performs these mappings:
 
@@ -122,8 +135,10 @@ A hosted `StreamWorkerEventRelay` performs these mappings:
 - Worker transport/session event -> streaming runtime state update;
 - Worker process exit -> runtime invalidation without terminating Beacon.Server.
 
-The relay logs only metadata such as event count, event kinds, sequence, and success. It does
-not render or serialize the event payload into diagnostics.
+The relay catches failures per event so one malformed event, sink failure, or Worker exit
+cannot terminate the hosted service. It logs only fixed messages and allowlisted metadata
+such as event count, event kinds, sequence, and success. It never logs exception messages,
+renders raw envelopes, or serializes input payloads into diagnostics.
 
 ### 5. Production Android Acceptance Flow
 

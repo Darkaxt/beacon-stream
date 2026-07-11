@@ -213,23 +213,34 @@ git push
 **Files:**
 - Modify: `src/Beacon.Platform.Windows/Streaming/StreamWorkerNamedPipeClient.cs`
 - Modify: `src/Beacon.Platform.Windows/Streaming/StreamWorkerProcessHost.cs`
+- Modify: `src/Beacon.Platform.Windows/Streaming/StreamWorkerStreamingBackend.cs`
 - Create: `src/Beacon.Platform.Windows/Streaming/StreamWorkerEvent.cs`
+- Modify: `src/Beacon.Core/Input/ClientInput.cs`
+- Modify: `src/Beacon.Platform.Windows/Input/WindowsInputAbstractions.cs`
+- Modify: `src/Beacon.Platform.Windows/Input/WindowsInputApi.cs`
+- Modify: `src/Beacon.Platform.Windows/Input/WindowsClientInputSink.cs`
 - Create: `src/Beacon.Server/Streaming/StreamWorkerEventRelay.cs`
 - Modify: `src/Beacon.Server/Hosting/BeaconServiceRegistration.cs`
+- Modify: `src/Beacon.Server/Api/ClientEndpoints.cs`
 - Test: `tests/Beacon.Platform.Windows.Tests/Streaming/StreamWorkerNamedPipeClientTests.cs`
 - Test: `tests/Beacon.Platform.Windows.Tests/Streaming/StreamWorkerProcessHostTests.cs`
+- Test: `tests/Beacon.Platform.Windows.Tests/Streaming/StreamWorkerStreamingBackendTests.cs`
+- Test: `tests/Beacon.Platform.Windows.Tests/Input/WindowsClientInputSinkTests.cs`
+- Test: `tests/Beacon.Platform.Windows.Tests/Input/WindowsInputApiTests.cs`
 - Create: `tests/Beacon.Server.Tests/StreamWorkerEventRelayTests.cs`
 
 - [ ] **Step 1: Write failing request-correlation and relay tests**
 
-Prove request-id-zero events never complete a correlated command, stale Worker generations
-are discarded, input is mapped exactly once, and diagnostics contain only metadata:
+Prove request-id-zero events never complete a correlated command, raw protobuf events do not
+cross the Platform boundary, stale process/session/runtime generations are discarded, every
+input variant is mapped exactly once, process exit invalidates matching runtimes immediately,
+and diagnostics contain only metadata:
 
 ```csharp
-WorkerIpcEnvelope envelope = await host.Events.ReadAsync(cancellationToken);
-Assert.Equal(0UL, envelope.RequestId);
+StreamWorkerEvent workerEvent = await host.Events.ReadAsync(cancellationToken);
+Assert.Equal(currentProcessGeneration, workerEvent.ProcessGeneration);
 
-await relay.HandleAsync(envelope, cancellationToken);
+await relay.HandleAsync(workerEvent, cancellationToken);
 ClientInputBatch batch = Assert.Single(inputSink.Batches);
 Assert.Equal("z-fold-7", batch.ClientId);
 Assert.Single(batch.Events);
@@ -246,28 +257,39 @@ dotnet test tests\Beacon.Server.Tests\Beacon.Server.Tests.csproj --filter Stream
 Expected: failure because `IStreamWorkerHost` has no event reader and request-id-zero frames
 are ignored.
 
-- [ ] **Step 3: Implement a bounded event channel and stable host surface**
+- [ ] **Step 3: Implement protocol-neutral input and a stable host event surface**
 
-Expose events without making Core depend on Worker contracts:
+Extend Core's input model to retain exact pointer/wheel, keyboard scan-code, controller, and
+touch-rational values without importing Worker contracts. Translate allowlisted Worker
+oneofs into a Platform-owned event before they reach the host channel:
 
 ```csharp
 public interface IStreamWorkerHost
 {
-    ChannelReader<WorkerIpcEnvelope> Events { get; }
+    ChannelReader<StreamWorkerEvent> Events { get; }
+    long CurrentProcessGeneration { get; }
+    bool IsCurrentProcessGeneration(long generation);
     // Existing members remain unchanged.
 }
 ```
 
-`StreamWorkerNamedPipeClient.ReceiveLoopAsync` writes request-id-zero frames to its event
-channel. `StreamWorkerProcessHost` forwards only the current process generation and completes
-the old generation before replacement.
+`StreamWorkerProcessHost` owns one fixed-capacity channel for its lifetime and completes it
+only on host disposal. Each initialized client receives a monotonic process generation.
+`StreamWorkerNamedPipeClient.ReceiveLoopAsync` translates request-id-zero frames and writes
+Platform events; positive IDs remain exclusively correlated commands. Translation reduces
+non-input events to metadata and gives input values redacted diagnostic rendering.
 
-- [ ] **Step 4: Implement the hosted relay**
+- [ ] **Step 4: Bind runtime generations and implement the hosted relay**
 
-Register one `BackgroundService` that awaits `Events.ReadAllAsync(stoppingToken)`. Map public
-input schema to `ClientInputBatch`, call `IClientInputSink`, and publish diagnostic metadata
-for feedback, transport, media, and failures. Never call `ToString()` on the incoming envelope
-or event payload.
+Make `StreamWorkerStreamingBackend` atomically bind Worker authentication generation to the
+current Service runtime. Later events are accepted only when process generation, session id,
+Worker session generation, and Service runtime generation all match. A process-exit event
+invalidates only runtimes owned by that process generation.
+
+Register one `BackgroundService` that awaits `Events.ReadAllAsync(stoppingToken)`. Map
+protocol-neutral input to `ClientInputBatch`, call `IClientInputSink`, and publish fixed,
+allowlisted metadata for feedback, transport, media, and failures. Catch failures per event
+and continue. Never log a raw envelope, input value, exception message, ticket, or path.
 
 - [ ] **Step 5: Run focused and full managed tests**
 
