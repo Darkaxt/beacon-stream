@@ -6,6 +6,13 @@
       "version": "27.3.13750724",
       "linuxArchive": "https://dl.google.com/android/repository/android-ndk-r27d-linux.zip",
       "linuxSha1": "22105e410cf29afcf163760cc95522b9fb981121"
+    },
+    "protobufCompiler": {
+      "version": "32.1",
+      "windowsArchive": "https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-win64.zip",
+      "windowsSha256": "69569cbc178cd5785ecb7d93569913110677eafeb4b8f82970c361fad4c7cd66",
+      "linuxArchive": "https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-linux-x86_64.zip",
+      "linuxSha256": "e9c129c176bb7df02546c4cd6185126ca53c89e7d2f09511e209319704b5dd7e"
     }
   },
   "dependencies": {

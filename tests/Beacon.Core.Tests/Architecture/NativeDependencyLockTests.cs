@@ -54,6 +54,21 @@ public sealed class NativeDependencyLockTests
             "22105e410cf29afcf163760cc95522b9fb981121",
             androidNdk.GetProperty("linuxSha1").GetString());
 
+        JsonElement protobufCompiler = rootElement.GetProperty("toolchains").GetProperty("protobufCompiler");
+        Assert.Equal("32.1", protobufCompiler.GetProperty("version").GetString());
+        Assert.Equal(
+            "https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-win64.zip",
+            protobufCompiler.GetProperty("windowsArchive").GetString());
+        Assert.Equal(
+            "69569cbc178cd5785ecb7d93569913110677eafeb4b8f82970c361fad4c7cd66",
+            protobufCompiler.GetProperty("windowsSha256").GetString());
+        Assert.Equal(
+            "https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-linux-x86_64.zip",
+            protobufCompiler.GetProperty("linuxArchive").GetString());
+        Assert.Equal(
+            "e9c129c176bb7df02546c4cd6185126ca53c89e7d2f09511e209319704b5dd7e",
+            protobufCompiler.GetProperty("linuxSha256").GetString());
+
         JsonElement dependencies = rootElement.GetProperty("dependencies");
         Assert.Equal(ExpectedDependencies.Count, dependencies.EnumerateObject().Count());
         foreach ((string name, ExpectedDependency expected) in ExpectedDependencies)

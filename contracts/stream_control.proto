@@ -1,0 +1,244 @@
+syntax = "proto3";
+
+package beacon.stream.v1;
+
+option csharp_namespace = "Beacon.StreamWorker.Contracts.Stream.V1";
+
+enum VideoCodec {
+  VIDEO_CODEC_UNSPECIFIED = 0;
+  VIDEO_CODEC_H264 = 1;
+}
+
+enum DynamicRange {
+  DYNAMIC_RANGE_UNSPECIFIED = 0;
+  DYNAMIC_RANGE_SDR = 1;
+}
+
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  SESSION_STATE_AUTHENTICATING = 1;
+  SESSION_STATE_READY = 2;
+  SESSION_STATE_STREAMING = 3;
+  SESSION_STATE_STOPPED = 4;
+  SESSION_STATE_FAILED = 5;
+}
+
+enum SessionErrorCode {
+  SESSION_ERROR_CODE_UNSPECIFIED = 0;
+  SESSION_ERROR_CODE_NONE = 1;
+  SESSION_ERROR_CODE_UNSUPPORTED_VERSION = 2;
+  SESSION_ERROR_CODE_AUTHENTICATION_FAILED = 3;
+  SESSION_ERROR_CODE_TICKET_REPLAYED = 4;
+  SESSION_ERROR_CODE_PLAN_MISMATCH = 5;
+  SESSION_ERROR_CODE_TRANSPORT_FAILED = 6;
+}
+
+enum SessionStopReason {
+  SESSION_STOP_REASON_UNSPECIFIED = 0;
+  SESSION_STOP_REASON_CLIENT_REQUEST = 1;
+  SESSION_STOP_REASON_SERVER_REQUEST = 2;
+  SESSION_STOP_REASON_CONNECTION_CLOSED = 3;
+}
+
+enum IdrRequestReason {
+  IDR_REQUEST_REASON_UNSPECIFIED = 0;
+  IDR_REQUEST_REASON_DATAGRAM_LOSS = 1;
+  IDR_REQUEST_REASON_FRAME_EVICTED = 2;
+  IDR_REQUEST_REASON_DECODER_RESET = 3;
+}
+
+enum PointerAction {
+  POINTER_ACTION_UNSPECIFIED = 0;
+  POINTER_ACTION_MOVE = 1;
+  POINTER_ACTION_BUTTON_DOWN = 2;
+  POINTER_ACTION_BUTTON_UP = 3;
+  POINTER_ACTION_SCROLL = 4;
+}
+
+enum TouchAction {
+  TOUCH_ACTION_UNSPECIFIED = 0;
+  TOUCH_ACTION_DOWN = 1;
+  TOUCH_ACTION_MOVE = 2;
+  TOUCH_ACTION_UP = 3;
+  TOUCH_ACTION_CANCEL = 4;
+}
+
+enum DecoderState {
+  DECODER_STATE_UNSPECIFIED = 0;
+  DECODER_STATE_READY = 1;
+  DECODER_STATE_AWAITING_IDR = 2;
+  DECODER_STATE_FAILED = 3;
+}
+
+enum BenchmarkFactKind {
+  BENCHMARK_FACT_KIND_UNSPECIFIED = 0;
+  BENCHMARK_FACT_KIND_RELIABLE_BYTES = 1;
+  BENCHMARK_FACT_KIND_DATAGRAM_BYTES = 2;
+  BENCHMARK_FACT_KIND_LOST_DATAGRAMS = 3;
+  BENCHMARK_FACT_KIND_REORDERED_DATAGRAMS = 4;
+  BENCHMARK_FACT_KIND_RTT_US = 5;
+  BENCHMARK_FACT_KIND_JITTER_US = 6;
+  BENCHMARK_FACT_KIND_DECODE_US = 7;
+  BENCHMARK_FACT_KIND_PRESENTATION_US = 8;
+  BENCHMARK_FACT_KIND_THERMAL_STATUS = 9;
+}
+
+message SelectedVideoMode {
+  VideoCodec codec = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  uint32 frames_per_second_numerator = 4;
+  uint32 frames_per_second_denominator = 5;
+  DynamicRange dynamic_range = 6;
+}
+
+message PublicSessionEnvelope {
+  uint32 protocol_version = 1;
+  string server_address = 2;
+  uint32 server_port = 3;
+  bytes stream_ticket = 4;
+  bytes pinned_server_fingerprint = 5;
+  SelectedVideoMode selected_video = 6;
+  uint64 plan_revision = 7;
+  string plan_explanation = 8;
+}
+
+message SessionStreamEnvelope {
+  uint32 protocol_version = 1;
+  string session_id = 2;
+  uint64 sequence = 3;
+
+  oneof body {
+    AuthenticateSession authenticate_session = 10;
+    SessionAuthenticated session_authenticated = 11;
+    StartSession start_session = 12;
+    StopSession stop_session = 13;
+    SessionStateChanged session_state_changed = 14;
+    RequestIdr request_idr = 15;
+  }
+}
+
+message AuthenticateSession {
+  bytes stream_ticket = 1;
+  string client_id = 2;
+  uint64 plan_revision = 3;
+}
+
+message SessionAuthenticated {
+  bool accepted = 1;
+  SessionErrorCode error_code = 2;
+  uint32 maximum_datagram_bytes = 3;
+}
+
+message StartSession {
+  SelectedVideoMode selected_video = 1;
+}
+
+message StopSession {
+  SessionStopReason reason = 1;
+}
+
+message SessionStateChanged {
+  SessionState state = 1;
+  SessionErrorCode error_code = 2;
+}
+
+message RequestIdr {
+  IdrRequestReason reason = 1;
+  uint64 last_complete_sequence = 2;
+}
+
+message InputStreamEnvelope {
+  uint32 protocol_version = 1;
+  string session_id = 2;
+  uint64 sequence = 3;
+  InputBatch input_batch = 10;
+}
+
+message InputBatch {
+  repeated InputEvent events = 1;
+}
+
+message InputEvent {
+  oneof body {
+    PointerInput pointer = 1;
+    KeyboardInput keyboard = 2;
+    ControllerInput controller = 3;
+    TouchInput touch = 4;
+  }
+}
+
+message PointerInput {
+  PointerAction action = 1;
+  sint32 x = 2;
+  sint32 y = 3;
+  sint32 wheel_delta = 4;
+  uint32 button = 5;
+}
+
+message KeyboardInput {
+  uint32 scan_code = 1;
+  bool pressed = 2;
+}
+
+message ControllerInput {
+  uint32 controller_index = 1;
+  uint32 control_id = 2;
+  sint32 value = 3;
+}
+
+message TouchInput {
+  uint32 contact_id = 1;
+  TouchAction action = 2;
+  uint32 x_numerator = 3;
+  uint32 y_numerator = 4;
+  uint32 coordinate_denominator = 5;
+  uint32 pressure_numerator = 6;
+  uint32 pressure_denominator = 7;
+}
+
+message FeedbackStreamEnvelope {
+  uint32 protocol_version = 1;
+  string session_id = 2;
+  uint64 sequence = 3;
+
+  oneof body {
+    RenderedFrameFeedback rendered_frame = 10;
+    DatagramLossFeedback datagram_loss = 11;
+    DecoderFeedback decoder = 12;
+    QueueDepthFeedback queue_depth = 13;
+    BenchmarkEvidence benchmark_evidence = 14;
+  }
+}
+
+message RenderedFrameFeedback {
+  uint64 frame_sequence = 1;
+  uint64 presentation_time_us = 2;
+  uint64 rendered_at_us = 3;
+}
+
+message DatagramLossFeedback {
+  uint64 frame_sequence = 1;
+  repeated uint32 missing_chunk_indexes = 2;
+}
+
+message DecoderFeedback {
+  DecoderState state = 1;
+  uint32 platform_error_code = 2;
+}
+
+message QueueDepthFeedback {
+  uint32 queued_access_units = 1;
+  uint64 dropped_access_units = 2;
+}
+
+message BenchmarkEvidence {
+  string run_id = 1;
+  uint32 schema_version = 2;
+  repeated BenchmarkFact facts = 3;
+}
+
+message BenchmarkFact {
+  BenchmarkFactKind kind = 1;
+  int64 value = 2;
+}

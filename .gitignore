@@ -318,6 +318,7 @@ dist/
 playwright-report/
 test-results/
 native/_deps/
+native/_tools/
 native/out/
 
 # Visual Studio 6 build log

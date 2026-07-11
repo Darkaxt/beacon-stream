@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Beacon.StreamWorker.Contracts</RootNamespace>
+    <GeneratedContractsDir>$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\GeneratedContracts</GeneratedContractsDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.32.1" />
+    <PackageReference Include="Google.Protobuf.Tools" Version="3.32.1" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ContractProto Include="..\..\contracts\worker_ipc.proto" />
+    <ContractProto Include="..\..\contracts\stream_control.proto" />
+    <Compile Include="$(GeneratedContractsDir)\WorkerIpc.cs" />
+    <Compile Include="$(GeneratedContractsDir)\StreamControl.cs" />
+  </ItemGroup>
+
+  <Target
+    Name="GenerateBeaconContracts"
+    BeforeTargets="CoreCompile"
+    Inputs="@(ContractProto)"
+    Outputs="$(GeneratedContractsDir)\WorkerIpc.cs;$(GeneratedContractsDir)\StreamControl.cs">
+    <PropertyGroup>
+      <BeaconContractsDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\..\contracts'))</BeaconContractsDir>
+      <BeaconProtocExecutable Condition="'$(OS)' == 'Windows_NT'">$(protoc_windows64)</BeaconProtocExecutable>
+      <BeaconProtocExecutable Condition="'$(OS)' != 'Windows_NT'">$(protoc_linux64)</BeaconProtocExecutable>
+    </PropertyGroup>
+    <MakeDir Directories="$(GeneratedContractsDir)" />
+    <Exec Command="&quot;$(BeaconProtocExecutable)&quot; --proto_path=&quot;$(BeaconContractsDir)&quot; --csharp_out=&quot;$(GeneratedContractsDir)&quot; @(ContractProto->'&quot;%(FullPath)&quot;', ' ')" />
+  </Target>
+
+</Project>

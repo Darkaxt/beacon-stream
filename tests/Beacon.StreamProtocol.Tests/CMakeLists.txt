@@ -3,6 +3,10 @@ target_link_libraries(BeaconStreamProtocolVersionTests PRIVATE Beacon::StreamPro
 
 add_test(NAME BeaconStreamProtocol.Version COMMAND BeaconStreamProtocolVersionTests)
 
+add_executable(BeaconMediaDatagramTests media_datagram_tests.cpp)
+target_link_libraries(BeaconMediaDatagramTests PRIVATE Beacon::StreamProtocol)
+add_test(NAME BeaconStreamProtocol.MediaDatagram COMMAND BeaconMediaDatagramTests)
+
 if(BEACON_WITH_MSQUIC)
   function(beacon_deploy_msquic target)
     if(WIN32)
