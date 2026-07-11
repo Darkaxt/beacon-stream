@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Beacon.Core\Beacon.Core.csproj" />
     <ProjectReference Include="..\..\src\Beacon.Platform.Windows\Beacon.Platform.Windows.csproj" />
+    <ProjectReference Include="..\..\src\Beacon.StreamWorker.Contracts\Beacon.StreamWorker.Contracts.csproj" />
   </ItemGroup>
 
 </Project>

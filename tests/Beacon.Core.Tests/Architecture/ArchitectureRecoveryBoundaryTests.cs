@@ -190,12 +190,17 @@ public sealed class ArchitectureRecoveryBoundaryTests
     public void NativeTestsDoNotUseCrashDialogAssertions()
     {
         string root = FindRepositoryRoot();
-        string nativeTests = ToPlatformPath(root, "tests/Beacon.StreamProtocol.Tests");
+        string[] nativeTestRoots =
+        [
+            ToPlatformPath(root, "tests/Beacon.StreamProtocol.Tests"),
+            ToPlatformPath(root, "tests/Beacon.StreamWorker.Tests")
+        ];
         var crashAssertion = new Regex(
             @"\b(?:assert|abort)\s*\(",
             RegexOptions.CultureInvariant);
 
-        string[] violations = Directory.EnumerateFiles(nativeTests, "*", SearchOption.AllDirectories)
+        string[] violations = nativeTestRoots
+            .SelectMany(path => Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
             .Where(path => Path.GetExtension(path) is ".cpp" or ".h")
             .Where(path => crashAssertion.IsMatch(File.ReadAllText(path)))
             .Select(path => ToRepositoryRelativePath(root, path))

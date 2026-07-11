@@ -5,6 +5,7 @@ using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Displays;
 using Beacon.Platform.Windows.Games;
 using Beacon.Platform.Windows.Sessions;
+using Beacon.Platform.Windows.Streaming;
 
 namespace Beacon.Server.Hosting;
 
@@ -30,7 +31,7 @@ public sealed record BeaconHostOptions(
             nameof(WindowsDisplayBackend),
             nameof(WindowsGameLauncher),
             nameof(WindowsSessionActivityInspector),
-            nameof(UnavailableStreamingBackend)),
+            nameof(StreamWorkerStreamingBackend)),
         _ => throw new ArgumentOutOfRangeException(
             nameof(mode),
             mode,

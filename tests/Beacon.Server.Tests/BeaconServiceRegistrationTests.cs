@@ -10,6 +10,7 @@ using Beacon.Platform.Windows.Games;
 using Beacon.Platform.Windows.Input;
 using Beacon.Platform.Windows.Recovery;
 using Beacon.Platform.Windows.Sessions;
+using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.Hosting;
 using Beacon.Server.State;
 using Microsoft.Extensions.Configuration;
@@ -45,9 +46,9 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
-    public void WindowsRegistrationUsesWindowsHostAndFailsClosedStreaming()
+    public async Task WindowsRegistrationUsesWindowsHostAndStreamWorker()
     {
-        using ServiceProvider provider = BuildProvider(new KeyValuePair<string, string?>(
+        await using ServiceProvider provider = BuildProvider(new KeyValuePair<string, string?>(
             BeaconServiceRegistration.HostModeConfigurationKey,
             "windows"));
 
@@ -55,7 +56,7 @@ public sealed class BeaconServiceRegistrationTests
 
         Assert.Equal(BeaconHostMode.Windows, options.Mode);
         Assert.Equal("windows", options.ModeName);
-        Assert.Equal(nameof(UnavailableStreamingBackend), options.StreamingBackendName);
+        Assert.Equal(nameof(StreamWorkerStreamingBackend), options.StreamingBackendName);
         Assert.IsType<WindowsDisplayApi>(provider.GetRequiredService<IWindowsDisplayApi>());
         Assert.IsType<WindowsDisplayBackend>(provider.GetRequiredService<IDisplayBackend>());
         Assert.IsType<WindowsRecoveryApi>(provider.GetRequiredService<IWindowsRecoveryApi>());
@@ -70,7 +71,10 @@ public sealed class BeaconServiceRegistrationTests
         Assert.Contains("tap", inputHealth.SupportedPointerActions);
         Assert.Contains("keyboard", inputHealth.SupportedEventTypes);
         Assert.Contains("press", inputHealth.SupportedKeyboardActions);
-        Assert.IsType<UnavailableStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+        Assert.IsType<StreamWorkerStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+        Assert.Same(
+            provider.GetRequiredService<StreamWorkerProcessHost>(),
+            provider.GetRequiredService<IStreamWorkerHost>());
         Assert.Single(provider.GetServices<IStreamingBackend>());
     }
 

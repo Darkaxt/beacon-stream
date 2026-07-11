@@ -3,6 +3,7 @@ syntax = "proto3";
 package beacon.worker.v1;
 
 option csharp_namespace = "Beacon.StreamWorker.Contracts.Worker.V1";
+option optimize_for = LITE_RUNTIME;
 
 enum WorkerLifecycleState {
   WORKER_LIFECYCLE_STATE_UNSPECIFIED = 0;

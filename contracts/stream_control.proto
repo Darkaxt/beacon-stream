@@ -3,6 +3,7 @@ syntax = "proto3";
 package beacon.stream.v1;
 
 option csharp_namespace = "Beacon.StreamWorker.Contracts.Stream.V1";
+option optimize_for = LITE_RUNTIME;
 
 enum VideoCodec {
   VIDEO_CODEC_UNSPECIFIED = 0;

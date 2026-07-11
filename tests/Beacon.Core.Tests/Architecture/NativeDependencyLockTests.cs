@@ -7,6 +7,10 @@ public sealed class NativeDependencyLockTests
     private static readonly IReadOnlyDictionary<string, ExpectedDependency> ExpectedDependencies =
         new Dictionary<string, ExpectedDependency>(StringComparer.Ordinal)
         {
+            ["abseil-cpp"] = new(
+                "https://github.com/abseil/abseil-cpp.git",
+                "76bb24329e8bf5f39704eb10d21b9a80befa7c81",
+                "Apache-2.0"),
             ["msquic"] = new(
                 "https://github.com/microsoft/msquic.git",
                 "87b53085d76bd7920d490a6f226c9999b6614d14",
