@@ -208,18 +208,18 @@ ctest --preset windows-x64-debug --output-on-failure
 - Create: `tests/Beacon.StreamProtocol.Tests/msquic_transport_tests.cpp`
 - Create: `tests/Beacon.StreamWorker.Tests/quic_session_tests.cpp`
 
-- [ ] Write failing loopback tests for certificate validation, ALPN/version mismatch,
+- [x] Write failing loopback tests for certificate validation, ALPN/version mismatch,
   ticket replay, independent session/input/feedback streams, datagram negotiation,
   `MaxSendLength` chunk sizing, send-state loss evidence, graceful close, abortive network
   close, and reconnect with a fresh ticket.
-- [ ] Configure one QUIC connection with reliable streams and datagram receive enabled.
+- [x] Configure one QUIC connection with reliable streams and datagram receive enabled.
   Disable transport idle expiry as an ownership mechanism; explicit state/events own the
   session.
-- [ ] Use MsQuic send-complete callbacks for buffer ownership. Never retain stack buffers or
+- [x] Use MsQuic send-complete callbacks for buffer ownership. Never retain stack buffers or
   assume send completion means peer receipt.
-- [ ] Feed QUIC statistics and client feedback into typed metrics without adding adaptive
+- [x] Feed QUIC statistics and client feedback into typed metrics without adding adaptive
   policy yet.
-- [ ] Commit: `feat: add authenticated Beacon QUIC transport`
+- [x] Commit: `feat: add authenticated Beacon QUIC transport`
 
 ### Task 8: Introduce One Android StreamCore Route
 

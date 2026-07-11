@@ -43,13 +43,15 @@ public sealed class StreamWorkerProcessHostTests
     public async Task RealWorkerCompletesExplicitLifecycleWhenBinaryIsAvailable()
     {
         string? executable = Environment.GetEnvironmentVariable("BEACON_STREAM_WORKER_PATH");
-        if (string.IsNullOrWhiteSpace(executable) || !File.Exists(executable))
+        string? identity = Environment.GetEnvironmentVariable("BEACON_SERVER_IDENTITY_PATH");
+        if (string.IsNullOrWhiteSpace(executable) || !File.Exists(executable)
+            || string.IsNullOrWhiteSpace(identity) || !File.Exists(identity))
         {
             return;
         }
 
         await using var host = new StreamWorkerProcessHost(
-            new StreamWorkerProcessHostOptions(executable));
+            new StreamWorkerProcessHostOptions(executable, identity));
 
         await host.EnsureReadyAsync(CancellationToken.None);
         int processId = host.ProcessId;
@@ -94,7 +96,7 @@ public sealed class StreamWorkerProcessHostTests
         Assert.True(prepare.Completion.WorkerCompletion.Succeeded);
         Assert.True(start.Completion.WorkerCompletion.Succeeded);
         Assert.True(stop.Completion.WorkerCompletion.Succeeded);
-        Assert.Equal(3ul, start.Events.Single(e => e.BodyCase == WorkerIpcEnvelope.BodyOneofCase.MediaMetrics)
+        Assert.Equal(0ul, start.Events.Single(e => e.BodyCase == WorkerIpcEnvelope.BodyOneofCase.MediaMetrics)
             .MediaMetrics.EncodedFrames);
 
         using (System.Diagnostics.Process firstWorker = System.Diagnostics.Process.GetProcessById(processId))

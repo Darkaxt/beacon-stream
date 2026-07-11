@@ -45,6 +45,11 @@ if(BEACON_WITH_MSQUIC)
   beacon_deploy_msquic(BeaconMsQuicApiTests)
   add_test(NAME BeaconStreamProtocol.MsQuicApi COMMAND BeaconMsQuicApiTests)
 
+  add_executable(BeaconMsQuicTransportTests msquic_transport_tests.cpp)
+  target_link_libraries(BeaconMsQuicTransportTests PRIVATE Beacon::StreamProtocol)
+  beacon_deploy_msquic(BeaconMsQuicTransportTests)
+  add_test(NAME BeaconStreamProtocol.MsQuicTransport COMMAND BeaconMsQuicTransportTests)
+
   add_executable(BeaconMsQuicInteropProof msquic_interop_proof.cpp)
   target_link_libraries(BeaconMsQuicInteropProof PRIVATE Beacon::StreamProtocol)
   beacon_deploy_msquic(BeaconMsQuicInteropProof)

@@ -3,6 +3,7 @@ add_library(
   STATIC
     src/frame_assembler.cpp
     src/media_datagram.cpp
+    src/msquic_transport.cpp
     src/session.cpp
 )
 

@@ -11,14 +11,23 @@
 
 namespace {
 
-using beacon::stream::IStreamTransport;
 using beacon::stream::TransportPacket;
 using beacon::stream::TransportSendResult;
+using beacon::worker::IWorkerMediaTransport;
 using beacon::worker::WorkerHost;
+using beacon::worker::AuthorizedQuicTicketStore;
 using beacon::worker::v1::WorkerIpcEnvelope;
 
-class RecordingTransport final : public IStreamTransport {
+class RecordingTransport final : public IWorkerMediaTransport {
  public:
+  bool configure_listener(std::string_view address, std::uint16_t port) override {
+    listen_address = address;
+    listen_port = port;
+    return true;
+  }
+
+  std::uint16_t local_port() const noexcept override { return listen_port; }
+
   bool open_connection() override {
     ++open_count;
     open = true;
@@ -43,6 +52,8 @@ class RecordingTransport final : public IStreamTransport {
   }
 
   bool open{};
+  std::string listen_address;
+  std::uint16_t listen_port{};
   std::size_t open_count{};
   std::size_t close_count{};
   std::size_t shutdown_count{};
@@ -67,7 +78,8 @@ WorkerIpcEnvelope command(std::uint64_t request_id, const char* session_id) {
 
 void hello_and_ready_are_typed_and_instance_bound() {
   RecordingTransport transport;
-  WorkerHost host({std::byte{1}, std::byte{2}, std::byte{3}}, 42, transport);
+  AuthorizedQuicTicketStore tickets;
+  WorkerHost host({std::byte{1}, std::byte{2}, std::byte{3}}, 42, transport, tickets);
 
   const auto hello = host.hello();
   const auto ready = host.ready();
@@ -81,7 +93,8 @@ void hello_and_ready_are_typed_and_instance_bound() {
 
 void unsupported_versions_receive_one_correlated_failure() {
   RecordingTransport transport;
-  WorkerHost host({std::byte{1}}, 42, transport);
+  AuthorizedQuicTicketStore tickets;
+  WorkerHost host({std::byte{1}}, 42, transport, tickets);
   auto request = command(17, "session-a");
   request.set_protocol_version(2);
   request.mutable_prepare_session();
@@ -100,9 +113,10 @@ void unsupported_versions_receive_one_correlated_failure() {
                       }) == 1);
 }
 
-void prepared_session_emits_deterministic_fake_access_units() {
+void prepared_session_starts_configured_listener_without_pre_auth_media() {
   RecordingTransport transport;
-  WorkerHost host({std::byte{1}}, 42, transport);
+  AuthorizedQuicTicketStore tickets;
+  WorkerHost host({std::byte{1}}, 42, transport, tickets);
 
   auto prepare = command(20, "session-a");
   auto* plan = prepare.mutable_prepare_session();
@@ -122,20 +136,19 @@ void prepared_session_emits_deterministic_fake_access_units() {
   BEACON_TEST_REQUIRE(completion(responses).request_id() == 21);
   BEACON_TEST_REQUIRE(completion(responses).worker_completion().succeeded());
   BEACON_TEST_REQUIRE(transport.open_count == 1);
-  BEACON_TEST_REQUIRE(transport.packets.size() == 3);
-  BEACON_TEST_REQUIRE(transport.packets[0].sequence == 1);
-  BEACON_TEST_REQUIRE(transport.packets[1].sequence == 2);
-  BEACON_TEST_REQUIRE(transport.packets[2].sequence == 3);
-  BEACON_TEST_REQUIRE(transport.packets[0].payload != transport.packets[1].payload);
+  BEACON_TEST_REQUIRE(transport.listen_address.empty());
+  BEACON_TEST_REQUIRE(transport.listen_port == 45999);
+  BEACON_TEST_REQUIRE(transport.packets.empty());
   BEACON_TEST_REQUIRE(std::ranges::any_of(responses, [](const WorkerIpcEnvelope& value) {
     return value.body_case() == WorkerIpcEnvelope::kMediaMetrics &&
-           value.media_metrics().encoded_frames() == 3;
+           value.media_metrics().encoded_frames() == 0;
   }));
 }
 
 void ticket_authorization_is_hash_only_and_worker_bound() {
   RecordingTransport transport;
-  WorkerHost host({std::byte{1}, std::byte{2}}, 42, transport);
+  AuthorizedQuicTicketStore tickets;
+  WorkerHost host({std::byte{1}, std::byte{2}}, 42, transport, tickets);
   auto authorize = command(25, "session-a");
   auto* ticket = authorize.mutable_authorize_ticket();
   ticket->set_ticket_hash(std::string(32, '\x5a'));
@@ -160,7 +173,8 @@ void ticket_authorization_is_hash_only_and_worker_bound() {
 
 void explicit_shutdown_is_acknowledged_and_releases_once() {
   RecordingTransport transport;
-  WorkerHost host({std::byte{1}}, 42, transport);
+  AuthorizedQuicTicketStore tickets;
+  WorkerHost host({std::byte{1}}, 42, transport, tickets);
   auto shutdown = command(30, "");
   shutdown.mutable_shutdown_worker();
 
@@ -178,7 +192,7 @@ void explicit_shutdown_is_acknowledged_and_releases_once() {
 int main() {
   hello_and_ready_are_typed_and_instance_bound();
   unsupported_versions_receive_one_correlated_failure();
-  prepared_session_emits_deterministic_fake_access_units();
+  prepared_session_starts_configured_listener_without_pre_auth_media();
   ticket_authorization_is_hash_only_and_worker_bound();
   explicit_shutdown_is_acknowledged_and_releases_once();
   return 0;

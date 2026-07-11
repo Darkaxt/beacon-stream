@@ -5,3 +5,11 @@ add_test(NAME BeaconStreamWorker.Host COMMAND BeaconStreamWorkerHostTests)
 add_executable(BeaconStreamWorkerChannelTests named_pipe_channel_tests.cpp)
 target_link_libraries(BeaconStreamWorkerChannelTests PRIVATE Beacon::StreamWorkerCore)
 add_test(NAME BeaconStreamWorker.Channel COMMAND BeaconStreamWorkerChannelTests)
+
+add_executable(BeaconStreamWorkerQuicSessionTests quic_session_tests.cpp)
+target_link_libraries(BeaconStreamWorkerQuicSessionTests PRIVATE Beacon::StreamWorkerCore)
+add_test(NAME BeaconStreamWorker.QuicSession COMMAND BeaconStreamWorkerQuicSessionTests)
+
+add_executable(BeaconStreamWorkerQuicListenerProbe quic_listener_probe.cpp)
+target_link_libraries(BeaconStreamWorkerQuicListenerProbe PRIVATE Beacon::StreamWorkerCore)
+beacon_deploy_msquic(BeaconStreamWorkerQuicListenerProbe)

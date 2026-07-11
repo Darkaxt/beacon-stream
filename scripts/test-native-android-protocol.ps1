@@ -14,7 +14,8 @@ $tests = @(
     'BeaconMediaDatagramTests',
     'BeaconFakeTransportTests',
     'BeaconSessionTests',
-    'BeaconFrameAssemblerTests'
+    'BeaconFrameAssemblerTests',
+    'BeaconMsQuicTransportTests'
 )
 
 & adb -s $Serial get-state | Out-Null
