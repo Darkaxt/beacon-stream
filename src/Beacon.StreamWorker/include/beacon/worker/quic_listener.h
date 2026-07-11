@@ -1,5 +1,6 @@
 #pragma once
 
+#include "beacon/stream/msquic_transport.h"
 #include "beacon/stream/transport.h"
 
 #include <array>
@@ -15,10 +16,9 @@
 namespace beacon::worker {
 
 class IWorkerMediaTransport : public stream::IStreamTransport {
- public:
-  [[nodiscard]] virtual bool configure_listener(
-      std::string_view listen_address,
-      std::uint16_t listen_port) = 0;
+public:
+  [[nodiscard]] virtual bool configure_listener(std::string_view listen_address,
+                                                std::uint16_t listen_port) = 0;
   [[nodiscard]] virtual std::uint16_t local_port() const noexcept = 0;
 };
 
@@ -45,18 +45,16 @@ enum class QuicTicketConsumeResult {
 [[nodiscard]] TicketHash hash_stream_ticket(std::span<const std::byte> ticket);
 
 class AuthorizedQuicTicketStore {
- public:
+public:
   [[nodiscard]] bool authorize(AuthorizedQuicTicket ticket);
   void revoke(std::span<const std::byte> hash);
-  [[nodiscard]] QuicTicketConsumeResult consume(
-      std::span<const std::byte> raw_ticket,
-      std::string_view client_id,
-      std::string_view session_id,
-      std::uint64_t plan_revision,
-      std::uint64_t now_unix_ms);
+  [[nodiscard]] QuicTicketConsumeResult
+  consume(std::span<const std::byte> raw_ticket, std::string_view client_id,
+          std::string_view session_id, std::uint64_t plan_revision,
+          std::uint64_t now_unix_ms);
   [[nodiscard]] std::size_t size() const;
 
- private:
+private:
   struct Record {
     AuthorizedQuicTicket ticket;
     bool consumed{};
@@ -79,28 +77,50 @@ enum class QuicListenerFailure {
   listener_start,
 };
 
+struct QuicListenerMetrics {
+  std::uint64_t sent_datagrams{};
+  std::uint64_t acknowledged_datagrams{};
+  std::uint64_t lost_datagrams{};
+  std::uint64_t canceled_datagrams{};
+  std::uint64_t session_messages{};
+  std::uint64_t input_messages{};
+  std::uint64_t feedback_messages{};
+  std::uint32_t smoothed_rtt_us{};
+  std::uint32_t path_mtu{};
+};
+
 class QuicListener final : public IWorkerMediaTransport {
- public:
-  QuicListener(std::wstring identity_path, AuthorizedQuicTicketStore& authorized_tickets);
+public:
+  QuicListener(std::wstring identity_path,
+               AuthorizedQuicTicketStore &authorized_tickets);
   ~QuicListener() override;
 
-  QuicListener(const QuicListener&) = delete;
-  QuicListener& operator=(const QuicListener&) = delete;
+  QuicListener(const QuicListener &) = delete;
+  QuicListener &operator=(const QuicListener &) = delete;
 
-  [[nodiscard]] bool configure_listener(
-      std::string_view listen_address,
-      std::uint16_t listen_port) override;
+  [[nodiscard]] bool configure_listener(std::string_view listen_address,
+                                        std::uint16_t listen_port) override;
   [[nodiscard]] std::uint16_t local_port() const noexcept override;
   [[nodiscard]] QuicListenerFailure failure() const noexcept;
   [[nodiscard]] std::uint64_t platform_error() const noexcept;
+  [[nodiscard]] bool authenticated() const noexcept;
+  [[nodiscard]] bool wait_until_authenticated();
+  [[nodiscard]] bool wait_until_media_ready();
+  void wait_until_disconnected();
+  [[nodiscard]] bool wait_for_received_packets(std::size_t count);
+  [[nodiscard]] std::vector<stream::TransportPacket> take_received_packets();
+  [[nodiscard]] QuicListenerMetrics metrics() const noexcept;
+  [[nodiscard]] std::vector<stream::MsQuicTransportEvent>
+  take_transport_events();
   [[nodiscard]] bool open_connection() override;
   void close_connection() noexcept override;
-  [[nodiscard]] stream::TransportSendResult send(stream::TransportPacket packet) override;
+  [[nodiscard]] stream::TransportSendResult
+  send(stream::TransportPacket packet) override;
   void shutdown() noexcept override;
 
- private:
+private:
   class Impl;
   std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace beacon::worker
+} // namespace beacon::worker

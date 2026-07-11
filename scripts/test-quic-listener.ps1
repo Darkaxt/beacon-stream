@@ -22,6 +22,18 @@ try {
             [DateTimeOffset]::UtcNow.AddDays(-1),
             [DateTimeOffset]::UtcNow.AddDays(1))
         try {
+            $publicKey = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey(
+                $certificate)
+            try {
+                $spki = $publicKey.ExportSubjectPublicKeyInfo()
+                try {
+                    $fingerprintBytes = [Security.Cryptography.SHA256]::HashData($spki)
+                    try { $fingerprint = [Convert]::ToHexString($fingerprintBytes) }
+                    finally { [Security.Cryptography.CryptographicOperations]::ZeroMemory($fingerprintBytes) }
+                }
+                finally { [Security.Cryptography.CryptographicOperations]::ZeroMemory($spki) }
+            }
+            finally { $publicKey.Dispose() }
             $pfx = $certificate.Export([Security.Cryptography.X509Certificates.X509ContentType]::Pfx)
             try {
                 [IO.File]::WriteAllBytes($identityPath, $pfx)
@@ -38,9 +50,10 @@ try {
         $key.Dispose()
     }
 
-    $output = & $probe $identityPath
+    $output = & $probe $identityPath $fingerprint
     $probeExitCode = $LASTEXITCODE
-    if ($probeExitCode -ne 0 -or $output -notmatch '^BEACON_QUIC_LISTENER_READY [1-9][0-9]*$') {
+    if ($probeExitCode -ne 0 -or
+        $output -notmatch '^BEACON_QUIC_LOOPBACK_OK 3 CERT_PIN_OK ALPN_VERSION_OK REPLAY_RECONNECT_OK$') {
         throw "Beacon QUIC listener probe failed with exit code ${probeExitCode}: $output"
     }
     Write-Host $output

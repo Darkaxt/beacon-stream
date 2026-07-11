@@ -3,6 +3,7 @@ add_library(
   STATIC
     src/named_pipe_channel.cpp
     src/quic_listener.cpp
+    src/quic_session_protocol.cpp
     src/worker_host.cpp
 )
 
