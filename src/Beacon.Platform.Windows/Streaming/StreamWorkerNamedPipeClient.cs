@@ -18,7 +18,7 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
     private readonly Task<int> processExit;
     private readonly uint expectedProcessId;
     private readonly long processGeneration;
-    private readonly ChannelWriter<StreamWorkerEvent> eventWriter;
+    private readonly ChannelWriter<StreamWorkerEvent>? eventWriter;
     private readonly SemaphoreSlim writeGate = new(1, 1);
     private readonly ConcurrentDictionary<ulong, PendingRequest> pending = new();
     private readonly CancellationTokenSource disposal = new();
@@ -32,13 +32,11 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
     private int disposed;
 
     public StreamWorkerNamedPipeClient(Stream stream, Task<int> processExit, uint expectedProcessId)
-        : this(
-            stream,
-            processExit,
-            expectedProcessId,
-            processGeneration: 1,
-            Channel.CreateBounded<StreamWorkerEvent>(1).Writer)
     {
+        this.stream = stream ?? throw new ArgumentNullException(nameof(stream));
+        this.processExit = processExit ?? throw new ArgumentNullException(nameof(processExit));
+        this.expectedProcessId = expectedProcessId;
+        processGeneration = 1;
     }
 
     public StreamWorkerNamedPipeClient(
@@ -224,6 +222,11 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
                 ProtocolVersion.EnsureSupported(envelope.ProtocolVersion);
                 if (envelope.RequestId == 0)
                 {
+                    if (eventWriter is null)
+                    {
+                        throw new StreamWorkerProtocolException(
+                            "StreamWorker emitted an unsolicited event to a legacy client.");
+                    }
                     StreamWorkerEvent workerEvent = TranslateEvent(envelope);
                     await eventWriter.WriteAsync(workerEvent, disposal.Token).ConfigureAwait(false);
                 }

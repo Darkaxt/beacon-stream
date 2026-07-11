@@ -80,6 +80,9 @@ public sealed class BeaconServiceRegistrationTests
         Assert.Same(
             provider.GetRequiredService<StreamWorkerProcessHost>(),
             provider.GetRequiredService<IStreamWorkerHost>());
+        Assert.Same(
+            provider.GetRequiredService<StreamWorkerProcessHost>(),
+            provider.GetRequiredService<IGenerationBoundStreamWorkerHost>());
         Assert.Single(provider.GetServices<IStreamingBackend>());
         Assert.Contains(provider.GetServices<IHostedService>(), service => service is StreamWorkerEventRelay);
         Assert.Same(
@@ -110,6 +113,7 @@ public sealed class BeaconServiceRegistrationTests
         Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
         Assert.Single(provider.GetServices<IStreamingBackend>());
         Assert.Empty(provider.GetServices<IStreamWorkerHost>());
+        Assert.Empty(provider.GetServices<IGenerationBoundStreamWorkerHost>());
         Assert.DoesNotContain(provider.GetServices<IHostedService>(), service => service is StreamWorkerEventRelay);
         Assert.Empty(provider.GetServices<StreamWorkerProcessHostOptions>());
     }

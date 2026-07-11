@@ -8,6 +8,44 @@ namespace Beacon.Platform.Windows.Tests.Input;
 public sealed class WindowsClientInputSinkTests
 {
     [Fact]
+    public async Task StreamPointerMoveAndButtonTransitionsMapExactly()
+    {
+        var displayApi = new FakeWindowsDisplayApi
+        {
+            CurrentTopology = new DisplayTopologySnapshot(
+                [new DisplayPathSnapshot("client-z", DisplayPathKind.Virtual, 100, 80, 60, true, 300, -20)],
+                IsMirrorMode: false)
+        };
+        var inputApi = new FakeWindowsInputApi();
+        var sink = new WindowsClientInputSink(displayApi, inputApi);
+
+        ClientInputResult result = await sink.ForwardAsync(
+            new ClientInputBatch(
+                "client",
+                "session",
+                "client-z",
+                1,
+                [
+                    ClientInputEvent.StreamPointer(ClientPointerAction.Move, 1, 2, 0, 0),
+                    ClientInputEvent.StreamPointer(ClientPointerAction.ButtonDown, 3, 4, 0, 2),
+                    ClientInputEvent.StreamPointer(ClientPointerAction.ButtonUp, 5, 6, 0, 2)
+                ]),
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(
+            [
+                (WindowsInputCommandKind.PointerMove, 301, -18, null, null),
+                (WindowsInputCommandKind.PointerMove, 303, -16, null, null),
+                (WindowsInputCommandKind.PointerButton, null, null, "right", true),
+                (WindowsInputCommandKind.PointerMove, 305, -14, null, null),
+                (WindowsInputCommandKind.PointerButton, null, null, "right", false)
+            ],
+            inputApi.Commands.Select(command =>
+                (command.Kind, command.X, command.Y, command.Button, command.Pressed)));
+    }
+
+    [Fact]
     public async Task StreamPointerWheelAndScanCodeMapToExactWindowsCommands()
     {
         var displayApi = new FakeWindowsDisplayApi

@@ -1,15 +1,153 @@
+using System.Diagnostics;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.IO.Pipes;
 using System.Threading.Channels;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.StreamWorker.Contracts.Worker.V1;
+using Beacon.StreamWorker.Contracts.Framing;
 using Beacon.Core.Streaming;
+using Google.Protobuf;
 
 namespace Beacon.Platform.Windows.Tests.Streaming;
 
 public sealed class StreamWorkerProcessHostTests
 {
+    [Fact]
+    public async Task ExitBeforePipeConnectionPublishesOneGenerationExitEvent()
+    {
+        var launch = TestLaunch.Exiting(23);
+        await using var host = new StreamWorkerProcessHost(
+            new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
+            new QueueLaunchFactory(launch));
+        var events = (IGenerationBoundStreamWorkerHost)host;
+
+        StreamWorkerProcessExitedException error = await Assert.ThrowsAsync<StreamWorkerProcessExitedException>(
+            () => host.EnsureReadyAsync(CancellationToken.None));
+        StreamWorkerProcessExited exited = Assert.IsType<StreamWorkerProcessExited>(
+            await events.Events.ReadAsync());
+
+        Assert.Equal(23, error.ExitCode);
+        Assert.Equal(1, exited.ProcessGeneration);
+        Assert.Equal(23, exited.ExitCode);
+        Assert.False(events.Events.TryRead(out _));
+    }
+
+    [Theory]
+    [InlineData("hello")]
+    [InlineData("version")]
+    [InlineData("ready")]
+    public async Task InvalidHandshakePublishesOneExitEventForAssignedGeneration(string failure)
+    {
+        await using ConnectedStreams streams = await ConnectedStreams.CreateAsync();
+        TestLaunch launch = TestLaunch.Waiting(streams.Service);
+        Task worker = Task.Run(async () =>
+        {
+            uint processId = checked((uint)launch.Process.Id);
+            if (failure == "hello")
+            {
+                await WriteAsync(streams.Worker, Hello(processId + 1, version: 1));
+                return;
+            }
+            await WriteAsync(streams.Worker, Hello(processId, failure == "version" ? 2u : 1u));
+            if (failure == "ready")
+            {
+                WorkerIpcEnvelope ready = Ready(version: 1);
+                ready.WorkerReady.WorkerInstanceId = ByteString.CopyFrom(new byte[] { 9, 9, 9 });
+                await WriteAsync(streams.Worker, ready);
+            }
+        });
+        await using var host = new StreamWorkerProcessHost(
+            new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
+            new QueueLaunchFactory(launch));
+        var events = (IGenerationBoundStreamWorkerHost)host;
+
+        await Assert.ThrowsAnyAsync<Exception>(() => host.EnsureReadyAsync(CancellationToken.None));
+        StreamWorkerProcessExited exited = Assert.IsType<StreamWorkerProcessExited>(
+            await events.Events.ReadAsync());
+
+        Assert.Equal(1, exited.ProcessGeneration);
+        Assert.False(events.Events.TryRead(out _));
+        await worker;
+    }
+
+    [Fact]
+    public async Task DelayedHandshakeExitCannotInvalidateInitializedReplacement()
+    {
+        TestLaunch first = TestLaunch.Exiting(31);
+        await using ConnectedStreams streams = await ConnectedStreams.CreateAsync();
+        TestLaunch replacement = TestLaunch.Waiting(streams.Service);
+        Task replacementWorker = Task.Run(async () =>
+        {
+            await WriteAsync(streams.Worker, Hello(checked((uint)replacement.Process.Id), 1));
+            await WriteAsync(streams.Worker, Ready(1));
+        });
+        var host = new StreamWorkerProcessHost(
+            new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
+            new QueueLaunchFactory(first, replacement));
+        var events = (IGenerationBoundStreamWorkerHost)host;
+        try
+        {
+            await Assert.ThrowsAsync<StreamWorkerProcessExitedException>(
+                () => host.EnsureReadyAsync(CancellationToken.None));
+            await host.EnsureReadyAsync(CancellationToken.None);
+
+            StreamWorkerProcessExited oldExit = Assert.IsType<StreamWorkerProcessExited>(
+                await events.Events.ReadAsync());
+
+            Assert.Equal(1, oldExit.ProcessGeneration);
+            Assert.Equal(2, events.CurrentProcessGeneration);
+            Assert.True(events.IsCurrentProcessGeneration(2));
+            Assert.True(host.IsReady);
+            await replacementWorker;
+        }
+        finally
+        {
+            replacement.Terminate();
+            await replacement.Process.WaitForExitAsync();
+            await host.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task GenerationBoundSendRejectsExitedProcessWithoutLaunchingReplacement()
+    {
+        await using ConnectedStreams streams = await ConnectedStreams.CreateAsync();
+        TestLaunch launch = TestLaunch.Waiting(streams.Service);
+        Task worker = Task.Run(async () =>
+        {
+            await WriteAsync(streams.Worker, Hello(checked((uint)launch.Process.Id), 1));
+            await WriteAsync(streams.Worker, Ready(1));
+        });
+        var factory = new QueueLaunchFactory(launch);
+        var host = new StreamWorkerProcessHost(
+            new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
+            factory);
+        var generationHost = (IGenerationBoundStreamWorkerHost)host;
+        try
+        {
+            await host.EnsureReadyAsync(CancellationToken.None);
+            long generation = generationHost.CurrentProcessGeneration;
+            launch.Terminate();
+            await launch.Process.WaitForExitAsync();
+
+            StreamWorkerGenerationChangedException error =
+                await Assert.ThrowsAsync<StreamWorkerGenerationChangedException>(() =>
+                    generationHost.SendAsync(
+                        generation,
+                        Prepare("session"),
+                        CancellationToken.None));
+
+            Assert.Equal(generation, error.ExpectedProcessGeneration);
+            Assert.Equal(1, factory.LaunchCount);
+            Assert.Equal(generation, generationHost.CurrentProcessGeneration);
+            await worker;
+        }
+        finally
+        {
+            await host.DisposeAsync();
+        }
+    }
     [Fact]
     public async Task EventReaderIsStableAcrossMonotonicWorkerReplacement()
     {
@@ -225,4 +363,141 @@ public sealed class StreamWorkerProcessHostTests
             MaximumBitrateKbps = 90000,
         },
     };
+
+    private static WorkerIpcEnvelope Hello(uint processId, uint version) => new()
+    {
+        ProtocolVersion = version,
+        WorkerHello = new WorkerHello
+        {
+            ProcessId = processId,
+            WorkerInstanceId = ByteString.CopyFrom(new byte[] { 1, 2, 3 })
+        }
+    };
+
+    private static WorkerIpcEnvelope Ready(uint version) => new()
+    {
+        ProtocolVersion = version,
+        WorkerReady = new WorkerReady
+        {
+            WorkerInstanceId = ByteString.CopyFrom(new byte[] { 1, 2, 3 })
+        }
+    };
+
+    private static async Task WriteAsync(Stream stream, WorkerIpcEnvelope envelope)
+    {
+        await stream.WriteAsync(ProtobufLengthFrameCodec.Encode(envelope));
+        await stream.FlushAsync();
+    }
+
+    private sealed class QueueLaunchFactory(params IStreamWorkerLaunch[] launches) : IStreamWorkerLaunchFactory
+    {
+        private readonly Queue<IStreamWorkerLaunch> remaining = new(launches);
+
+        public int LaunchCount { get; private set; }
+
+        public IStreamWorkerLaunch Launch(StreamWorkerProcessHostOptions options)
+        {
+            LaunchCount++;
+            return remaining.Dequeue();
+        }
+    }
+
+    private sealed class TestLaunch : IStreamWorkerLaunch
+    {
+        private readonly Stream? stream;
+        private readonly TaskCompletionSource<Stream> connection = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int disposed;
+
+        private TestLaunch(Process process, Stream? stream)
+        {
+            Process = process;
+            this.stream = stream;
+            if (stream is not null)
+            {
+                connection.TrySetResult(stream);
+            }
+        }
+
+        public Process Process { get; }
+
+        public static TestLaunch Exiting(int exitCode) =>
+            new(StartPowerShell($"exit {exitCode}"), stream: null);
+
+        public static TestLaunch Waiting(Stream stream) =>
+            new(StartPowerShell("[Console]::In.ReadLine() | Out-Null", redirectInput: true), stream);
+
+        public Task<Stream> ConnectAsync(CancellationToken cancellationToken) =>
+            connection.Task.WaitAsync(cancellationToken);
+
+        public void Terminate()
+        {
+            if (!Process.HasExited)
+            {
+                Process.Kill(entireProcessTree: true);
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) != 0)
+            {
+                return;
+            }
+            Terminate();
+            if (!Process.HasExited)
+            {
+                await Process.WaitForExitAsync();
+            }
+            Process.Dispose();
+        }
+
+        private static Process StartPowerShell(string command, bool redirectInput = false)
+        {
+            var startInfo = new ProcessStartInfo("powershell.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = redirectInput,
+            };
+            startInfo.ArgumentList.Add("-NoProfile");
+            startInfo.ArgumentList.Add("-NonInteractive");
+            startInfo.ArgumentList.Add("-Command");
+            startInfo.ArgumentList.Add(command);
+            return Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Test process did not start.");
+        }
+    }
+
+    private sealed class ConnectedStreams : IAsyncDisposable
+    {
+        private ConnectedStreams(NamedPipeServerStream service, NamedPipeClientStream worker)
+        {
+            Service = service;
+            Worker = worker;
+        }
+
+        public NamedPipeServerStream Service { get; }
+
+        public NamedPipeClientStream Worker { get; }
+
+        public static async Task<ConnectedStreams> CreateAsync()
+        {
+            string name = $"beacon-host-test-{Guid.NewGuid():N}";
+            var service = new NamedPipeServerStream(
+                name,
+                PipeDirection.InOut,
+                1,
+                PipeTransmissionMode.Byte,
+                PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+            var worker = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
+            await Task.WhenAll(service.WaitForConnectionAsync(), worker.ConnectAsync());
+            return new ConnectedStreams(service, worker);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await Service.DisposeAsync();
+            await Worker.DisposeAsync();
+        }
+    }
 }

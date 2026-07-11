@@ -25,13 +25,24 @@ public interface IStreamWorkerRuntimeEvents
     Guid? GetBoundRuntimeGeneration(string sessionId);
 }
 
-public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStreamingBackend, IStreamWorkerRuntimeEvents
+public sealed class StreamWorkerStreamingBackend : IStreamingBackend, IStreamWorkerRuntimeEvents
 {
+    private readonly IStreamWorkerHost host;
+    private readonly IGenerationBoundStreamWorkerHost generationHost;
     private readonly ConcurrentDictionary<string, WorkerBoundStreamingSession> sessions =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim lifecycleGate = new(1, 1);
     private readonly Lock runtimeGate = new();
     private readonly Dictionary<(long ProcessGeneration, string SessionId), ulong> highestWorkerGenerations = [];
+
+    public StreamWorkerStreamingBackend(IStreamWorkerHost host)
+    {
+        this.host = host ?? throw new ArgumentNullException(nameof(host));
+        generationHost = host as IGenerationBoundStreamWorkerHost
+            ?? throw new ArgumentException(
+                "StreamWorker host must support generation-bound commands.",
+                nameof(host));
+    }
 
     public async Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken)
     {
@@ -107,34 +118,52 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
         CancellationToken cancellationToken)
     {
         await host.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
+        long processGeneration = generationHost.CurrentProcessGeneration;
         byte[] workerInstanceId = host.WorkerInstanceId.ToArray();
-        long processGeneration = host.CurrentProcessGeneration;
         if (!host.IsReady
             || workerInstanceId.Length == 0
-            || !host.IsCurrentProcessGeneration(processGeneration))
+            || !generationHost.IsCurrentProcessGeneration(processGeneration))
         {
             return StreamingStartResult.Fail("Beacon StreamWorker runtime identity is unavailable.");
         }
-        StreamWorkerCommandResponse prepared = await host.SendAsync(
-            CreatePrepareCommand(plan),
-            cancellationToken).ConfigureAwait(false);
+        StreamWorkerCommandResponse prepared;
+        try
+        {
+            prepared = await generationHost.SendAsync(
+                processGeneration,
+                CreatePrepareCommand(plan),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (IsGenerationFailure(error))
+        {
+            return StreamingStartResult.Fail("Beacon StreamWorker generation changed during stream start.");
+        }
         string? prepareError = CompletionError("prepare_session", prepared.Completion.WorkerCompletion);
         if (prepareError is not null)
         {
             return StreamingStartResult.Fail(prepareError);
         }
 
-        StreamWorkerCommandResponse started = await host.SendAsync(
-            new WorkerIpcEnvelope
-            {
-                SessionId = plan.SessionId,
-                StartMedia = new StartMedia
+        StreamWorkerCommandResponse started;
+        try
+        {
+            started = await generationHost.SendAsync(
+                processGeneration,
+                new WorkerIpcEnvelope
                 {
-                    ListenAddress = "0.0.0.0",
-                    ListenPort = 0,
+                    SessionId = plan.SessionId,
+                    StartMedia = new StartMedia
+                    {
+                        ListenAddress = "0.0.0.0",
+                        ListenPort = 0,
+                    },
                 },
-            },
-            cancellationToken).ConfigureAwait(false);
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (IsGenerationFailure(error))
+        {
+            return StreamingStartResult.Fail("Beacon StreamWorker generation changed during stream start.");
+        }
         string? startError = CompletionError("start_media", started.Completion.WorkerCompletion);
         if (startError is not null)
         {
@@ -156,6 +185,7 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
         {
             string? cleanupError = await CleanupInvalidTransportReadyAsync(
                 plan.SessionId,
+                processGeneration,
                 cancellationToken).ConfigureAwait(false);
             return StreamingStartResult.Fail(
                 cleanupError
@@ -252,13 +282,24 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
                 $"Stream session '{sessionId}' runtime generation changed before compensation.");
         }
 
-        StreamWorkerCommandResponse stopped = await host.SendAsync(
-            new WorkerIpcEnvelope
-            {
-                SessionId = sessionId,
-                StopMedia = new StopMedia { Reason = reason },
-            },
-            cancellationToken).ConfigureAwait(false);
+        StreamWorkerCommandResponse stopped;
+        try
+        {
+            stopped = await generationHost.SendAsync(
+                runtime.ProcessGeneration,
+                new WorkerIpcEnvelope
+                {
+                    SessionId = sessionId,
+                    StopMedia = new StopMedia { Reason = reason },
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (IsGenerationFailure(error))
+        {
+            RemoveIfCurrent(sessionId, runtime);
+            return StreamingStopResult.Fail(
+                $"Stream session '{sessionId}' Worker generation changed during stop.");
+        }
         string? stopError = CompletionError("stop_media", stopped.Completion.WorkerCompletion);
         if (stopError is not null)
         {
@@ -443,7 +484,7 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
             && runtime.State.State == "running"
             && runtime.ProcessGeneration == workerEvent.ProcessGeneration
             && host.IsReady
-            && host.IsCurrentProcessGeneration(workerEvent.ProcessGeneration)
+            && generationHost.IsCurrentProcessGeneration(workerEvent.ProcessGeneration)
             && runtime.State.RuntimeGeneration != Guid.Empty;
     }
 
@@ -466,7 +507,7 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
     {
         ReadOnlyMemory<byte> currentWorkerInstanceId = host.WorkerInstanceId;
         return host.IsReady
-            && host.IsCurrentProcessGeneration(processGeneration)
+            && generationHost.IsCurrentProcessGeneration(processGeneration)
             && !currentWorkerInstanceId.IsEmpty
             && currentWorkerInstanceId.Span.SequenceEqual(workerInstanceId);
     }
@@ -477,11 +518,13 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
 
     private async Task<string?> CleanupInvalidTransportReadyAsync(
         string sessionId,
+        long processGeneration,
         CancellationToken cancellationToken)
     {
         try
         {
-            StreamWorkerCommandResponse stopped = await host.SendAsync(
+            StreamWorkerCommandResponse stopped = await generationHost.SendAsync(
+                processGeneration,
                 new WorkerIpcEnvelope
                 {
                     SessionId = sessionId,
@@ -495,7 +538,7 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            await host.ShutdownAsync(CancellationToken.None).ConfigureAwait(false);
+            await ShutdownGenerationAsync(processGeneration).ConfigureAwait(false);
             throw;
         }
         catch (Exception)
@@ -504,7 +547,7 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
 
         try
         {
-            await host.ShutdownAsync(CancellationToken.None).ConfigureAwait(false);
+            await ShutdownGenerationAsync(processGeneration).ConfigureAwait(false);
             return "StreamWorker start_media transport-ready validation failed; " +
                 "stop_media cleanup was not confirmed and the Worker was shut down.";
         }
@@ -514,6 +557,21 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
                 "stop_media cleanup was not confirmed and Worker shutdown failed.";
         }
     }
+
+    private async Task ShutdownGenerationAsync(long processGeneration)
+    {
+        StreamWorkerCommandResponse response = await generationHost.SendAsync(
+            processGeneration,
+            new WorkerIpcEnvelope { ShutdownWorker = new ShutdownWorker() },
+            CancellationToken.None).ConfigureAwait(false);
+        if (!response.Completion.WorkerCompletion.Succeeded)
+        {
+            throw new StreamWorkerProtocolException("StreamWorker rejected generation shutdown.");
+        }
+    }
+
+    private static bool IsGenerationFailure(Exception error) =>
+        error is StreamWorkerGenerationChangedException or StreamWorkerProcessExitedException;
 
     private static bool IsSuccessfulCompletion(WorkerIpcEnvelope completion, string sessionId) =>
         completion.ProtocolVersion == ProtocolVersion.Current

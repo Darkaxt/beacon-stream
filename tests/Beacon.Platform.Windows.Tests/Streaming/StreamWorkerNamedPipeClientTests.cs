@@ -13,6 +13,41 @@ namespace Beacon.Platform.Windows.Tests.Streaming;
 public sealed class StreamWorkerNamedPipeClientTests
 {
     [Fact]
+    public async Task LegacyConstructorFailsClosedOnFirstUnsolicitedEventWithoutBlockingCommand()
+    {
+        await using PipePair pipes = await PipePair.CreateAsync();
+        var processExit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<Task> worker = Task.Run(async () =>
+        {
+            await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Ready(1));
+            _ = await ReadAsync(pipes.Worker);
+            await WriteAsync(pipes.Worker, InputEventEnvelope());
+            return WriteAsync(pipes.Worker, InputEventEnvelope());
+        });
+        var client = new StreamWorkerNamedPipeClient(pipes.Service, processExit.Task, 42);
+        await client.InitializeAsync(CancellationToken.None);
+
+        Task<StreamWorkerCommandResponse> pending = client.SendAsync(
+            Command("session-a"),
+            CancellationToken.None);
+        Task secondWrite = await worker;
+        await client.Completion;
+
+        await Assert.ThrowsAsync<StreamWorkerProtocolException>(() => pending);
+        Assert.False(client.IsReady);
+        Assert.IsType<StreamWorkerProtocolException>(client.TerminalError);
+        await client.DisposeAsync();
+        try
+        {
+            await secondWrite;
+        }
+        catch (Exception error) when (error is IOException or ObjectDisposedException)
+        {
+        }
+    }
+
+    [Fact]
     public async Task ZeroIdTransportFeedbackMediaAndDisconnectUseNeutralScalarEvents()
     {
         await using PipePair pipes = await PipePair.CreateAsync();

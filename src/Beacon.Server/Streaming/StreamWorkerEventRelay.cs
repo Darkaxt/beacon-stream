@@ -6,14 +6,14 @@ using Beacon.Platform.Windows.Streaming;
 namespace Beacon.Server.Streaming;
 
 public sealed class StreamWorkerEventRelay(
-    IStreamWorkerHost host,
+    IGenerationBoundStreamWorkerHost eventSource,
     IStreamWorkerRuntimeEvents runtimeEvents,
     IClientInputSink inputSink,
     IDiagnosticEventSink diagnostics) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await foreach (StreamWorkerEvent workerEvent in host.Events.ReadAllAsync(stoppingToken))
+        await foreach (StreamWorkerEvent workerEvent in eventSource.Events.ReadAllAsync(stoppingToken))
         {
             try
             {

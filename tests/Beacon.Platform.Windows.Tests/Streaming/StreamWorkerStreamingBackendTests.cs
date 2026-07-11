@@ -13,6 +13,25 @@ namespace Beacon.Platform.Windows.Tests.Streaming;
 public sealed class StreamWorkerStreamingBackendTests
 {
     [Fact]
+    public async Task WorkerExitBetweenPrepareAndStartDoesNotCreateOrUseReplacement()
+    {
+        var host = new RecordingStreamWorkerHost { ExitAfterPrepare = true };
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        StreamingStartResult result = await backend.StartAsync(CreatePlan(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("Beacon StreamWorker generation changed during stream start.", result.Error);
+        Assert.Equal(1, host.EnsureReadyCalls);
+        Assert.Equal(
+            [WorkerIpcEnvelope.BodyOneofCase.PrepareSession],
+            host.GenerationBoundCommands.Select(command => command.BodyCase));
+        Assert.Empty(backend.GetSessions());
+        Assert.False(host.MediaStarted);
+        Assert.False(host.IsReady);
+    }
+
+    [Fact]
     public async Task AuthenticationBindsExactGenerationsAndResolvesInputRuntime()
     {
         var host = new RecordingStreamWorkerHost();
@@ -401,7 +420,7 @@ public sealed class StreamWorkerStreamingBackendTests
         WorkerTransportReady = new WorkerTransportReady { ListenerPort = port },
     };
 
-    private sealed class RecordingStreamWorkerHost : IStreamWorkerHost
+    private sealed class RecordingStreamWorkerHost : IStreamWorkerHost, IGenerationBoundStreamWorkerHost
     {
         private readonly Channel<StreamWorkerEvent> events = Channel.CreateUnbounded<StreamWorkerEvent>();
         private byte[] workerInstanceId = [1, 2, 3];
@@ -433,7 +452,15 @@ public sealed class StreamWorkerStreamingBackendTests
 
         public Exception? ReadinessError { get; set; }
 
+        public bool ExitAfterPrepare { get; set; }
+
+        public bool MediaStarted { get; private set; }
+
+        public int EnsureReadyCalls { get; private set; }
+
         public List<WorkerIpcEnvelope> Commands { get; } = [];
+
+        public List<WorkerIpcEnvelope> GenerationBoundCommands { get; } = [];
 
         public List<WorkerIpcEnvelope> StartMediaEvents { get; } = [];
 
@@ -468,6 +495,7 @@ public sealed class StreamWorkerStreamingBackendTests
 
         public Task EnsureReadyAsync(CancellationToken cancellationToken)
         {
+            EnsureReadyCalls++;
             if (ReadinessError is not null)
             {
                 return Task.FromException(ReadinessError);
@@ -507,6 +535,11 @@ public sealed class StreamWorkerStreamingBackendTests
                 ? StartMediaEvents.Select(value => value.Clone()).ToArray()
                 : [];
             var response = new StreamWorkerCommandResponse(completion, events);
+            if (command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.ShutdownWorker)
+            {
+                ShutdownCalls++;
+                IsReady = false;
+            }
             if (command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.StopMedia
                 && blockedStopCompletion is not null)
             {
@@ -515,6 +548,29 @@ public sealed class StreamWorkerStreamingBackendTests
                 return blockedStopCompletion.Task;
             }
             return Task.FromResult(response);
+        }
+
+        public async Task<StreamWorkerCommandResponse> SendAsync(
+            long expectedProcessGeneration,
+            WorkerIpcEnvelope command,
+            CancellationToken cancellationToken)
+        {
+            if (!IsReady || expectedProcessGeneration != CurrentProcessGeneration)
+            {
+                throw new StreamWorkerGenerationChangedException(expectedProcessGeneration);
+            }
+            GenerationBoundCommands.Add(command.Clone());
+            StreamWorkerCommandResponse response = await SendAsync(command, cancellationToken);
+            if (command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.StartMedia)
+            {
+                MediaStarted = true;
+            }
+            if (ExitAfterPrepare
+                && command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.PrepareSession)
+            {
+                IsReady = false;
+            }
+            return response;
         }
 
         public Task ShutdownAsync(CancellationToken cancellationToken)

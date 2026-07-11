@@ -18,6 +18,18 @@ public sealed record WindowsInputCommand(
     int? WheelDelta = null,
     uint? ScanCode = null)
 {
+    public WindowsInputCommand(
+        WindowsInputCommandKind Kind,
+        int? X,
+        int? Y,
+        string? Button,
+        bool? Pressed,
+        string? Key,
+        string? Code)
+        : this(Kind, X, Y, Button, Pressed, Key, Code, WheelDelta: null, ScanCode: null)
+    {
+    }
+
     public static WindowsInputCommand PointerMove(int x, int y) =>
         new(WindowsInputCommandKind.PointerMove, X: x, Y: y);
 

@@ -84,7 +84,7 @@ public sealed class StreamWorkerEventRelayTests
     private static StreamWorkerInputReceived Input(long sequence, ClientInputEvent input) =>
         new(1, "session", 7, checked((ulong)sequence), [input]);
 
-    private sealed class EventHost : IStreamWorkerHost
+    private sealed class EventHost : IStreamWorkerHost, IGenerationBoundStreamWorkerHost
     {
         private readonly Channel<StreamWorkerEvent> channel = Channel.CreateUnbounded<StreamWorkerEvent>();
 
@@ -96,6 +96,10 @@ public sealed class StreamWorkerEventRelayTests
         public ValueTask WriteAsync(StreamWorkerEvent value) => channel.Writer.WriteAsync(value);
         public Task EnsureReadyAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<StreamWorkerCommandResponse> SendAsync(
+            WorkerIpcEnvelope command,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<StreamWorkerCommandResponse> SendAsync(
+            long expectedProcessGeneration,
             WorkerIpcEnvelope command,
             CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task ShutdownAsync(CancellationToken cancellationToken) => Task.CompletedTask;
