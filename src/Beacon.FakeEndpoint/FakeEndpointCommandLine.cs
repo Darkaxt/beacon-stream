@@ -16,7 +16,6 @@ public static class FakeEndpointCommandLine
         {
             ClientId = ReadString(values, "client-id", profiled.ClientId),
             Name = ReadString(values, "name", profiled.Name),
-            PairingToken = ReadOptionalString(values, "pairing-token", profiled.PairingToken),
             Width = ReadInt(values, "width", profiled.Width),
             Height = ReadInt(values, "height", profiled.Height),
             RefreshHz = ReadInt(values, "refresh", profiled.RefreshHz),

@@ -211,6 +211,26 @@
                     </Grid>
                 </TabItem>
 
+                <TabItem Header="Registrations">
+                    <Grid Margin="10">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <ListBox Grid.Row="0"
+                                 ItemsSource="{Binding PendingRegistrations}"
+                                 DisplayMemberPath="Name"
+                                 SelectedValuePath="RegistrationId"
+                                 SelectedValue="{Binding SelectedRegistrationId, Mode=TwoWay}"
+                                 MinHeight="180"
+                                 Margin="0,0,0,10" />
+                        <Button Grid.Row="1"
+                                Content="Approve Selected Client"
+                                Command="{Binding ApproveRegistrationCommand}"
+                                HorizontalAlignment="Left" />
+                    </Grid>
+                </TabItem>
+
                 <TabItem Header="Ownership">
                     <Grid Margin="10">
                         <ListBox ItemsSource="{Binding Ownership}" />

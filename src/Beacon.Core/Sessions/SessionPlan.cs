@@ -27,6 +27,7 @@ public sealed record SessionPlan(
     ClientId ClientId,
     string AppId,
     PlannedDisplay Display,
-    PlannedStream Stream);
+    PlannedStream Stream,
+    ulong Revision = 1);
 
 public sealed record SessionPlanResult(bool Success, SessionPlan? Plan, string? Error);

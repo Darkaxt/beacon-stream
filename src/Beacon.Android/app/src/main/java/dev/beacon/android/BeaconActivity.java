@@ -44,6 +44,7 @@ public final class BeaconActivity extends Activity {
     private LinearLayout rootLayout;
     private EditText serverUrl;
     private EditText clientId;
+    private EditText publicKeyFingerprint;
     private Spinner touchLayout;
     private Spinner uiDensity;
     private Spinner localTheme;
@@ -116,8 +117,9 @@ public final class BeaconActivity extends Activity {
 
         addLocalSettingsControls(root);
 
-        serverUrl = input("Server URL", "http://10.0.2.2:5000");
+        serverUrl = input("Server URL", "https://10.0.2.2:5001");
         clientId = input("Client ID", "z-fold-7");
+        publicKeyFingerprint = input("Server public-key fingerprint", "");
         width = input("Preferred width", "2560");
         height = input("Preferred height", "1600");
         refreshHz = input("Preferred refresh Hz", "120");
@@ -141,6 +143,7 @@ public final class BeaconActivity extends Activity {
 
         root.addView(serverUrl);
         root.addView(clientId);
+        root.addView(publicKeyFingerprint);
         root.addView(width);
         root.addView(height);
         root.addView(refreshHz);
@@ -388,7 +391,10 @@ public final class BeaconActivity extends Activity {
     }
 
     private BeaconViewModel currentModel() {
-        BeaconClientConfig config = new BeaconClientConfig(serverUrl.getText().toString(), clientId.getText().toString());
+        BeaconClientConfig config = new BeaconClientConfig(
+            serverUrl.getText().toString(),
+            clientId.getText().toString(),
+            publicKeyFingerprint.getText().toString());
         return modelSession.get(config.clientId(), config.serverUrl());
     }
 
@@ -495,11 +501,14 @@ public final class BeaconActivity extends Activity {
     }
 
     private BeaconViewModel createModel(String clientId, String serverUrl) {
-        BeaconClientConfig config = new BeaconClientConfig(serverUrl, clientId);
+        BeaconClientConfig config = new BeaconClientConfig(
+            serverUrl,
+            clientId,
+            publicKeyFingerprint.getText().toString());
         return new BeaconViewModel(
             config.clientId(),
             config.serverUrl(),
-            new BeaconApiClient(config));
+            new BeaconApiClient(this, config));
     }
 
     private BeaconApiClient.ProfilePatch readPatch() {

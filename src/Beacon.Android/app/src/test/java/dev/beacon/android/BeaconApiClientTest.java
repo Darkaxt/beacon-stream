@@ -3,12 +3,37 @@ package dev.beacon.android;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.util.ArrayDeque;
+import java.util.Collections;
+import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public final class BeaconApiClientTest {
+    @Test
+    public void approvedCredentialIsStoredAndAttachedToScopedRequests() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        transport.responses.add(new BeaconHttpResponse(202, "{\"registrationId\":\"registration-1\"}"));
+        transport.responses.add(new BeaconHttpResponse(200, "{\"credential\":\"issued-secret\"}"));
+        RecordingCredentialStore credentials = new RecordingCredentialStore();
+        BeaconApiClient client = new BeaconApiClient(
+            new BeaconClientConfig("http://server", "z-fold-7"),
+            transport,
+            credentials);
+
+        BeaconApiClient.BeaconResult hello = client.hello();
+        client.games();
+
+        assertEquals(200, hello.statusCode());
+        assertFalse(hello.body().contains("issued-secret"));
+        assertEquals("issued-secret", credentials.credential);
+        assertEquals("Beacon issued-secret", transport.headers.get("Authorization"));
+        assertEquals("z-fold-7", transport.headers.get("X-Beacon-Client-Id"));
+        assertEquals("/games", transport.path);
+    }
+
     @Test
     public void helloSendsClientIdentityOnlyToHelloEndpoint() throws Exception {
         FakeTransport transport = new FakeTransport();
@@ -183,13 +208,38 @@ public final class BeaconApiClientTest {
         String path;
         String body;
         BeaconHttpResponse response = new BeaconHttpResponse(200, "{}");
+        ArrayDeque<BeaconHttpResponse> responses = new ArrayDeque<>();
+        Map<String, String> headers = Collections.emptyMap();
 
         @Override
         public BeaconHttpResponse send(String method, String path, String body) throws IOException {
             this.method = method;
             this.path = path;
             this.body = body;
-            return response;
+            return responses.isEmpty() ? response : responses.remove();
         }
+
+        @Override
+        public BeaconHttpResponse send(
+            String method,
+            String path,
+            String body,
+            Map<String, String> headers) throws IOException {
+            this.headers = headers;
+            return send(method, path, body);
+        }
+    }
+
+    private static final class RecordingCredentialStore implements BeaconCredentialStore {
+        String credential;
+
+        @Override
+        public String loadCredential() { return credential; }
+
+        @Override
+        public void saveCredential(String value) { credential = value; }
+
+        @Override
+        public void clearCredential() { credential = null; }
     }
 }

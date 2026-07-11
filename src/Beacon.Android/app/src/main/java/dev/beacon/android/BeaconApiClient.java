@@ -4,18 +4,33 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
 import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+import android.content.Context;
 
 public final class BeaconApiClient implements BeaconViewModel.BeaconService {
     private final BeaconClientConfig config;
     private final BeaconHttpTransport transport;
+    private final BeaconCredentialStore credentialStore;
 
-    public BeaconApiClient(BeaconClientConfig config) {
-        this(config, new HttpUrlConnectionBeaconTransport(config));
+    public BeaconApiClient(Context context, BeaconClientConfig config) {
+        this(
+            config,
+            new HttpUrlConnectionBeaconTransport(config),
+            new AndroidKeyStoreCredentialStore(context, config.clientId()));
     }
 
     public BeaconApiClient(BeaconClientConfig config, BeaconHttpTransport transport) {
+        this(config, transport, new MemoryCredentialStore());
+    }
+
+    public BeaconApiClient(
+        BeaconClientConfig config,
+        BeaconHttpTransport transport,
+        BeaconCredentialStore credentialStore) {
         this.config = config;
         this.transport = transport;
+        this.credentialStore = credentialStore;
     }
 
     @Override
@@ -23,7 +38,20 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         JsonObject body = new JsonObject();
         body.addProperty("clientId", config.clientId());
         body.addProperty("name", config.clientId());
-        return post("/clients/hello", body);
+        BeaconResult response = post("/clients/hello", body);
+        if (response.statusCode() != 202) {
+            return response;
+        }
+        JsonObject pending = BeaconJson.gson().fromJson(response.body(), JsonObject.class);
+        String registrationId = pending.get("registrationId").getAsString();
+        BeaconResult approved = get("/clients/registrations/" + registrationId + "/completion");
+        if (approved.isSuccess()) {
+            JsonObject completion = BeaconJson.gson().fromJson(approved.body(), JsonObject.class);
+            credentialStore.saveCredential(completion.get("credential").getAsString());
+            completion.remove("credential");
+            return new BeaconResult(approved.statusCode(), BeaconJson.gson().toJson(completion));
+        }
+        return approved;
     }
 
     @Override
@@ -101,8 +129,31 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
     }
 
     private BeaconResult send(String method, String path, JsonObject body) throws IOException {
-        BeaconHttpResponse response = transport.send(method, path, body == null ? null : BeaconJson.gson().toJson(body));
+        Map<String, String> headers = new HashMap<>();
+        String credential = credentialStore.loadCredential();
+        if (credential != null && !credential.trim().isEmpty()) {
+            headers.put("Authorization", "Beacon " + credential);
+            headers.put("X-Beacon-Client-Id", config.clientId());
+        }
+        BeaconHttpResponse response = transport.send(
+            method,
+            path,
+            body == null ? null : BeaconJson.gson().toJson(body),
+            headers);
         return new BeaconResult(response.statusCode(), response.body());
+    }
+
+    private static final class MemoryCredentialStore implements BeaconCredentialStore {
+        private String credential;
+
+        @Override
+        public String loadCredential() { return credential; }
+
+        @Override
+        public void saveCredential(String value) { credential = value; }
+
+        @Override
+        public void clearCredential() { credential = null; }
     }
 
     public static final class BeaconResult {

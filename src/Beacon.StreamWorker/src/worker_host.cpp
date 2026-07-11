@@ -57,6 +57,10 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::dispatch(
   switch (request.body_case()) {
     case v1::WorkerIpcEnvelope::kPrepareSession:
       return prepare(request);
+    case v1::WorkerIpcEnvelope::kAuthorizeTicket:
+      return authorize_ticket(request);
+    case v1::WorkerIpcEnvelope::kRevokeTicket:
+      return revoke_ticket(request);
     case v1::WorkerIpcEnvelope::kStartMedia:
       return start_media(request);
     case v1::WorkerIpcEnvelope::kStopMedia:
@@ -71,6 +75,10 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::dispatch(
 }
 
 bool WorkerHost::shutdown_requested() const noexcept { return shutdown_requested_; }
+
+std::size_t WorkerHost::authorized_ticket_count() const noexcept {
+  return authorized_tickets_.size();
+}
 
 v1::WorkerIpcEnvelope WorkerHost::response_envelope(
     const v1::WorkerIpcEnvelope& request) const {
@@ -117,6 +125,33 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare(
   state.mutable_session_state_changed()->set_state(v1::WORKER_SESSION_STATE_PREPARED);
   state.mutable_session_state_changed()->set_error_code(v1::WORKER_ERROR_CODE_NONE);
   return {std::move(state), completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
+}
+
+std::vector<v1::WorkerIpcEnvelope> WorkerHost::authorize_ticket(
+    const v1::WorkerIpcEnvelope& request) {
+  const auto& ticket = request.authorize_ticket();
+  if (request.session_id().empty() || ticket.ticket_hash().size() != 32 ||
+      ticket.client_id().empty() || ticket.plan_revision() == 0 ||
+      ticket.expires_at_unix_ms() == 0 ||
+      ticket.worker_instance_id() != bytes_to_string(worker_instance_id_)) {
+    return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);
+  }
+
+  authorized_tickets_.push_back(ticket);
+  return {completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
+}
+
+std::vector<v1::WorkerIpcEnvelope> WorkerHost::revoke_ticket(
+    const v1::WorkerIpcEnvelope& request) {
+  const auto& hash = request.revoke_ticket().ticket_hash();
+  if (hash.size() != 32) {
+    return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);
+  }
+
+  std::erase_if(authorized_tickets_, [&hash](const v1::AuthorizeTicket& ticket) {
+    return ticket.ticket_hash() == hash;
+  });
+  return {completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }
 
 std::vector<v1::WorkerIpcEnvelope> WorkerHost::start_media(

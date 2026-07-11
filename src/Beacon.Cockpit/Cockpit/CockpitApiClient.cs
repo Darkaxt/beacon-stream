@@ -24,6 +24,9 @@ public interface ICockpitApi
     Task RemoveClientDisplayLeaseAsync(string clientId, CancellationToken cancellationToken);
 
     Task StopClientStreamAsync(string clientId, CancellationToken cancellationToken);
+
+    Task ApproveRegistrationAsync(string registrationId, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
 }
 
 public sealed class CockpitApiClient(HttpClient httpClient) : ICockpitApi
@@ -107,6 +110,15 @@ public sealed class CockpitApiClient(HttpClient httpClient) : ICockpitApi
     public async Task StopClientStreamAsync(string clientId, CancellationToken cancellationToken)
     {
         using HttpResponseMessage response = await httpClient.PostAsJsonAsync($"/admin/clients/{Uri.EscapeDataString(clientId)}/stream/stop", new { }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ApproveRegistrationAsync(string registrationId, CancellationToken cancellationToken)
+    {
+        using HttpResponseMessage response = await httpClient.PostAsJsonAsync(
+            $"/admin/registrations/{Uri.EscapeDataString(registrationId)}/approve",
+            new { },
+            cancellationToken);
         response.EnsureSuccessStatusCode();
     }
 }

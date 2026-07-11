@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Beacon.StreamWorker.Contracts.Framing;
 using Beacon.StreamWorker.Contracts.Worker.V1;
+using Google.Protobuf;
 
 namespace Beacon.Platform.Windows.Streaming;
 
@@ -20,6 +21,7 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
         TaskCreationOptions.RunContinuationsAsynchronously);
     private Task? receiveLoop;
     private Exception? terminalError;
+    private byte[] workerInstanceId = [];
     private long nextRequestId;
     private int initialized;
     private int disposed;
@@ -36,6 +38,8 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
     public Task Completion => lifecycleCompletion.Task;
 
     public Exception? TerminalError => Volatile.Read(ref terminalError);
+
+    public ReadOnlyMemory<byte> WorkerInstanceId => workerInstanceId;
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
@@ -55,6 +59,7 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
             {
                 throw new StreamWorkerProtocolException("StreamWorker hello identity is invalid.");
             }
+            workerInstanceId = hello.WorkerHello.WorkerInstanceId.ToByteArray();
 
             WorkerIpcEnvelope ready = await ReadEnvelopeOrProcessExitAsync(cancellationToken).ConfigureAwait(false);
             ProtocolVersion.EnsureSupported(ready.ProtocolVersion);

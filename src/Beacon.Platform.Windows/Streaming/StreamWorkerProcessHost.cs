@@ -16,6 +16,8 @@ public interface IStreamWorkerHost
 {
     bool IsReady { get; }
 
+    ReadOnlyMemory<byte> WorkerInstanceId { get; }
+
     Task EnsureReadyAsync(CancellationToken cancellationToken);
 
     Task<StreamWorkerCommandResponse> SendAsync(
@@ -58,6 +60,8 @@ public sealed class StreamWorkerProcessHost : IStreamWorkerHost, IAsyncDisposabl
     public int ProcessId => process?.Id ?? 0;
 
     public bool HasExited => process is null || process.HasExited;
+
+    public ReadOnlyMemory<byte> WorkerInstanceId => client?.WorkerInstanceId ?? ReadOnlyMemory<byte>.Empty;
 
     public async Task EnsureReadyAsync(CancellationToken cancellationToken)
     {

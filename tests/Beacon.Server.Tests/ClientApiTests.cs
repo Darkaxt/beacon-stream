@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Security.Cryptography;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
 using Beacon.Core.Input;
@@ -40,34 +42,69 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
-    public async Task UnknownClientHelloRequiresPairingToken()
+    public async Task ProductionRegistrationRequiresApprovalAndScopesCredential()
     {
-        HttpClient client = factory.CreateClient();
+        string credentialPath = Path.Combine(Path.GetTempPath(), $"beacon-credentials-{Guid.NewGuid():N}.json");
+        string identityPath = Path.Combine(Path.GetTempPath(), $"beacon-identity-{Guid.NewGuid():N}.pfx");
+        WebApplicationFactory<Program> secureFactory = factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("Beacon:Security:TestHost", "false");
+            builder.UseSetting("Beacon:Security:CredentialsPath", credentialPath);
+            builder.UseSetting("Beacon:Security:IdentityPath", identityPath);
+        });
+        HttpClient client = secureFactory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost"),
+        });
+        string clientId = $"secure-{Guid.NewGuid():N}";
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/clients/hello", new
         {
-            clientId = $"unknown-{Guid.NewGuid():N}",
-            name = "Unknown Client"
+            clientId,
+            name = "Secure Client"
         });
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        string body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("pair", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        using JsonDocument pendingDocument = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        string registrationId = Assert.IsType<string>(
+            pendingDocument.RootElement.GetProperty("registrationId").GetString());
+        Task<HttpResponseMessage> completion = client.GetAsync($"/clients/registrations/{registrationId}/completion");
+        Assert.False(completion.IsCompleted);
+
+        HttpResponseMessage approval = await client.PostAsJsonAsync(
+            $"/admin/registrations/{registrationId}/approve",
+            new { });
+        HttpResponseMessage completed = await completion;
+
+        Assert.Equal(HttpStatusCode.OK, approval.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, completed.StatusCode);
+        using JsonDocument credentialDocument = await JsonDocument.ParseAsync(await completed.Content.ReadAsStreamAsync());
+        string credential = Assert.IsType<string>(credentialDocument.RootElement.GetProperty("credential").GetString());
+
+        HttpResponseMessage unauthenticated = await client.GetAsync($"/clients/{clientId}/profile");
+        var authenticatedRequest = new HttpRequestMessage(HttpMethod.Get, $"/clients/{clientId}/profile");
+        authenticatedRequest.Headers.Authorization = new AuthenticationHeaderValue("Beacon", credential);
+        HttpResponseMessage authenticated = await client.SendAsync(authenticatedRequest);
+        var otherRequest = new HttpRequestMessage(HttpMethod.Get, "/clients/z-fold-7/profile");
+        otherRequest.Headers.Authorization = new AuthenticationHeaderValue("Beacon", credential);
+        HttpResponseMessage other = await client.SendAsync(otherRequest);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthenticated.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, authenticated.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, other.StatusCode);
+        Assert.DoesNotContain(credential, File.ReadAllText(credentialPath), StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task HelloWithPairingTokenRegistersNewClient()
+    public async Task ExplicitTestHostRegistersNewClientWithoutSharedToken()
     {
-        WebApplicationFactory<Program> pairedFactory = factory.WithWebHostBuilder(builder =>
-            builder.UseSetting("Beacon:Pairing:Token", "pair-me"));
-        HttpClient client = pairedFactory.CreateClient();
+        HttpClient client = factory.CreateClient();
         string clientId = $"windows-handheld-{Guid.NewGuid():N}";
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/clients/hello", new
         {
             clientId,
-            name = "Windows Handheld",
-            pairingToken = "pair-me"
+            name = "Windows Handheld"
         });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -81,6 +118,34 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task ProductionRejectsPlainHttpAndRequiresCatalogAuthentication()
+    {
+        string credentialPath = Path.Combine(Path.GetTempPath(), $"beacon-credentials-{Guid.NewGuid():N}.json");
+        string identityPath = Path.Combine(Path.GetTempPath(), $"beacon-identity-{Guid.NewGuid():N}.pfx");
+        WebApplicationFactory<Program> secureFactory = factory.WithWebHostBuilder(builder =>
+        {
+            builder.UseSetting("Beacon:Security:TestHost", "false");
+            builder.UseSetting("Beacon:Security:CredentialsPath", credentialPath);
+            builder.UseSetting("Beacon:Security:IdentityPath", identityPath);
+        });
+        HttpClient plain = secureFactory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("http://localhost"),
+            AllowAutoRedirect = false,
+        });
+        HttpClient secure = secureFactory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost"),
+        });
+
+        HttpResponseMessage plainHealth = await plain.GetAsync("/health");
+        HttpResponseMessage catalog = await secure.GetAsync("/games");
+
+        Assert.Equal(HttpStatusCode.UpgradeRequired, plainHealth.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, catalog.StatusCode);
+    }
+
+    [Fact]
     public async Task RegisteredClientProfilePersistsAcrossServerInstances()
     {
         string profilePath = Path.Combine(Path.GetTempPath(), $"beacon-client-profiles-{Guid.NewGuid():N}.json");
@@ -91,15 +156,13 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             WebApplicationFactory<Program> firstFactory = factory.WithWebHostBuilder(builder =>
             {
                 builder.UseSetting("Beacon:Profiles:Path", profilePath);
-                builder.UseSetting("Beacon:Pairing:Token", "pair-me");
             });
             HttpClient firstClient = firstFactory.CreateClient();
 
             HttpResponseMessage hello = await firstClient.PostAsJsonAsync("/clients/hello", new
             {
                 clientId,
-                name = "Gaming Tablet",
-                pairingToken = "pair-me"
+                name = "Gaming Tablet"
             });
             HttpResponseMessage patch = await firstClient.PatchAsJsonAsync($"/clients/{clientId}/profile", new
             {
@@ -114,7 +177,6 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             WebApplicationFactory<Program> secondFactory = factory.WithWebHostBuilder(builder =>
             {
                 builder.UseSetting("Beacon:Profiles:Path", profilePath);
-                builder.UseSetting("Beacon:Pairing:Token", "pair-me");
             });
             HttpClient secondClient = secondFactory.CreateClient();
 
@@ -225,16 +287,14 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     [Fact]
     public async Task CapabilitiesAndTelemetryInfluencePlanWithoutChangingDisplayGeometry()
     {
-        WebApplicationFactory<Program> pairedFactory = factory.WithWebHostBuilder(builder =>
-            builder.UseSetting("Beacon:Pairing:Token", "pair-me"));
+        WebApplicationFactory<Program> pairedFactory = factory.WithWebHostBuilder(_ => { });
         HttpClient client = pairedFactory.CreateClient();
         string clientId = $"telemetry-plan-{Guid.NewGuid():N}";
 
         await client.PostAsJsonAsync("/clients/hello", new
         {
             clientId,
-            name = "Telemetry Plan Client",
-            pairingToken = "pair-me"
+            name = "Telemetry Plan Client"
         });
 
         HttpResponseMessage capabilities = await client.PostAsJsonAsync($"/clients/{clientId}/capabilities", new
@@ -279,16 +339,14 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     [Fact]
     public async Task PlanHonorsClientBitrateCap()
     {
-        WebApplicationFactory<Program> pairedFactory = factory.WithWebHostBuilder(builder =>
-            builder.UseSetting("Beacon:Pairing:Token", "pair-me"));
+        WebApplicationFactory<Program> pairedFactory = factory.WithWebHostBuilder(_ => { });
         HttpClient client = pairedFactory.CreateClient();
         string clientId = $"bitrate-cap-{Guid.NewGuid():N}";
 
         await client.PostAsJsonAsync("/clients/hello", new
         {
             clientId,
-            name = "Bitrate Cap Client",
-            pairingToken = "pair-me"
+            name = "Bitrate Cap Client"
         });
         await client.PatchAsJsonAsync($"/clients/{clientId}/profile", new
         {
@@ -393,8 +451,19 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal("running", root.GetProperty("stream").GetProperty("state").GetString());
         Assert.Equal("av1", root.GetProperty("stream").GetProperty("codec").GetString());
         Assert.Equal(120, root.GetProperty("stream").GetProperty("fps").GetInt32());
+        Assert.Equal(1, root.GetProperty("connection").GetProperty("protocolVersion").GetInt32());
+        Assert.Equal(1ul, root.GetProperty("connection").GetProperty("planRevision").GetUInt64());
+        byte[] publicTicket = Convert.FromBase64String(Assert.IsType<string>(
+            root.GetProperty("connection").GetProperty("ticket").GetString()));
+        Assert.True(publicTicket.Length >= 32);
+        FakeStreamSessionAuthorizer authorizer = Assert.IsType<FakeStreamSessionAuthorizer>(
+            factory.Services.GetRequiredService<IStreamSessionAuthorizer>());
+        StreamWorkerAuthorization privateAuthorization = Assert.IsType<StreamWorkerAuthorization>(
+            authorizer.Authorizations.LastOrDefault());
+        Assert.Equal(32, privateAuthorization.TicketHash.Length);
+        Assert.False(CryptographicOperations.FixedTimeEquals(publicTicket, privateAuthorization.TicketHash));
         Assert.True(root.EnumerateObject().Select(property => property.Name).ToHashSet().SetEquals(
-            ["clientId", "displayId", "state", "launch", "stream"]));
+            ["clientId", "displayId", "state", "launch", "stream", "connection"]));
     }
 
     [Fact]
@@ -538,6 +607,33 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.True(quitJson.RootElement.GetProperty("displayRemoved").GetBoolean());
         Assert.True(restoreJson.RootElement.GetProperty("recovered").GetBoolean());
         Assert.Equal("client-z-fold-7", restoreJson.RootElement.GetProperty("displayId").GetString());
+    }
+
+    [Fact]
+    public async Task ReconnectReplacesUnusedStreamTicketWithoutStoppingSession()
+    {
+        HttpClient client = factory.CreateClient();
+        HttpResponseMessage launch = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/launch",
+            new { gameId = "steam-shortcut:3767414131" });
+        HttpResponseMessage reconnect = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/reconnect",
+            new { });
+
+        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, reconnect.StatusCode);
+        using JsonDocument launchJson = await JsonDocument.ParseAsync(await launch.Content.ReadAsStreamAsync());
+        using JsonDocument reconnectJson = await JsonDocument.ParseAsync(await reconnect.Content.ReadAsStreamAsync());
+        string first = Assert.IsType<string>(
+            launchJson.RootElement.GetProperty("connection").GetProperty("ticket").GetString());
+        string replacement = Assert.IsType<string>(
+            reconnectJson.RootElement.GetProperty("connection").GetProperty("ticket").GetString());
+
+        Assert.NotEqual(first, replacement);
+        Assert.Equal("reconnected", reconnectJson.RootElement.GetProperty("state").GetString());
+        FakeStreamSessionAuthorizer authorizer = Assert.IsType<FakeStreamSessionAuthorizer>(
+            factory.Services.GetRequiredService<IStreamSessionAuthorizer>());
+        Assert.NotEmpty(authorizer.Revocations);
     }
 
     [Fact]

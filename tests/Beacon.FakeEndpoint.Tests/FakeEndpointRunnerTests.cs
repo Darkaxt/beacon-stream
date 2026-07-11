@@ -27,15 +27,12 @@ public sealed class FakeEndpointRunnerTests
                 "--client-id",
                 "handheld-1",
                 "--name",
-                "Handheld 1",
-                "--pairing-token",
-                "pair-me"
+                "Handheld 1"
             ]);
 
         Assert.Equal(new Uri("http://127.0.0.1:5111"), options.ServerUri);
         Assert.Equal("handheld-1", options.Script.ClientId);
         Assert.Equal("Handheld 1", options.Script.Name);
-        Assert.Equal("pair-me", options.Script.PairingToken);
         Assert.Equal(1920, options.Script.Width);
         Assert.Equal(1200, options.Script.Height);
         Assert.Equal(60, options.Script.RefreshHz);
@@ -100,7 +97,7 @@ public sealed class FakeEndpointRunnerTests
     }
 
     [Fact]
-    public async Task SendsPairingTokenWhenConfigured()
+    public async Task HelloContainsIdentityWithoutSharedToken()
     {
         var handler = new RecordingHandler();
         var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost") };
@@ -108,8 +105,7 @@ public sealed class FakeEndpointRunnerTests
         FakeEndpointScript script = FakeEndpointScript.CreateZFold7Default() with
         {
             ClientId = "handheld-1",
-            Name = "Handheld 1",
-            PairingToken = "pair-me"
+            Name = "Handheld 1"
         };
 
         FakeEndpointResult result = await runner.RunAsync(script, CancellationToken.None);
@@ -117,7 +113,7 @@ public sealed class FakeEndpointRunnerTests
         Assert.True(result.Success);
         Assert.Contains("\"clientId\":\"handheld-1\"", handler.Bodies[0], StringComparison.Ordinal);
         Assert.Contains("\"name\":\"Handheld 1\"", handler.Bodies[0], StringComparison.Ordinal);
-        Assert.Contains("\"pairingToken\":\"pair-me\"", handler.Bodies[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("pairingToken", handler.Bodies[0], StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
