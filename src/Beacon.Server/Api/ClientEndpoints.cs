@@ -419,7 +419,7 @@ public static class ClientEndpoints
 
         clients.MapPost("/{clientId}/input", async (
             string clientId,
-            ClientInputRequest request,
+            HttpClientInputTransportRequest request,
             InMemorySessionStore sessions,
             IStreamingBackend streaming,
             IClientInputSink input,
@@ -985,9 +985,13 @@ public sealed record DisconnectRequest(bool ClientActive = true);
 
 public sealed record BeaconRequest(bool Active = true);
 
-public sealed record ClientInputRequest(long Sequence, IReadOnlyList<HttpClientInputEvent> Events);
+public sealed record ClientInputRequest(long Sequence, IReadOnlyList<ClientInputEvent> Events);
 
-public sealed record HttpClientInputEvent(
+internal sealed record HttpClientInputTransportRequest(
+    long Sequence,
+    IReadOnlyList<HttpClientInputTransportEvent> Events);
+
+internal sealed record HttpClientInputTransportEvent(
     string Type,
     string Action,
     int? PointerId = null,
@@ -998,6 +1002,6 @@ public sealed record HttpClientInputEvent(
     string? Code = null,
     double? Value = null)
 {
-    internal ClientInputEvent ToCoreEvent() =>
+    public ClientInputEvent ToCoreEvent() =>
         new(Type, Action, PointerId, X, Y, Buttons, Key, Code, Value);
 }
