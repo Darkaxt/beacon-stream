@@ -4,7 +4,7 @@
 
 **Goal:** Prove one real Beacon.Server to StreamWorker to MsQuic to Android production-JNI path, including media, input, feedback, reconnect, Worker crash isolation, recovery, static boundaries, and secret absence.
 
-**Architecture:** Keep fake display/game/recovery boundaries in the acceptance host while selecting the real Worker streaming boundary independently. Worker emits one deterministic synthetic access unit through its production QUIC listener and publishes typed request-id-zero events over its existing named pipe; Service relays those events to input and diagnostics, while Android instrumentation uses the production StreamCore JNI route.
+**Architecture:** Keep fake display/game/recovery boundaries in the acceptance host while selecting the real Worker streaming boundary independently. Worker emits one deterministic non-decodable access-unit marker through its production QUIC listener and publishes typed request-id-zero events over its existing named pipe; Service relays those events to input and diagnostics, while Android instrumentation uses the production StreamCore JNI route.
 
 **Tech Stack:** .NET 10, ASP.NET Core, C# channels and hosted services, C++20, Protobuf, Windows named pipes, MsQuic, Java/JNI, Android instrumentation, PowerShell, CMake/CTest, Gradle.
 
@@ -110,7 +110,9 @@ git push -u origin codex/beacon-gate3-validation
 
 - [ ] **Step 1: Write failing native tests**
 
-Add tests that authenticate/start a session and assert one valid numbered IDR datagram,
+Add tests that authenticate/start a session and assert one numbered synthetic access-unit
+marker datagram carrying protocol IDR/end flags. The marker is explicitly non-decodable and
+must not be described as valid H.264 or encoding proof;
 then assert input, feedback, disconnect, and media evidence become request-id-zero IPC events.
 The central expectations are:
 
@@ -167,8 +169,9 @@ packet payloads. Regenerate C# and C++ contracts through the existing build.
 
 - [ ] **Step 4: Implement the source and serialized event writer**
 
-Implement `SyntheticMediaSource::emit_idr` as a pure packet builder whose output enters
-`QuicListener::send` after the accepted StartSession action. Add one outbound MPSC queue;
+Implement `SyntheticMediaSource::emit_access_unit_marker` as a pure packet builder whose
+output enters `QuicListener::send` after the accepted StartSession action. Add one outbound
+MPSC queue;
 `main.cpp` is its sole named-pipe consumer/writer, while one command-reader thread performs
 blocking reads and enqueues complete response vectors as indivisible batches. QuicListener
 publishes typed events through the same queue without holding its state mutex or waiting on
@@ -177,7 +180,7 @@ pipe backpressure. Do not add periodic loops or sleep.
 ```cpp
 class SyntheticMediaSource final {
  public:
-  std::vector<stream::TransportPacket> emit_idr(
+  std::vector<stream::TransportPacket> emit_access_unit_marker(
       std::uint64_t sequence,
       std::uint64_t presentation_time_us,
       std::uint16_t maximum_datagram_bytes) const;

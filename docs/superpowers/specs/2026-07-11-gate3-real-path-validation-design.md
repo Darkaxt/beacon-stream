@@ -31,7 +31,8 @@ against a real server session.
 - Fake host boundaries may replace display, game launch, recovery, and input side effects in
   the acceptance harness. They may not replace Worker, named-pipe IPC, MsQuic, StreamCore,
   ticket authorization, or launch/reconnect grants.
-- Test media is deterministic fake encoded data. It is not a second product encoder. Gate 5
+- Test media is a deterministic, non-decodable access-unit marker. Protocol metadata carries
+  IDR/end flags, but the bytes are not encoded video and are not decoder-valid H.264. Gate 5
   replaces this source with capture and encoding behind the same Worker contract.
 - No startup sleeps, readiness polling, cancellation timeouts, descriptor files, fixed
   streaming ports, or lifecycle watchdogs are allowed.
@@ -57,13 +58,14 @@ Add a separate `BeaconStreamingMode` with values `Fake` and `Worker`.
 
 This is dependency composition only. It does not create another runtime implementation.
 
-### 2. Worker Emits One Deterministic Access Unit
+### 2. Worker Emits One Deterministic Access-Unit Marker
 
 Add a focused `SyntheticMediaSource` invoked by `QuicListener` from an accepted
 `StartSession` protocol action.
 
 - It becomes eligible only after ticket authentication and a valid `StartSession`.
-- It emits one numbered IDR access unit per authenticated session generation.
+- It emits one numbered synthetic access-unit marker with protocol IDR/end flags per
+  authenticated session generation.
 - It uses the existing 40-byte media datagram header and the real `QuicListener::send` path.
 - Chunk size is bounded by the negotiated QUIC datagram maximum.
 - It updates encoded-frame, sent-datagram, dropped-frame, and byte metrics through existing
@@ -73,8 +75,8 @@ Add a focused `SyntheticMediaSource` invoked by `QuicListener` from an accepted
   access unit. Session id, plan revision, ticket sequence, and native handles are not used as
   generation identifiers.
 
-The payload need only be deterministic bytes for Gate 3 because Android uses a fake Java
-encoded-frame sink. It must not be presented as decodable H.264.
+The payload is deterministic marker data for Gate 3 because Android uses a fake Java
+access-unit marker sink. It must not be presented as decodable H.264 or encoding proof.
 
 ### 3. Worker IPC Carries Unsolicited Typed Events
 
@@ -162,7 +164,7 @@ Acceptance is split into explicit instrumentation invocations while the same ser
 remains alive:
 
 1. register/beacon/capabilities/telemetry/plan/launch;
-2. production JNI connects and receives the synthetic access unit;
+2. production JNI connects and receives the synthetic access-unit marker;
 3. APK sends one input batch and automatic queue feedback;
 4. APK closes transport without quitting the server-owned session;
 5. reconnect obtains a fresh ticket and receives a new access unit;
@@ -233,7 +235,7 @@ It injects five unique canaries and asserts all captures omit them:
 ## Gate 3 Exit Criteria
 
 - The complete Service-to-emulator path passes using one Worker and one StreamCore route.
-- One synthetic access unit is observed on first connect and fresh-ticket reconnect.
+- One synthetic access-unit marker is observed on first connect and fresh-ticket reconnect.
 - APK input reaches `IClientInputSink`; feedback reaches Service diagnostics/metrics.
 - Worker termination does not terminate Beacon.Server and emergency restore succeeds.
 - FakeEndpoint live flow matches server lifecycle semantics.

@@ -3,19 +3,17 @@
 #include "beacon/stream/media_datagram.h"
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <span>
 
 namespace beacon::worker {
 
-std::vector<stream::TransportPacket> SyntheticMediaSource::emit_idr(
+std::vector<stream::TransportPacket>
+SyntheticMediaSource::emit_access_unit_marker(
     std::uint64_t sequence, std::uint64_t presentation_time_us,
     std::uint16_t maximum_datagram_bytes) const {
-  constexpr std::array payload{std::byte{0x00}, std::byte{0x00},
-                               std::byte{0x01}, std::byte{0x65}};
   constexpr auto packet_bytes = stream::media_datagram_header_bytes +
-                                payload.size();
+                                synthetic_access_unit_marker_bytes.size();
   if (maximum_datagram_bytes < packet_bytes) {
     return {};
   }
@@ -27,11 +25,13 @@ std::vector<stream::TransportPacket> SyntheticMediaSource::emit_idr(
                stream::MediaDatagramFlags::end_of_access_unit,
       .sequence = sequence,
       .presentation_time_us = presentation_time_us,
-      .frame_bytes = static_cast<std::uint32_t>(payload.size()),
+      .frame_bytes = static_cast<std::uint32_t>(
+          synthetic_access_unit_marker_bytes.size()),
       .chunk_index = 0,
       .chunk_count = 1,
       .payload_offset = 0,
-      .payload_bytes = static_cast<std::uint16_t>(payload.size()),
+      .payload_bytes = static_cast<std::uint16_t>(
+          synthetic_access_unit_marker_bytes.size()),
   };
   std::vector<std::byte> datagram(packet_bytes);
   if (!stream::serialize_media_datagram_header(
@@ -40,7 +40,7 @@ std::vector<stream::TransportPacket> SyntheticMediaSource::emit_idr(
               datagram.data(), stream::media_datagram_header_bytes})) {
     return {};
   }
-  std::ranges::copy(payload,
+  std::ranges::copy(synthetic_access_unit_marker_bytes,
                     datagram.begin() + stream::media_datagram_header_bytes);
   return {{.channel = stream::StreamChannel::media,
            .sequence = sequence,

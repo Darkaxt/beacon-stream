@@ -77,7 +77,17 @@ enum class QuicListenerFailure {
   credential_load,
   listener_open,
   listener_start,
+  callback_exception,
 };
+
+enum class QuicListenerFaultPoint {
+  connection_context_allocation,
+  event_serialization,
+  datagram_context_allocation,
+};
+
+using QuicListenerFaultInjector =
+    std::function<void(QuicListenerFaultPoint point)>;
 
 struct QuicListenerMetrics {
   std::uint64_t sent_datagrams{};
@@ -96,7 +106,8 @@ public:
   using EventSink = std::function<void(v1::WorkerIpcEnvelope)>;
 
   QuicListener(std::wstring identity_path,
-               AuthorizedQuicTicketStore &authorized_tickets);
+               AuthorizedQuicTicketStore &authorized_tickets,
+               QuicListenerFaultInjector fault_injector = {});
   ~QuicListener() override;
 
   QuicListener(const QuicListener &) = delete;

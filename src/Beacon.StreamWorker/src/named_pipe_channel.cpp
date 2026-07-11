@@ -81,7 +81,8 @@ bool overlapped_transfer(HANDLE handle,
 }  // namespace
 
 struct NamedPipeChannel::State {
-  explicit State(void *value) noexcept : handle(static_cast<HANDLE>(value)) {}
+  State(void *value, NamedPipeChannelOperationHooks operation_hooks) noexcept
+      : handle(static_cast<HANDLE>(value)), hooks(operation_hooks) {}
 
   ~State() {
     if (handle != nullptr && handle != INVALID_HANDLE_VALUE) {
@@ -98,6 +99,7 @@ struct NamedPipeChannel::State {
 
   HANDLE handle{};
   std::atomic_bool canceled{};
+  NamedPipeChannelOperationHooks hooks;
   std::mutex read_mutex;
   std::mutex write_mutex;
 };
@@ -150,8 +152,9 @@ FrameDecodeStatus decode_worker_frame(std::span<const std::byte> frame,
 
 NamedPipeChannel::NamedPipeChannel() noexcept : state_(nullptr) {}
 
-NamedPipeChannel::NamedPipeChannel(void* handle)
-    : state_(std::make_shared<State>(handle)) {}
+NamedPipeChannel::NamedPipeChannel(void *handle,
+                                   NamedPipeChannelOperationHooks hooks)
+    : state_(std::make_shared<State>(handle, hooks)) {}
 
 NamedPipeChannel::~NamedPipeChannel() { release_owner(); }
 
@@ -192,6 +195,9 @@ FrameDecodeStatus NamedPipeChannel::read(v1::WorkerIpcEnvelope& envelope) noexce
   if (!state) {
     return FrameDecodeStatus::io_error;
   }
+  if (state->hooks.after_state_acquired != nullptr) {
+    state->hooks.after_state_acquired(state->hooks.context);
+  }
   std::lock_guard operation_lock{state->read_mutex};
   std::array<std::byte, sizeof(std::uint32_t)> prefix{};
   const auto prefix_error = read_exact(state, prefix);
@@ -221,6 +227,9 @@ bool NamedPipeChannel::write(const v1::WorkerIpcEnvelope& envelope) noexcept {
   const auto state = state_.load(std::memory_order_acquire);
   if (!state) {
     return false;
+  }
+  if (state->hooks.after_state_acquired != nullptr) {
+    state->hooks.after_state_acquired(state->hooks.context);
   }
   std::lock_guard operation_lock{state->write_mutex};
   try {

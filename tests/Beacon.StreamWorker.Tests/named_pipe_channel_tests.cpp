@@ -21,10 +21,13 @@ using beacon::worker::v1::WorkerIpcEnvelope;
 
 struct PipePair {
   HANDLE server{INVALID_HANDLE_VALUE};
+  HANDLE client_handle{INVALID_HANDLE_VALUE};
   beacon::worker::NamedPipeChannel client;
 
-  PipePair(HANDLE server_handle, HANDLE client_handle)
-      : server(server_handle), client(client_handle) {}
+  PipePair(HANDLE server_value, HANDLE client_value,
+           beacon::worker::NamedPipeChannelOperationHooks hooks = {})
+      : server(server_value), client_handle(client_value),
+        client(client_value, hooks) {}
   ~PipePair() {
     if (server != INVALID_HANDLE_VALUE) {
       CloseHandle(server);
@@ -37,9 +40,9 @@ struct PipePair {
 
 bool read_exact(HANDLE handle, std::span<std::byte> output);
 
-PipePair create_pipe_pair(DWORD buffer_bytes =
-                              beacon::worker::maximum_worker_message_bytes +
-                              4) {
+PipePair create_pipe_pair(
+    DWORD buffer_bytes = beacon::worker::maximum_worker_message_bytes + 4,
+    beacon::worker::NamedPipeChannelOperationHooks hooks = {}) {
   const auto name = L"\\\\.\\pipe\\beacon-worker-test-" +
                     std::to_wstring(GetCurrentProcessId()) + L"-" +
                     std::to_wstring(GetTickCount64());
@@ -54,7 +57,18 @@ PipePair create_pipe_pair(DWORD buffer_bytes =
   BEACON_TEST_REQUIRE(client != INVALID_HANDLE_VALUE);
   const auto connected = ConnectNamedPipe(server, nullptr);
   BEACON_TEST_REQUIRE(connected != FALSE || GetLastError() == ERROR_PIPE_CONNECTED);
-  return PipePair(server, client);
+  return PipePair(server, client, hooks);
+}
+
+struct OperationGate {
+  HANDLE acquired{};
+  HANDLE release{};
+};
+
+void hold_acquired_operation(void *context) noexcept {
+  auto &gate = *static_cast<OperationGate *>(context);
+  SetEvent(gate.acquired);
+  WaitForSingleObject(gate.release, INFINITE);
 }
 
 WorkerIpcEnvelope large_envelope(std::uint64_t request_id) {
@@ -248,26 +262,35 @@ void blocked_write_is_released_by_terminal_cancellation() {
 }
 
 void owner_release_cancels_operation_without_closing_its_live_handle() {
-  auto pair = create_pipe_pair(64);
+  OperationGate gate{.acquired = CreateEventW(nullptr, TRUE, FALSE, nullptr),
+                     .release = CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  BEACON_TEST_REQUIRE(gate.acquired != nullptr);
+  BEACON_TEST_REQUIRE(gate.release != nullptr);
+  auto pair = create_pipe_pair(
+      64, {.after_state_acquired = hold_acquired_operation,
+           .context = &gate});
   const auto outbound = large_envelope(102);
-  std::promise<void> first_byte_read;
-  auto write_started = first_byte_read.get_future();
   bool write_result = true;
 
-  std::thread server_reader([&] {
-    std::byte first{};
-    BEACON_TEST_REQUIRE(read_exact(pair.server, {&first, 1}));
-    first_byte_read.set_value();
-  });
   std::thread writer([&] { write_result = pair.client.write(outbound); });
 
-  write_started.wait();
+  BEACON_TEST_REQUIRE(WaitForSingleObject(gate.acquired, INFINITE) ==
+                      WAIT_OBJECT_0);
   pair.client.release_owner();
+  SetLastError(ERROR_SUCCESS);
+  BEACON_TEST_REQUIRE(GetFileType(pair.client_handle) == FILE_TYPE_PIPE);
+  BEACON_TEST_REQUIRE(GetLastError() != ERROR_INVALID_HANDLE);
+
+  SetEvent(gate.release);
   writer.join();
-  server_reader.join();
 
   BEACON_TEST_REQUIRE(!write_result);
   BEACON_TEST_REQUIRE(!pair.client.valid());
+  SetLastError(ERROR_SUCCESS);
+  BEACON_TEST_REQUIRE(GetFileType(pair.client_handle) == FILE_TYPE_UNKNOWN);
+  BEACON_TEST_REQUIRE(GetLastError() == ERROR_INVALID_HANDLE);
+  CloseHandle(gate.acquired);
+  CloseHandle(gate.release);
 }
 
 void concurrent_writers_deliver_only_complete_non_interleaved_frames() {

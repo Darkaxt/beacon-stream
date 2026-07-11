@@ -56,7 +56,8 @@ int wmain(int argument_count, wchar_t** arguments) {
         [&channel, &outbound, &record_failure](
             beacon::worker::v1::WorkerIpcEnvelope event) {
           try {
-            if (outbound.enqueue({std::move(event)})) {
+            if (outbound.enqueue({std::move(event)}) ==
+                beacon::worker::WorkerOutboundEnqueueResult::accepted) {
               return;
             }
           } catch (...) {
@@ -67,7 +68,8 @@ int wmain(int argument_count, wchar_t** arguments) {
         });
     beacon::worker::WorkerHost host(
         std::move(instance_id), GetCurrentProcessId(), transport, tickets);
-    if (!outbound.enqueue({host.hello(), host.ready()})) {
+    if (outbound.enqueue({host.hello(), host.ready()}) !=
+        beacon::worker::WorkerOutboundEnqueueResult::accepted) {
       return 3;
     }
 
@@ -85,11 +87,12 @@ int wmain(int argument_count, wchar_t** arguments) {
           }
           auto responses = host.dispatch(request);
           const bool shutdown_requested = host.shutdown_requested();
-          const bool enqueued =
+          const auto enqueue_result =
               shutdown_requested
                   ? outbound.enqueue_terminal(std::move(responses))
                   : outbound.enqueue(std::move(responses));
-          if (!enqueued) {
+          if (enqueue_result !=
+              beacon::worker::WorkerOutboundEnqueueResult::accepted) {
             record_failure(5);
             transport.shutdown();
             outbound.close();

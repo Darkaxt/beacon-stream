@@ -14,7 +14,9 @@ namespace {
 namespace stream_v1 = beacon::stream::v1;
 using beacon::worker::WorkerOutboundBatch;
 using beacon::worker::WorkerOutboundBatchKind;
+using beacon::worker::WorkerOutboundEnqueueResult;
 using beacon::worker::WorkerOutboundQueue;
+using beacon::worker::WorkerOutboundQueueLimits;
 using beacon::worker::v1::WorkerIpcEnvelope;
 
 WorkerIpcEnvelope response(std::uint64_t request_id,
@@ -27,6 +29,14 @@ WorkerIpcEnvelope response(std::uint64_t request_id,
       beacon::worker::v1::WORKER_ERROR_CODE_NONE);
   value.set_session_id("response-" + std::to_string(marker));
   return value;
+}
+
+std::size_t serialized_bytes(const WorkerOutboundBatch &batch) {
+  std::size_t result = 0;
+  for (const auto &envelope : batch) {
+    result += 4 + envelope.ByteSizeLong();
+  }
+  return result;
 }
 
 void worker_events_are_uncorrelated_typed_and_generation_bound() {
@@ -77,13 +87,16 @@ void worker_events_are_uncorrelated_typed_and_generation_bound() {
 void response_batches_remain_contiguous_with_concurrent_event_producers() {
   WorkerOutboundQueue queue;
   std::thread first([&queue] {
-    BEACON_TEST_REQUIRE(queue.enqueue(
-        WorkerOutboundBatch{response(11, 1), response(11, 2)}));
+    BEACON_TEST_REQUIRE(
+        queue.enqueue(WorkerOutboundBatch{response(11, 1), response(11, 2)}) ==
+        WorkerOutboundEnqueueResult::accepted);
   });
   std::thread second([&queue] {
-    BEACON_TEST_REQUIRE(queue.enqueue(WorkerOutboundBatch{
-        beacon::worker::make_transport_authenticated_event("session-a", 1,
-                                                            1232)}));
+    BEACON_TEST_REQUIRE(
+        queue.enqueue(WorkerOutboundBatch{
+            beacon::worker::make_transport_authenticated_event(
+                "session-a", 1, 1232)}) ==
+        WorkerOutboundEnqueueResult::accepted);
   });
   first.join();
   second.join();
@@ -104,7 +117,9 @@ void response_batches_remain_contiguous_with_concurrent_event_producers() {
   BEACON_TEST_REQUIRE((*response_batch)[1].request_id() == 11);
   BEACON_TEST_REQUIRE((*response_batch)[0].session_id() == "response-1");
   BEACON_TEST_REQUIRE((*response_batch)[1].session_id() == "response-2");
-  BEACON_TEST_REQUIRE(!queue.enqueue(WorkerOutboundBatch{response(12, 3)}));
+  BEACON_TEST_REQUIRE(
+      queue.enqueue(WorkerOutboundBatch{response(12, 3)}) ==
+      WorkerOutboundEnqueueResult::closed);
 }
 
 void terminal_batch_remains_open_until_the_writer_closes_after_progress() {
@@ -117,15 +132,22 @@ void terminal_batch_remains_open_until_the_writer_closes_after_progress() {
   input.mutable_input_batch()->add_events()->mutable_keyboard()->set_scan_code(
       30);
 
-  BEACON_TEST_REQUIRE(queue.enqueue(WorkerOutboundBatch{
-      beacon::worker::make_transport_disconnected_event("session-a", 4)}));
-  BEACON_TEST_REQUIRE(queue.enqueue(WorkerOutboundBatch{
-      beacon::worker::make_input_received_event(4, input)}));
-  BEACON_TEST_REQUIRE(queue.enqueue_terminal(std::move(terminal)));
+  BEACON_TEST_REQUIRE(
+      queue.enqueue(WorkerOutboundBatch{
+          beacon::worker::make_transport_disconnected_event(
+              "session-a", 4)}) == WorkerOutboundEnqueueResult::accepted);
+  BEACON_TEST_REQUIRE(
+      queue.enqueue(WorkerOutboundBatch{
+          beacon::worker::make_input_received_event(4, input)}) ==
+      WorkerOutboundEnqueueResult::accepted);
+  BEACON_TEST_REQUIRE(queue.enqueue_terminal(std::move(terminal)) ==
+                      WorkerOutboundEnqueueResult::accepted);
   BEACON_TEST_REQUIRE(!queue.closed());
-  BEACON_TEST_REQUIRE(!queue.enqueue(WorkerOutboundBatch{
-      beacon::worker::make_media_evidence_event("session-a", 4, 1,
-                                                1'000'000, 44)}));
+  BEACON_TEST_REQUIRE(
+      queue.enqueue(WorkerOutboundBatch{
+          beacon::worker::make_media_evidence_event(
+              "session-a", 4, 1, 1'000'000, 44)}) ==
+      WorkerOutboundEnqueueResult::terminal_pending);
 
   auto disconnected = queue.wait_pop();
   auto received_input = queue.wait_pop();
@@ -159,22 +181,27 @@ void command_response_progresses_contiguously_through_event_backlog() {
   std::latch continue_producer{1};
   std::thread producer([&] {
     for (std::uint64_t index = 0; index < 64; ++index) {
-      BEACON_TEST_REQUIRE(queue.enqueue(WorkerOutboundBatch{
-          beacon::worker::make_media_evidence_event(
-              "session-a", 1, index + 1, 1'000'000, 44)}));
+      BEACON_TEST_REQUIRE(
+          queue.enqueue(WorkerOutboundBatch{
+              beacon::worker::make_media_evidence_event(
+                  "session-a", 1, index + 1, 1'000'000, 44)}) ==
+          WorkerOutboundEnqueueResult::accepted);
     }
     first_half_queued.count_down();
     continue_producer.wait();
     for (std::uint64_t index = 64; index < 128; ++index) {
-      BEACON_TEST_REQUIRE(queue.enqueue(WorkerOutboundBatch{
-          beacon::worker::make_media_evidence_event(
-              "session-a", 1, index + 1, 1'000'000, 44)}));
+      BEACON_TEST_REQUIRE(
+          queue.enqueue(WorkerOutboundBatch{
+              beacon::worker::make_media_evidence_event(
+                  "session-a", 1, index + 1, 1'000'000, 44)}) ==
+          WorkerOutboundEnqueueResult::accepted);
     }
   });
 
   first_half_queued.wait();
-  BEACON_TEST_REQUIRE(queue.enqueue(
-      WorkerOutboundBatch{response(40, 1), response(40, 2)}));
+  BEACON_TEST_REQUIRE(
+      queue.enqueue(WorkerOutboundBatch{response(40, 1), response(40, 2)}) ==
+      WorkerOutboundEnqueueResult::accepted);
   continue_producer.count_down();
   producer.join();
   queue.close();
@@ -198,6 +225,70 @@ void command_response_progresses_contiguously_through_event_backlog() {
   BEACON_TEST_REQUIRE(event_count == 128);
 }
 
+void count_capacity_reserves_one_atomic_terminal_batch() {
+  WorkerOutboundQueue queue(WorkerOutboundQueueLimits{
+      .maximum_items = 3,
+      .maximum_serialized_bytes = 64 * 1024,
+      .terminal_reserved_bytes = 1024,
+  });
+  BEACON_TEST_REQUIRE(queue.enqueue({response(50, 1)}) ==
+                      WorkerOutboundEnqueueResult::accepted);
+  BEACON_TEST_REQUIRE(queue.enqueue({response(51, 1)}) ==
+                      WorkerOutboundEnqueueResult::accepted);
+  BEACON_TEST_REQUIRE(queue.enqueue({response(52, 1)}) ==
+                      WorkerOutboundEnqueueResult::count_capacity_exceeded);
+  BEACON_TEST_REQUIRE(queue.enqueue_terminal({response(53, 1)}) ==
+                      WorkerOutboundEnqueueResult::accepted);
+}
+
+void serialized_byte_capacity_is_exact_and_batch_atomic() {
+  WorkerOutboundBatch full_batch{response(60, 1), response(60, 2)};
+  WorkerOutboundBatch terminal{response(61, 1)};
+  const auto full_batch_bytes = serialized_bytes(full_batch);
+  const auto terminal_bytes = serialized_bytes(terminal);
+  WorkerOutboundQueue queue(WorkerOutboundQueueLimits{
+      .maximum_items = 4,
+      .maximum_serialized_bytes = full_batch_bytes + terminal_bytes,
+      .terminal_reserved_bytes = terminal_bytes,
+  });
+
+  BEACON_TEST_REQUIRE(queue.enqueue(std::move(full_batch)) ==
+                      WorkerOutboundEnqueueResult::accepted);
+  BEACON_TEST_REQUIRE(queue.enqueue({response(62, 1)}) ==
+                      WorkerOutboundEnqueueResult::byte_capacity_exceeded);
+  BEACON_TEST_REQUIRE(queue.enqueue_terminal(std::move(terminal)) ==
+                      WorkerOutboundEnqueueResult::accepted);
+
+  auto regular = queue.wait_pop();
+  auto terminal_item = queue.wait_pop();
+  BEACON_TEST_REQUIRE(regular && regular->batch.size() == 2);
+  BEACON_TEST_REQUIRE(terminal_item &&
+                      terminal_item->kind == WorkerOutboundBatchKind::terminal);
+}
+
+void oversized_batch_and_terminal_fail_without_partial_admission() {
+  WorkerOutboundBatch one{response(70, 1)};
+  const auto one_bytes = serialized_bytes(one);
+  WorkerOutboundQueue queue(WorkerOutboundQueueLimits{
+      .maximum_items = 3,
+      .maximum_serialized_bytes = one_bytes * 2,
+      .terminal_reserved_bytes = one_bytes,
+  });
+  BEACON_TEST_REQUIRE(
+      queue.enqueue({response(71, 1), response(71, 2)}) ==
+      WorkerOutboundEnqueueResult::byte_capacity_exceeded);
+  queue.close();
+  BEACON_TEST_REQUIRE(!queue.wait_pop());
+
+  WorkerOutboundQueue terminal_too_large(WorkerOutboundQueueLimits{
+      .maximum_items = 1,
+      .maximum_serialized_bytes = one_bytes - 1,
+      .terminal_reserved_bytes = one_bytes - 1,
+  });
+  BEACON_TEST_REQUIRE(terminal_too_large.enqueue_terminal(std::move(one)) ==
+                      WorkerOutboundEnqueueResult::byte_capacity_exceeded);
+}
+
 } // namespace
 
 int main() {
@@ -205,5 +296,8 @@ int main() {
   response_batches_remain_contiguous_with_concurrent_event_producers();
   terminal_batch_remains_open_until_the_writer_closes_after_progress();
   command_response_progresses_contiguously_through_event_backlog();
+  count_capacity_reserves_one_atomic_terminal_batch();
+  serialized_byte_capacity_is_exact_and_batch_atomic();
+  oversized_batch_and_terminal_fail_without_partial_admission();
   return 0;
 }

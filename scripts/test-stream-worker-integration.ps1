@@ -69,10 +69,21 @@ try {
         --fingerprint $fingerprint
     $nativeExitCode = $LASTEXITCODE
     if ($nativeExitCode -ne 0 -or
-        $nativeOutput -notmatch '^BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK MEDIA DISCONNECT SHUTDOWN$') {
+        $nativeOutput -notmatch '^BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK ACCESS_UNIT_MARKER DISCONNECT SHUTDOWN$') {
         throw "Native Worker IPC/QUIC integration failed with exit code ${nativeExitCode}: $nativeOutput"
     }
     Write-Host $nativeOutput
+
+    $startupExitOutput = & $nativeProbe `
+        --worker $nativeProbe `
+        --identity $identityPath `
+        --fingerprint $fingerprint
+    $startupExitCode = $LASTEXITCODE
+    if ($startupExitCode -ne 97 -or
+        $startupExitOutput -notmatch '^BEACON_WORKER_STARTUP_EXIT 64$') {
+        throw "Native Worker startup-exit proof failed with exit code ${startupExitCode}: $startupExitOutput"
+    }
+    Write-Host $startupExitOutput
 }
 finally {
     Remove-Item Env:BEACON_SERVER_IDENTITY_PATH -ErrorAction SilentlyContinue

@@ -1,5 +1,6 @@
 #include "beacon/worker/quic_listener.h"
 #include "beacon/worker/quic_session_protocol.h"
+#include "beacon/worker/secure_bytes.h"
 
 #include "../Beacon.StreamProtocol.Tests/test_failure.h"
 #include "stream_control.pb.h"
@@ -343,6 +344,25 @@ void stale_old_connection_receive_does_not_touch_current_protocol_state() {
   BEACON_TEST_REQUIRE(current.inputs[0].input.sequence() == 1);
 }
 
+void secure_clear_observes_zeroes_before_pending_bytes_are_released() {
+  std::vector<std::byte> pending{std::byte{0x01}, std::byte{0x7f},
+                                 std::byte{0xff}};
+  bool observed = false;
+  const auto observer = [](std::span<const std::byte> bytes,
+                           void *context) noexcept {
+    auto &was_observed = *static_cast<bool *>(context);
+    was_observed = !bytes.empty() &&
+                   std::ranges::all_of(bytes, [](std::byte value) {
+                     return value == std::byte{};
+                   });
+  };
+
+  beacon::worker::secure_clear_bytes(pending, observer, &observed);
+
+  BEACON_TEST_REQUIRE(observed);
+  BEACON_TEST_REQUIRE(pending.empty());
+}
+
 void unauthenticated_data_and_oversized_frames_fail_closed() {
   AuthorizedQuicTicketStore store;
   QuicSessionProtocol protocol(store);
@@ -376,6 +396,7 @@ int main() {
   start_session_is_typed_once_per_authenticated_generation();
   reset_and_fresh_authentication_allocate_a_new_generation();
   stale_old_connection_receive_does_not_touch_current_protocol_state();
+  secure_clear_observes_zeroes_before_pending_bytes_are_released();
   unauthenticated_data_and_oversized_frames_fail_closed();
   return 0;
 }

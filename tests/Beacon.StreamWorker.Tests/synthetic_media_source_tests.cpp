@@ -11,12 +11,13 @@
 namespace {
 
 constexpr std::uint64_t expected_timestamp_us = 1'000'000;
-constexpr std::array expected_payload{std::byte{0x00}, std::byte{0x00},
-                                      std::byte{0x01}, std::byte{0x65}};
+constexpr auto expected_payload =
+    beacon::worker::synthetic_access_unit_marker_bytes;
 
-void deterministic_idr_is_one_parseable_bounded_datagram() {
+void non_decodable_access_unit_marker_has_protocol_idr_flags() {
   const beacon::worker::SyntheticMediaSource source;
-  const auto packets = source.emit_idr(1, expected_timestamp_us, 1232);
+  const auto packets =
+      source.emit_access_unit_marker(1, expected_timestamp_us, 1232);
 
   BEACON_TEST_REQUIRE(packets.size() == 1);
   BEACON_TEST_REQUIRE(packets[0].channel ==
@@ -38,6 +39,13 @@ void deterministic_idr_is_one_parseable_bounded_datagram() {
        beacon::stream::MediaDatagramFlags::end_of_access_unit));
   BEACON_TEST_REQUIRE(parsed.payload.size() == expected_payload.size());
   BEACON_TEST_REQUIRE(std::ranges::equal(parsed.payload, expected_payload));
+  BEACON_TEST_REQUIRE(
+      beacon::worker::synthetic_access_unit_diagnostic_name ==
+      "gate3-non-decodable-access-unit-marker");
+  BEACON_TEST_REQUIRE(!(parsed.payload.size() >= 4 &&
+                        parsed.payload[0] == std::byte{0x00} &&
+                        parsed.payload[1] == std::byte{0x00} &&
+                        parsed.payload[2] == std::byte{0x01}));
 }
 
 void negotiated_limit_too_small_fails_without_partial_packets() {
@@ -45,17 +53,18 @@ void negotiated_limit_too_small_fails_without_partial_packets() {
 
   BEACON_TEST_REQUIRE(
       source
-          .emit_idr(1, expected_timestamp_us,
-                    static_cast<std::uint16_t>(
-                        beacon::stream::media_datagram_header_bytes +
-                        expected_payload.size() - 1))
+          .emit_access_unit_marker(
+              1, expected_timestamp_us,
+              static_cast<std::uint16_t>(
+                  beacon::stream::media_datagram_header_bytes +
+                  expected_payload.size() - 1))
           .empty());
 }
 
 } // namespace
 
 int main() {
-  deterministic_idr_is_one_parseable_bounded_datagram();
+  non_decodable_access_unit_marker_has_protocol_idr_flags();
   negotiated_limit_too_small_fails_without_partial_packets();
   return 0;
 }

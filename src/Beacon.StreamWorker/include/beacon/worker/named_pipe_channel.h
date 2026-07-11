@@ -29,6 +29,11 @@ struct FrameLengthResult {
   std::uint32_t message_bytes{};
 };
 
+struct NamedPipeChannelOperationHooks {
+  void (*after_state_acquired)(void *context) noexcept{};
+  void *context{};
+};
+
 [[nodiscard]] FrameLengthResult decode_worker_frame_length(
     std::span<const std::byte> prefix) noexcept;
 [[nodiscard]] std::vector<std::byte> encode_worker_frame(
@@ -40,7 +45,8 @@ struct FrameLengthResult {
 class NamedPipeChannel {
  public:
   NamedPipeChannel() noexcept;
-  explicit NamedPipeChannel(void* handle);
+  explicit NamedPipeChannel(
+      void *handle, NamedPipeChannelOperationHooks hooks = {});
   ~NamedPipeChannel();
 
   NamedPipeChannel(const NamedPipeChannel&) = delete;

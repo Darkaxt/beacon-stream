@@ -1,5 +1,6 @@
 #include "beacon/worker/named_pipe_channel.h"
 #include "beacon/worker/quic_listener.h"
+#include "beacon/worker/synthetic_media_source.h"
 
 #include "beacon/stream/media_datagram.h"
 
@@ -12,12 +13,14 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -113,6 +116,18 @@ public:
     }
     reaped_ = true;
     return exit_code;
+  }
+
+  [[nodiscard]] HANDLE handle() const noexcept { return process_.get(); }
+
+  [[nodiscard]] std::optional<DWORD> exit_code() const noexcept {
+    DWORD value = 0;
+    if (process_.get() == nullptr ||
+        GetExitCodeProcess(process_.get(), &value) == FALSE ||
+        value == STILL_ACTIVE) {
+      return std::nullopt;
+    }
+    return value;
   }
 
 private:
@@ -366,8 +381,8 @@ QUIC_STATUS QUIC_API connection_callback(HQUIC connection, void *context,
     const auto &buffer = *event->DATAGRAM_RECEIVED.Buffer;
     const auto parsed = beacon::stream::parse_media_datagram(
         {reinterpret_cast<const std::byte *>(buffer.Buffer), buffer.Length});
-    constexpr std::array expected_payload{
-        std::byte{0x00}, std::byte{0x00}, std::byte{0x01}, std::byte{0x65}};
+    constexpr auto expected_payload =
+        beacon::worker::synthetic_access_unit_marker_bytes;
     std::lock_guard lock{state.mutex};
     state.datagram_received =
         parsed.error == beacon::stream::MediaDatagramError::none &&
@@ -625,7 +640,22 @@ int run_worker_process_probe(const std::wstring &worker_path,
     return 83;
   }
   if (connected_immediately == FALSE) {
-    if (WaitForSingleObject(connected_event.get(), INFINITE) != WAIT_OBJECT_0) {
+    const std::array wait_handles{connected_event.get(), process.handle()};
+    const auto wait = WaitForMultipleObjects(
+        static_cast<DWORD>(wait_handles.size()), wait_handles.data(), FALSE,
+        INFINITE);
+    if (wait == WAIT_OBJECT_0 + 1) {
+      CancelIoEx(pipe.get(), &connected);
+      DWORD transferred = 0;
+      static_cast<void>(
+          GetOverlappedResult(pipe.get(), &connected, &transferred, TRUE));
+      const auto worker_exit = process.exit_code();
+      std::printf("BEACON_WORKER_STARTUP_EXIT %lu\n",
+                  static_cast<unsigned long>(worker_exit.value_or(
+                      std::numeric_limits<DWORD>::max())));
+      return 97;
+    }
+    if (wait != WAIT_OBJECT_0) {
       return 84;
     }
     DWORD transferred = 0;
@@ -742,9 +772,68 @@ int run_worker_process_probe(const std::wstring &worker_path,
   if (!exit_code || *exit_code != 0) {
     return 96;
   }
-  std::printf("BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK MEDIA "
+  std::printf("BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK "
+              "ACCESS_UNIT_MARKER "
               "DISCONNECT SHUTDOWN\n");
   return 0;
+}
+
+bool callback_fault_is_contained(
+    const std::wstring &identity_path,
+    const beacon::worker::TicketHash &fingerprint,
+    beacon::worker::QuicListenerFaultPoint target,
+    std::string_view raw_ticket, bool send_post_auth_messages) {
+  beacon::worker::AuthorizedQuicTicketStore tickets;
+  if (target !=
+      beacon::worker::QuicListenerFaultPoint::connection_context_allocation) {
+    beacon::worker::AuthorizedQuicTicket ticket{
+        .hash = beacon::worker::hash_stream_ticket(
+            {reinterpret_cast<const std::byte *>(raw_ticket.data()),
+             raw_ticket.size()}),
+        .client_id = "z-fold-7",
+        .session_id = "session-a",
+        .plan_revision = 8,
+        .expires_at_unix_ms = std::numeric_limits<std::uint64_t>::max(),
+    };
+    if (!tickets.authorize(std::move(ticket))) {
+      return false;
+    }
+  }
+
+  auto injected = std::make_shared<std::atomic_bool>(false);
+  beacon::worker::QuicListener listener(
+      identity_path, tickets,
+      [target, injected](beacon::worker::QuicListenerFaultPoint point) {
+        bool expected = false;
+        if (point == target && injected->compare_exchange_strong(expected, true)) {
+          throw std::bad_alloc{};
+        }
+      });
+  if (!listener.configure_listener("127.0.0.1", 0) ||
+      !listener.open_connection()) {
+    return false;
+  }
+
+  ClientState client;
+  client.expected_fingerprint = fingerprint;
+  client.raw_ticket = raw_ticket;
+  client.send_data_after_auth = send_post_auth_messages;
+  if (!start_client(client, listener.local_port())) {
+    stop_client(client);
+    return false;
+  }
+  {
+    std::unique_lock lock{client.mutex};
+    client.changed.wait(lock, [&client] {
+      return client.failed || client.connection_closed;
+    });
+  }
+  stop_client(client);
+  listener.close_connection();
+  listener.shutdown();
+  return injected->load() &&
+         listener.failure() ==
+             beacon::worker::QuicListenerFailure::callback_exception;
 }
 
 } // namespace
@@ -781,6 +870,22 @@ int wmain(int argument_count, wchar_t **arguments) {
   }
   if (!decode_fingerprint(fingerprint, expected_fingerprint))
     return 66;
+
+  if (!callback_fault_is_contained(
+          arguments[1], expected_fingerprint,
+          beacon::worker::QuicListenerFaultPoint::connection_context_allocation,
+          "unused-connection-fault-ticket", false))
+    return 24;
+  if (!callback_fault_is_contained(
+          arguments[1], expected_fingerprint,
+          beacon::worker::QuicListenerFaultPoint::event_serialization,
+          "loopback-ticket-event-fault", false))
+    return 25;
+  if (!callback_fault_is_contained(
+          arguments[1], expected_fingerprint,
+          beacon::worker::QuicListenerFaultPoint::datagram_context_allocation,
+          "loopback-ticket-datagram-fault", true))
+    return 26;
 
   beacon::worker::AuthorizedQuicTicketStore retry_tickets;
   beacon::worker::AuthorizedQuicTicket retry_ticket{
@@ -1078,7 +1183,7 @@ int wmain(int argument_count, wchar_t **arguments) {
   listener.close_connection();
   listener.shutdown();
   std::printf("BEACON_QUIC_LOOPBACK_OK %u CERT_PIN_OK ALPN_VERSION_OK "
-              "REPLAY_RECONNECT_OK\n",
+              "REPLAY_RECONNECT_OK CALLBACK_FAULTS_OK\n",
               static_cast<unsigned int>(packets.size()));
   return 0;
 }
