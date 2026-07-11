@@ -1404,6 +1404,58 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task ClientInputHttpBindingIgnoresWorkerOnlyStructuredPayloads()
+    {
+        var input = new RecordingClientInputSink();
+        WebApplicationFactory<Program> inputFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IClientInputSink>();
+                services.AddSingleton<IClientInputSink>(input);
+            }));
+        HttpClient client = inputFactory.CreateClient();
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/input", new
+        {
+            sequence = 44,
+            events = new[]
+            {
+                new
+                {
+                    type = "pointer",
+                    action = "move",
+                    pointerId = 1,
+                    x = 0.5,
+                    y = 0.25,
+                    pointer = new { action = 0, x = 32768, y = 32768, wheelDelta = 0, button = 0 },
+                    keyboard = new { scanCode = 30, pressed = true },
+                    controller = new { controllerIndex = 1, controlId = 2, value = 3 },
+                    touch = new
+                    {
+                        contactId = 1,
+                        action = 0,
+                        xNumerator = 1,
+                        yNumerator = 2,
+                        coordinateDenominator = 3,
+                        pressureNumerator = 4,
+                        pressureDenominator = 5
+                    }
+                }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        ClientInputEvent inputEvent = Assert.Single(Assert.Single(input.Batches).Events);
+        Assert.Null(inputEvent.Pointer);
+        Assert.Null(inputEvent.Keyboard);
+        Assert.Null(inputEvent.Controller);
+        Assert.Null(inputEvent.Touch);
+        Assert.Equal(0.5, inputEvent.X);
+        Assert.Equal(0.25, inputEvent.Y);
+    }
+
+    [Fact]
     public async Task ClientInputForwardsKeyboardEventToActiveStreamSession()
     {
         var input = new RecordingClientInputSink();

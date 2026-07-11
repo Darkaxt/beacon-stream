@@ -19,6 +19,7 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
     private readonly uint expectedProcessId;
     private readonly long processGeneration;
     private readonly ChannelWriter<StreamWorkerEvent>? eventWriter;
+    private readonly Func<bool>? eventSubscriptionActive;
     private readonly SemaphoreSlim writeGate = new(1, 1);
     private readonly ConcurrentDictionary<ulong, PendingRequest> pending = new();
     private readonly CancellationTokenSource disposal = new();
@@ -45,6 +46,23 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
         uint expectedProcessId,
         long processGeneration,
         ChannelWriter<StreamWorkerEvent> eventWriter)
+        : this(
+            stream,
+            processExit,
+            expectedProcessId,
+            processGeneration,
+            eventWriter,
+            static () => true)
+    {
+    }
+
+    internal StreamWorkerNamedPipeClient(
+        Stream stream,
+        Task<int> processExit,
+        uint expectedProcessId,
+        long processGeneration,
+        ChannelWriter<StreamWorkerEvent> eventWriter,
+        Func<bool> eventSubscriptionActive)
     {
         this.stream = stream ?? throw new ArgumentNullException(nameof(stream));
         this.processExit = processExit ?? throw new ArgumentNullException(nameof(processExit));
@@ -53,6 +71,8 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
             ? processGeneration
             : throw new ArgumentOutOfRangeException(nameof(processGeneration));
         this.eventWriter = eventWriter ?? throw new ArgumentNullException(nameof(eventWriter));
+        this.eventSubscriptionActive = eventSubscriptionActive
+            ?? throw new ArgumentNullException(nameof(eventSubscriptionActive));
     }
 
     public bool IsReady => Volatile.Read(ref initialized) == 1 && Volatile.Read(ref disposed) == 0;
@@ -226,6 +246,11 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
                     {
                         throw new StreamWorkerProtocolException(
                             "StreamWorker emitted an unsolicited event to a legacy client.");
+                    }
+                    if (eventSubscriptionActive?.Invoke() != true)
+                    {
+                        throw new StreamWorkerProtocolException(
+                            "StreamWorker emitted an event without an active event subscription.");
                     }
                     StreamWorkerEvent workerEvent = TranslateEvent(envelope);
                     await eventWriter.WriteAsync(workerEvent, disposal.Token).ConfigureAwait(false);

@@ -282,7 +282,8 @@ public sealed class StreamWorkerProcessHost :
                 processExit,
                 checked((uint)launch.Process.Id),
                 processGeneration,
-                eventBuffer.Writer);
+                eventBuffer.Writer,
+                () => eventBuffer.HasSubscriber);
             Volatile.Write(ref activeWorker, pending with { Client = client });
             await client.InitializeAsync(connectionCancellation.Token).ConfigureAwait(false);
         }
@@ -516,6 +517,7 @@ internal sealed class StreamWorkerEventBuffer : IAsyncDisposable
     private readonly HashSet<long> publishedExitGenerations = [];
     private long nextGeneration;
     private long currentGeneration;
+    private int hasSubscriber;
     private int disposed;
 
     public StreamWorkerEventBuffer(int capacity)
@@ -533,9 +535,18 @@ internal sealed class StreamWorkerEventBuffer : IAsyncDisposable
         });
     }
 
-    public ChannelReader<StreamWorkerEvent> Reader => channel.Reader;
+    public ChannelReader<StreamWorkerEvent> Reader
+    {
+        get
+        {
+            Volatile.Write(ref hasSubscriber, 1);
+            return channel.Reader;
+        }
+    }
 
     public ChannelWriter<StreamWorkerEvent> Writer => channel.Writer;
+
+    public bool HasSubscriber => Volatile.Read(ref hasSubscriber) != 0;
 
     public long CurrentGeneration => Interlocked.Read(ref currentGeneration);
 
@@ -569,6 +580,10 @@ internal sealed class StreamWorkerEventBuffer : IAsyncDisposable
             {
                 return;
             }
+        }
+        if (!HasSubscriber)
+        {
+            return;
         }
 
         try

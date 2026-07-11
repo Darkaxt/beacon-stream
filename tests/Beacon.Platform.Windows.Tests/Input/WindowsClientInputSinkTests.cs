@@ -35,10 +35,10 @@ public sealed class WindowsClientInputSinkTests
         Assert.True(result.Success, result.Error);
         Assert.Equal(
             [
-                (WindowsInputCommandKind.PointerMove, 301, -18, null, null),
-                (WindowsInputCommandKind.PointerMove, 303, -16, null, null),
+                (WindowsInputCommandKind.PointerMove, 300, -20, null, null),
+                (WindowsInputCommandKind.PointerMove, 300, -20, null, null),
                 (WindowsInputCommandKind.PointerButton, null, null, "right", true),
-                (WindowsInputCommandKind.PointerMove, 305, -14, null, null),
+                (WindowsInputCommandKind.PointerMove, 300, -20, null, null),
                 (WindowsInputCommandKind.PointerButton, null, null, "right", false)
             ],
             inputApi.Commands.Select(command =>
@@ -71,8 +71,8 @@ public sealed class WindowsClientInputSinkTests
             command =>
             {
                 Assert.Equal(WindowsInputCommandKind.PointerMove, command.Kind);
-                Assert.Equal(311, command.X);
-                Assert.Equal(-7, command.Y);
+                Assert.Equal(300, command.X);
+                Assert.Equal(-20, command.Y);
             },
             command =>
             {
@@ -85,6 +85,72 @@ public sealed class WindowsClientInputSinkTests
                 Assert.Equal(0xE04Du, command.ScanCode);
                 Assert.False(command.Pressed);
             });
+    }
+
+    [Theory]
+    [InlineData(0, -300, 200)]
+    [InlineData(32768, -250, 240)]
+    [InlineData(65535, -200, 280)]
+    public async Task StreamPointerFixedPointCoordinatesStayWithinTargetDisplay(
+        int fixedPoint,
+        int expectedX,
+        int expectedY)
+    {
+        var displayApi = new FakeWindowsDisplayApi
+        {
+            CurrentTopology = new DisplayTopologySnapshot(
+                [
+                    new DisplayPathSnapshot("other", DisplayPathKind.Physical, 400, 300, 60, false, -700, 0),
+                    new DisplayPathSnapshot("client-z", DisplayPathKind.Virtual, 101, 81, 60, true, -300, 200)
+                ],
+                IsMirrorMode: false)
+        };
+        var inputApi = new FakeWindowsInputApi();
+        var sink = new WindowsClientInputSink(displayApi, inputApi);
+
+        ClientInputResult result = await sink.ForwardAsync(
+            new ClientInputBatch(
+                "client",
+                "session",
+                "client-z",
+                1,
+                [ClientInputEvent.StreamPointer(ClientPointerAction.Move, fixedPoint, fixedPoint, 0, 0)]),
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        WindowsInputCommand move = Assert.Single(inputApi.Commands);
+        Assert.Equal(expectedX, move.X);
+        Assert.Equal(expectedY, move.Y);
+        Assert.InRange(move.X!.Value, -300, -200);
+        Assert.InRange(move.Y!.Value, 200, 280);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(65536)]
+    public async Task StreamPointerRejectsOutOfRangeFixedPointCoordinates(int fixedPoint)
+    {
+        var displayApi = new FakeWindowsDisplayApi
+        {
+            CurrentTopology = new DisplayTopologySnapshot(
+                [new DisplayPathSnapshot("client-z", DisplayPathKind.Virtual, 101, 81, 60, true, -300, 200)],
+                IsMirrorMode: false)
+        };
+        var inputApi = new FakeWindowsInputApi();
+        var sink = new WindowsClientInputSink(displayApi, inputApi);
+
+        ClientInputResult result = await sink.ForwardAsync(
+            new ClientInputBatch(
+                "client",
+                "session",
+                "client-z",
+                1,
+                [ClientInputEvent.StreamPointer(ClientPointerAction.Move, fixedPoint, 0, 0, 0)]),
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("Pointer coordinates must be fixed-point values between 0 and 65535.", result.Error);
+        Assert.Empty(inputApi.Commands);
     }
 
     [Theory]

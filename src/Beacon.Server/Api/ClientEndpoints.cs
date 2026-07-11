@@ -473,12 +473,16 @@ public static class ClientEndpoints
                 return Results.BadRequest(new { error = "Input request must include at least one event." });
             }
 
+            ClientInputEvent[] events = request.Events
+                .Select(inputEvent => inputEvent.ToCoreEvent())
+                .ToArray();
+
             var batch = new ClientInputBatch(
                 clientId,
                 plan.SessionId,
                 plan.Display.DisplayId,
                 request.Sequence,
-                request.Events);
+                events);
             ClientInputResult result = await input.ForwardAsync(batch, cancellationToken);
             if (!result.Success)
             {
@@ -981,4 +985,19 @@ public sealed record DisconnectRequest(bool ClientActive = true);
 
 public sealed record BeaconRequest(bool Active = true);
 
-public sealed record ClientInputRequest(long Sequence, IReadOnlyList<ClientInputEvent> Events);
+public sealed record ClientInputRequest(long Sequence, IReadOnlyList<HttpClientInputEvent> Events);
+
+public sealed record HttpClientInputEvent(
+    string Type,
+    string Action,
+    int? PointerId = null,
+    double? X = null,
+    double? Y = null,
+    int? Buttons = null,
+    string? Key = null,
+    string? Code = null,
+    double? Value = null)
+{
+    internal ClientInputEvent ToCoreEvent() =>
+        new(Type, Action, PointerId, X, Y, Buttons, Key, Code, Value);
+}

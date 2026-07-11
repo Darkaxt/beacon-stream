@@ -197,6 +197,82 @@ public sealed class StreamWorkerStreamingBackendTests
         runtimeEvents.ProcessExited(new StreamWorkerProcessExited(1, 23));
         Assert.NotNull(await backend.GetSessionAsync(plan.SessionId, CancellationToken.None));
     }
+
+    [Fact]
+    public async Task ReplacementPrunesReplayHistoryWithoutAcceptingOldProcessEvents()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan();
+        IStreamWorkerRuntimeEvents runtimeEvents = backend;
+        _ = await backend.StartAsync(plan, CancellationToken.None);
+        Assert.True(runtimeEvents.TryBind(
+            new StreamWorkerTransportAuthenticated(1, plan.SessionId, 7, 1200)));
+        Assert.Equal(1, backend.RetainedWorkerGenerationHistoryCount);
+
+        host.ReplaceWorker([9, 8, 7]);
+        _ = await backend.StartAsync(plan, CancellationToken.None);
+
+        Assert.Equal(0, backend.RetainedWorkerGenerationHistoryCount);
+        Assert.False(runtimeEvents.TryBind(
+            new StreamWorkerTransportAuthenticated(1, plan.SessionId, 8, 1200)));
+        Assert.True(runtimeEvents.TryBind(
+            new StreamWorkerTransportAuthenticated(2, plan.SessionId, 1, 1200)));
+        Assert.Equal(1, backend.RetainedWorkerGenerationHistoryCount);
+        Assert.True(runtimeEvents.TryDisconnect(
+            new StreamWorkerTransportDisconnected(2, plan.SessionId, 1)));
+        Assert.False(runtimeEvents.TryBind(
+            new StreamWorkerTransportAuthenticated(2, plan.SessionId, 1, 1200)));
+        Assert.Equal(1, backend.RetainedWorkerGenerationHistoryCount);
+    }
+
+    [Fact]
+    public async Task FailedReplacementStartStillPrunesRetiredReplayHistory()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan();
+        IStreamWorkerRuntimeEvents runtimeEvents = backend;
+        _ = await backend.StartAsync(plan, CancellationToken.None);
+        Assert.True(runtimeEvents.TryBind(
+            new StreamWorkerTransportAuthenticated(1, plan.SessionId, 7, 1200)));
+        Assert.Equal(1, backend.RetainedWorkerGenerationHistoryCount);
+        host.ReplaceWorker([9, 8, 7]);
+        host.NextError = WorkerErrorCode.OperationFailed;
+
+        StreamingStartResult replacement = await backend.StartAsync(plan, CancellationToken.None);
+
+        Assert.False(replacement.Success);
+        Assert.Equal(0, backend.RetainedWorkerGenerationHistoryCount);
+    }
+
+    [Fact]
+    public async Task ProcessExitChurnLeavesNoReplayHistory()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan();
+        IStreamWorkerRuntimeEvents runtimeEvents = backend;
+
+        for (int generation = 1; generation <= 32; generation++)
+        {
+            _ = await backend.StartAsync(plan, CancellationToken.None);
+            Assert.True(runtimeEvents.TryBind(new StreamWorkerTransportAuthenticated(
+                generation,
+                plan.SessionId,
+                checked((ulong)generation),
+                1200)));
+            Assert.Equal(1, backend.RetainedWorkerGenerationHistoryCount);
+
+            runtimeEvents.ProcessExited(new StreamWorkerProcessExited(generation, 23));
+
+            Assert.Equal(0, backend.RetainedWorkerGenerationHistoryCount);
+            if (generation < 32)
+            {
+                host.ReplaceWorker([9, 8, checked((byte)generation)]);
+            }
+        }
+    }
     [Fact]
     public async Task StartMapsPlanAndStopKeepsWorkerReady()
     {

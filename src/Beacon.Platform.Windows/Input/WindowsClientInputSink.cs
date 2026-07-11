@@ -98,8 +98,14 @@ public sealed class WindowsClientInputSink(
         List<WindowsInputCommand> commands,
         out string error)
     {
-        int x = display.X + pointer.X;
-        int y = display.Y + pointer.Y;
+        if (!IsFixedPointCoordinate(pointer.X) || !IsFixedPointCoordinate(pointer.Y))
+        {
+            error = "Pointer coordinates must be fixed-point values between 0 and 65535.";
+            return false;
+        }
+
+        int x = ToDisplayFixedPointPixel(pointer.X, display.X, display.Width);
+        int y = ToDisplayFixedPointPixel(pointer.Y, display.Y, display.Height);
         commands.Add(WindowsInputCommand.PointerMove(x, y));
         switch (pointer.Action)
         {
@@ -276,6 +282,11 @@ public sealed class WindowsClientInputSink(
 
     private static bool IsNormalized(double value) =>
         !double.IsNaN(value) && !double.IsInfinity(value) && value >= 0 && value <= 1;
+
+    private static bool IsFixedPointCoordinate(int value) => value is >= 0 and <= ushort.MaxValue;
+
+    private static int ToDisplayFixedPointPixel(int fixedPoint, int origin, int size) =>
+        checked(origin + (int)(((long)fixedPoint * (size - 1) + (ushort.MaxValue / 2)) / ushort.MaxValue));
 
     private static int ToDisplayPixel(double normalized, int size) =>
         size <= 1

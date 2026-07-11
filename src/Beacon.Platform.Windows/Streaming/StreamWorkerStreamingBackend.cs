@@ -43,6 +43,17 @@ public sealed class StreamWorkerStreamingBackend : IStreamingBackend, IStreamWor
             ?? new LegacyGenerationBoundStreamWorkerHost(host);
     }
 
+    internal int RetainedWorkerGenerationHistoryCount
+    {
+        get
+        {
+            lock (runtimeGate)
+            {
+                return highestWorkerGenerations.Count;
+            }
+        }
+    }
+
     public async Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken)
     {
         try
@@ -124,6 +135,10 @@ public sealed class StreamWorkerStreamingBackend : IStreamingBackend, IStreamWor
             || !generationHost.IsCurrentProcessGeneration(processGeneration))
         {
             return StreamingStartResult.Fail("Beacon StreamWorker runtime identity is unavailable.");
+        }
+        lock (runtimeGate)
+        {
+            PruneWorkerGenerationHistoryBefore(processGeneration);
         }
         StreamWorkerCommandResponse prepared;
         try
@@ -370,6 +385,7 @@ public sealed class StreamWorkerStreamingBackend : IStreamingBackend, IStreamWor
             {
                 return false;
             }
+            PruneWorkerGenerationHistoryBefore(authenticated.ProcessGeneration);
             if (runtime.Binding is { } existing
                 && existing.ProcessGeneration == authenticated.ProcessGeneration
                 && existing.WorkerSessionGeneration == authenticated.WorkerSessionGeneration
@@ -453,6 +469,7 @@ public sealed class StreamWorkerStreamingBackend : IStreamingBackend, IStreamWor
     {
         lock (runtimeGate)
         {
+            RemoveWorkerGenerationHistory(exited.ProcessGeneration);
             foreach ((string sessionId, WorkerBoundStreamingSession runtime) in sessions.ToArray())
             {
                 if (runtime.ProcessGeneration == exited.ProcessGeneration)
@@ -514,6 +531,26 @@ public sealed class StreamWorkerStreamingBackend : IStreamingBackend, IStreamWor
     private void RemoveIfCurrent(string sessionId, WorkerBoundStreamingSession runtime) =>
         ((ICollection<KeyValuePair<string, WorkerBoundStreamingSession>>)sessions)
             .Remove(new KeyValuePair<string, WorkerBoundStreamingSession>(sessionId, runtime));
+
+    private void PruneWorkerGenerationHistoryBefore(long processGeneration)
+    {
+        foreach ((long retiredGeneration, string sessionId) in highestWorkerGenerations.Keys
+            .Where(key => key.ProcessGeneration < processGeneration)
+            .ToArray())
+        {
+            highestWorkerGenerations.Remove((retiredGeneration, sessionId));
+        }
+    }
+
+    private void RemoveWorkerGenerationHistory(long processGeneration)
+    {
+        foreach ((long exitedGeneration, string sessionId) in highestWorkerGenerations.Keys
+            .Where(key => key.ProcessGeneration == processGeneration)
+            .ToArray())
+        {
+            highestWorkerGenerations.Remove((exitedGeneration, sessionId));
+        }
+    }
 
     private async Task<string?> CleanupInvalidTransportReadyAsync(
         string sessionId,
