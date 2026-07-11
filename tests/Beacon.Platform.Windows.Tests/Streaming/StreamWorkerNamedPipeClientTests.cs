@@ -150,6 +150,47 @@ public sealed class StreamWorkerNamedPipeClientTests
         await worker;
     }
 
+    [Fact]
+    public async Task ProtocolFaultClearsReadinessAndCompletesLifecycleSignal()
+    {
+        await using PipePair pipes = await PipePair.CreateAsync();
+        var processExit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task worker = Task.Run(async () =>
+        {
+            await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Ready(1));
+            byte[] oversized = new byte[sizeof(uint)];
+            BinaryPrimitives.WriteUInt32BigEndian(
+                oversized,
+                ProtobufLengthFrameCodec.MaximumMessageBytes + 1);
+            await pipes.Worker.WriteAsync(oversized);
+            await pipes.Worker.FlushAsync();
+        });
+        await using var client = new StreamWorkerNamedPipeClient(pipes.Service, processExit.Task, 42);
+        await client.InitializeAsync(CancellationToken.None);
+
+        await client.Completion;
+
+        Assert.False(client.IsReady);
+        Assert.IsType<ProtobufFrameException>(client.TerminalError);
+        await worker;
+    }
+
+    [Fact]
+    public async Task ProcessExitDuringHandshakeCancelsOutstandingRead()
+    {
+        await using PipePair pipes = await PipePair.CreateAsync();
+        var processExit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var client = new StreamWorkerNamedPipeClient(pipes.Service, processExit.Task, 42);
+        Task initialize = client.InitializeAsync(CancellationToken.None);
+
+        processExit.SetResult(17);
+
+        StreamWorkerProcessExitedException error =
+            await Assert.ThrowsAsync<StreamWorkerProcessExitedException>(() => initialize);
+        Assert.Equal(17, error.ExitCode);
+    }
+
     private static WorkerIpcEnvelope Hello(uint processId, uint version)
     {
         var envelope = new WorkerIpcEnvelope { ProtocolVersion = version };

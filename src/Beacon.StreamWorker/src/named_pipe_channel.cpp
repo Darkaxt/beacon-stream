@@ -29,9 +29,12 @@ bool overlapped_transfer(HANDLE handle,
                          void* buffer,
                          DWORD bytes,
                          bool write,
-                         DWORD& transferred) noexcept {
+                         DWORD& transferred,
+                         DWORD& failure_error) noexcept {
+  failure_error = ERROR_SUCCESS;
   const auto event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (event == nullptr) {
+    failure_error = GetLastError();
     return false;
   }
   OVERLAPPED operation{};
@@ -41,12 +44,14 @@ bool overlapped_transfer(HANDLE handle,
   if (started == FALSE) {
     const auto error = GetLastError();
     if (error != ERROR_IO_PENDING) {
+      failure_error = error;
       CloseHandle(event);
       return false;
     }
     const auto wait = WaitForSingleObject(event, INFINITE);
     if (wait != WAIT_OBJECT_0 ||
         GetOverlappedResult(handle, &operation, &transferred, FALSE) == FALSE) {
+      failure_error = wait == WAIT_OBJECT_0 ? GetLastError() : ERROR_OPERATION_ABORTED;
       CloseHandle(event);
       return false;
     }
@@ -134,8 +139,8 @@ bool NamedPipeChannel::valid() const noexcept {
 FrameDecodeStatus NamedPipeChannel::read(v1::WorkerIpcEnvelope& envelope) noexcept {
   std::array<std::byte, sizeof(std::uint32_t)> prefix{};
   if (!read_exact(prefix)) {
-    return GetLastError() == ERROR_BROKEN_PIPE ? FrameDecodeStatus::pipe_closed
-                                               : FrameDecodeStatus::io_error;
+    return last_error_ == ERROR_BROKEN_PIPE ? FrameDecodeStatus::pipe_closed
+                                            : FrameDecodeStatus::io_error;
   }
   const auto length = decode_worker_frame_length(prefix);
   if (length.status != FrameDecodeStatus::success) {
@@ -145,8 +150,8 @@ FrameDecodeStatus NamedPipeChannel::read(v1::WorkerIpcEnvelope& envelope) noexce
   std::ranges::copy(prefix, frame.begin());
   if (length.message_bytes > 0 &&
       !read_exact(std::span<std::byte>{frame}.subspan(sizeof(std::uint32_t)))) {
-    return GetLastError() == ERROR_BROKEN_PIPE ? FrameDecodeStatus::pipe_closed
-                                               : FrameDecodeStatus::io_error;
+    return last_error_ == ERROR_BROKEN_PIPE ? FrameDecodeStatus::pipe_closed
+                                            : FrameDecodeStatus::io_error;
   }
   return decode_worker_frame(frame, envelope);
 }
@@ -167,9 +172,11 @@ bool NamedPipeChannel::read_exact(std::span<std::byte> output) noexcept {
     const auto requested = static_cast<DWORD>(
         std::min<std::size_t>(remaining, std::numeric_limits<DWORD>::max()));
     DWORD transferred = 0;
+    DWORD failure_error = ERROR_SUCCESS;
     if (!overlapped_transfer(static_cast<HANDLE>(handle_), output.data() + offset, requested,
-                             false, transferred) ||
+                             false, transferred, failure_error) ||
         transferred == 0) {
+      last_error_ = failure_error == ERROR_SUCCESS ? ERROR_BROKEN_PIPE : failure_error;
       return false;
     }
     offset += transferred;
@@ -184,10 +191,12 @@ bool NamedPipeChannel::write_exact(std::span<const std::byte> input) noexcept {
     const auto requested = static_cast<DWORD>(
         std::min<std::size_t>(remaining, std::numeric_limits<DWORD>::max()));
     DWORD transferred = 0;
+    DWORD failure_error = ERROR_SUCCESS;
     if (!overlapped_transfer(static_cast<HANDLE>(handle_),
                              const_cast<std::byte*>(input.data() + offset), requested, true,
-                             transferred) ||
+                             transferred, failure_error) ||
         transferred == 0) {
+      last_error_ = failure_error == ERROR_SUCCESS ? ERROR_BROKEN_PIPE : failure_error;
       return false;
     }
     offset += transferred;

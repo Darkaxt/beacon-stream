@@ -8,6 +8,16 @@ namespace Beacon.Platform.Windows.Tests.Streaming;
 
 public sealed class StreamWorkerProcessHostTests
 {
+    [Theory]
+    [InlineData("plain", "plain")]
+    [InlineData("", "\"\"")]
+    [InlineData("C:\\Program Files\\Beacon\\", "\"C:\\Program Files\\Beacon\\\\\"")]
+    [InlineData("quoted\"value", "\"quoted\\\"value\"")]
+    public void ActiveSessionArgumentsUseWindowsCommandLineQuoting(string value, string expected)
+    {
+        Assert.Equal(expected, InteractiveStreamWorkerLauncher.QuoteArgument(value));
+    }
+
     [Fact]
     public void PipeSecurityAllowsOnlyOwningUserAndLocalSystem()
     {
@@ -66,6 +76,17 @@ public sealed class StreamWorkerProcessHostTests
         Assert.True(stop.Completion.WorkerCompletion.Succeeded);
         Assert.Equal(3ul, start.Events.Single(e => e.BodyCase == WorkerIpcEnvelope.BodyOneofCase.MediaMetrics)
             .MediaMetrics.EncodedFrames);
+
+        using (System.Diagnostics.Process firstWorker = System.Diagnostics.Process.GetProcessById(processId))
+        {
+            firstWorker.Kill();
+            await firstWorker.WaitForExitAsync();
+        }
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+
+        Assert.True(host.IsReady);
+        Assert.NotEqual(processId, host.ProcessId);
 
         await host.ShutdownAsync(CancellationToken.None);
 

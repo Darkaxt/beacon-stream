@@ -57,6 +57,7 @@ class NamedPipeChannel {
   void close() noexcept;
 
   void* handle_{};
+  std::uint32_t last_error_{};
 };
 
 }  // namespace beacon::worker

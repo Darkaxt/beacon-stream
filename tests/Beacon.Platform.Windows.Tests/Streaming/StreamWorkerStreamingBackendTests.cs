@@ -73,6 +73,23 @@ public sealed class StreamWorkerStreamingBackendTests
         Assert.Equal("StreamWorker rejected prepare_session: capability_unavailable.", result.Error);
     }
 
+    [Fact]
+    public async Task HealthReportsWorkerExitWithoutThrowingOrRenderingProcessDetails()
+    {
+        var host = new RecordingStreamWorkerHost
+        {
+            ReadinessError = new StreamWorkerProcessExitedException(23),
+        };
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.False(health.Ready);
+        Assert.Equal("unavailable", health.State);
+        Assert.Equal("Beacon StreamWorker failed readiness verification.", health.Diagnostic);
+        Assert.DoesNotContain("23", health.Diagnostic, StringComparison.Ordinal);
+    }
+
     private static SessionPlan CreatePlan() => new(
         "Z Fold 7",
         new ClientId("z-fold-7"),
@@ -97,10 +114,16 @@ public sealed class StreamWorkerStreamingBackendTests
 
         public int ShutdownCalls { get; private set; }
 
+        public Exception? ReadinessError { get; set; }
+
         public List<WorkerIpcEnvelope> Commands { get; } = [];
 
         public Task EnsureReadyAsync(CancellationToken cancellationToken)
         {
+            if (ReadinessError is not null)
+            {
+                return Task.FromException(ReadinessError);
+            }
             IsReady = true;
             return Task.CompletedTask;
         }
