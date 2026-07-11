@@ -45,9 +45,21 @@ public static class BeaconServiceRegistration
         this IServiceCollection services,
         IConfiguration configuration,
         string? environmentHostMode,
-        string? environmentClientProfilesPath = null,
-        string? environmentStreamingMode = null,
-        string? environmentStreamWorkerPath = null)
+        string? environmentClientProfilesPath = null) =>
+        services.AddBeaconServices(
+            configuration,
+            environmentHostMode,
+            environmentClientProfilesPath,
+            environmentStreamingMode: null,
+            environmentStreamWorkerPath: null);
+
+    public static IServiceCollection AddBeaconServices(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        string? environmentHostMode,
+        string? environmentClientProfilesPath,
+        string? environmentStreamingMode,
+        string? environmentStreamWorkerPath)
     {
         BeaconHostMode hostMode = ResolveHostMode(configuration, environmentHostMode);
         BeaconStreamingMode streamingMode = ResolveStreamingMode(

@@ -80,6 +80,32 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public void WindowsHostCanUseFakeStreamingWithoutWorkerServices()
+    {
+        using ServiceProvider provider = BuildProvider(
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.HostModeConfigurationKey,
+                "windows"),
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.StreamingModeConfigurationKey,
+                "fake"));
+
+        BeaconHostOptions options = provider.GetRequiredService<BeaconHostOptions>();
+
+        Assert.Equal(BeaconHostMode.Windows, options.Mode);
+        Assert.Equal(nameof(FakeStreamingBackend), options.StreamingBackendName);
+        Assert.IsType<WindowsDisplayBackend>(provider.GetRequiredService<IDisplayBackend>());
+        Assert.IsType<WindowsRecoveryBackend>(provider.GetRequiredService<IRecoveryBackend>());
+        Assert.IsType<WindowsGameLauncher>(provider.GetRequiredService<IGameLauncher>());
+        Assert.IsType<WindowsSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
+        Assert.IsType<WindowsClientInputSink>(provider.GetRequiredService<IClientInputSink>());
+        Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+        Assert.Single(provider.GetServices<IStreamingBackend>());
+        Assert.Empty(provider.GetServices<IStreamWorkerHost>());
+        Assert.Empty(provider.GetServices<StreamWorkerProcessHostOptions>());
+    }
+
+    [Fact]
     public async Task FakeHostCanUseWorkerStreamingWithoutWindowsSideEffects()
     {
         string workerPath = Path.Combine(Path.GetTempPath(), "acceptance", "Beacon.StreamWorker.exe");
@@ -144,6 +170,45 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public void RegistrationPreservesLegacyOverloadAndRequiresAllCompositionArguments()
+    {
+        MethodInfo? legacyOverload = typeof(BeaconServiceRegistration).GetMethod(
+            nameof(BeaconServiceRegistration.AddBeaconServices),
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            [
+                typeof(IServiceCollection),
+                typeof(IConfiguration),
+                typeof(string),
+                typeof(string)
+            ],
+            modifiers: null);
+        MethodInfo? compositionOverload = typeof(BeaconServiceRegistration).GetMethod(
+            nameof(BeaconServiceRegistration.AddBeaconServices),
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            [
+                typeof(IServiceCollection),
+                typeof(IConfiguration),
+                typeof(string),
+                typeof(string),
+                typeof(string),
+                typeof(string)
+            ],
+            modifiers: null);
+
+        Assert.NotNull(legacyOverload);
+        MethodInfo legacy = legacyOverload;
+        ParameterInfo legacyProfilesPath = legacy.GetParameters()[3];
+        Assert.True(legacyProfilesPath.HasDefaultValue);
+        Assert.Null(legacyProfilesPath.DefaultValue);
+
+        Assert.NotNull(compositionOverload);
+        MethodInfo composition = compositionOverload;
+        Assert.All(composition.GetParameters(), parameter => Assert.False(parameter.HasDefaultValue));
+    }
+
+    [Fact]
     public void ClientProfilesPathUsesFileRepository()
     {
         string profilePath = Path.Combine(Path.GetTempPath(), $"beacon-profiles-{Guid.NewGuid():N}.json");
@@ -177,7 +242,9 @@ public sealed class BeaconServiceRegistrationTests
                 BeaconServiceRegistration.StreamingModeConfigurationKey,
                 "worker")),
             environmentHostMode: null,
-            environmentStreamingMode: "fake");
+            environmentClientProfilesPath: null,
+            environmentStreamingMode: "fake",
+            environmentStreamWorkerPath: null);
         using ServiceProvider provider = services.BuildServiceProvider(new ServiceProviderOptions
         {
             ValidateOnBuild = true,
@@ -260,6 +327,8 @@ public sealed class BeaconServiceRegistrationTests
                     BeaconServiceRegistration.StreamWorkerPathConfigurationKey,
                     configuredPath)),
             environmentHostMode: null,
+            environmentClientProfilesPath: null,
+            environmentStreamingMode: null,
             environmentStreamWorkerPath: environmentPath);
         await using ServiceProvider provider = services.BuildServiceProvider(new ServiceProviderOptions
         {

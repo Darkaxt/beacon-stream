@@ -38,6 +38,16 @@ public sealed class StreamWorkerProcessHostTests
         Assert.Equal(identityPath, options.IdentityPath);
     }
 
+    [Fact]
+    public void CreateDefaultDelegatesToDefaultWorkerExecutablePath()
+    {
+        string identityPath = Path.Combine(Path.GetTempPath(), "identity.pfx");
+
+        StreamWorkerProcessHostOptions options = StreamWorkerProcessHostOptions.CreateDefault(identityPath);
+
+        Assert.Equal(StreamWorkerProcessHostOptions.Create(null, identityPath), options);
+    }
+
     [Theory]
     [InlineData("plain", "plain")]
     [InlineData("", "\"\"")]
