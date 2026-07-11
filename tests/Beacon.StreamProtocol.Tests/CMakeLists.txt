@@ -7,6 +7,26 @@ add_executable(BeaconMediaDatagramTests media_datagram_tests.cpp)
 target_link_libraries(BeaconMediaDatagramTests PRIVATE Beacon::StreamProtocol)
 add_test(NAME BeaconStreamProtocol.MediaDatagram COMMAND BeaconMediaDatagramTests)
 
+add_executable(
+  BeaconFakeTransportTests
+  fake_transport.cpp
+  fake_transport_tests.cpp
+)
+target_link_libraries(BeaconFakeTransportTests PRIVATE Beacon::StreamProtocol)
+add_test(NAME BeaconStreamProtocol.FakeTransport COMMAND BeaconFakeTransportTests)
+
+add_executable(
+  BeaconSessionTests
+  fake_transport.cpp
+  session_tests.cpp
+)
+target_link_libraries(BeaconSessionTests PRIVATE Beacon::StreamProtocol)
+add_test(NAME BeaconStreamProtocol.Session COMMAND BeaconSessionTests)
+
+add_executable(BeaconFrameAssemblerTests frame_assembler_tests.cpp)
+target_link_libraries(BeaconFrameAssemblerTests PRIVATE Beacon::StreamProtocol)
+add_test(NAME BeaconStreamProtocol.FrameAssembler COMMAND BeaconFrameAssemblerTests)
+
 if(BEACON_WITH_MSQUIC)
   function(beacon_deploy_msquic target)
     if(WIN32)

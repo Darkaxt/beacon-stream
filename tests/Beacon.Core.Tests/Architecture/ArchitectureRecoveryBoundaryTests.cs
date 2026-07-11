@@ -56,7 +56,7 @@ public sealed class ArchitectureRecoveryBoundaryTests
     };
 
     private static readonly Regex CompatibilityPattern = new(
-        "Apollo|Sunshine|Moonlight|GameStream|RTSP|RTP|ExternalProcessStreaming|StreamingWrapper|" +
+        @"Apollo|Sunshine|Moonlight|GameStream|\b(?:RTSP|RTP)\b|ExternalProcessStreaming|StreamingWrapper|" +
         "WrapperChild|RuntimeDescriptor|LaunchUri|nativeSession",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
@@ -184,6 +184,25 @@ public sealed class ArchitectureRecoveryBoundaryTests
         }
 
         Assert.Empty(violations.Order());
+    }
+
+    [Fact]
+    public void NativeTestsDoNotUseCrashDialogAssertions()
+    {
+        string root = FindRepositoryRoot();
+        string nativeTests = ToPlatformPath(root, "tests/Beacon.StreamProtocol.Tests");
+        var crashAssertion = new Regex(
+            @"\b(?:assert|abort)\s*\(",
+            RegexOptions.CultureInvariant);
+
+        string[] violations = Directory.EnumerateFiles(nativeTests, "*", SearchOption.AllDirectories)
+            .Where(path => Path.GetExtension(path) is ".cpp" or ".h")
+            .Where(path => crashAssertion.IsMatch(File.ReadAllText(path)))
+            .Select(path => ToRepositoryRelativePath(root, path))
+            .Order()
+            .ToArray();
+
+        Assert.Empty(violations);
     }
 
     private static IEnumerable<string> EnumerateSourceFiles(string root) =>

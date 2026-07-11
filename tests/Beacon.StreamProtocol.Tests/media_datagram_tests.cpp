@@ -1,7 +1,7 @@
 #include "beacon/stream/media_datagram.h"
 
 #include <array>
-#include <cassert>
+#include "test_failure.h"
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -42,62 +42,62 @@ constexpr MediaDatagramHeader valid_header{
 
 void serialization_uses_the_fixed_network_order_vector() {
   std::array<std::byte, 40> output{};
-  assert(beacon::stream::serialize_media_datagram_header(valid_header, output));
-  assert(std::equal(output.begin(), output.end(), expected_datagram.begin()));
+  BEACON_TEST_REQUIRE(beacon::stream::serialize_media_datagram_header(valid_header, output));
+  BEACON_TEST_REQUIRE(std::equal(output.begin(), output.end(), expected_datagram.begin()));
 }
 
 void parsing_returns_header_and_zero_copy_payload() {
   const auto result = beacon::stream::parse_media_datagram(expected_datagram);
-  assert(result.error == MediaDatagramError::none);
-  assert(result.header.sequence == valid_header.sequence);
-  assert(result.header.presentation_time_us == valid_header.presentation_time_us);
-  assert(result.header.frame_bytes == valid_header.frame_bytes);
-  assert(result.payload.size() == 3);
-  assert(result.payload.data() == expected_datagram.data() + 40);
+  BEACON_TEST_REQUIRE(result.error == MediaDatagramError::none);
+  BEACON_TEST_REQUIRE(result.header.sequence == valid_header.sequence);
+  BEACON_TEST_REQUIRE(result.header.presentation_time_us == valid_header.presentation_time_us);
+  BEACON_TEST_REQUIRE(result.header.frame_bytes == valid_header.frame_bytes);
+  BEACON_TEST_REQUIRE(result.payload.size() == 3);
+  BEACON_TEST_REQUIRE(result.payload.data() == expected_datagram.data() + 40);
 }
 
 void malformed_datagrams_are_rejected() {
   auto malformed = expected_datagram;
   malformed[0] = std::byte{0};
-  assert(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::invalid_magic);
+  BEACON_TEST_REQUIRE(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::invalid_magic);
 
   malformed = expected_datagram;
   malformed[4] = std::byte{2};
-  assert(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::unsupported_version);
+  BEACON_TEST_REQUIRE(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::unsupported_version);
 
   malformed = expected_datagram;
   malformed[7] = std::byte{0x80};
-  assert(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::invalid_flags);
+  BEACON_TEST_REQUIRE(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::invalid_flags);
 
   malformed = expected_datagram;
   malformed[39] = std::byte{1};
-  assert(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::reserved_not_zero);
+  BEACON_TEST_REQUIRE(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::reserved_not_zero);
 
   malformed = expected_datagram;
   malformed[24] = std::byte{0x01};
   malformed[27] = std::byte{0x01};
-  assert(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::invalid_frame_size);
+  BEACON_TEST_REQUIRE(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::invalid_frame_size);
 
   malformed = expected_datagram;
   malformed[30] = std::byte{0};
   malformed[31] = std::byte{0};
-  assert(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::invalid_chunk_count);
+  BEACON_TEST_REQUIRE(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::invalid_chunk_count);
 
   malformed = expected_datagram;
   malformed[30] = std::byte{0};
   malformed[31] = std::byte{1};
-  assert(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::invalid_chunk_index);
+  BEACON_TEST_REQUIRE(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::invalid_chunk_index);
 
   malformed = expected_datagram;
   malformed[34] = std::byte{0x10};
   malformed[35] = std::byte{0x00};
-  assert(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::payload_out_of_range);
+  BEACON_TEST_REQUIRE(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::payload_out_of_range);
 
   malformed = expected_datagram;
   malformed[37] = std::byte{2};
-  assert(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::payload_size_mismatch);
+  BEACON_TEST_REQUIRE(beacon::stream::parse_media_datagram(malformed).error == MediaDatagramError::payload_size_mismatch);
 
-  assert(beacon::stream::parse_media_datagram(
+  BEACON_TEST_REQUIRE(beacon::stream::parse_media_datagram(
              std::span<const std::byte>{expected_datagram.data(), expected_datagram.size() - 1})
              .error == MediaDatagramError::payload_size_mismatch);
 }
