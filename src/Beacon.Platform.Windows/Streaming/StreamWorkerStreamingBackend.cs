@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
+using System.Threading.Channels;
 using Beacon.Core.Input;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
@@ -39,9 +40,7 @@ public sealed class StreamWorkerStreamingBackend : IStreamingBackend, IStreamWor
     {
         this.host = host ?? throw new ArgumentNullException(nameof(host));
         generationHost = host as IGenerationBoundStreamWorkerHost
-            ?? throw new ArgumentException(
-                "StreamWorker host must support generation-bound commands.",
-                nameof(host));
+            ?? new LegacyGenerationBoundStreamWorkerHost(host);
     }
 
     public async Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken)
@@ -634,6 +633,110 @@ public sealed class StreamWorkerStreamingBackend : IStreamingBackend, IStreamWor
         WorkerErrorCode.OperationFailed => "operation_failed",
         _ => "unspecified",
     };
+
+    private sealed class LegacyGenerationBoundStreamWorkerHost : IGenerationBoundStreamWorkerHost
+    {
+        private readonly IStreamWorkerHost host;
+        private readonly Channel<StreamWorkerEvent> events = Channel.CreateBounded<StreamWorkerEvent>(
+            new BoundedChannelOptions(1)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = true,
+                SingleWriter = true,
+                AllowSynchronousContinuations = false,
+            });
+        private readonly SemaphoreSlim commandGate = new(1, 1);
+        private readonly Lock identityGate = new();
+        private byte[] workerInstanceId = [];
+        private long processGeneration;
+
+        public LegacyGenerationBoundStreamWorkerHost(IStreamWorkerHost host)
+        {
+            this.host = host;
+        }
+
+        public ChannelReader<StreamWorkerEvent> Events => events.Reader;
+
+        public long CurrentProcessGeneration => CaptureCurrentGeneration();
+
+        public bool IsCurrentProcessGeneration(long expectedProcessGeneration)
+        {
+            if (!host.IsReady || expectedProcessGeneration <= 0)
+            {
+                return false;
+            }
+            byte[] currentIdentity = host.WorkerInstanceId.ToArray();
+            lock (identityGate)
+            {
+                return expectedProcessGeneration == processGeneration
+                    && currentIdentity.Length > 0
+                    && currentIdentity.AsSpan().SequenceEqual(workerInstanceId);
+            }
+        }
+
+        public async Task<StreamWorkerCommandResponse> SendAsync(
+            long expectedProcessGeneration,
+            WorkerIpcEnvelope command,
+            CancellationToken cancellationToken)
+        {
+            await commandGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                byte[] before = host.WorkerInstanceId.ToArray();
+                long currentGeneration = CaptureGeneration(before);
+                if (!host.IsReady
+                    || before.Length == 0
+                    || currentGeneration != expectedProcessGeneration)
+                {
+                    throw new StreamWorkerGenerationChangedException(expectedProcessGeneration);
+                }
+
+                StreamWorkerCommandResponse response = await host.SendAsync(
+                    command,
+                    cancellationToken).ConfigureAwait(false);
+                byte[] after = host.WorkerInstanceId.ToArray();
+                if (!host.IsReady || !after.AsSpan().SequenceEqual(before))
+                {
+                    if (after.Length > 0)
+                    {
+                        _ = CaptureGeneration(after);
+                    }
+                    throw new StreamWorkerGenerationChangedException(expectedProcessGeneration);
+                }
+                return response;
+            }
+            finally
+            {
+                commandGate.Release();
+            }
+        }
+
+        private long CaptureCurrentGeneration()
+        {
+            if (!host.IsReady)
+            {
+                return 0;
+            }
+            return CaptureGeneration(host.WorkerInstanceId.ToArray());
+        }
+
+        private long CaptureGeneration(byte[] identity)
+        {
+            if (identity.Length == 0)
+            {
+                return 0;
+            }
+            lock (identityGate)
+            {
+                if (!identity.AsSpan().SequenceEqual(workerInstanceId))
+                {
+                    workerInstanceId = identity;
+                    processGeneration++;
+                }
+                return processGeneration;
+            }
+        }
+    }
 
     private sealed class WorkerBoundStreamingSession(
         StreamingSessionState state,

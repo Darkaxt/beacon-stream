@@ -148,6 +148,80 @@ public sealed class StreamWorkerProcessHostTests
             await host.DisposeAsync();
         }
     }
+
+    [Fact]
+    public async Task ReadyHostDisposeGracefullyShutsDownThenCompletesEventChannel()
+    {
+        await using ConnectedStreams streams = await ConnectedStreams.CreateAsync();
+        TestLaunch launch = TestLaunch.Waiting(streams.Service);
+        Task worker = Task.Run(async () =>
+        {
+            await WriteAsync(streams.Worker, Hello(checked((uint)launch.Process.Id), 1));
+            await WriteAsync(streams.Worker, Ready(1));
+            WorkerIpcEnvelope shutdown = await ReadAsync(streams.Worker);
+            Assert.Equal(WorkerIpcEnvelope.BodyOneofCase.ShutdownWorker, shutdown.BodyCase);
+            await WriteAsync(streams.Worker, new WorkerIpcEnvelope
+            {
+                ProtocolVersion = ProtocolVersion.Current,
+                RequestId = shutdown.RequestId,
+                WorkerCompletion = new WorkerCompletion
+                {
+                    Succeeded = true,
+                    ErrorCode = WorkerErrorCode.None
+                }
+            });
+            launch.Terminate();
+        });
+        var host = new StreamWorkerProcessHost(
+            new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
+            new QueueLaunchFactory(launch));
+        var eventSource = (IGenerationBoundStreamWorkerHost)host;
+        await host.EnsureReadyAsync(CancellationToken.None);
+
+        Exception? error = await Record.ExceptionAsync(() => host.DisposeAsync().AsTask());
+        await worker;
+
+        Assert.Null(error);
+        Assert.IsType<StreamWorkerProcessExited>(await eventSource.Events.ReadAsync());
+        await eventSource.Events.Completion;
+        Assert.True(eventSource.Events.Completion.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task ExceptionalDisposeReleasesWorkerAndEventChannelExactlyOnce()
+    {
+        await using ConnectedStreams streams = await ConnectedStreams.CreateAsync();
+        TestLaunch launch = TestLaunch.Waiting(streams.Service);
+        Task worker = Task.Run(async () =>
+        {
+            await WriteAsync(streams.Worker, Hello(checked((uint)launch.Process.Id), 1));
+            await WriteAsync(streams.Worker, Ready(1));
+            WorkerIpcEnvelope shutdown = await ReadAsync(streams.Worker);
+            await WriteAsync(streams.Worker, new WorkerIpcEnvelope
+            {
+                ProtocolVersion = ProtocolVersion.Current,
+                RequestId = shutdown.RequestId,
+                WorkerCompletion = new WorkerCompletion
+                {
+                    Succeeded = false,
+                    ErrorCode = WorkerErrorCode.OperationFailed
+                }
+            });
+        });
+        var host = new StreamWorkerProcessHost(
+            new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
+            new QueueLaunchFactory(launch));
+        var eventSource = (IGenerationBoundStreamWorkerHost)host;
+        await host.EnsureReadyAsync(CancellationToken.None);
+
+        await Assert.ThrowsAsync<StreamWorkerProtocolException>(() => host.DisposeAsync().AsTask());
+        await worker;
+
+        Assert.Equal(1, launch.TerminateCalls);
+        Assert.IsType<StreamWorkerProcessExited>(await eventSource.Events.ReadAsync());
+        await eventSource.Events.Completion;
+        Assert.True(eventSource.Events.Completion.IsCompletedSuccessfully);
+    }
     [Fact]
     public async Task EventReaderIsStableAcrossMonotonicWorkerReplacement()
     {
@@ -389,6 +463,17 @@ public sealed class StreamWorkerProcessHostTests
         await stream.FlushAsync();
     }
 
+    private static async Task<WorkerIpcEnvelope> ReadAsync(Stream stream)
+    {
+        byte[] prefix = new byte[sizeof(uint)];
+        await stream.ReadExactlyAsync(prefix);
+        int messageLength = ProtobufLengthFrameCodec.ReadMessageLength(prefix);
+        byte[] frame = new byte[sizeof(uint) + messageLength];
+        prefix.CopyTo(frame, 0);
+        await stream.ReadExactlyAsync(frame.AsMemory(sizeof(uint)));
+        return ProtobufLengthFrameCodec.Decode(frame, WorkerIpcEnvelope.Parser);
+    }
+
     private sealed class QueueLaunchFactory(params IStreamWorkerLaunch[] launches) : IStreamWorkerLaunchFactory
     {
         private readonly Queue<IStreamWorkerLaunch> remaining = new(launches);
@@ -420,6 +505,8 @@ public sealed class StreamWorkerProcessHostTests
 
         public Process Process { get; }
 
+        public int TerminateCalls { get; private set; }
+
         public static TestLaunch Exiting(int exitCode) =>
             new(StartPowerShell($"exit {exitCode}"), stream: null);
 
@@ -431,6 +518,7 @@ public sealed class StreamWorkerProcessHostTests
 
         public void Terminate()
         {
+            TerminateCalls++;
             if (!Process.HasExited)
             {
                 Process.Kill(entireProcessTree: true);
@@ -443,7 +531,6 @@ public sealed class StreamWorkerProcessHostTests
             {
                 return;
             }
-            Terminate();
             if (!Process.HasExited)
             {
                 await Process.WaitForExitAsync();

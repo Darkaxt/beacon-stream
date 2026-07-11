@@ -188,15 +188,21 @@ public sealed class StreamWorkerProcessHost :
         }
 
         disposal.Cancel();
-        await eventBuffer.DisposeAsync().ConfigureAwait(false);
-        await lifecycleGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            await ShutdownWorkerCoreAsync(disposal.Token).ConfigureAwait(false);
+            await lifecycleGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                await ShutdownWorkerCoreAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            finally
+            {
+                lifecycleGate.Release();
+            }
         }
         finally
         {
-            lifecycleGate.Release();
+            await eventBuffer.DisposeAsync().ConfigureAwait(false);
             lifecycleGate.Dispose();
             disposal.Dispose();
         }
@@ -292,23 +298,6 @@ public sealed class StreamWorkerProcessHost :
                     _ = await activeExit.WaitAsync(cancellationToken).ConfigureAwait(false);
                 }
             }
-            else if (active is { Launch.Process.HasExited: false })
-            {
-                active.Launch.Terminate();
-                if (activeExit is not null)
-                {
-                    _ = await activeExit.WaitAsync(cancellationToken).ConfigureAwait(false);
-                }
-            }
-        }
-        catch
-        {
-            active?.Launch.Terminate();
-            if (activeExit is not null)
-            {
-                _ = await activeExit.ConfigureAwait(false);
-            }
-            throw;
         }
         finally
         {
@@ -470,7 +459,6 @@ internal sealed class DefaultStreamWorkerLaunch(
         {
             return;
         }
-        job.Dispose();
         await pipe.DisposeAsync().ConfigureAwait(false);
         Process.Dispose();
     }

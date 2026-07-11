@@ -30,6 +30,24 @@ public sealed record WindowsInputCommand(
     {
     }
 
+    public void Deconstruct(
+        out WindowsInputCommandKind Kind,
+        out int? X,
+        out int? Y,
+        out string? Button,
+        out bool? Pressed,
+        out string? Key,
+        out string? Code)
+    {
+        Kind = this.Kind;
+        X = this.X;
+        Y = this.Y;
+        Button = this.Button;
+        Pressed = this.Pressed;
+        Key = this.Key;
+        Code = this.Code;
+    }
+
     public static WindowsInputCommand PointerMove(int x, int y) =>
         new(WindowsInputCommandKind.PointerMove, X: x, Y: y);
 
