@@ -8,6 +8,74 @@ namespace Beacon.Platform.Windows.Tests.Input;
 public sealed class WindowsClientInputSinkTests
 {
     [Fact]
+    public async Task StreamPointerWheelAndScanCodeMapToExactWindowsCommands()
+    {
+        var displayApi = new FakeWindowsDisplayApi
+        {
+            CurrentTopology = new DisplayTopologySnapshot(
+                [new DisplayPathSnapshot("client-z", DisplayPathKind.Virtual, 100, 80, 60, true, 300, -20)],
+                IsMirrorMode: false)
+        };
+        var inputApi = new FakeWindowsInputApi();
+        var sink = new WindowsClientInputSink(displayApi, inputApi);
+        var batch = new ClientInputBatch(
+            "client", "session", "client-z", 1,
+            [
+                ClientInputEvent.StreamPointer(ClientPointerAction.Scroll, 11, 13, -120, 2),
+                ClientInputEvent.StreamKeyboard(0xE04D, pressed: false)
+            ]);
+
+        ClientInputResult result = await sink.ForwardAsync(batch, CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Collection(
+            inputApi.Commands,
+            command =>
+            {
+                Assert.Equal(WindowsInputCommandKind.PointerMove, command.Kind);
+                Assert.Equal(311, command.X);
+                Assert.Equal(-7, command.Y);
+            },
+            command =>
+            {
+                Assert.Equal(WindowsInputCommandKind.PointerWheel, command.Kind);
+                Assert.Equal(-120, command.WheelDelta);
+            },
+            command =>
+            {
+                Assert.Equal(WindowsInputCommandKind.KeyboardScanCode, command.Kind);
+                Assert.Equal(0xE04Du, command.ScanCode);
+                Assert.False(command.Pressed);
+            });
+    }
+
+    [Theory]
+    [InlineData(true, "Unsupported input category: controller.")]
+    [InlineData(false, "Unsupported input category: touch.")]
+    public async Task UnsupportedStreamCategoriesReturnFixedSanitizedErrors(bool controller, string expected)
+    {
+        var displayApi = new FakeWindowsDisplayApi
+        {
+            CurrentTopology = DisplayTopologySnapshot.Extended(
+                "physical", "client-z", 100, 80, 60, virtualPrimary: true)
+        };
+        var inputApi = new FakeWindowsInputApi();
+        var sink = new WindowsClientInputSink(displayApi, inputApi);
+        ClientInputEvent input = controller
+            ? ClientInputEvent.StreamController(938475, 123456, -654321)
+            : ClientInputEvent.StreamTouch(938475, ClientTouchAction.Down, 123456, 2, 3, 4, 5);
+
+        ClientInputResult result = await sink.ForwardAsync(
+            new ClientInputBatch("client", "session", "client-z", 1, [input]),
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal(expected, result.Error);
+        Assert.DoesNotContain("938475", result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("123456", result.Error, StringComparison.Ordinal);
+        Assert.Empty(inputApi.Commands);
+    }
+    [Fact]
     public async Task PointerTapTargetsTheLeasedDisplay()
     {
         var displayApi = new FakeWindowsDisplayApi

@@ -486,7 +486,7 @@ public static class ClientEndpoints
                     diagnostics,
                     DiagnosticSeverity.Error,
                     "input.forward",
-                    $"Input forwarding failed: {result.Error}",
+                    "Input forwarding failed.",
                     clientId,
                     plan.SessionId,
                     plan.Display.DisplayId,

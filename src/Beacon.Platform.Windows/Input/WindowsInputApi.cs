@@ -17,9 +17,12 @@ public sealed class WindowsInputApi : IWindowsInputApi
     private const uint MouseEventRightUp = 0x0010;
     private const uint MouseEventMiddleDown = 0x0020;
     private const uint MouseEventMiddleUp = 0x0040;
+    private const uint MouseEventWheel = 0x0800;
     private const uint MouseEventVirtualDesk = 0x4000;
     private const uint MouseEventAbsolute = 0x8000;
     private const uint KeyEventKeyUp = 0x0002;
+    private const uint KeyEventExtendedKey = 0x0001;
+    private const uint KeyEventScanCode = 0x0008;
 
     public Task<WindowsInputResult> SendAsync(
         IReadOnlyList<WindowsInputCommand> commands,
@@ -96,6 +99,18 @@ public sealed class WindowsInputApi : IWindowsInputApi
 
                 input.Union.Mouse = new MouseInput { DwFlags = flags };
                 return true;
+            case WindowsInputCommandKind.PointerWheel:
+                if (!TryEncodeCommand(command, out WindowsInputEncoding wheel))
+                {
+                    error = "Pointer wheel command is invalid.";
+                    return false;
+                }
+                input.Union.Mouse = new MouseInput
+                {
+                    MouseData = unchecked((uint)wheel.MouseData),
+                    DwFlags = MouseEventWheel,
+                };
+                return true;
             case WindowsInputCommandKind.KeyboardKey:
                 if (!TryMapKeyboardVirtualKey(command.Code, command.Key, out ushort virtualKey))
                 {
@@ -110,10 +125,62 @@ public sealed class WindowsInputApi : IWindowsInputApi
                     DwFlags = command.Pressed == false ? KeyEventKeyUp : 0
                 };
                 return true;
+            case WindowsInputCommandKind.KeyboardScanCode:
+                if (!TryEncodeCommand(command, out WindowsInputEncoding keyboard))
+                {
+                    error = "Keyboard scan-code command is invalid.";
+                    return false;
+                }
+                input.Type = InputKeyboard;
+                input.Union.Keyboard = new KeyboardInput
+                {
+                    WScan = keyboard.ScanCode,
+                    DwFlags = (uint)keyboard.Flags,
+                };
+                return true;
             default:
                 error = $"Unsupported Windows input command '{command.Kind}'.";
                 return false;
         }
+    }
+
+    internal static bool TryEncodeCommand(
+        WindowsInputCommand command,
+        out WindowsInputEncoding encoding)
+    {
+        if (command.Kind == WindowsInputCommandKind.PointerWheel && command.WheelDelta is int wheelDelta)
+        {
+            encoding = new WindowsInputEncoding(
+                WindowsInputEncodingKind.Mouse,
+                WindowsInputFlags.Wheel,
+                MouseData: wheelDelta);
+            return true;
+        }
+
+        if (command.Kind == WindowsInputCommandKind.KeyboardScanCode
+            && command.ScanCode is uint scanCode
+            && scanCode <= ushort.MaxValue)
+        {
+            bool extended = (scanCode & 0xFF00) == 0xE000;
+            ushort nativeScanCode = checked((ushort)(extended ? scanCode & 0xFF : scanCode));
+            WindowsInputFlags flags = WindowsInputFlags.ScanCode;
+            if (extended)
+            {
+                flags |= WindowsInputFlags.ExtendedKey;
+            }
+            if (command.Pressed == false)
+            {
+                flags |= WindowsInputFlags.KeyUp;
+            }
+            encoding = new WindowsInputEncoding(
+                WindowsInputEncodingKind.Keyboard,
+                flags,
+                ScanCode: nativeScanCode);
+            return true;
+        }
+
+        encoding = new WindowsInputEncoding(WindowsInputEncodingKind.Mouse, WindowsInputFlags.None);
+        return false;
     }
 
     public static bool TryMapKeyboardVirtualKey(string? code, string? key, out ushort virtualKey)

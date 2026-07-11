@@ -14,6 +14,7 @@ using Beacon.Platform.Windows.Sessions;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.State;
 using Beacon.Server.Security;
+using Beacon.Server.Streaming;
 
 namespace Beacon.Server.Hosting;
 
@@ -214,7 +215,12 @@ public static class BeaconServiceRegistration
                 services.AddSingleton<IStreamWorkerHost>(sp =>
                     sp.GetRequiredService<StreamWorkerProcessHost>());
                 services.AddSingleton<IStreamSessionAuthorizer, StreamWorkerSessionAuthorizer>();
-                services.AddSingleton<IStreamingBackend, StreamWorkerStreamingBackend>();
+                services.AddSingleton<StreamWorkerStreamingBackend>();
+                services.AddSingleton<IStreamingBackend>(sp =>
+                    sp.GetRequiredService<StreamWorkerStreamingBackend>());
+                services.AddSingleton<IStreamWorkerRuntimeEvents>(sp =>
+                    sp.GetRequiredService<StreamWorkerStreamingBackend>());
+                services.AddHostedService<StreamWorkerEventRelay>();
                 break;
             default:
                 throw new ArgumentOutOfRangeException(

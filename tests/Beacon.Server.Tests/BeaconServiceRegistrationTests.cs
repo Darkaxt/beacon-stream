@@ -16,6 +16,8 @@ using Beacon.Server.State;
 using Beacon.Server.Security;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Beacon.Server.Streaming;
 
 namespace Beacon.Server.Tests;
 
@@ -35,6 +37,8 @@ public sealed class BeaconServiceRegistrationTests
         Assert.IsType<FakeGameLauncher>(provider.GetRequiredService<IGameLauncher>());
         Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
         Assert.Single(provider.GetServices<IStreamingBackend>());
+        Assert.DoesNotContain(provider.GetServices<IHostedService>(), service => service is StreamWorkerEventRelay);
+        Assert.Empty(provider.GetServices<IStreamWorkerRuntimeEvents>());
         Assert.IsType<FakeSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
         Assert.IsType<NoOpClientInputSink>(provider.GetRequiredService<IClientInputSink>());
         ClientInputHealth inputHealth = provider.GetRequiredService<IClientInputHealthProvider>().GetHealth();
@@ -77,6 +81,10 @@ public sealed class BeaconServiceRegistrationTests
             provider.GetRequiredService<StreamWorkerProcessHost>(),
             provider.GetRequiredService<IStreamWorkerHost>());
         Assert.Single(provider.GetServices<IStreamingBackend>());
+        Assert.Contains(provider.GetServices<IHostedService>(), service => service is StreamWorkerEventRelay);
+        Assert.Same(
+            provider.GetRequiredService<StreamWorkerStreamingBackend>(),
+            provider.GetRequiredService<IStreamWorkerRuntimeEvents>());
     }
 
     [Fact]
@@ -102,6 +110,7 @@ public sealed class BeaconServiceRegistrationTests
         Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
         Assert.Single(provider.GetServices<IStreamingBackend>());
         Assert.Empty(provider.GetServices<IStreamWorkerHost>());
+        Assert.DoesNotContain(provider.GetServices<IHostedService>(), service => service is StreamWorkerEventRelay);
         Assert.Empty(provider.GetServices<StreamWorkerProcessHostOptions>());
     }
 
@@ -134,6 +143,7 @@ public sealed class BeaconServiceRegistrationTests
             workerPath,
             provider.GetRequiredService<StreamWorkerProcessHostOptions>().ExecutablePath);
         Assert.Single(provider.GetServices<IStreamingBackend>());
+        Assert.Contains(provider.GetServices<IHostedService>(), service => service is StreamWorkerEventRelay);
     }
 
     [Fact]

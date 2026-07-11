@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Security.Cryptography;
 using Beacon.Core.Displays;
+using Beacon.Core.Diagnostics;
 using Beacon.Core.Games;
 using Beacon.Core.Input;
 using Beacon.Core.Sessions;
@@ -21,6 +22,34 @@ namespace Beacon.Server.Tests;
 
 public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
 {
+    [Fact]
+    public async Task ClientInputDiagnosticsRedactPayloadAndSinkErrorCanaries()
+    {
+        const string canary = "HTTP-INPUT-CANARY-b7e4";
+        var journal = new InMemoryDiagnosticEventJournal();
+        WebApplicationFactory<Program> inputFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IClientInputSink>();
+                services.RemoveAll<IDiagnosticEventSink>();
+                services.AddSingleton<IClientInputSink>(new FailingInputSink(canary));
+                services.AddSingleton<IDiagnosticEventSink>(journal);
+            }));
+        HttpClient client = inputFactory.CreateClient();
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/input", new
+        {
+            sequence = 1,
+            events = new[] { new { type = "keyboard", action = "press", key = canary, code = canary } }
+        });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        string rendered = string.Join('|', journal.GetRecent(20).Select(value =>
+            $"{value.Operation}:{value.Message}:{string.Join(',', value.Metadata.Select(pair => $"{pair.Key}={pair.Value}"))}"));
+        Assert.DoesNotContain(canary, rendered, StringComparison.Ordinal);
+        Assert.Contains("Input forwarding failed.", rendered, StringComparison.Ordinal);
+    }
     [Fact]
     public async Task HelloReturnsZFoldProfileAndEditableFields()
     {
@@ -1462,6 +1491,14 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             Batches.Add(batch);
             return Task.FromResult(ClientInputResult.Ok(batch.Events.Count));
         }
+    }
+
+    private sealed class FailingInputSink(string error) : IClientInputSink
+    {
+        public Task<ClientInputResult> ForwardAsync(
+            ClientInputBatch batch,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(ClientInputResult.Fail(error));
     }
 
     private sealed class ReplacingOnSecondAuthorizationAuthorizer : IStreamSessionAuthorizer

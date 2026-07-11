@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
+using Beacon.Core.Input;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.StreamWorker.Contracts.Framing;
@@ -6,11 +8,30 @@ using Beacon.StreamWorker.Contracts.Worker.V1;
 
 namespace Beacon.Platform.Windows.Streaming;
 
-public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStreamingBackend
+public interface IStreamWorkerRuntimeEvents
+{
+    bool TryBind(StreamWorkerTransportAuthenticated authenticated);
+
+    bool TryResolveInput(StreamWorkerInputReceived input, out ClientInputBatch? batch);
+
+    bool IsCurrent(StreamWorkerFeedbackReceived feedback);
+
+    bool IsCurrent(StreamWorkerMediaEvidence media);
+
+    bool TryDisconnect(StreamWorkerTransportDisconnected disconnected);
+
+    void ProcessExited(StreamWorkerProcessExited exited);
+
+    Guid? GetBoundRuntimeGeneration(string sessionId);
+}
+
+public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStreamingBackend, IStreamWorkerRuntimeEvents
 {
     private readonly ConcurrentDictionary<string, WorkerBoundStreamingSession> sessions =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim lifecycleGate = new(1, 1);
+    private readonly Lock runtimeGate = new();
+    private readonly Dictionary<(long ProcessGeneration, string SessionId), ulong> highestWorkerGenerations = [];
 
     public async Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken)
     {
@@ -87,7 +108,10 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
     {
         await host.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
         byte[] workerInstanceId = host.WorkerInstanceId.ToArray();
-        if (!host.IsReady || workerInstanceId.Length == 0)
+        long processGeneration = host.CurrentProcessGeneration;
+        if (!host.IsReady
+            || workerInstanceId.Length == 0
+            || !host.IsCurrentProcessGeneration(processGeneration))
         {
             return StreamingStartResult.Fail("Beacon StreamWorker runtime identity is unavailable.");
         }
@@ -137,7 +161,7 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
                 cleanupError
                 ?? "StreamWorker start_media requires exactly one valid transport-ready event.");
         }
-        if (!IsCurrentWorker(workerInstanceId))
+        if (!IsCurrentWorker(workerInstanceId, processGeneration))
         {
             return StreamingStartResult.Fail(
                 "Beacon StreamWorker runtime changed during start_media.");
@@ -155,7 +179,13 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
             null,
             checked((int)transportReady.WorkerTransportReady.ListenerPort),
             Guid.NewGuid());
-        sessions[plan.SessionId] = new WorkerBoundStreamingSession(state, workerInstanceId);
+        lock (runtimeGate)
+        {
+            sessions[plan.SessionId] = new WorkerBoundStreamingSession(
+                state,
+                workerInstanceId,
+                processGeneration);
+        }
         return StreamingStartResult.Ok(state);
     }
 
@@ -207,7 +237,7 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
     {
         if (!sessions.TryGetValue(sessionId, out WorkerBoundStreamingSession? runtime)
             || runtime.State.State != "running"
-            || !IsCurrentWorker(runtime.WorkerInstanceId))
+            || !IsCurrentWorker(runtime.WorkerInstanceId, runtime.ProcessGeneration))
         {
             if (runtime is not null)
             {
@@ -235,16 +265,23 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
             return StreamingStopResult.Fail(stopError);
         }
 
-        StreamingSessionState state = runtime.State with
+        StreamingSessionState state;
+        lock (runtimeGate)
         {
-            State = "stopped",
-            Error = null,
-            ActiveListenerPort = null,
-        };
-        if (!sessions.TryUpdate(sessionId, runtime with { State = state }, runtime))
-        {
-            return StreamingStopResult.Fail(
-                $"Stream session '{sessionId}' runtime changed while stop_media was in flight.");
+            if (!sessions.TryGetValue(sessionId, out WorkerBoundStreamingSession? current)
+                || !ReferenceEquals(current, runtime))
+            {
+                return StreamingStopResult.Fail(
+                    $"Stream session '{sessionId}' runtime changed while stop_media was in flight.");
+            }
+            state = runtime.State with
+            {
+                State = "stopped",
+                Error = null,
+                ActiveListenerPort = null,
+            };
+            runtime.State = state;
+            runtime.Binding = null;
         }
         return StreamingStopResult.Ok(state);
     }
@@ -257,7 +294,8 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
         {
             return Task.FromResult<StreamingSessionState?>(null);
         }
-        if (runtime.State.State == "running" && !IsCurrentWorker(runtime.WorkerInstanceId))
+        if (runtime.State.State == "running"
+            && !IsCurrentWorker(runtime.WorkerInstanceId, runtime.ProcessGeneration))
         {
             RemoveIfCurrent(sessionId, runtime);
             return Task.FromResult<StreamingSessionState?>(null);
@@ -270,7 +308,8 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
     {
         foreach ((string sessionId, WorkerBoundStreamingSession runtime) in sessions.ToArray())
         {
-            if (runtime.State.State == "running" && !IsCurrentWorker(runtime.WorkerInstanceId))
+            if (runtime.State.State == "running"
+                && !IsCurrentWorker(runtime.WorkerInstanceId, runtime.ProcessGeneration))
             {
                 RemoveIfCurrent(sessionId, runtime);
             }
@@ -283,10 +322,151 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
             .ToArray();
     }
 
-    private bool IsCurrentWorker(byte[] workerInstanceId)
+    public bool TryBind(StreamWorkerTransportAuthenticated authenticated)
+    {
+        lock (runtimeGate)
+        {
+            if (!TryGetRunningRuntime(authenticated, out WorkerBoundStreamingSession? runtime))
+            {
+                return false;
+            }
+            if (runtime.Binding is { } existing
+                && existing.ProcessGeneration == authenticated.ProcessGeneration
+                && existing.WorkerSessionGeneration == authenticated.WorkerSessionGeneration
+                && existing.RuntimeGeneration == runtime.State.RuntimeGeneration)
+            {
+                return true;
+            }
+
+            var key = (authenticated.ProcessGeneration, authenticated.SessionId!.ToUpperInvariant());
+            if (highestWorkerGenerations.TryGetValue(key, out ulong highest)
+                && authenticated.WorkerSessionGeneration <= highest)
+            {
+                return false;
+            }
+            highestWorkerGenerations[key] = authenticated.WorkerSessionGeneration;
+            runtime.Binding = new WorkerRuntimeBinding(
+                authenticated.ProcessGeneration,
+                authenticated.WorkerSessionGeneration,
+                runtime.State.RuntimeGeneration);
+            return true;
+        }
+    }
+
+    public bool TryResolveInput(StreamWorkerInputReceived input, out ClientInputBatch? batch)
+    {
+        lock (runtimeGate)
+        {
+            if (input.Sequence > long.MaxValue
+                || input.Events.Count == 0
+                || !TryGetBoundRuntime(input, input.WorkerSessionGeneration, out WorkerBoundStreamingSession? runtime))
+            {
+                batch = null;
+                return false;
+            }
+            batch = new ClientInputBatch(
+                runtime.State.ClientId,
+                runtime.State.SessionId,
+                runtime.State.DisplayId,
+                checked((long)input.Sequence),
+                input.Events);
+            return true;
+        }
+    }
+
+    public bool IsCurrent(StreamWorkerFeedbackReceived feedback)
+    {
+        lock (runtimeGate)
+        {
+            return TryGetBoundRuntime(
+                feedback,
+                feedback.WorkerSessionGeneration,
+                out _);
+        }
+    }
+
+    public bool IsCurrent(StreamWorkerMediaEvidence media)
+    {
+        lock (runtimeGate)
+        {
+            return TryGetBoundRuntime(media, media.WorkerSessionGeneration, out _);
+        }
+    }
+
+    public bool TryDisconnect(StreamWorkerTransportDisconnected disconnected)
+    {
+        lock (runtimeGate)
+        {
+            if (!TryGetBoundRuntime(
+                    disconnected,
+                    disconnected.WorkerSessionGeneration,
+                    out WorkerBoundStreamingSession? runtime))
+            {
+                return false;
+            }
+            runtime.Binding = null;
+            return true;
+        }
+    }
+
+    public void ProcessExited(StreamWorkerProcessExited exited)
+    {
+        lock (runtimeGate)
+        {
+            foreach ((string sessionId, WorkerBoundStreamingSession runtime) in sessions.ToArray())
+            {
+                if (runtime.ProcessGeneration == exited.ProcessGeneration)
+                {
+                    RemoveIfCurrent(sessionId, runtime);
+                }
+            }
+        }
+    }
+
+    public Guid? GetBoundRuntimeGeneration(string sessionId)
+    {
+        lock (runtimeGate)
+        {
+            return sessions.TryGetValue(sessionId, out WorkerBoundStreamingSession? runtime)
+                ? runtime.Binding?.RuntimeGeneration
+                : null;
+        }
+    }
+
+    private bool TryGetRunningRuntime(
+        StreamWorkerEvent workerEvent,
+        [NotNullWhen(true)] out WorkerBoundStreamingSession? runtime)
+    {
+        runtime = null;
+        return workerEvent.SessionId is not null
+            && sessions.TryGetValue(workerEvent.SessionId, out runtime)
+            && runtime.State.State == "running"
+            && runtime.ProcessGeneration == workerEvent.ProcessGeneration
+            && host.IsReady
+            && host.IsCurrentProcessGeneration(workerEvent.ProcessGeneration)
+            && runtime.State.RuntimeGeneration != Guid.Empty;
+    }
+
+    private bool TryGetBoundRuntime(
+        StreamWorkerEvent workerEvent,
+        ulong workerSessionGeneration,
+        [NotNullWhen(true)] out WorkerBoundStreamingSession? runtime)
+    {
+        if (!TryGetRunningRuntime(workerEvent, out runtime) || runtime.Binding is null)
+        {
+            return false;
+        }
+        WorkerRuntimeBinding binding = runtime.Binding;
+        return binding.ProcessGeneration == workerEvent.ProcessGeneration
+            && binding.WorkerSessionGeneration == workerSessionGeneration
+            && binding.RuntimeGeneration == runtime.State.RuntimeGeneration;
+    }
+
+    private bool IsCurrentWorker(byte[] workerInstanceId, long processGeneration)
     {
         ReadOnlyMemory<byte> currentWorkerInstanceId = host.WorkerInstanceId;
         return host.IsReady
+            && host.IsCurrentProcessGeneration(processGeneration)
             && !currentWorkerInstanceId.IsEmpty
             && currentWorkerInstanceId.Span.SequenceEqual(workerInstanceId);
     }
@@ -397,7 +577,22 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
         _ => "unspecified",
     };
 
-    private sealed record WorkerBoundStreamingSession(
-        StreamingSessionState State,
-        byte[] WorkerInstanceId);
+    private sealed class WorkerBoundStreamingSession(
+        StreamingSessionState state,
+        byte[] workerInstanceId,
+        long processGeneration)
+    {
+        public StreamingSessionState State { get; set; } = state;
+
+        public byte[] WorkerInstanceId { get; } = workerInstanceId;
+
+        public long ProcessGeneration { get; } = processGeneration;
+
+        public WorkerRuntimeBinding? Binding { get; set; }
+    }
+
+    private sealed record WorkerRuntimeBinding(
+        long ProcessGeneration,
+        ulong WorkerSessionGeneration,
+        Guid RuntimeGeneration);
 }

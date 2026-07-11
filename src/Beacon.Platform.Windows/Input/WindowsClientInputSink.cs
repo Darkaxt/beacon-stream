@@ -60,6 +60,29 @@ public sealed class WindowsClientInputSink(
         List<WindowsInputCommand> commands,
         out string error)
     {
+        if (inputEvent.Pointer is not null)
+        {
+            return TryAppendStreamPointerCommands(inputEvent.Pointer, display, commands, out error);
+        }
+        if (inputEvent.Keyboard is not null)
+        {
+            commands.Add(WindowsInputCommand.KeyboardScanCode(
+                inputEvent.Keyboard.ScanCode,
+                inputEvent.Keyboard.Pressed));
+            error = string.Empty;
+            return true;
+        }
+        if (inputEvent.Controller is not null)
+        {
+            error = "Unsupported input category: controller.";
+            return false;
+        }
+        if (inputEvent.Touch is not null)
+        {
+            error = "Unsupported input category: touch.";
+            return false;
+        }
+
         string eventType = inputEvent.Type?.Trim().ToLowerInvariant() ?? string.Empty;
         return eventType switch
         {
@@ -67,6 +90,56 @@ public sealed class WindowsClientInputSink(
             "keyboard" => TryAppendKeyboardCommands(inputEvent, commands, out error),
             _ => UnsupportedEventType(inputEvent, out error)
         };
+    }
+
+    private static bool TryAppendStreamPointerCommands(
+        ClientPointerInput pointer,
+        DisplayPathSnapshot display,
+        List<WindowsInputCommand> commands,
+        out string error)
+    {
+        int x = display.X + pointer.X;
+        int y = display.Y + pointer.Y;
+        commands.Add(WindowsInputCommand.PointerMove(x, y));
+        switch (pointer.Action)
+        {
+            case ClientPointerAction.Move:
+                error = string.Empty;
+                return true;
+            case ClientPointerAction.ButtonDown:
+            case ClientPointerAction.ButtonUp:
+                if (!TryStreamButtonName(pointer.Button, out string button))
+                {
+                    commands.RemoveAt(commands.Count - 1);
+                    error = "Unsupported pointer button category.";
+                    return false;
+                }
+                commands.Add(WindowsInputCommand.PointerButton(
+                    button,
+                    pointer.Action == ClientPointerAction.ButtonDown));
+                error = string.Empty;
+                return true;
+            case ClientPointerAction.Scroll:
+                commands.Add(WindowsInputCommand.PointerWheel(pointer.WheelDelta));
+                error = string.Empty;
+                return true;
+            default:
+                commands.RemoveAt(commands.Count - 1);
+                error = "Unsupported pointer action category.";
+                return false;
+        }
+    }
+
+    private static bool TryStreamButtonName(uint button, out string name)
+    {
+        name = button switch
+        {
+            0 or 1 => "left",
+            2 => "right",
+            3 or 4 => "middle",
+            _ => string.Empty,
+        };
+        return name.Length != 0;
     }
 
     private static bool TryAppendPointerCommands(

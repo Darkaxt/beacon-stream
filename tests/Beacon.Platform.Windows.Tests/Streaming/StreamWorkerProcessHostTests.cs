@@ -1,6 +1,7 @@
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.IO.Pipes;
+using System.Threading.Channels;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.StreamWorker.Contracts.Worker.V1;
 using Beacon.Core.Streaming;
@@ -9,6 +10,57 @@ namespace Beacon.Platform.Windows.Tests.Streaming;
 
 public sealed class StreamWorkerProcessHostTests
 {
+    [Fact]
+    public async Task EventReaderIsStableAcrossMonotonicWorkerReplacement()
+    {
+        await using var events = new StreamWorkerEventBuffer(capacity: 2);
+        ChannelReader<StreamWorkerEvent> reader = events.Reader;
+
+        long first = events.ActivateNextGeneration();
+        long second = events.ActivateNextGeneration();
+
+        Assert.Same(reader, events.Reader);
+        Assert.Equal(1, first);
+        Assert.Equal(2, second);
+        Assert.False(events.IsCurrentGeneration(first));
+        Assert.True(events.IsCurrentGeneration(second));
+        Assert.False(reader.Completion.IsCompleted);
+    }
+
+    [Fact]
+    public async Task OldProcessExitIsPublishedOnceWithoutInvalidatingReplacement()
+    {
+        await using var events = new StreamWorkerEventBuffer(capacity: 2);
+        long oldGeneration = events.ActivateNextGeneration();
+        long replacementGeneration = events.ActivateNextGeneration();
+
+        await events.PublishProcessExitedAsync(oldGeneration, 23);
+        await events.PublishProcessExitedAsync(oldGeneration, 23);
+
+        StreamWorkerProcessExited exited = Assert.IsType<StreamWorkerProcessExited>(
+            await events.Reader.ReadAsync());
+        Assert.Equal(oldGeneration, exited.ProcessGeneration);
+        Assert.Equal(23, exited.ExitCode);
+        Assert.False(events.Reader.TryRead(out _));
+        Assert.Equal(replacementGeneration, events.CurrentGeneration);
+        Assert.True(events.IsCurrentGeneration(replacementGeneration));
+    }
+
+    [Fact]
+    public async Task DisposalCompletesStableEventChannelAndCancelsBlockedWriter()
+    {
+        var events = new StreamWorkerEventBuffer(capacity: 1);
+        long generation = events.ActivateNextGeneration();
+        await events.PublishProcessExitedAsync(generation, 1);
+        Task blocked = events.PublishProcessExitedAsync(generation + 1, 2).AsTask();
+
+        await events.DisposeAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => blocked);
+        _ = await events.Reader.ReadAsync();
+        await events.Reader.Completion;
+        Assert.True(events.Reader.Completion.IsCompletedSuccessfully);
+    }
     [Fact]
     public void OptionsUseExplicitWorkerExecutablePath()
     {

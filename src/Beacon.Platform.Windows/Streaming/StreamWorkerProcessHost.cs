@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Threading.Channels;
 using Beacon.StreamWorker.Contracts.Worker.V1;
 
 namespace Beacon.Platform.Windows.Streaming;
@@ -25,6 +26,12 @@ public interface IStreamWorkerHost
 
     ReadOnlyMemory<byte> WorkerInstanceId { get; }
 
+    ChannelReader<StreamWorkerEvent> Events { get; }
+
+    long CurrentProcessGeneration { get; }
+
+    bool IsCurrentProcessGeneration(long processGeneration);
+
     Task EnsureReadyAsync(CancellationToken cancellationToken);
 
     Task<StreamWorkerCommandResponse> SendAsync(
@@ -39,11 +46,8 @@ public sealed class StreamWorkerProcessHost : IStreamWorkerHost, IAsyncDisposabl
     private readonly StreamWorkerProcessHostOptions options;
     private readonly InteractiveStreamWorkerLauncher launcher;
     private readonly SemaphoreSlim lifecycleGate = new(1, 1);
-    private StreamWorkerNamedPipeClient? client;
-    private NamedPipeServerStream? pipe;
-    private Process? process;
-    private Task<int>? processExit;
-    private WorkerJobObject? job;
+    private readonly StreamWorkerEventBuffer eventBuffer = new(capacity: 64);
+    private ActiveWorker? activeWorker;
     private int disposed;
 
     public StreamWorkerProcessHost(StreamWorkerProcessHostOptions options)
@@ -61,14 +65,23 @@ public sealed class StreamWorkerProcessHost : IStreamWorkerHost, IAsyncDisposabl
 
     public bool IsReady =>
         Volatile.Read(ref disposed) == 0
-        && client?.IsReady == true
-        && process is { HasExited: false };
+        && Volatile.Read(ref activeWorker) is { Client.IsReady: true, Process.HasExited: false };
 
-    public int ProcessId => process?.Id ?? 0;
+    public int ProcessId => Volatile.Read(ref activeWorker)?.Process.Id ?? 0;
 
-    public bool HasExited => process is null || process.HasExited;
+    public bool HasExited => Volatile.Read(ref activeWorker) is not { Process.HasExited: false };
 
-    public ReadOnlyMemory<byte> WorkerInstanceId => client?.WorkerInstanceId ?? ReadOnlyMemory<byte>.Empty;
+    public ReadOnlyMemory<byte> WorkerInstanceId =>
+        Volatile.Read(ref activeWorker)?.Client.WorkerInstanceId ?? ReadOnlyMemory<byte>.Empty;
+
+    public ChannelReader<StreamWorkerEvent> Events => eventBuffer.Reader;
+
+    public long CurrentProcessGeneration =>
+        Volatile.Read(ref activeWorker)?.ProcessGeneration ?? 0;
+
+    public bool IsCurrentProcessGeneration(long processGeneration) =>
+        processGeneration > 0
+        && Volatile.Read(ref activeWorker)?.ProcessGeneration == processGeneration;
 
     public async Task EnsureReadyAsync(CancellationToken cancellationToken)
     {
@@ -101,7 +114,7 @@ public sealed class StreamWorkerProcessHost : IStreamWorkerHost, IAsyncDisposabl
         CancellationToken cancellationToken)
     {
         await EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
-        StreamWorkerNamedPipeClient activeClient = client
+        StreamWorkerNamedPipeClient activeClient = Volatile.Read(ref activeWorker)?.Client
             ?? throw new InvalidOperationException("StreamWorker did not become ready.");
         return await activeClient.SendAsync(command, cancellationToken).ConfigureAwait(false);
     }
@@ -126,6 +139,7 @@ public sealed class StreamWorkerProcessHost : IStreamWorkerHost, IAsyncDisposabl
             return;
         }
 
+        await eventBuffer.DisposeAsync().ConfigureAwait(false);
         await lifecycleGate.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -202,18 +216,35 @@ public sealed class StreamWorkerProcessHost : IStreamWorkerHost, IAsyncDisposabl
             }
             await connection.ConfigureAwait(false);
 
-            newClient = new StreamWorkerNamedPipeClient(newPipe, newProcessExit, checked((uint)newProcess.Id));
+            long processGeneration = eventBuffer.ActivateNextGeneration();
+            newClient = new StreamWorkerNamedPipeClient(
+                newPipe,
+                newProcessExit,
+                checked((uint)newProcess.Id),
+                processGeneration,
+                eventBuffer.Writer);
+            Volatile.Write(
+                ref activeWorker,
+                new ActiveWorker(
+                    processGeneration,
+                    newProcess,
+                    newProcessExit,
+                    newPipe,
+                    newJob,
+                    newClient));
             await newClient.InitializeAsync(cancellationToken).ConfigureAwait(false);
-
-            pipe = newPipe;
-            job = newJob;
-            process = newProcess;
-            processExit = newProcessExit;
-            client = newClient;
+            _ = PublishProcessExitAsync(newProcessExit, processGeneration);
         }
         catch
         {
-            if (newClient is not null)
+            if (newClient is not null
+                && ReferenceEquals(Volatile.Read(ref activeWorker)?.Client, newClient))
+            {
+                await ReleaseWorkerAsync().ConfigureAwait(false);
+                newClient = null;
+                newProcess = null;
+            }
+            else if (newClient is not null)
             {
                 await newClient.DisposeAsync().ConfigureAwait(false);
             }
@@ -229,11 +260,12 @@ public sealed class StreamWorkerProcessHost : IStreamWorkerHost, IAsyncDisposabl
 
     private async Task ShutdownWorkerCoreAsync(CancellationToken cancellationToken)
     {
-        StreamWorkerNamedPipeClient? activeClient = client;
-        Task<int>? activeExit = processExit;
+        ActiveWorker? active = Volatile.Read(ref activeWorker);
+        StreamWorkerNamedPipeClient? activeClient = active?.Client;
+        Task<int>? activeExit = active?.ProcessExit;
         try
         {
-            if (process is { HasExited: false } && activeClient?.IsReady == true)
+            if (active is { Process.HasExited: false } && activeClient?.IsReady == true)
             {
                 StreamWorkerCommandResponse response = await activeClient.SendAsync(
                     new WorkerIpcEnvelope { ShutdownWorker = new ShutdownWorker() },
@@ -247,9 +279,9 @@ public sealed class StreamWorkerProcessHost : IStreamWorkerHost, IAsyncDisposabl
                     _ = await activeExit.WaitAsync(cancellationToken).ConfigureAwait(false);
                 }
             }
-            else if (process is { HasExited: false })
+            else if (active is { Process.HasExited: false })
             {
-                job?.Dispose();
+                active.Job.Dispose();
                 if (activeExit is not null)
                 {
                     _ = await activeExit.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -258,7 +290,7 @@ public sealed class StreamWorkerProcessHost : IStreamWorkerHost, IAsyncDisposabl
         }
         catch
         {
-            job?.Dispose();
+            active?.Job.Dispose();
             if (activeExit is not null)
             {
                 _ = await activeExit.ConfigureAwait(false);
@@ -273,14 +305,11 @@ public sealed class StreamWorkerProcessHost : IStreamWorkerHost, IAsyncDisposabl
 
     private async Task ReleaseUnreadyWorkerAsync()
     {
-        if (process is { HasExited: false })
+        ActiveWorker? active = Volatile.Read(ref activeWorker);
+        if (active is { Process.HasExited: false })
         {
-            Task<int>? activeExit = processExit;
-            job?.Dispose();
-            if (activeExit is not null)
-            {
-                _ = await activeExit.ConfigureAwait(false);
-            }
+            active.Job.Dispose();
+            _ = await active.ProcessExit.ConfigureAwait(false);
         }
 
         if (!IsReady)
@@ -291,27 +320,127 @@ public sealed class StreamWorkerProcessHost : IStreamWorkerHost, IAsyncDisposabl
 
     private async Task ReleaseWorkerAsync()
     {
-        StreamWorkerNamedPipeClient? oldClient = Interlocked.Exchange(ref client, null);
-        NamedPipeServerStream? oldPipe = Interlocked.Exchange(ref pipe, null);
-        Process? oldProcess = Interlocked.Exchange(ref process, null);
-        WorkerJobObject? oldJob = Interlocked.Exchange(ref job, null);
-        processExit = null;
-
-        if (oldClient is not null)
+        ActiveWorker? old = Interlocked.Exchange(ref activeWorker, null);
+        if (old is null)
         {
-            await oldClient.DisposeAsync().ConfigureAwait(false);
+            return;
         }
-        else if (oldPipe is not null)
-        {
-            await oldPipe.DisposeAsync().ConfigureAwait(false);
-        }
-        oldJob?.Dispose();
-        oldProcess?.Dispose();
+        eventBuffer.Deactivate(old.ProcessGeneration);
+        await old.Client.DisposeAsync().ConfigureAwait(false);
+        old.Job.Dispose();
+        old.Process.Dispose();
     }
 
     private static async Task<int> ObserveExitAsync(Process process)
     {
         await process.WaitForExitAsync().ConfigureAwait(false);
         return process.ExitCode;
+    }
+
+    private async Task PublishProcessExitAsync(Task<int> exit, long processGeneration)
+    {
+        try
+        {
+            int exitCode = await exit.ConfigureAwait(false);
+            await eventBuffer.PublishProcessExitedAsync(processGeneration, exitCode).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (Volatile.Read(ref disposed) != 0)
+        {
+        }
+        catch (ChannelClosedException) when (Volatile.Read(ref disposed) != 0)
+        {
+        }
+    }
+
+    private sealed record ActiveWorker(
+        long ProcessGeneration,
+        Process Process,
+        Task<int> ProcessExit,
+        NamedPipeServerStream Pipe,
+        WorkerJobObject Job,
+        StreamWorkerNamedPipeClient Client);
+}
+
+internal sealed class StreamWorkerEventBuffer : IAsyncDisposable
+{
+    private readonly Channel<StreamWorkerEvent> channel;
+    private readonly CancellationTokenSource disposal = new();
+    private readonly Lock exitGate = new();
+    private readonly HashSet<long> publishedExitGenerations = [];
+    private long nextGeneration;
+    private long currentGeneration;
+    private int disposed;
+
+    public StreamWorkerEventBuffer(int capacity)
+    {
+        if (capacity <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(capacity));
+        }
+        channel = Channel.CreateBounded<StreamWorkerEvent>(new BoundedChannelOptions(capacity)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+            SingleWriter = false,
+            AllowSynchronousContinuations = false,
+        });
+    }
+
+    public ChannelReader<StreamWorkerEvent> Reader => channel.Reader;
+
+    public ChannelWriter<StreamWorkerEvent> Writer => channel.Writer;
+
+    public long CurrentGeneration => Interlocked.Read(ref currentGeneration);
+
+    public long ActivateNextGeneration()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+        long generation = Interlocked.Increment(ref nextGeneration);
+        Interlocked.Exchange(ref currentGeneration, generation);
+        return generation;
+    }
+
+    public void Deactivate(long generation)
+    {
+        if (generation > 0)
+        {
+            Interlocked.CompareExchange(ref currentGeneration, 0, generation);
+        }
+    }
+
+    public bool IsCurrentGeneration(long generation) =>
+        generation > 0 && CurrentGeneration == generation;
+
+    public async ValueTask PublishProcessExitedAsync(long generation, int exitCode)
+    {
+        lock (exitGate)
+        {
+            if (!publishedExitGenerations.Add(generation))
+            {
+                return;
+            }
+        }
+
+        try
+        {
+            await channel.Writer.WriteAsync(
+                new StreamWorkerProcessExited(generation, exitCode),
+                disposal.Token).ConfigureAwait(false);
+        }
+        catch (ChannelClosedException) when (disposal.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(disposal.Token);
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref disposed, 1) == 0)
+        {
+            disposal.Cancel();
+            channel.Writer.TryComplete();
+            disposal.Dispose();
+        }
+        return ValueTask.CompletedTask;
     }
 }

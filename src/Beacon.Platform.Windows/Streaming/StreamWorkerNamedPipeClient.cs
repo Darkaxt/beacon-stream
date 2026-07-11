@@ -1,5 +1,8 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
+using Beacon.Core.Input;
 using Beacon.StreamWorker.Contracts.Framing;
+using Beacon.StreamWorker.Contracts.Stream.V1;
 using Beacon.StreamWorker.Contracts.Worker.V1;
 using Google.Protobuf;
 
@@ -14,6 +17,8 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
     private readonly Stream stream;
     private readonly Task<int> processExit;
     private readonly uint expectedProcessId;
+    private readonly long processGeneration;
+    private readonly ChannelWriter<StreamWorkerEvent> eventWriter;
     private readonly SemaphoreSlim writeGate = new(1, 1);
     private readonly ConcurrentDictionary<ulong, PendingRequest> pending = new();
     private readonly CancellationTokenSource disposal = new();
@@ -27,10 +32,29 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
     private int disposed;
 
     public StreamWorkerNamedPipeClient(Stream stream, Task<int> processExit, uint expectedProcessId)
+        : this(
+            stream,
+            processExit,
+            expectedProcessId,
+            processGeneration: 1,
+            Channel.CreateBounded<StreamWorkerEvent>(1).Writer)
+    {
+    }
+
+    public StreamWorkerNamedPipeClient(
+        Stream stream,
+        Task<int> processExit,
+        uint expectedProcessId,
+        long processGeneration,
+        ChannelWriter<StreamWorkerEvent> eventWriter)
     {
         this.stream = stream ?? throw new ArgumentNullException(nameof(stream));
         this.processExit = processExit ?? throw new ArgumentNullException(nameof(processExit));
         this.expectedProcessId = expectedProcessId;
+        this.processGeneration = processGeneration > 0
+            ? processGeneration
+            : throw new ArgumentOutOfRangeException(nameof(processGeneration));
+        this.eventWriter = eventWriter ?? throw new ArgumentNullException(nameof(eventWriter));
     }
 
     public bool IsReady => Volatile.Read(ref initialized) == 1 && Volatile.Read(ref disposed) == 0;
@@ -198,7 +222,12 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
             {
                 WorkerIpcEnvelope envelope = await ReadEnvelopeAsync(disposal.Token).ConfigureAwait(false);
                 ProtocolVersion.EnsureSupported(envelope.ProtocolVersion);
-                if (envelope.RequestId != 0 && pending.TryGetValue(envelope.RequestId, out PendingRequest? request))
+                if (envelope.RequestId == 0)
+                {
+                    StreamWorkerEvent workerEvent = TranslateEvent(envelope);
+                    await eventWriter.WriteAsync(workerEvent, disposal.Token).ConfigureAwait(false);
+                }
+                else if (pending.TryGetValue(envelope.RequestId, out PendingRequest? request))
                 {
                     if (envelope.BodyCase == WorkerIpcEnvelope.BodyOneofCase.WorkerCompletion)
                     {
@@ -253,6 +282,186 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
                 request.Fail(error);
             }
         }
+    }
+
+    private StreamWorkerEvent TranslateEvent(WorkerIpcEnvelope envelope)
+    {
+        if (string.IsNullOrWhiteSpace(envelope.SessionId))
+        {
+            throw new StreamWorkerProtocolException("StreamWorker event session identity is invalid.");
+        }
+
+        return envelope.BodyCase switch
+        {
+            WorkerIpcEnvelope.BodyOneofCase.TransportAuthenticated =>
+                TranslateTransportAuthenticated(envelope),
+            WorkerIpcEnvelope.BodyOneofCase.TransportDisconnected =>
+                TranslateTransportDisconnected(envelope),
+            WorkerIpcEnvelope.BodyOneofCase.InputReceived => TranslateInput(envelope),
+            WorkerIpcEnvelope.BodyOneofCase.FeedbackReceived => TranslateFeedback(envelope),
+            WorkerIpcEnvelope.BodyOneofCase.MediaEvidence => TranslateMediaEvidence(envelope),
+            _ => throw new StreamWorkerProtocolException("StreamWorker emitted an unknown unsolicited event."),
+        };
+    }
+
+    private StreamWorkerTransportAuthenticated TranslateTransportAuthenticated(WorkerIpcEnvelope envelope)
+    {
+        if (envelope.TransportAuthenticated.SessionGeneration == 0)
+        {
+            throw new StreamWorkerProtocolException("StreamWorker transport event generation is invalid.");
+        }
+        return new StreamWorkerTransportAuthenticated(
+            processGeneration,
+            envelope.SessionId,
+            envelope.TransportAuthenticated.SessionGeneration,
+            envelope.TransportAuthenticated.MaximumDatagramBytes);
+    }
+
+    private StreamWorkerTransportDisconnected TranslateTransportDisconnected(WorkerIpcEnvelope envelope)
+    {
+        if (envelope.TransportDisconnected.SessionGeneration == 0)
+        {
+            throw new StreamWorkerProtocolException("StreamWorker disconnect event generation is invalid.");
+        }
+        return new StreamWorkerTransportDisconnected(
+            processGeneration,
+            envelope.SessionId,
+            envelope.TransportDisconnected.SessionGeneration);
+    }
+
+    private StreamWorkerInputReceived TranslateInput(WorkerIpcEnvelope envelope)
+    {
+        InputReceived received = envelope.InputReceived;
+        InputStreamEnvelope input = received.Input;
+        if (received.SessionGeneration == 0
+            || input is null
+            || input.ProtocolVersion != ProtocolVersion.Current
+            || !string.Equals(input.SessionId, envelope.SessionId, StringComparison.Ordinal)
+            || input.InputBatch is null
+            || input.InputBatch.Events.Count == 0)
+        {
+            throw new StreamWorkerProtocolException("StreamWorker input event is invalid.");
+        }
+
+        ClientInputEvent[] translated = input.InputBatch.Events.Select(TranslateInputEvent).ToArray();
+        return new StreamWorkerInputReceived(
+            processGeneration,
+            envelope.SessionId,
+            received.SessionGeneration,
+            input.Sequence,
+            translated);
+    }
+
+    private static ClientInputEvent TranslateInputEvent(InputEvent input) => input.BodyCase switch
+    {
+        InputEvent.BodyOneofCase.Pointer when input.Pointer.Action != PointerAction.Unspecified =>
+            ClientInputEvent.StreamPointer(
+                input.Pointer.Action switch
+                {
+                    PointerAction.Move => ClientPointerAction.Move,
+                    PointerAction.ButtonDown => ClientPointerAction.ButtonDown,
+                    PointerAction.ButtonUp => ClientPointerAction.ButtonUp,
+                    PointerAction.Scroll => ClientPointerAction.Scroll,
+                    _ => throw new StreamWorkerProtocolException("StreamWorker pointer action is invalid."),
+                },
+                input.Pointer.X,
+                input.Pointer.Y,
+                input.Pointer.WheelDelta,
+                input.Pointer.Button),
+        InputEvent.BodyOneofCase.Keyboard =>
+            ClientInputEvent.StreamKeyboard(input.Keyboard.ScanCode, input.Keyboard.Pressed),
+        InputEvent.BodyOneofCase.Controller =>
+            ClientInputEvent.StreamController(
+                input.Controller.ControllerIndex,
+                input.Controller.ControlId,
+                input.Controller.Value),
+        InputEvent.BodyOneofCase.Touch when input.Touch.Action != TouchAction.Unspecified
+            && input.Touch.CoordinateDenominator != 0
+            && input.Touch.PressureDenominator != 0 =>
+            ClientInputEvent.StreamTouch(
+                input.Touch.ContactId,
+                input.Touch.Action switch
+                {
+                    TouchAction.Down => ClientTouchAction.Down,
+                    TouchAction.Move => ClientTouchAction.Move,
+                    TouchAction.Up => ClientTouchAction.Up,
+                    TouchAction.Cancel => ClientTouchAction.Cancel,
+                    _ => throw new StreamWorkerProtocolException("StreamWorker touch action is invalid."),
+                },
+                input.Touch.XNumerator,
+                input.Touch.YNumerator,
+                input.Touch.CoordinateDenominator,
+                input.Touch.PressureNumerator,
+                input.Touch.PressureDenominator),
+        _ => throw new StreamWorkerProtocolException("StreamWorker input variant is invalid."),
+    };
+
+    private StreamWorkerFeedbackReceived TranslateFeedback(WorkerIpcEnvelope envelope)
+    {
+        FeedbackReceived received = envelope.FeedbackReceived;
+        FeedbackStreamEnvelope feedback = received.Feedback;
+        if (received.SessionGeneration == 0
+            || feedback is null
+            || feedback.ProtocolVersion != ProtocolVersion.Current
+            || !string.Equals(feedback.SessionId, envelope.SessionId, StringComparison.Ordinal))
+        {
+            throw new StreamWorkerProtocolException("StreamWorker feedback event is invalid.");
+        }
+
+        (StreamWorkerFeedbackKind kind, ulong primary, ulong secondary, uint count) = feedback.BodyCase switch
+        {
+            FeedbackStreamEnvelope.BodyOneofCase.RenderedFrame =>
+                (StreamWorkerFeedbackKind.RenderedFrame,
+                    feedback.RenderedFrame.FrameSequence,
+                    feedback.RenderedFrame.PresentationTimeUs,
+                    0u),
+            FeedbackStreamEnvelope.BodyOneofCase.DatagramLoss =>
+                (StreamWorkerFeedbackKind.DatagramLoss,
+                    feedback.DatagramLoss.FrameSequence,
+                    0UL,
+                    checked((uint)feedback.DatagramLoss.MissingChunkIndexes.Count)),
+            FeedbackStreamEnvelope.BodyOneofCase.Decoder =>
+                (StreamWorkerFeedbackKind.Decoder,
+                    checked((ulong)feedback.Decoder.State),
+                    feedback.Decoder.PlatformErrorCode,
+                    0u),
+            FeedbackStreamEnvelope.BodyOneofCase.QueueDepth =>
+                (StreamWorkerFeedbackKind.QueueDepth,
+                    feedback.QueueDepth.QueuedAccessUnits,
+                    feedback.QueueDepth.DroppedAccessUnits,
+                    0u),
+            FeedbackStreamEnvelope.BodyOneofCase.BenchmarkEvidence =>
+                (StreamWorkerFeedbackKind.Benchmark,
+                    feedback.BenchmarkEvidence.SchemaVersion,
+                    0UL,
+                    checked((uint)feedback.BenchmarkEvidence.Facts.Count)),
+            _ => throw new StreamWorkerProtocolException("StreamWorker feedback variant is invalid."),
+        };
+        return new StreamWorkerFeedbackReceived(
+            processGeneration,
+            envelope.SessionId,
+            received.SessionGeneration,
+            feedback.Sequence,
+            kind,
+            primary,
+            secondary,
+            count);
+    }
+
+    private StreamWorkerMediaEvidence TranslateMediaEvidence(WorkerIpcEnvelope envelope)
+    {
+        MediaEvidence media = envelope.MediaEvidence;
+        if (media.SessionGeneration == 0)
+        {
+            throw new StreamWorkerProtocolException("StreamWorker media event generation is invalid.");
+        }
+        return new StreamWorkerMediaEvidence(
+            processGeneration,
+            envelope.SessionId,
+            media.SessionGeneration,
+            media.Sequence,
+            media.PresentationTimeUs,
+            media.DatagramBytes);
     }
 
     private static async Task ObserveCompletionAsync(Task task)
