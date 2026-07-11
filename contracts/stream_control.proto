@@ -8,11 +8,14 @@ option optimize_for = LITE_RUNTIME;
 enum VideoCodec {
   VIDEO_CODEC_UNSPECIFIED = 0;
   VIDEO_CODEC_H264 = 1;
+  VIDEO_CODEC_HEVC = 2;
+  VIDEO_CODEC_AV1 = 3;
 }
 
 enum DynamicRange {
   DYNAMIC_RANGE_UNSPECIFIED = 0;
   DYNAMIC_RANGE_SDR = 1;
+  DYNAMIC_RANGE_HDR10 = 2;
 }
 
 enum SessionState {

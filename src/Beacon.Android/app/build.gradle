@@ -8,21 +8,79 @@ android {
 
     defaultConfig {
         applicationId 'dev.beacon.android'
-        minSdk 26
+        minSdk 29
         targetSdk 35
         versionCode 1
         versionName '0.1.0'
-        testInstrumentationRunner 'android.test.InstrumentationTestRunner'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        ndk {
+            abiFilters 'x86_64', 'arm64-v8a'
+        }
     }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+
+    sourceSets {
+        debug {
+            jniLibs.srcDir 'build/generated/jniLibs/debug'
+        }
+        release {
+            jniLibs.srcDir 'build/generated/jniLibs/release'
+        }
+    }
 }
+
+def repositoryRoot = rootProject.projectDir.toPath().resolve('../..').normalize().toFile()
+def windowsHost = System.getProperty('os.name').toLowerCase(Locale.ROOT).contains('windows')
+
+def registerBeaconNative = { String configuration ->
+    def lower = configuration.toLowerCase(Locale.ROOT)
+    def taskName = "generateBeaconNative${configuration}"
+    tasks.register(taskName, Exec) {
+        workingDir repositoryRoot
+        inputs.files(
+            fileTree(new File(repositoryRoot, 'contracts')) { include '**/*.proto' },
+            fileTree(new File(repositoryRoot, 'native')) {
+                include 'CMakeLists.txt', 'CMakePresets.json', 'cmake/**'
+            },
+            fileTree(new File(repositoryRoot, 'src/Beacon.StreamProtocol')) {
+                include '**/*.h', '**/*.cpp', 'CMakeLists.txt'
+            },
+            fileTree(new File(repositoryRoot, 'tests/Beacon.StreamProtocol.Tests')) {
+                include '**/*.h', '**/*.cpp', 'CMakeLists.txt'
+            },
+            fileTree('src/main/cpp') { include '**/*' },
+            new File(repositoryRoot, 'scripts/build-native-android.sh'),
+            new File(repositoryRoot, 'scripts/build-native-android-wsl.sh'),
+            new File(repositoryRoot, 'scripts/build-native-android-wsl.ps1'),
+            new File(repositoryRoot, 'scripts/bootstrap-native-dependencies-linux.sh'),
+            new File(repositoryRoot, 'scripts/install-protoc-linux.sh'))
+        outputs.dir(layout.buildDirectory.dir("generated/jniLibs/${lower}"))
+        if (windowsHost) {
+            commandLine 'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                '-File', new File(repositoryRoot, 'scripts/build-native-android-wsl.ps1'),
+                '-Configuration', configuration
+        } else {
+            commandLine 'bash', new File(repositoryRoot, 'scripts/build-native-android.sh'), configuration
+        }
+    }
+    tasks.configureEach { task ->
+        if (task.name == "pre${configuration}Build") {
+            task.dependsOn taskName
+        }
+    }
+}
+
+registerBeaconNative('Debug')
+registerBeaconNative('Release')
 
 dependencies {
     implementation 'com.google.code.gson:gson:2.11.0'
     androidTestImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
     testImplementation 'junit:junit:4.13.2'
 }

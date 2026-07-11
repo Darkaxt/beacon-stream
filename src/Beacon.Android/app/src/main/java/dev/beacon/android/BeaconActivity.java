@@ -25,8 +25,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class BeaconActivity extends Activity {
-    private static final String MEDIA_RECOVERY_STATUS =
-        "StreamWorker recovery in progress; control-plane launch completed without media.";
     private static final String[] LOCAL_THEME_VALUES = new String[] { "system", "dark", "light" };
     private static final String[] TOUCH_LAYOUT_VALUES = new String[] { "default", "compact", "edge" };
     private static final String[] UI_DENSITY_VALUES = new String[] { "comfortable", "dense", "large" };
@@ -378,12 +376,9 @@ public final class BeaconActivity extends Activity {
             try {
                 action.run(model);
                 String error = model.latestError().isEmpty() ? "" : "\nError: " + model.latestError();
-                String recovery = "Launch".equals(label) && model.latestError().isEmpty()
-                    ? "\n" + MEDIA_RECOVERY_STATUS
-                    : "";
                 setStatus(model.status() + "\nGames: " + model.latestGames() +
                     "\nPlan: " + model.latestPlan() + "\nStream: " + model.latestStream() +
-                    recovery + error);
+                    error);
             } catch (IOException | RuntimeException ex) {
                 setStatus(label + " failed: " + ex.getMessage());
             }
@@ -508,7 +503,18 @@ public final class BeaconActivity extends Activity {
         return new BeaconViewModel(
             config.clientId(),
             config.serverUrl(),
-            new BeaconApiClient(this, config));
+            new BeaconApiClient(this, config),
+            new BeaconStreamCore(frame -> { }));
+    }
+
+    BeaconViewModel createOwnedModelForInstrumentation() {
+        publicKeyFingerprint.setText(
+            "0000000000000000000000000000000000000000000000000000000000000000");
+        return modelSession.get("instrumentation-client", "https://127.0.0.1");
+    }
+
+    boolean workerExecutorShutdown() {
+        return executor.isShutdown();
     }
 
     private BeaconApiClient.ProfilePatch readPatch() {

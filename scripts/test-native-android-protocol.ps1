@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $wslHome = (& wsl.exe -d $WslDistribution -- bash -lc 'printf %s "$HOME"').Trim()
-$androidBuild = "$wslHome/.cache/beacon/build/android-x86_64"
+$androidBuild = "$wslHome/.cache/beacon/build/android-x86_64-debug"
 $androidBuildWindows = (& wsl.exe -d $WslDistribution -- wslpath -w $androidBuild).Trim()
 $remoteDirectory = '/data/local/tmp/beacon-native'
 $tests = @(
@@ -15,7 +15,10 @@ $tests = @(
     'BeaconFakeTransportTests',
     'BeaconSessionTests',
     'BeaconFrameAssemblerTests',
-    'BeaconMsQuicTransportTests'
+    'BeaconMsQuicTransportTests',
+    'BeaconAndroidStreamCoreTests',
+    'BeaconAndroidCertificatePinTests',
+    'BeaconAndroidLifecycleTests'
 )
 
 & adb -s $Serial get-state | Out-Null
