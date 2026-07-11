@@ -70,6 +70,10 @@ public sealed class StreamTicketService
         {
             throw new ArgumentException("Worker instance id is required.", nameof(workerInstanceId));
         }
+        if (planRevision == 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(planRevision), "Plan revision must be nonzero.");
+        }
 
         byte[] ticket = RandomNumberGenerator.GetBytes(32);
         byte[] hash = SHA256.HashData(ticket);
@@ -212,6 +216,22 @@ public sealed class StreamTicketService
             if (ticketsById.TryGetValue(ticketId, out StreamTicketRecord? record))
             {
                 record.Revoked = true;
+            }
+        }
+    }
+
+    public void RevokeUnusedForSession(string clientId, string sessionId)
+    {
+        lock (gate)
+        {
+            foreach (StreamTicketRecord record in ticketsById.Values)
+            {
+                if (!record.Consumed
+                    && string.Equals(record.ClientId, clientId, StringComparison.Ordinal)
+                    && string.Equals(record.SessionId, sessionId, StringComparison.Ordinal))
+                {
+                    record.Revoked = true;
+                }
             }
         }
     }

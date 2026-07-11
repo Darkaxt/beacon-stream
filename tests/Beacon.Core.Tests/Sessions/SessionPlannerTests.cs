@@ -214,4 +214,34 @@ public sealed class SessionPlannerTests
         Assert.Equal("hevc", plan.Stream.Codec);
         Assert.Contains("profile", plan.Stream.Reason, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void RevisionIsStableForTheSamePlanAndChangesWithPlanFacts()
+    {
+        EndpointCapabilities capabilities = new(
+            Av1: true,
+            Hevc: true,
+            H264: true,
+            Hdr10: false,
+            VirtualDisplayHdrSupported: false,
+            MaxFps: 120);
+        TelemetrySnapshot excellent = new(
+            RttMs: 8,
+            PacketLossPercent: 0,
+            DecoderLoadPercent: 20,
+            EstimatedBandwidthMbps: 120,
+            WifiBand: "wifi-7");
+        TelemetrySnapshot congested = excellent with { RttMs = 115 };
+
+        SessionPlan first = Assert.IsType<SessionPlan>(SessionPlanner.CreatePlan(
+            ClientProfile.CreateZFold7Default(), capabilities, excellent, Dispatch).Plan);
+        SessionPlan repeated = Assert.IsType<SessionPlan>(SessionPlanner.CreatePlan(
+            ClientProfile.CreateZFold7Default(), capabilities, excellent, Dispatch).Plan);
+        SessionPlan changed = Assert.IsType<SessionPlan>(SessionPlanner.CreatePlan(
+            ClientProfile.CreateZFold7Default(), capabilities, congested, Dispatch).Plan);
+
+        Assert.NotEqual(0UL, first.Revision);
+        Assert.Equal(first.Revision, repeated.Revision);
+        Assert.NotEqual(first.Revision, changed.Revision);
+    }
 }

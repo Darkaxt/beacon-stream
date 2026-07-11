@@ -302,6 +302,9 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
     {
         HttpClient client = factory.CreateClient();
         await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        FakeStreamSessionAuthorizer authorizer = Assert.IsType<FakeStreamSessionAuthorizer>(
+            factory.Services.GetRequiredService<IStreamSessionAuthorizer>());
+        int revocationsBeforeStop = authorizer.Revocations.Count;
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/admin/clients/z-fold-7/stream/stop", new { });
 
@@ -311,6 +314,7 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
 
         Assert.Equal("z-fold-7", root.GetProperty("clientId").GetString());
         Assert.Equal("stopped", root.GetProperty("stream").GetProperty("state").GetString());
+        Assert.Equal(revocationsBeforeStop + 1, authorizer.Revocations.Count);
     }
 
     [Fact]

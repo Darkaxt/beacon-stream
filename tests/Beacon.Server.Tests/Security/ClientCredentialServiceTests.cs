@@ -25,6 +25,8 @@ public sealed class ClientCredentialServiceTests
         Assert.True(service.Authenticate("z-fold-7", approved.Credential));
         Assert.False(service.Authenticate("other-client", approved.Credential));
         Assert.DoesNotContain(approved.Credential, service.GetRegistration(pending.RegistrationId)!.ToString());
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.WaitForApprovalAsync(pending.RegistrationId, CancellationToken.None));
     }
 
     [Fact]
@@ -49,6 +51,28 @@ public sealed class ClientCredentialServiceTests
             second.Revoke("z-fold-7");
 
             Assert.False(second.Authenticate("z-fold-7", approved.Credential));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Theory]
+    [InlineData("not-json")]
+    [InlineData("[{\"clientId\":\"z-fold-7\",\"salt\":\"YQ==\",\"hash\":\"Yg==\",\"revoked\":false}]")]
+    public void CorruptCredentialStoreFailsClosed(string contents)
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"beacon-credentials-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, contents);
+
+            InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+                new ClientCredentialService(path));
+
+            Assert.Contains("credential store", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(contents, File.ReadAllText(path));
         }
         finally
         {

@@ -265,6 +265,7 @@ public static class AdminEndpoints
             string clientId,
             InMemorySessionStore sessions,
             IStreamingBackend streaming,
+            StreamTicketProvisioningService ticketProvisioning,
             CancellationToken cancellationToken) =>
         {
             SessionPlan? plan = sessions.Get(clientId);
@@ -274,9 +275,17 @@ public static class AdminEndpoints
             }
 
             StreamingStopResult stop = await streaming.StopAsync(plan.SessionId, cancellationToken);
-            return stop.Success && stop.Session is not null
+            if (!stop.Success || stop.Session is null)
+            {
+                return Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
+                clientId,
+                plan.SessionId,
+                cancellationToken);
+            return revoked.Success
                 ? Results.Ok(new { clientId, stream = stop.Session })
-                : Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+                : Results.Problem(revoked.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
         });
 
         admin.MapPatch("/clients/{clientId}/profile", (

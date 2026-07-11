@@ -70,12 +70,21 @@ public sealed class ClientCredentialService
         this.path = string.IsNullOrWhiteSpace(path) ? null : Path.GetFullPath(path);
         if (this.path is not null && File.Exists(this.path))
         {
-            PersistedClientCredential[] stored = JsonSerializer.Deserialize<PersistedClientCredential[]>(
-                File.ReadAllText(this.path),
-                JsonOptions) ?? [];
-            foreach (PersistedClientCredential credential in stored)
+            try
             {
-                credentials[credential.ClientId] = credential;
+                PersistedClientCredential[] stored = JsonSerializer.Deserialize<PersistedClientCredential[]>(
+                    File.ReadAllText(this.path),
+                    JsonOptions) ?? [];
+                foreach (PersistedClientCredential credential in stored)
+                {
+                    ValidatePersistedCredential(credential);
+                    credentials[credential.ClientId] = credential;
+                }
+            }
+            catch (Exception error) when (
+                error is JsonException or FormatException or ArgumentException or InvalidDataException)
+            {
+                throw new InvalidDataException("Beacon client credential store could not be loaded.", error);
             }
         }
     }
@@ -204,15 +213,31 @@ public sealed class ClientCredentialService
         {
             return false;
         }
+        byte[]? salt = null;
+        byte[]? actual = null;
+        byte[]? expected = null;
         try
         {
-            byte[] actual = HashCredential(Convert.FromBase64String(stored.Salt), submitted);
-            byte[] expected = Convert.FromBase64String(stored.Hash);
+            salt = Convert.FromBase64String(stored.Salt);
+            actual = HashCredential(salt, submitted);
+            expected = Convert.FromBase64String(stored.Hash);
             return CryptographicOperations.FixedTimeEquals(actual, expected);
         }
         finally
         {
             CryptographicOperations.ZeroMemory(submitted);
+            if (salt is not null)
+            {
+                CryptographicOperations.ZeroMemory(salt);
+            }
+            if (actual is not null)
+            {
+                CryptographicOperations.ZeroMemory(actual);
+            }
+            if (expected is not null)
+            {
+                CryptographicOperations.ZeroMemory(expected);
+            }
         }
     }
 
@@ -286,6 +311,33 @@ public sealed class ClientCredentialService
         finally
         {
             CryptographicOperations.ZeroMemory(material);
+        }
+    }
+
+    private static void ValidatePersistedCredential(PersistedClientCredential credential)
+    {
+        _ = RequireText(credential.ClientId, nameof(credential.ClientId));
+        byte[]? salt = null;
+        byte[]? hash = null;
+        try
+        {
+            salt = Convert.FromBase64String(credential.Salt);
+            hash = Convert.FromBase64String(credential.Hash);
+            if (salt.Length != 32 || hash.Length != 32)
+            {
+                throw new InvalidDataException("Persisted credential salt and hash must be 32 bytes.");
+            }
+        }
+        finally
+        {
+            if (salt is not null)
+            {
+                CryptographicOperations.ZeroMemory(salt);
+            }
+            if (hash is not null)
+            {
+                CryptographicOperations.ZeroMemory(hash);
+            }
         }
     }
 
