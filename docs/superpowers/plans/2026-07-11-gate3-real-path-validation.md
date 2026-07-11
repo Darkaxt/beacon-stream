@@ -99,6 +99,10 @@ git push -u origin codex/beacon-gate3-validation
 - Modify: `src/Beacon.StreamWorker/src/worker_host.cpp`
 - Modify: `src/Beacon.StreamWorker/include/beacon/worker/quic_listener.h`
 - Modify: `src/Beacon.StreamWorker/src/quic_listener.cpp`
+- Modify: `src/Beacon.StreamWorker/include/beacon/worker/quic_session_protocol.h`
+- Modify: `src/Beacon.StreamWorker/src/quic_session_protocol.cpp`
+- Modify: `src/Beacon.StreamWorker/include/beacon/worker/named_pipe_channel.h`
+- Modify: `src/Beacon.StreamWorker/src/named_pipe_channel.cpp`
 - Modify: `src/Beacon.StreamWorker/src/main.cpp`
 - Modify: `src/Beacon.StreamWorker/CMakeLists.txt`
 - Test: `tests/Beacon.StreamWorker.Tests/worker_host_tests.cpp`
@@ -114,7 +118,8 @@ The central expectations are:
 BEACON_TEST_REQUIRE(events.size() >= 3);
 BEACON_TEST_REQUIRE(events[0].request_id() == 0);
 BEACON_TEST_REQUIRE(events[0].body_case() == WorkerIpcEnvelope::kTransportAuthenticated);
-BEACON_TEST_REQUIRE(events[1].input_received().input_batch().events_size() == 1);
+BEACON_TEST_REQUIRE(
+    events[1].input_received().input().input_batch().events_size() == 1);
 BEACON_TEST_REQUIRE(events[2].feedback_received().feedback().sequence() == 1);
 
 const auto datagrams = transport.take_sent_packets();
@@ -134,7 +139,9 @@ Expected: compilation/test failure because the event messages and synthetic sour
 - [ ] **Step 3: Extend the IPC schema with typed events**
 
 Import `stream_control.proto` and add these oneof bodies and messages without duplicating the
-public input/feedback schema:
+public input/feedback schema. The event also carries an explicit monotonic generation created
+at successful authentication; do not derive it from session id, plan revision, ticket state,
+packet sequence, or an `HQUIC` value:
 
 ```proto
 TransportAuthenticated transport_authenticated = 34;
@@ -154,14 +161,18 @@ message FeedbackReceived {
 ```
 
 Every unsolicited event must set `request_id = 0`, the owning `session_id`, and its session
-generation. Regenerate C# and C++ contracts through the existing build.
+generation. Extend `QuicSessionProtocolOutput` with typed accepted-authentication,
+accepted-StartSession, input, and feedback actions so QuicListener does not reparse generic
+packet payloads. Regenerate C# and C++ contracts through the existing build.
 
 - [ ] **Step 4: Implement the source and serialized event writer**
 
 Implement `SyntheticMediaSource::emit_idr` as a pure packet builder whose output enters
-`QuicListener::send`. Add one event-driven event queue to `WorkerHost`; `main.cpp` drains it
-from native state notifications and serializes command responses and events through one
-writer mutex. Do not add periodic loops or sleep.
+`QuicListener::send` after the accepted StartSession action. Add one outbound MPSC queue;
+`main.cpp` is its sole named-pipe consumer/writer, while one command-reader thread performs
+blocking reads and enqueues complete response vectors as indivisible batches. QuicListener
+publishes typed events through the same queue without holding its state mutex or waiting on
+pipe backpressure. Do not add periodic loops or sleep.
 
 ```cpp
 class SyntheticMediaSource final {
@@ -172,6 +183,11 @@ class SyntheticMediaSource final {
       std::uint16_t maximum_datagram_bytes) const;
 };
 ```
+
+Make `NamedPipeChannel` safe for one concurrent reader and writer by removing shared mutable
+error state. Add an explicit `cancel_pending_io()` using `CancelIoEx` so terminal queue,
+reader, or writer failure wakes the peer operation before the command-reader thread is joined.
+Never close the pipe handle while either operation can still use it.
 
 - [ ] **Step 5: Run native and contract validation**
 

@@ -59,7 +59,8 @@ This is dependency composition only. It does not create another runtime implemen
 
 ### 2. Worker Emits One Deterministic Access Unit
 
-Add a focused `SyntheticMediaSource` owned by `WorkerHost`.
+Add a focused `SyntheticMediaSource` invoked by `QuicListener` from an accepted
+`StartSession` protocol action.
 
 - It becomes eligible only after ticket authentication and a valid `StartSession`.
 - It emits one numbered IDR access unit per authenticated session generation.
@@ -68,7 +69,9 @@ Add a focused `SyntheticMediaSource` owned by `WorkerHost`.
 - It updates encoded-frame, sent-datagram, dropped-frame, and byte metrics through existing
   typed metrics.
 - Stop, disconnect, session failure, and Worker shutdown release it exactly once.
-- A fresh-ticket reconnect creates a new session generation and emits a new access unit.
+- A fresh-ticket reconnect creates an explicit monotonic session generation and emits a new
+  access unit. Session id, plan revision, ticket sequence, and native handles are not used as
+  generation identifiers.
 
 The payload need only be deterministic bytes for Gate 3 because Android uses a fake Java
 encoded-frame sink. It must not be presented as decodable H.264.
@@ -87,8 +90,20 @@ Input uses the existing public `InputBatch` schema rather than a second input mo
 Feedback uses the existing `FeedbackStreamEnvelope` body. Worker events carry session id,
 session generation, and source sequence so Service can reject stale evidence.
 
-Worker main owns one serialized pipe writer. Command responses and unsolicited events share
-that writer so frames cannot interleave. Event production is signaled by native state changes;
+`QuicSessionProtocol` returns typed authentication, StartSession, input, and feedback actions
+instead of requiring a second parse of generic transport packets. MsQuic callbacks publish
+those actions without blocking on pipe I/O and without invoking arbitrary code while holding
+the listener state mutex.
+
+Worker main owns one outbound MPSC queue and is the only named-pipe writer. A command-reader
+thread performs blocking reads, dispatches commands sequentially, and enqueues each complete
+response vector as one batch. MsQuic callbacks enqueue unsolicited events through the same
+queue. This preserves each command response sequence and prevents frame interleaving without
+allowing two writers to coordinate through a fragile mutex.
+
+`NamedPipeChannel` supports one concurrent reader and writer without shared mutable error
+state. Terminal reader/writer failure uses `CancelIoEx` to wake the peer operation before
+joining the command-reader thread. Event production is signaled by native state changes;
 there is no periodic drain loop.
 
 ### 4. Managed Worker Event Stream
