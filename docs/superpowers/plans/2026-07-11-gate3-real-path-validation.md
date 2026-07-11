@@ -195,7 +195,7 @@ Never close the pipe handle while either operation can still use it.
 .\scripts\build-native-windows.ps1
 dotnet test tests\Beacon.StreamWorker.Contracts.Tests\Beacon.StreamWorker.Contracts.Tests.csproj
 .\scripts\test-stream-worker-integration.ps1
-.\scripts\test-stream-worker-quic-loopback.ps1
+.\scripts\test-quic-listener.ps1
 ```
 
 Expected: all pass, one media packet is observed, and no modal assertion process remains.
