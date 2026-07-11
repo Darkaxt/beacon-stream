@@ -108,7 +108,7 @@ git push -u origin codex/beacon-gate3-validation
 - Test: `tests/Beacon.StreamWorker.Tests/worker_host_tests.cpp`
 - Test: `tests/Beacon.StreamWorker.Tests/quic_session_tests.cpp`
 
-- [ ] **Step 1: Write failing native tests**
+- [x] **Step 1: Write failing native tests**
 
 Add tests that authenticate/start a session and assert one numbered synthetic access-unit
 marker datagram carrying protocol IDR/end flags. The marker is explicitly non-decodable and
@@ -133,7 +133,7 @@ BEACON_TEST_REQUIRE(datagrams.front().channel == StreamChannel::media);
 BEACON_TEST_REQUIRE(parse_media_header(datagrams.front()).sequence == 1);
 ```
 
-- [ ] **Step 2: Run native tests and verify failure**
+- [x] **Step 2: Run native tests and verify failure**
 
 ```powershell
 .\scripts\build-native-windows.ps1
@@ -141,7 +141,7 @@ BEACON_TEST_REQUIRE(parse_media_header(datagrams.front()).sequence == 1);
 
 Expected: compilation/test failure because the event messages and synthetic source are absent.
 
-- [ ] **Step 3: Extend the IPC schema with typed events**
+- [x] **Step 3: Extend the IPC schema with typed events**
 
 Import `stream_control.proto` and add these oneof bodies and messages without duplicating the
 public input/feedback schema. The event also carries an explicit monotonic generation created
@@ -170,7 +170,7 @@ generation. Extend `QuicSessionProtocolOutput` with typed accepted-authenticatio
 accepted-StartSession, input, and feedback actions so QuicListener does not reparse generic
 packet payloads. Regenerate C# and C++ contracts through the existing build.
 
-- [ ] **Step 4: Implement the source and serialized event writer**
+- [x] **Step 4: Implement the source and serialized event writer**
 
 Implement `SyntheticMediaSource::emit_access_unit_marker` as a pure packet builder whose
 output enters `QuicListener::send` after the accepted StartSession action. Add one outbound
@@ -195,7 +195,7 @@ error state. Add an explicit `cancel_pending_io()` using `CancelIoEx` so termina
 reader, or writer failure wakes the peer operation before the command-reader thread is joined.
 Never close the pipe handle while either operation can still use it.
 
-- [ ] **Step 5: Run native and contract validation**
+- [x] **Step 5: Run native and contract validation**
 
 ```powershell
 .\scripts\build-native-windows.ps1
@@ -206,7 +206,7 @@ dotnet test tests\Beacon.StreamWorker.Contracts.Tests\Beacon.StreamWorker.Contra
 
 Expected: all pass, one media packet is observed, and no modal assertion process remains.
 
-- [ ] **Step 6: Commit and push**
+- [x] **Step 6: Commit and push**
 
 ```powershell
 git add contracts/worker_ipc.proto src/Beacon.StreamWorker tests/Beacon.StreamWorker.Tests
