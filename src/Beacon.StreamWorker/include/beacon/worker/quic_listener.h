@@ -2,10 +2,12 @@
 
 #include "beacon/stream/msquic_transport.h"
 #include "beacon/stream/transport.h"
+#include "worker_ipc.pb.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -91,6 +93,8 @@ struct QuicListenerMetrics {
 
 class QuicListener final : public IWorkerMediaTransport {
 public:
+  using EventSink = std::function<void(v1::WorkerIpcEnvelope)>;
+
   QuicListener(std::wstring identity_path,
                AuthorizedQuicTicketStore &authorized_tickets);
   ~QuicListener() override;
@@ -112,6 +116,7 @@ public:
   [[nodiscard]] QuicListenerMetrics metrics() const noexcept;
   [[nodiscard]] std::vector<stream::MsQuicTransportEvent>
   take_transport_events();
+  void set_event_sink(EventSink sink);
   [[nodiscard]] bool open_connection() override;
   void close_connection() noexcept override;
   [[nodiscard]] stream::TransportSendResult

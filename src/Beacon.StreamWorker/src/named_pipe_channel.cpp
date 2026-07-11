@@ -29,9 +29,14 @@ bool overlapped_transfer(HANDLE handle,
                          void* buffer,
                          DWORD bytes,
                          bool write,
+                         const std::atomic_bool& canceled,
                          DWORD& transferred,
                          DWORD& failure_error) noexcept {
   failure_error = ERROR_SUCCESS;
+  if (canceled.load(std::memory_order_acquire)) {
+    failure_error = ERROR_OPERATION_ABORTED;
+    return false;
+  }
   const auto event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (event == nullptr) {
     failure_error = GetLastError();
@@ -47,6 +52,9 @@ bool overlapped_transfer(HANDLE handle,
       failure_error = error;
       CloseHandle(event);
       return false;
+    }
+    if (canceled.load(std::memory_order_acquire)) {
+      CancelIoEx(handle, &operation);
     }
     const auto wait = WaitForSingleObject(event, INFINITE);
     if (wait != WAIT_OBJECT_0 ||
@@ -113,12 +121,15 @@ NamedPipeChannel::NamedPipeChannel(void* handle) noexcept : handle_(handle) {}
 NamedPipeChannel::~NamedPipeChannel() { close(); }
 
 NamedPipeChannel::NamedPipeChannel(NamedPipeChannel&& other) noexcept
-    : handle_(std::exchange(other.handle_, nullptr)) {}
+    : handle_(std::exchange(other.handle_, nullptr)),
+      canceled_(other.canceled_.load(std::memory_order_acquire)) {}
 
 NamedPipeChannel& NamedPipeChannel::operator=(NamedPipeChannel&& other) noexcept {
   if (this != &other) {
     close();
     handle_ = std::exchange(other.handle_, nullptr);
+    canceled_.store(other.canceled_.load(std::memory_order_acquire),
+                    std::memory_order_release);
   }
   return *this;
 }
@@ -138,9 +149,10 @@ bool NamedPipeChannel::valid() const noexcept {
 
 FrameDecodeStatus NamedPipeChannel::read(v1::WorkerIpcEnvelope& envelope) noexcept {
   std::array<std::byte, sizeof(std::uint32_t)> prefix{};
-  if (!read_exact(prefix)) {
-    return last_error_ == ERROR_BROKEN_PIPE ? FrameDecodeStatus::pipe_closed
-                                            : FrameDecodeStatus::io_error;
+  const auto prefix_error = read_exact(prefix);
+  if (prefix_error != ERROR_SUCCESS) {
+    return prefix_error == ERROR_BROKEN_PIPE ? FrameDecodeStatus::pipe_closed
+                                             : FrameDecodeStatus::io_error;
   }
   const auto length = decode_worker_frame_length(prefix);
   if (length.status != FrameDecodeStatus::success) {
@@ -148,10 +160,14 @@ FrameDecodeStatus NamedPipeChannel::read(v1::WorkerIpcEnvelope& envelope) noexce
   }
   std::vector<std::byte> frame(sizeof(std::uint32_t) + length.message_bytes);
   std::ranges::copy(prefix, frame.begin());
-  if (length.message_bytes > 0 &&
-      !read_exact(std::span<std::byte>{frame}.subspan(sizeof(std::uint32_t)))) {
-    return last_error_ == ERROR_BROKEN_PIPE ? FrameDecodeStatus::pipe_closed
-                                            : FrameDecodeStatus::io_error;
+  const auto body_error =
+      length.message_bytes == 0
+          ? static_cast<std::uint32_t>(ERROR_SUCCESS)
+          : read_exact(
+                std::span<std::byte>{frame}.subspan(sizeof(std::uint32_t)));
+  if (body_error != ERROR_SUCCESS) {
+    return body_error == ERROR_BROKEN_PIPE ? FrameDecodeStatus::pipe_closed
+                                           : FrameDecodeStatus::io_error;
   }
   return decode_worker_frame(frame, envelope);
 }
@@ -159,13 +175,14 @@ FrameDecodeStatus NamedPipeChannel::read(v1::WorkerIpcEnvelope& envelope) noexce
 bool NamedPipeChannel::write(const v1::WorkerIpcEnvelope& envelope) noexcept {
   try {
     const auto frame = encode_worker_frame(envelope);
-    return write_exact(frame);
+    return write_exact(frame) == ERROR_SUCCESS;
   } catch (...) {
     return false;
   }
 }
 
-bool NamedPipeChannel::read_exact(std::span<std::byte> output) noexcept {
+std::uint32_t
+NamedPipeChannel::read_exact(std::span<std::byte> output) noexcept {
   std::size_t offset = 0;
   while (offset < output.size()) {
     const auto remaining = output.size() - offset;
@@ -173,18 +190,20 @@ bool NamedPipeChannel::read_exact(std::span<std::byte> output) noexcept {
         std::min<std::size_t>(remaining, std::numeric_limits<DWORD>::max()));
     DWORD transferred = 0;
     DWORD failure_error = ERROR_SUCCESS;
-    if (!overlapped_transfer(static_cast<HANDLE>(handle_), output.data() + offset, requested,
-                             false, transferred, failure_error) ||
+    if (!overlapped_transfer(static_cast<HANDLE>(handle_),
+                             output.data() + offset, requested, false,
+                             canceled_, transferred, failure_error) ||
         transferred == 0) {
-      last_error_ = failure_error == ERROR_SUCCESS ? ERROR_BROKEN_PIPE : failure_error;
-      return false;
+      return failure_error == ERROR_SUCCESS ? ERROR_BROKEN_PIPE
+                                            : failure_error;
     }
     offset += transferred;
   }
-  return true;
+  return ERROR_SUCCESS;
 }
 
-bool NamedPipeChannel::write_exact(std::span<const std::byte> input) noexcept {
+std::uint32_t
+NamedPipeChannel::write_exact(std::span<const std::byte> input) noexcept {
   std::size_t offset = 0;
   while (offset < input.size()) {
     const auto remaining = input.size() - offset;
@@ -194,14 +213,21 @@ bool NamedPipeChannel::write_exact(std::span<const std::byte> input) noexcept {
     DWORD failure_error = ERROR_SUCCESS;
     if (!overlapped_transfer(static_cast<HANDLE>(handle_),
                              const_cast<std::byte*>(input.data() + offset), requested, true,
-                             transferred, failure_error) ||
+                             canceled_, transferred, failure_error) ||
         transferred == 0) {
-      last_error_ = failure_error == ERROR_SUCCESS ? ERROR_BROKEN_PIPE : failure_error;
-      return false;
+      return failure_error == ERROR_SUCCESS ? ERROR_BROKEN_PIPE
+                                            : failure_error;
     }
     offset += transferred;
   }
-  return true;
+  return ERROR_SUCCESS;
+}
+
+void NamedPipeChannel::cancel_pending_io() noexcept {
+  canceled_.store(true, std::memory_order_release);
+  if (valid()) {
+    CancelIoEx(static_cast<HANDLE>(handle_), nullptr);
+  }
 }
 
 void NamedPipeChannel::close() noexcept {

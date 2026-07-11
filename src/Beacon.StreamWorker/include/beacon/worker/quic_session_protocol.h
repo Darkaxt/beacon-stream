@@ -2,11 +2,13 @@
 
 #include "beacon/stream/transport.h"
 #include "beacon/worker/quic_listener.h"
+#include "stream_control.pb.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
+#include <optional>
 #include <vector>
 
 namespace beacon::worker {
@@ -21,9 +23,36 @@ enum class QuicPeerStreamRole {
 };
 
 struct QuicSessionProtocolOutput {
+  struct AcceptedAuthentication {
+    std::string session_id;
+    std::uint64_t session_generation{};
+    std::uint16_t maximum_datagram_bytes{};
+  };
+
+  struct AcceptedStartSession {
+    std::string session_id;
+    std::uint64_t session_generation{};
+    std::uint16_t maximum_datagram_bytes{};
+    stream::v1::StartSession start_session;
+  };
+
+  struct ParsedInput {
+    std::uint64_t session_generation{};
+    stream::v1::InputStreamEnvelope input;
+  };
+
+  struct ParsedFeedback {
+    std::uint64_t session_generation{};
+    stream::v1::FeedbackStreamEnvelope feedback;
+  };
+
   bool close_connection{};
   std::vector<std::vector<std::byte>> session_replies;
   std::vector<stream::TransportPacket> packets;
+  std::optional<AcceptedAuthentication> accepted_authentication;
+  std::optional<AcceptedStartSession> accepted_start_session;
+  std::vector<ParsedInput> inputs;
+  std::vector<ParsedFeedback> feedback;
 };
 
 [[nodiscard]] QuicPeerStreamRole
@@ -50,7 +79,10 @@ private:
   std::uint64_t last_session_sequence_{};
   std::uint64_t last_input_sequence_{};
   std::uint64_t last_feedback_sequence_{};
+  std::uint64_t current_generation_{};
+  std::uint64_t next_generation_{};
   bool authenticated_{};
+  bool started_{};
 };
 
 } // namespace beacon::worker

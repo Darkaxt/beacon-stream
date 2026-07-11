@@ -2,6 +2,7 @@
 
 #include "worker_ipc.pb.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -50,14 +51,17 @@ class NamedPipeChannel {
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] FrameDecodeStatus read(v1::WorkerIpcEnvelope& envelope) noexcept;
   [[nodiscard]] bool write(const v1::WorkerIpcEnvelope& envelope) noexcept;
+  void cancel_pending_io() noexcept;
 
  private:
-  [[nodiscard]] bool read_exact(std::span<std::byte> output) noexcept;
-  [[nodiscard]] bool write_exact(std::span<const std::byte> input) noexcept;
+  [[nodiscard]] std::uint32_t
+  read_exact(std::span<std::byte> output) noexcept;
+  [[nodiscard]] std::uint32_t
+  write_exact(std::span<const std::byte> input) noexcept;
   void close() noexcept;
 
   void* handle_{};
-  std::uint32_t last_error_{};
+  std::atomic_bool canceled_{};
 };
 
 }  // namespace beacon::worker

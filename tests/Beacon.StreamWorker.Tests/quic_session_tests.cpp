@@ -58,6 +58,21 @@ stream_v1::SessionStreamEnvelope authenticate(std::string_view ticket) {
   return message;
 }
 
+stream_v1::SessionStreamEnvelope start_session(std::uint64_t sequence) {
+  stream_v1::SessionStreamEnvelope message;
+  message.set_protocol_version(1);
+  message.set_session_id("session-a");
+  message.set_sequence(sequence);
+  auto *video = message.mutable_start_session()->mutable_selected_video();
+  video->set_codec(stream_v1::VIDEO_CODEC_H264);
+  video->set_width(2560);
+  video->set_height(1600);
+  video->set_frames_per_second_numerator(120);
+  video->set_frames_per_second_denominator(1);
+  video->set_dynamic_range(stream_v1::DYNAMIC_RANGE_SDR);
+  return message;
+}
+
 stream_v1::SessionStreamEnvelope
 reply_from(const beacon::worker::QuicSessionProtocolOutput &output) {
   BEACON_TEST_REQUIRE(output.session_replies.size() == 1);
@@ -150,6 +165,12 @@ void fragmented_authentication_consumes_ticket_and_returns_negotiated_limit() {
   BEACON_TEST_REQUIRE(reply.session_authenticated().accepted());
   BEACON_TEST_REQUIRE(reply.session_authenticated().maximum_datagram_bytes() ==
                       1232);
+  BEACON_TEST_REQUIRE(second.accepted_authentication.has_value());
+  BEACON_TEST_REQUIRE(second.accepted_authentication->session_id ==
+                      "session-a");
+  BEACON_TEST_REQUIRE(second.accepted_authentication->session_generation == 1);
+  BEACON_TEST_REQUIRE(
+      second.accepted_authentication->maximum_datagram_bytes == 1232);
 }
 
 void replay_and_version_mismatch_return_typed_rejections() {
@@ -223,6 +244,62 @@ void authenticated_streams_are_routed_independently() {
   BEACON_TEST_REQUIRE(feedback_output.packets.size() == 1);
   BEACON_TEST_REQUIRE(feedback_output.packets[0].channel ==
                       beacon::stream::StreamChannel::feedback);
+  BEACON_TEST_REQUIRE(input_output.inputs.size() == 1);
+  BEACON_TEST_REQUIRE(input_output.inputs[0].session_generation == 1);
+  BEACON_TEST_REQUIRE(
+      input_output.inputs[0].input.SerializeAsString() ==
+      input.SerializeAsString());
+  BEACON_TEST_REQUIRE(feedback_output.feedback.size() == 1);
+  BEACON_TEST_REQUIRE(feedback_output.feedback[0].session_generation == 1);
+  BEACON_TEST_REQUIRE(
+      feedback_output.feedback[0].feedback.SerializeAsString() ==
+      feedback.SerializeAsString());
+}
+
+void start_session_is_typed_once_per_authenticated_generation() {
+  AuthorizedQuicTicketStore store;
+  BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-start")));
+  QuicSessionProtocol protocol(store);
+  protocol.set_maximum_datagram_bytes(1232);
+
+  const auto auth = protocol.receive(
+      QuicPeerStreamRole::session, frame(authenticate("raw-ticket-start")),
+      1'000);
+  const auto first = protocol.receive(QuicPeerStreamRole::session,
+                                      frame(start_session(2)), 1'000);
+  const auto duplicate = protocol.receive(QuicPeerStreamRole::session,
+                                          frame(start_session(3)), 1'000);
+
+  BEACON_TEST_REQUIRE(auth.accepted_authentication.has_value());
+  BEACON_TEST_REQUIRE(first.accepted_start_session.has_value());
+  BEACON_TEST_REQUIRE(
+      first.accepted_start_session->session_generation == 1);
+  BEACON_TEST_REQUIRE(
+      first.accepted_start_session->maximum_datagram_bytes == 1232);
+  BEACON_TEST_REQUIRE(
+      first.accepted_start_session->start_session.SerializeAsString() ==
+      start_session(2).start_session().SerializeAsString());
+  BEACON_TEST_REQUIRE(!duplicate.accepted_start_session.has_value());
+}
+
+void reset_and_fresh_authentication_allocate_a_new_generation() {
+  AuthorizedQuicTicketStore store;
+  BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-generation-a")));
+  BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-generation-b")));
+  QuicSessionProtocol protocol(store);
+  protocol.set_maximum_datagram_bytes(1232);
+
+  const auto first = protocol.receive(
+      QuicPeerStreamRole::session,
+      frame(authenticate("raw-ticket-generation-a")), 1'000);
+  protocol.reset();
+  protocol.set_maximum_datagram_bytes(1232);
+  const auto second = protocol.receive(
+      QuicPeerStreamRole::session,
+      frame(authenticate("raw-ticket-generation-b")), 1'000);
+
+  BEACON_TEST_REQUIRE(first.accepted_authentication->session_generation == 1);
+  BEACON_TEST_REQUIRE(second.accepted_authentication->session_generation == 2);
 }
 
 void unauthenticated_data_and_oversized_frames_fail_closed() {
@@ -255,6 +332,8 @@ int main() {
   fragmented_authentication_consumes_ticket_and_returns_negotiated_limit();
   replay_and_version_mismatch_return_typed_rejections();
   authenticated_streams_are_routed_independently();
+  start_session_is_typed_once_per_authenticated_generation();
+  reset_and_fresh_authentication_allocate_a_new_generation();
   unauthenticated_data_and_oversized_frames_fail_closed();
   return 0;
 }

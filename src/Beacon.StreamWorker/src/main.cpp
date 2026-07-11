@@ -1,14 +1,17 @@
 #include "beacon/worker/named_pipe_channel.h"
+#include "beacon/worker/outbound_queue.h"
 #include "beacon/worker/quic_listener.h"
 #include "beacon/worker/worker_host.h"
 
 #include <Windows.h>
 #include <bcrypt.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -40,26 +43,86 @@ int wmain(int argument_count, wchar_t** arguments) {
     if (instance_id.empty()) {
       return 2;
     }
+    beacon::worker::WorkerOutboundQueue outbound;
+    std::atomic_int process_result{0};
+    const auto record_failure = [&process_result](int code) {
+      int expected = 0;
+      static_cast<void>(process_result.compare_exchange_strong(
+          expected, code, std::memory_order_acq_rel));
+    };
     beacon::worker::AuthorizedQuicTicketStore tickets;
     beacon::worker::QuicListener transport(arguments[4], tickets);
+    transport.set_event_sink(
+        [&channel, &outbound, &record_failure](
+            beacon::worker::v1::WorkerIpcEnvelope event) {
+          try {
+            if (outbound.enqueue({std::move(event)})) {
+              return;
+            }
+          } catch (...) {
+          }
+          record_failure(5);
+          outbound.close();
+          channel.cancel_pending_io();
+        });
     beacon::worker::WorkerHost host(
         std::move(instance_id), GetCurrentProcessId(), transport, tickets);
-    if (!channel.write(host.hello()) || !channel.write(host.ready())) {
+    if (!outbound.enqueue({host.hello(), host.ready()})) {
       return 3;
     }
 
-    while (!host.shutdown_requested()) {
-      beacon::worker::v1::WorkerIpcEnvelope request;
-      if (channel.read(request) != beacon::worker::FrameDecodeStatus::success) {
-        return 4;
+    std::thread command_reader([&] {
+      try {
+        while (!host.shutdown_requested()) {
+          beacon::worker::v1::WorkerIpcEnvelope request;
+          if (channel.read(request) !=
+              beacon::worker::FrameDecodeStatus::success) {
+            record_failure(4);
+            transport.shutdown();
+            outbound.close();
+            channel.cancel_pending_io();
+            return;
+          }
+          auto responses = host.dispatch(request);
+          const bool shutdown_requested = host.shutdown_requested();
+          if (!outbound.enqueue(std::move(responses))) {
+            record_failure(5);
+            transport.shutdown();
+            channel.cancel_pending_io();
+            return;
+          }
+          if (shutdown_requested) {
+            outbound.close();
+            return;
+          }
+        }
+      } catch (...) {
+        record_failure(6);
+        transport.shutdown();
+        outbound.close();
+        channel.cancel_pending_io();
       }
-      for (const auto& response : host.dispatch(request)) {
+    });
+
+    bool write_failed = false;
+    while (auto batch = outbound.wait_pop()) {
+      for (const auto &response : *batch) {
         if (!channel.write(response)) {
-          return 5;
+          write_failed = true;
+          break;
         }
       }
+      if (write_failed) {
+        record_failure(5);
+        transport.shutdown();
+        outbound.close();
+        channel.cancel_pending_io();
+        break;
+      }
     }
-    return 0;
+    channel.cancel_pending_io();
+    command_reader.join();
+    return process_result.load(std::memory_order_acquire);
   } catch (...) {
     return 6;
   }

@@ -174,6 +174,12 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
             if (authenticated_) {
               session_id_ = message.session_id();
               last_session_sequence_ = message.sequence();
+              current_generation_ = ++next_generation_;
+              output.accepted_authentication =
+                  QuicSessionProtocolOutput::AcceptedAuthentication{
+                      .session_id = session_id_,
+                      .session_generation = current_generation_,
+                      .maximum_datagram_bytes = maximum_datagram_bytes_};
             } else {
               output.close_connection = true;
             }
@@ -191,6 +197,16 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
                  body == stream_v1::SessionStreamEnvelope::kRequestIdr);
         if (valid) {
           last_session_sequence_ = message.sequence();
+          if (body == stream_v1::SessionStreamEnvelope::kStartSession &&
+              !started_) {
+            started_ = true;
+            output.accepted_start_session =
+                QuicSessionProtocolOutput::AcceptedStartSession{
+                    .session_id = session_id_,
+                    .session_generation = current_generation_,
+                    .maximum_datagram_bytes = maximum_datagram_bytes_,
+                    .start_session = message.start_session()};
+          }
           output.packets.push_back({.channel = stream::StreamChannel::session,
                                     .sequence = message.sequence(),
                                     .payload = std::vector<std::byte>(
@@ -208,6 +224,8 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
               message.has_input_batch();
       if (valid) {
         last_input_sequence_ = message.sequence();
+        output.inputs.push_back(
+            {.session_generation = current_generation_, .input = message});
         output.packets.push_back({.channel = stream::StreamChannel::input,
                                   .sequence = message.sequence(),
                                   .payload = std::vector<std::byte>(
@@ -225,6 +243,8 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
                   stream_v1::FeedbackStreamEnvelope::BODY_NOT_SET;
       if (valid) {
         last_feedback_sequence_ = message.sequence();
+        output.feedback.push_back({.session_generation = current_generation_,
+                                   .feedback = message});
         output.packets.push_back({.channel = stream::StreamChannel::feedback,
                                   .sequence = message.sequence(),
                                   .payload = std::vector<std::byte>(
@@ -259,7 +279,9 @@ void QuicSessionProtocol::reset() {
   last_session_sequence_ = 0;
   last_input_sequence_ = 0;
   last_feedback_sequence_ = 0;
+  current_generation_ = 0;
   authenticated_ = false;
+  started_ = false;
 }
 
 } // namespace beacon::worker
