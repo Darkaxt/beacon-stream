@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.ComponentModel;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.StreamWorker.Contracts.Worker.V1;
@@ -24,7 +23,7 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
                 ActiveSessions: sessions.Values.Count(session => session.State == "running"),
                 Diagnostics: []);
         }
-        catch (Exception error) when (error is IOException or Win32Exception or StreamWorkerProtocolException)
+        catch (Exception error) when (error is not OperationCanceledException)
         {
             return new StreamingBackendHealth(
                 Ready: false,

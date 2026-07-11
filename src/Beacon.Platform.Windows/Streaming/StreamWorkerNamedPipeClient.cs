@@ -16,7 +16,10 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
     private readonly SemaphoreSlim writeGate = new(1, 1);
     private readonly ConcurrentDictionary<ulong, PendingRequest> pending = new();
     private readonly CancellationTokenSource disposal = new();
+    private readonly TaskCompletionSource lifecycleCompletion = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
     private Task? receiveLoop;
+    private Exception? terminalError;
     private long nextRequestId;
     private int initialized;
     private int disposed;
@@ -29,6 +32,10 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
     }
 
     public bool IsReady => Volatile.Read(ref initialized) == 1 && Volatile.Read(ref disposed) == 0;
+
+    public Task Completion => lifecycleCompletion.Task;
+
+    public Exception? TerminalError => Volatile.Read(ref terminalError);
 
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
@@ -126,6 +133,7 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
         }
 
         disposal.Cancel();
+        Volatile.Write(ref initialized, 0);
         FailPending(new ObjectDisposedException(nameof(StreamWorkerNamedPipeClient)));
         if (receiveLoop is not null)
         {
@@ -143,6 +151,7 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
             {
             }
         }
+        lifecycleCompletion.TrySetResult();
         await stream.DisposeAsync().ConfigureAwait(false);
         disposal.Dispose();
         writeGate.Dispose();
@@ -150,16 +159,30 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
 
     private async Task<WorkerIpcEnvelope> ReadEnvelopeOrProcessExitAsync(CancellationToken cancellationToken)
     {
-        Task<WorkerIpcEnvelope> read = ReadEnvelopeAsync(cancellationToken);
-        Task winner = await Task.WhenAny(read, processExit)
-            .WaitAsync(cancellationToken)
-            .ConfigureAwait(false);
-        if (winner == processExit)
+        using var readCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            disposal.Token);
+        Task<WorkerIpcEnvelope> read = ReadEnvelopeAsync(readCancellation.Token);
+        try
         {
-            throw new StreamWorkerProcessExitedException(await processExit.ConfigureAwait(false));
-        }
+            Task winner = await Task.WhenAny(read, processExit)
+                .WaitAsync(readCancellation.Token)
+                .ConfigureAwait(false);
+            if (winner == processExit)
+            {
+                readCancellation.Cancel();
+                await ObserveCompletionAsync(read).ConfigureAwait(false);
+                throw new StreamWorkerProcessExitedException(await processExit.ConfigureAwait(false));
+            }
 
-        return await read.ConfigureAwait(false);
+            return await read.ConfigureAwait(false);
+        }
+        catch
+        {
+            readCancellation.Cancel();
+            await ObserveCompletionAsync(read).ConfigureAwait(false);
+            throw;
+        }
     }
 
     private async Task ReceiveLoopAsync()
@@ -184,9 +207,18 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
                 }
             }
         }
-        catch (Exception error) when (error is not OperationCanceledException || !disposal.IsCancellationRequested)
+        catch (OperationCanceledException) when (disposal.IsCancellationRequested)
         {
+        }
+        catch (Exception error)
+        {
+            Volatile.Write(ref terminalError, error);
             FailPending(error);
+        }
+        finally
+        {
+            Volatile.Write(ref initialized, 0);
+            lifecycleCompletion.TrySetResult();
         }
     }
 
@@ -215,6 +247,17 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
             {
                 request.Fail(error);
             }
+        }
+    }
+
+    private static async Task ObserveCompletionAsync(Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch
+        {
         }
     }
 
