@@ -235,7 +235,7 @@ git push
 - Test: `tests/Beacon.Platform.Windows.Tests/Input/WindowsInputApiTests.cs`
 - Create: `tests/Beacon.Server.Tests/StreamWorkerEventRelayTests.cs`
 
-- [ ] **Step 1: Write failing request-correlation and relay tests**
+- [x] **Step 1: Write failing request-correlation and relay tests**
 
 Prove request-id-zero events never complete a correlated command, raw protobuf events do not
 cross the Platform boundary, stale process/session/runtime generations are discarded, every
@@ -253,7 +253,7 @@ Assert.Single(batch.Events);
 Assert.DoesNotContain(rawInputCanary, journal.RenderForTest());
 ```
 
-- [ ] **Step 2: Run focused tests and verify failure**
+- [x] **Step 2: Run focused tests and verify failure**
 
 ```powershell
 dotnet test tests\Beacon.Platform.Windows.Tests\Beacon.Platform.Windows.Tests.csproj --filter "StreamWorkerNamedPipeClientTests|StreamWorkerProcessHostTests"
@@ -263,7 +263,7 @@ dotnet test tests\Beacon.Server.Tests\Beacon.Server.Tests.csproj --filter Stream
 Expected: failure because `IStreamWorkerHost` has no event reader and request-id-zero frames
 are ignored.
 
-- [ ] **Step 3: Implement protocol-neutral input and a stable host event surface**
+- [x] **Step 3: Implement protocol-neutral input and a stable host event surface**
 
 Extend Core's input model to retain exact pointer/wheel, keyboard scan-code, controller, and
 touch-rational values without importing Worker contracts. Translate allowlisted Worker
@@ -285,7 +285,7 @@ only on host disposal. Each initialized client receives a monotonic process gene
 Platform events; positive IDs remain exclusively correlated commands. Translation reduces
 non-input events to metadata and gives input values redacted diagnostic rendering.
 
-- [ ] **Step 4: Bind runtime generations and implement the hosted relay**
+- [x] **Step 4: Bind runtime generations and implement the hosted relay**
 
 Make `StreamWorkerStreamingBackend` atomically bind Worker authentication generation to the
 current Service runtime. Later events are accepted only when process generation, session id,
@@ -297,7 +297,7 @@ protocol-neutral input to `ClientInputBatch`, call `IClientInputSink`, and publi
 allowlisted metadata for feedback, transport, media, and failures. Catch failures per event
 and continue. Never log a raw envelope, input value, exception message, ticket, or path.
 
-- [ ] **Step 5: Run focused and full managed tests**
+- [x] **Step 5: Run focused and full managed tests**
 
 ```powershell
 dotnet test tests\Beacon.Platform.Windows.Tests\Beacon.Platform.Windows.Tests.csproj
@@ -307,7 +307,7 @@ dotnet test Beacon.slnx --no-build
 
 Expected: all pass with no raw input canary in captured diagnostics.
 
-- [ ] **Step 6: Commit and push**
+- [x] **Step 6: Commit and push**
 
 ```powershell
 git add src/Beacon.Platform.Windows/Streaming src/Beacon.Server/Streaming src/Beacon.Server/Hosting tests/Beacon.Platform.Windows.Tests tests/Beacon.Server.Tests
