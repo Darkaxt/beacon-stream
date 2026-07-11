@@ -15,6 +15,8 @@ export PATH="${BEACON_ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bi
 
 bash "${script_dir}/bootstrap-native-dependencies-linux.sh"
 
+export BEACON_PROTOC_EXECUTABLE="$(bash "${script_dir}/install-protoc-linux.sh")"
+
 cd "${repository_root}/native"
 cmake --fresh --preset android-x86_64
 cmake --build --preset android-x86_64-debug

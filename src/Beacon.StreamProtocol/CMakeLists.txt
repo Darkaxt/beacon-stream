@@ -1,24 +1,24 @@
-add_library(BeaconStreamProtocol INTERFACE)
+add_library(BeaconStreamProtocol STATIC src/media_datagram.cpp)
 
 target_include_directories(
   BeaconStreamProtocol
-  INTERFACE
+  PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 add_library(Beacon::StreamProtocol ALIAS BeaconStreamProtocol)
 
 if(MSVC)
-  target_compile_options(BeaconStreamProtocol INTERFACE /W4 /WX /permissive-)
+  target_compile_options(BeaconStreamProtocol PUBLIC /W4 /WX /permissive-)
 else()
-  target_compile_options(BeaconStreamProtocol INTERFACE -Wall -Wextra -Wpedantic -Werror)
+  target_compile_options(BeaconStreamProtocol PUBLIC -Wall -Wextra -Wpedantic -Werror)
 endif()
 
 if(BEACON_WITH_MSQUIC)
   target_include_directories(
     BeaconStreamProtocol
-    SYSTEM INTERFACE
+    SYSTEM PUBLIC
       ${BEACON_NATIVE_DEPENDENCIES_DIR}/msquic/src/inc
   )
-  target_link_libraries(BeaconStreamProtocol INTERFACE msquic)
+  target_link_libraries(BeaconStreamProtocol PUBLIC msquic)
 endif()

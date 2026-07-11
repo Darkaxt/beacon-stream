@@ -13,6 +13,7 @@
       "binaryDir": "${sourceDir}/out/build/windows-x64",
       "cacheVariables": {
         "BEACON_WITH_MSQUIC": "ON",
+        "BEACON_PROTOC_EXECUTABLE": "$env{BEACON_PROTOC_EXECUTABLE}",
         "CMAKE_CONFIGURATION_TYPES": "Debug;Release"
       }
     },
@@ -25,6 +26,7 @@
       "cacheVariables": {
         "ANDROID_PLATFORM": "android-29",
         "BEACON_NATIVE_DEPENDENCIES_DIR": "$env{HOME}/.cache/beacon/native/_deps",
+        "BEACON_PROTOC_EXECUTABLE": "$env{BEACON_PROTOC_EXECUTABLE}",
         "BEACON_WITH_MSQUIC": "ON",
         "CMAKE_BUILD_TYPE": "Debug"
       }

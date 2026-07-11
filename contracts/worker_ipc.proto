@@ -1,0 +1,193 @@
+syntax = "proto3";
+
+package beacon.worker.v1;
+
+option csharp_namespace = "Beacon.StreamWorker.Contracts.Worker.V1";
+
+enum WorkerLifecycleState {
+  WORKER_LIFECYCLE_STATE_UNSPECIFIED = 0;
+  WORKER_LIFECYCLE_STATE_STARTING = 1;
+  WORKER_LIFECYCLE_STATE_READY = 2;
+  WORKER_LIFECYCLE_STATE_STOPPING = 3;
+  WORKER_LIFECYCLE_STATE_STOPPED = 4;
+  WORKER_LIFECYCLE_STATE_FAILED = 5;
+}
+
+enum WorkerSessionState {
+  WORKER_SESSION_STATE_UNSPECIFIED = 0;
+  WORKER_SESSION_STATE_PREPARED = 1;
+  WORKER_SESSION_STATE_STREAMING = 2;
+  WORKER_SESSION_STATE_STOPPED = 3;
+  WORKER_SESSION_STATE_FAILED = 4;
+}
+
+enum WorkerVideoCodec {
+  WORKER_VIDEO_CODEC_UNSPECIFIED = 0;
+  WORKER_VIDEO_CODEC_H264 = 1;
+}
+
+enum WorkerDynamicRange {
+  WORKER_DYNAMIC_RANGE_UNSPECIFIED = 0;
+  WORKER_DYNAMIC_RANGE_SDR = 1;
+}
+
+enum StopMediaReason {
+  STOP_MEDIA_REASON_UNSPECIFIED = 0;
+  STOP_MEDIA_REASON_EXPLICIT = 1;
+  STOP_MEDIA_REASON_CONNECTION_CLOSED = 2;
+  STOP_MEDIA_REASON_SESSION_FAILED = 3;
+  STOP_MEDIA_REASON_SERVICE_SHUTDOWN = 4;
+}
+
+enum IdrReason {
+  IDR_REASON_UNSPECIFIED = 0;
+  IDR_REASON_CLIENT_RECOVERY = 1;
+  IDR_REASON_DATAGRAM_LOSS = 2;
+  IDR_REASON_DECODER_RESET = 3;
+}
+
+enum DiagnosticSeverity {
+  DIAGNOSTIC_SEVERITY_UNSPECIFIED = 0;
+  DIAGNOSTIC_SEVERITY_INFORMATION = 1;
+  DIAGNOSTIC_SEVERITY_WARNING = 2;
+  DIAGNOSTIC_SEVERITY_ERROR = 3;
+}
+
+enum DiagnosticBoundary {
+  DIAGNOSTIC_BOUNDARY_UNSPECIFIED = 0;
+  DIAGNOSTIC_BOUNDARY_WORKER = 1;
+  DIAGNOSTIC_BOUNDARY_IPC = 2;
+  DIAGNOSTIC_BOUNDARY_TRANSPORT = 3;
+  DIAGNOSTIC_BOUNDARY_CAPTURE = 4;
+  DIAGNOSTIC_BOUNDARY_ENCODER = 5;
+}
+
+enum DiagnosticCode {
+  DIAGNOSTIC_CODE_UNSPECIFIED = 0;
+  DIAGNOSTIC_CODE_READY = 1;
+  DIAGNOSTIC_CODE_CAPABILITY_UNAVAILABLE = 2;
+  DIAGNOSTIC_CODE_INVALID_COMMAND = 3;
+  DIAGNOSTIC_CODE_OPERATION_FAILED = 4;
+  DIAGNOSTIC_CODE_RESOURCE_RELEASED = 5;
+}
+
+enum WorkerErrorCode {
+  WORKER_ERROR_CODE_UNSPECIFIED = 0;
+  WORKER_ERROR_CODE_NONE = 1;
+  WORKER_ERROR_CODE_UNSUPPORTED_VERSION = 2;
+  WORKER_ERROR_CODE_INVALID_REQUEST = 3;
+  WORKER_ERROR_CODE_INVALID_STATE = 4;
+  WORKER_ERROR_CODE_CAPABILITY_UNAVAILABLE = 5;
+  WORKER_ERROR_CODE_OPERATION_FAILED = 6;
+}
+
+message WorkerIpcEnvelope {
+  uint32 protocol_version = 1;
+  uint64 request_id = 2;
+  string session_id = 3;
+
+  oneof body {
+    WorkerHello worker_hello = 10;
+    WorkerReady worker_ready = 11;
+    WorkerCapabilities worker_capabilities = 12;
+    WorkerHealth worker_health = 13;
+    AuthorizeTicket authorize_ticket = 20;
+    RevokeTicket revoke_ticket = 21;
+    PrepareSession prepare_session = 22;
+    StartMedia start_media = 23;
+    StopMedia stop_media = 24;
+    RequestIdr request_idr = 25;
+    SessionStateChanged session_state_changed = 30;
+    MediaMetrics media_metrics = 31;
+    WorkerDiagnostic worker_diagnostic = 32;
+    WorkerCompletion worker_completion = 40;
+    ShutdownWorker shutdown_worker = 41;
+  }
+}
+
+message WorkerHello {
+  bytes worker_instance_id = 1;
+  uint32 process_id = 2;
+}
+
+message WorkerReady {
+  bytes worker_instance_id = 1;
+}
+
+message WorkerCapabilities {
+  repeated WorkerVideoCodec video_codecs = 1;
+  bool quic_datagrams = 2;
+  uint32 maximum_sessions = 3;
+}
+
+message WorkerHealth {
+  WorkerLifecycleState lifecycle_state = 1;
+  uint32 active_sessions = 2;
+}
+
+message AuthorizeTicket {
+  bytes ticket_hash = 1;
+  string client_id = 2;
+  uint64 plan_revision = 3;
+  uint64 expires_at_unix_ms = 4;
+  bytes worker_instance_id = 5;
+}
+
+message RevokeTicket {
+  bytes ticket_hash = 1;
+}
+
+message PrepareSession {
+  string display_target = 1;
+  WorkerVideoCodec video_codec = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+  uint32 frames_per_second_numerator = 5;
+  uint32 frames_per_second_denominator = 6;
+  WorkerDynamicRange dynamic_range = 7;
+  uint32 minimum_bitrate_kbps = 8;
+  uint32 initial_bitrate_kbps = 9;
+  uint32 maximum_bitrate_kbps = 10;
+}
+
+message StartMedia {
+  string listen_address = 1;
+  uint32 listen_port = 2;
+  bytes certificate_fingerprint = 3;
+}
+
+message StopMedia {
+  StopMediaReason reason = 1;
+}
+
+message RequestIdr {
+  IdrReason reason = 1;
+}
+
+message SessionStateChanged {
+  WorkerSessionState state = 1;
+  WorkerErrorCode error_code = 2;
+}
+
+message MediaMetrics {
+  uint64 encoded_frames = 1;
+  uint64 sent_datagrams = 2;
+  uint64 dropped_frames = 3;
+  uint64 bytes_sent = 4;
+  uint64 smoothed_rtt_us = 5;
+}
+
+message WorkerDiagnostic {
+  DiagnosticSeverity severity = 1;
+  DiagnosticBoundary boundary = 2;
+  DiagnosticCode code = 3;
+  uint32 platform_error_code = 4;
+  uint64 numeric_value = 5;
+}
+
+message WorkerCompletion {
+  bool succeeded = 1;
+  WorkerErrorCode error_code = 2;
+}
+
+message ShutdownWorker {}

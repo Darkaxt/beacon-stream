@@ -5,7 +5,12 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $nativeRoot = Join-Path $repositoryRoot 'native'
 
-& (Join-Path $PSScriptRoot 'bootstrap-native-dependencies.ps1') -Name msquic,xdp-for-windows
+& (Join-Path $PSScriptRoot 'bootstrap-native-dependencies.ps1') -Name msquic,xdp-for-windows,protobuf
+
+$env:BEACON_PROTOC_EXECUTABLE = (& (Join-Path $PSScriptRoot 'install-protoc.ps1')).Trim()
+if (-not (Test-Path -LiteralPath $env:BEACON_PROTOC_EXECUTABLE)) {
+    throw 'Pinned protoc 32.1 executable was not installed.'
+}
 
 $vswhere = 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe'
 $visualStudio = (& $vswhere `

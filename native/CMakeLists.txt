@@ -11,6 +11,12 @@ set(
   CACHE PATH
   "Directory populated by bootstrap-native-dependencies.ps1"
 )
+set(
+  BEACON_PROTOC_EXECUTABLE
+  ""
+  CACHE FILEPATH
+  "Pinned host protoc executable from Google.Protobuf.Tools 3.32.1"
+)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -35,8 +41,41 @@ if(BEACON_WITH_MSQUIC)
   add_subdirectory("${msquic_source}" msquic EXCLUDE_FROM_ALL)
 endif()
 
+set(protobuf_source "${BEACON_NATIVE_DEPENDENCIES_DIR}/protobuf")
+if(NOT EXISTS "${protobuf_source}/cmake/protobuf-generate.cmake")
+  message(FATAL_ERROR "Pinned Protobuf source is missing. Bootstrap the protobuf dependency.")
+endif()
+if(NOT EXISTS "${BEACON_PROTOC_EXECUTABLE}")
+  message(FATAL_ERROR "BEACON_PROTOC_EXECUTABLE must name the pinned protoc 32.1 host executable.")
+endif()
+
+set(protobuf_PROTOC_EXE "${BEACON_PROTOC_EXECUTABLE}")
+include("${protobuf_source}/cmake/protobuf-generate.cmake")
+
+set(beacon_contracts_dir "${CMAKE_CURRENT_SOURCE_DIR}/../contracts")
+set(beacon_generated_contracts_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/contracts")
+file(MAKE_DIRECTORY "${beacon_generated_contracts_dir}")
+protobuf_generate(
+  LANGUAGE cpp
+  OUT_VAR beacon_generated_contracts
+  PROTOS
+    "${beacon_contracts_dir}/worker_ipc.proto"
+    "${beacon_contracts_dir}/stream_control.proto"
+  IMPORT_DIRS "${beacon_contracts_dir}"
+  PROTOC_OUT_DIR "${beacon_generated_contracts_dir}"
+  PROTOC_EXE "${BEACON_PROTOC_EXECUTABLE}"
+)
+add_custom_target(BeaconStreamContractsGenerated ALL DEPENDS ${beacon_generated_contracts})
+
 add_subdirectory(../src/Beacon.StreamProtocol Beacon.StreamProtocol)
 
 if(BUILD_TESTING)
   add_subdirectory(../tests/Beacon.StreamProtocol.Tests Beacon.StreamProtocol.Tests)
+  add_test(
+    NAME BeaconStreamProtocol.GeneratedContracts
+    COMMAND
+      ${CMAKE_COMMAND}
+      -DGENERATED_DIR=${beacon_generated_contracts_dir}
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/../tests/Beacon.StreamProtocol.Tests/generated_contracts_test.cmake
+  )
 endif()
