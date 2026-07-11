@@ -9,6 +9,35 @@ namespace Beacon.Platform.Windows.Tests.Streaming;
 
 public sealed class StreamWorkerProcessHostTests
 {
+    [Fact]
+    public void OptionsUseExplicitWorkerExecutablePath()
+    {
+        string executablePath = Path.Combine(Path.GetTempPath(), "acceptance", "Beacon.StreamWorker.exe");
+        string identityPath = Path.Combine(Path.GetTempPath(), "identity.pfx");
+
+        StreamWorkerProcessHostOptions options = StreamWorkerProcessHostOptions.Create(
+            executablePath,
+            identityPath);
+
+        Assert.Equal(executablePath, options.ExecutablePath);
+        Assert.Equal(identityPath, options.IdentityPath);
+    }
+
+    [Fact]
+    public void OptionsDefaultWorkerExecutablePathToApplicationDirectory()
+    {
+        string identityPath = Path.Combine(Path.GetTempPath(), "identity.pfx");
+
+        StreamWorkerProcessHostOptions options = StreamWorkerProcessHostOptions.Create(
+            executablePath: null,
+            identityPath);
+
+        Assert.Equal(
+            Path.Combine(AppContext.BaseDirectory, "Beacon.StreamWorker.exe"),
+            options.ExecutablePath);
+        Assert.Equal(identityPath, options.IdentityPath);
+    }
+
     [Theory]
     [InlineData("plain", "plain")]
     [InlineData("", "\"\"")]

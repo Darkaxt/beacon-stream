@@ -21,6 +21,10 @@ public static class BeaconServiceRegistration
 {
     public const string HostModeConfigurationKey = "Beacon:HostMode";
     public const string HostModeEnvironmentVariable = "BEACON_HOST_MODE";
+    public const string StreamingModeConfigurationKey = "Beacon:StreamingMode";
+    public const string StreamingModeEnvironmentVariable = "BEACON_STREAMING_MODE";
+    public const string StreamWorkerPathConfigurationKey = "Beacon:Streaming:WorkerPath";
+    public const string StreamWorkerPathEnvironmentVariable = "BEACON_STREAM_WORKER_PATH";
     public const string ClientProfilesPathConfigurationKey = "Beacon:Profiles:Path";
     public const string ClientProfilesPathEnvironmentVariable = "BEACON_CLIENT_PROFILES_PATH";
     public const string SecurityTestHostConfigurationKey = "Beacon:Security:TestHost";
@@ -32,17 +36,37 @@ public static class BeaconServiceRegistration
         IConfiguration configuration) =>
         services.AddBeaconServices(
             configuration,
-            Environment.GetEnvironmentVariable(HostModeEnvironmentVariable),
-            Environment.GetEnvironmentVariable(ClientProfilesPathEnvironmentVariable));
+            environmentHostMode: Environment.GetEnvironmentVariable(HostModeEnvironmentVariable),
+            environmentClientProfilesPath: Environment.GetEnvironmentVariable(ClientProfilesPathEnvironmentVariable),
+            environmentStreamingMode: Environment.GetEnvironmentVariable(StreamingModeEnvironmentVariable),
+            environmentStreamWorkerPath: Environment.GetEnvironmentVariable(StreamWorkerPathEnvironmentVariable));
 
     public static IServiceCollection AddBeaconServices(
         this IServiceCollection services,
         IConfiguration configuration,
         string? environmentHostMode,
-        string? environmentClientProfilesPath = null)
+        string? environmentClientProfilesPath = null,
+        string? environmentStreamingMode = null,
+        string? environmentStreamWorkerPath = null)
     {
-        BeaconHostMode mode = ResolveHostMode(configuration, environmentHostMode);
-        services.AddSingleton(BeaconHostOptions.Create(mode));
+        BeaconHostMode hostMode = ResolveHostMode(configuration, environmentHostMode);
+        BeaconStreamingMode streamingMode = ResolveStreamingMode(
+            configuration,
+            environmentStreamingMode,
+            hostMode);
+        BeaconHostOptions hostOptions = BeaconHostOptions.Create(hostMode) with
+        {
+            StreamingBackendName = streamingMode switch
+            {
+                BeaconStreamingMode.Fake => nameof(FakeStreamingBackend),
+                BeaconStreamingMode.Worker => nameof(StreamWorkerStreamingBackend),
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(streamingMode),
+                    streamingMode,
+                    "Unsupported Beacon streaming mode.")
+            }
+        };
+        services.AddSingleton(hostOptions);
         services.AddSingleton<IClientProfileRepository>(_ =>
             CreateClientProfileRepository(configuration, environmentClientProfilesPath));
         BeaconSecurityOptions securityOptions = CreateSecurityOptions(configuration);
@@ -84,9 +108,38 @@ public static class BeaconServiceRegistration
             sp.GetServices<IGameLibraryProvider>().ToArray(),
             sp.GetRequiredService<IArtworkProvider>()));
 
-        AddHostBoundaries(services, mode);
-        AddStreamingBoundary(services, mode);
+        AddHostBoundaries(services, hostMode);
+        AddStreamingBoundary(
+            services,
+            streamingMode,
+            ResolveStreamWorkerPath(configuration, environmentStreamWorkerPath));
         return services;
+    }
+
+    public static BeaconStreamingMode ResolveStreamingMode(
+        IConfiguration configuration,
+        string? environmentStreamingMode,
+        BeaconHostMode hostMode)
+    {
+        string? configuredMode = string.IsNullOrWhiteSpace(environmentStreamingMode)
+            ? configuration[StreamingModeConfigurationKey]
+            : environmentStreamingMode;
+
+        if (string.IsNullOrWhiteSpace(configuredMode))
+        {
+            return hostMode == BeaconHostMode.Windows
+                ? BeaconStreamingMode.Worker
+                : BeaconStreamingMode.Fake;
+        }
+
+        return configuredMode.Trim().ToLowerInvariant() switch
+        {
+            "fake" => BeaconStreamingMode.Fake,
+            "worker" => BeaconStreamingMode.Worker,
+            _ => throw new InvalidOperationException(
+                $"Unsupported Beacon streaming mode '{configuredMode}'. Set {StreamingModeConfigurationKey} or " +
+                $"{StreamingModeEnvironmentVariable} to one of: fake, worker.")
+        };
     }
 
     public static BeaconHostMode ResolveHostMode(
@@ -130,22 +183,33 @@ public static class BeaconServiceRegistration
         }
     }
 
-    private static void AddStreamingBoundary(IServiceCollection services, BeaconHostMode mode)
+    private static void AddStreamingBoundary(
+        IServiceCollection services,
+        BeaconStreamingMode mode,
+        string? workerExecutablePath)
     {
-        if (mode == BeaconHostMode.Windows)
+        switch (mode)
         {
-            services.AddSingleton(sp => StreamWorkerProcessHostOptions.CreateDefault(
-                sp.GetRequiredService<BeaconServerIdentity>().IdentityPath));
-            services.AddSingleton<StreamWorkerProcessHost>();
-            services.AddSingleton<IStreamWorkerHost>(sp =>
-                sp.GetRequiredService<StreamWorkerProcessHost>());
-            services.AddSingleton<IStreamSessionAuthorizer, StreamWorkerSessionAuthorizer>();
-            services.AddSingleton<IStreamingBackend, StreamWorkerStreamingBackend>();
-            return;
+            case BeaconStreamingMode.Fake:
+                services.AddSingleton<IStreamSessionAuthorizer, FakeStreamSessionAuthorizer>();
+                services.AddSingleton<IStreamingBackend, FakeStreamingBackend>();
+                break;
+            case BeaconStreamingMode.Worker:
+                services.AddSingleton(sp => StreamWorkerProcessHostOptions.Create(
+                    workerExecutablePath,
+                    sp.GetRequiredService<BeaconServerIdentity>().IdentityPath));
+                services.AddSingleton<StreamWorkerProcessHost>();
+                services.AddSingleton<IStreamWorkerHost>(sp =>
+                    sp.GetRequiredService<StreamWorkerProcessHost>());
+                services.AddSingleton<IStreamSessionAuthorizer, StreamWorkerSessionAuthorizer>();
+                services.AddSingleton<IStreamingBackend, StreamWorkerStreamingBackend>();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(
+                    nameof(mode),
+                    mode,
+                    "Unsupported Beacon streaming mode.");
         }
-
-        services.AddSingleton<IStreamSessionAuthorizer, FakeStreamSessionAuthorizer>();
-        services.AddSingleton<IStreamingBackend, FakeStreamingBackend>();
     }
 
     private static IServiceCollection AddFakeHostBoundaries(this IServiceCollection services)
@@ -193,6 +257,13 @@ public static class BeaconServiceRegistration
         string.IsNullOrWhiteSpace(environmentClientProfilesPath)
             ? configuration[ClientProfilesPathConfigurationKey]
             : environmentClientProfilesPath;
+
+    public static string? ResolveStreamWorkerPath(
+        IConfiguration configuration,
+        string? environmentStreamWorkerPath) =>
+        string.IsNullOrWhiteSpace(environmentStreamWorkerPath)
+            ? configuration[StreamWorkerPathConfigurationKey]
+            : environmentStreamWorkerPath;
 
     private static BeaconSecurityOptions CreateSecurityOptions(IConfiguration configuration)
     {

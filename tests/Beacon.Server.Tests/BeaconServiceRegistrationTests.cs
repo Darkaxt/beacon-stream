@@ -1,4 +1,3 @@
-using System.Reflection;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
 using Beacon.Core.Input;
@@ -22,7 +21,7 @@ namespace Beacon.Server.Tests;
 public sealed class BeaconServiceRegistrationTests
 {
     [Fact]
-    public void DefaultRegistrationUsesFakeHostMode()
+    public void DefaultRegistrationUsesFakeHostAndFakeStreaming()
     {
         using ServiceProvider provider = BuildProvider();
 
@@ -47,7 +46,7 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
-    public async Task WindowsRegistrationUsesWindowsHostAndStreamWorker()
+    public async Task WindowsRegistrationUsesWindowsHostAndWorkerStreaming()
     {
         await using ServiceProvider provider = BuildProvider(new KeyValuePair<string, string?>(
             BeaconServiceRegistration.HostModeConfigurationKey,
@@ -80,21 +79,34 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
-    public void RegistrationExposesNoCompatibilityConfigurationConstants()
+    public async Task FakeHostCanUseWorkerStreamingWithoutWindowsSideEffects()
     {
-        string[] values = typeof(BeaconServiceRegistration)
-            .GetFields(BindingFlags.Public | BindingFlags.Static)
-            .Where(field => field.IsLiteral && field.FieldType == typeof(string))
-            .Select(field => Assert.IsType<string>(field.GetRawConstantValue()))
-            .ToArray();
+        string workerPath = Path.Combine(Path.GetTempPath(), "acceptance", "Beacon.StreamWorker.exe");
+        await using ServiceProvider provider = BuildProvider(
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.HostModeConfigurationKey,
+                "fake"),
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.StreamingModeConfigurationKey,
+                "worker"),
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.StreamWorkerPathConfigurationKey,
+                workerPath));
 
-        Assert.DoesNotContain(values, value =>
-            value.StartsWith("Beacon:Streaming", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(values, value =>
-            value.StartsWith("BEACON_STREAMING", StringComparison.OrdinalIgnoreCase)
-            || value.StartsWith("BEACON_EXTERNAL_STREAMING", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(values, value =>
-            value.Contains("Pairing", StringComparison.OrdinalIgnoreCase));
+        BeaconHostOptions options = provider.GetRequiredService<BeaconHostOptions>();
+
+        Assert.Equal(BeaconHostMode.Fake, options.Mode);
+        Assert.Equal(nameof(StreamWorkerStreamingBackend), options.StreamingBackendName);
+        Assert.IsType<FakeDisplayBackend>(provider.GetRequiredService<IDisplayBackend>());
+        Assert.IsType<FakeRecoveryBackend>(provider.GetRequiredService<IRecoveryBackend>());
+        Assert.IsType<FakeGameLauncher>(provider.GetRequiredService<IGameLauncher>());
+        Assert.IsType<FakeSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
+        Assert.IsType<NoOpClientInputSink>(provider.GetRequiredService<IClientInputSink>());
+        Assert.IsType<StreamWorkerStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+        Assert.Equal(
+            workerPath,
+            provider.GetRequiredService<StreamWorkerProcessHostOptions>().ExecutablePath);
+        Assert.Single(provider.GetServices<IStreamingBackend>());
     }
 
     [Fact]
@@ -144,6 +156,65 @@ public sealed class BeaconServiceRegistrationTests
 
         Assert.Contains("Unsupported Beacon host mode 'broken'", exception.Message, StringComparison.Ordinal);
         Assert.Contains("fake, windows", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnknownStreamingModeFailsWithClearConfigurationError()
+    {
+        IConfiguration configuration = CreateConfiguration(new KeyValuePair<string, string?>(
+            BeaconServiceRegistration.StreamingModeConfigurationKey,
+            "broken"));
+        var services = new ServiceCollection();
+
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
+            services.AddBeaconServices(configuration, environmentHostMode: null));
+
+        Assert.Contains("Unsupported Beacon streaming mode 'broken'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("fake, worker", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ConfiguredWorkerPathIsUsed()
+    {
+        string workerPath = Path.Combine(Path.GetTempPath(), "configured", "Beacon.StreamWorker.exe");
+        await using ServiceProvider provider = BuildProvider(
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.StreamingModeConfigurationKey,
+                "worker"),
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.StreamWorkerPathConfigurationKey,
+                workerPath));
+
+        Assert.Equal(
+            workerPath,
+            provider.GetRequiredService<StreamWorkerProcessHostOptions>().ExecutablePath);
+    }
+
+    [Fact]
+    public async Task EnvironmentWorkerPathOverridesConfiguration()
+    {
+        string configuredPath = Path.Combine(Path.GetTempPath(), "configured", "Beacon.StreamWorker.exe");
+        string environmentPath = Path.Combine(Path.GetTempPath(), "environment", "Beacon.StreamWorker.exe");
+        var services = new ServiceCollection();
+        services.AddBeaconServices(
+            CreateConfiguration(
+                new KeyValuePair<string, string?>(
+                    BeaconServiceRegistration.StreamingModeConfigurationKey,
+                    "worker"),
+                new KeyValuePair<string, string?>(
+                    BeaconServiceRegistration.StreamWorkerPathConfigurationKey,
+                    configuredPath)),
+            environmentHostMode: null,
+            environmentStreamWorkerPath: environmentPath);
+        await using ServiceProvider provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true
+        });
+
+        Assert.Equal(
+            environmentPath,
+            provider.GetRequiredService<StreamWorkerProcessHostOptions>().ExecutablePath);
     }
 
     private static ServiceProvider BuildProvider(params KeyValuePair<string, string?>[] values)

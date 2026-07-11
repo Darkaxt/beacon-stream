@@ -8,8 +8,12 @@ namespace Beacon.Platform.Windows.Streaming;
 
 public sealed record StreamWorkerProcessHostOptions(string ExecutablePath, string IdentityPath)
 {
-    public static StreamWorkerProcessHostOptions CreateDefault(string identityPath) =>
-        new(Path.Combine(AppContext.BaseDirectory, "Beacon.StreamWorker.exe"), identityPath);
+    public static StreamWorkerProcessHostOptions Create(string? executablePath, string identityPath) =>
+        new(
+            string.IsNullOrWhiteSpace(executablePath)
+                ? Path.Combine(AppContext.BaseDirectory, "Beacon.StreamWorker.exe")
+                : executablePath,
+            identityPath);
 }
 
 public interface IStreamWorkerHost
