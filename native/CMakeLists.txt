@@ -42,12 +42,34 @@ if(BEACON_WITH_MSQUIC)
 endif()
 
 set(protobuf_source "${BEACON_NATIVE_DEPENDENCIES_DIR}/protobuf")
+set(abseil_source "${BEACON_NATIVE_DEPENDENCIES_DIR}/abseil-cpp")
 if(NOT EXISTS "${protobuf_source}/cmake/protobuf-generate.cmake")
   message(FATAL_ERROR "Pinned Protobuf source is missing. Bootstrap the protobuf dependency.")
+endif()
+if(NOT EXISTS "${abseil_source}/CMakeLists.txt")
+  message(FATAL_ERROR "Pinned Abseil source is missing. Bootstrap the abseil-cpp dependency.")
 endif()
 if(NOT EXISTS "${BEACON_PROTOC_EXECUTABLE}")
   message(FATAL_ERROR "BEACON_PROTOC_EXECUTABLE must name the pinned protoc 32.1 host executable.")
 endif()
+
+set(ABSL_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+add_subdirectory("${abseil_source}" abseil EXCLUDE_FROM_ALL)
+
+set(WITH_PROTOC "${BEACON_PROTOC_EXECUTABLE}")
+set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(protobuf_BUILD_CONFORMANCE OFF CACHE BOOL "" FORCE)
+set(protobuf_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(protobuf_BUILD_PROTOC_BINARIES OFF CACHE BOOL "" FORCE)
+set(protobuf_BUILD_LIBPROTOC OFF CACHE BOOL "" FORCE)
+set(protobuf_BUILD_LIBUPB OFF CACHE BOOL "" FORCE)
+set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
+set(protobuf_LOCAL_DEPENDENCIES_ONLY ON CACHE BOOL "" FORCE)
+set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
+set(protobuf_WITH_ZLIB OFF CACHE BOOL "" FORCE)
+add_subdirectory("${protobuf_source}" protobuf EXCLUDE_FROM_ALL)
 
 set(protobuf_PROTOC_EXE "${BEACON_PROTOC_EXECUTABLE}")
 include("${protobuf_source}/cmake/protobuf-generate.cmake")
@@ -66,11 +88,33 @@ protobuf_generate(
   PROTOC_EXE "${BEACON_PROTOC_EXECUTABLE}"
 )
 add_custom_target(BeaconStreamContractsGenerated ALL DEPENDS ${beacon_generated_contracts})
+add_library(BeaconStreamContracts STATIC ${beacon_generated_contracts})
+add_dependencies(BeaconStreamContracts BeaconStreamContractsGenerated)
+target_include_directories(
+  BeaconStreamContracts
+  PUBLIC
+    "${beacon_generated_contracts_dir}"
+)
+target_include_directories(
+  BeaconStreamContracts
+  SYSTEM PUBLIC
+    "${protobuf_source}/src"
+    "${abseil_source}"
+)
+target_link_libraries(BeaconStreamContracts PUBLIC protobuf::libprotobuf-lite)
+add_library(Beacon::StreamContracts ALIAS BeaconStreamContracts)
 
 add_subdirectory(../src/Beacon.StreamProtocol Beacon.StreamProtocol)
 
+if(WIN32)
+  add_subdirectory(../src/Beacon.StreamWorker Beacon.StreamWorker)
+endif()
+
 if(BUILD_TESTING)
   add_subdirectory(../tests/Beacon.StreamProtocol.Tests Beacon.StreamProtocol.Tests)
+  if(WIN32)
+    add_subdirectory(../tests/Beacon.StreamWorker.Tests Beacon.StreamWorker.Tests)
+  endif()
   add_test(
     NAME BeaconStreamProtocol.GeneratedContracts
     COMMAND

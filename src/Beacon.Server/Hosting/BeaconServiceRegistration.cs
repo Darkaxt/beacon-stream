@@ -11,6 +11,7 @@ using Beacon.Platform.Windows.Games;
 using Beacon.Platform.Windows.Input;
 using Beacon.Platform.Windows.Recovery;
 using Beacon.Platform.Windows.Sessions;
+using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.State;
 
 namespace Beacon.Server.Hosting;
@@ -128,7 +129,11 @@ public static class BeaconServiceRegistration
     {
         if (mode == BeaconHostMode.Windows)
         {
-            services.AddSingleton<IStreamingBackend, UnavailableStreamingBackend>();
+            services.AddSingleton(StreamWorkerProcessHostOptions.CreateDefault());
+            services.AddSingleton<StreamWorkerProcessHost>();
+            services.AddSingleton<IStreamWorkerHost>(sp =>
+                sp.GetRequiredService<StreamWorkerProcessHost>());
+            services.AddSingleton<IStreamingBackend, StreamWorkerStreamingBackend>();
             return;
         }
 

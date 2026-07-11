@@ -1,0 +1,7 @@
+add_executable(BeaconStreamWorkerHostTests worker_host_tests.cpp)
+target_link_libraries(BeaconStreamWorkerHostTests PRIVATE Beacon::StreamWorkerCore)
+add_test(NAME BeaconStreamWorker.Host COMMAND BeaconStreamWorkerHostTests)
+
+add_executable(BeaconStreamWorkerChannelTests named_pipe_channel_tests.cpp)
+target_link_libraries(BeaconStreamWorkerChannelTests PRIVATE Beacon::StreamWorkerCore)
+add_test(NAME BeaconStreamWorker.Channel COMMAND BeaconStreamWorkerChannelTests)

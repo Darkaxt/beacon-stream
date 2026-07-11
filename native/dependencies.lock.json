@@ -16,6 +16,13 @@
     }
   },
   "dependencies": {
+    "abseil-cpp": {
+      "repository": "https://github.com/abseil/abseil-cpp.git",
+      "revision": "76bb24329e8bf5f39704eb10d21b9a80befa7c81",
+      "ref": "76bb24329e8bf5f39704eb10d21b9a80befa7c81",
+      "license": "Apache-2.0",
+      "path": "abseil-cpp"
+    },
     "msquic": {
       "repository": "https://github.com/microsoft/msquic.git",
       "revision": "87b53085d76bd7920d490a6f226c9999b6614d14",

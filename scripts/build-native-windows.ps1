@@ -5,7 +5,8 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $nativeRoot = Join-Path $repositoryRoot 'native'
 
-& (Join-Path $PSScriptRoot 'bootstrap-native-dependencies.ps1') -Name msquic,xdp-for-windows,protobuf
+& (Join-Path $PSScriptRoot 'bootstrap-native-dependencies.ps1') `
+    -Name msquic,xdp-for-windows,protobuf,abseil-cpp
 
 $env:BEACON_PROTOC_EXECUTABLE = (& (Join-Path $PSScriptRoot 'install-protoc.ps1')).Trim()
 if (-not (Test-Path -LiteralPath $env:BEACON_PROTOC_EXECUTABLE)) {

@@ -1,0 +1,94 @@
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.IO.Pipes;
+using Beacon.Platform.Windows.Streaming;
+using Beacon.StreamWorker.Contracts.Worker.V1;
+
+namespace Beacon.Platform.Windows.Tests.Streaming;
+
+public sealed class StreamWorkerProcessHostTests
+{
+    [Fact]
+    public void PipeSecurityAllowsOnlyOwningUserAndLocalSystem()
+    {
+        var owner = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
+
+        PipeSecurity security = StreamWorkerProcessHost.CreatePipeSecurity(owner);
+
+        Assert.True(security.AreAccessRulesProtected);
+        AuthorizationRuleCollection rules = security.GetAccessRules(
+            includeExplicit: true,
+            includeInherited: false,
+            typeof(SecurityIdentifier));
+        PipeAccessRule[] access = rules.Cast<PipeAccessRule>().ToArray();
+        Assert.Equal(2, access.Length);
+        Assert.All(access, rule => Assert.Equal(AccessControlType.Allow, rule.AccessControlType));
+        Assert.Contains(access, rule => owner.Equals(rule.IdentityReference));
+        Assert.Contains(access, rule =>
+            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Equals(rule.IdentityReference));
+    }
+
+    [Fact]
+    public async Task RealWorkerCompletesExplicitLifecycleWhenBinaryIsAvailable()
+    {
+        string? executable = Environment.GetEnvironmentVariable("BEACON_STREAM_WORKER_PATH");
+        if (string.IsNullOrWhiteSpace(executable) || !File.Exists(executable))
+        {
+            return;
+        }
+
+        await using var host = new StreamWorkerProcessHost(
+            new StreamWorkerProcessHostOptions(executable));
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        int processId = host.ProcessId;
+        StreamWorkerCommandResponse prepare = await host.SendAsync(
+            Prepare("integration-session"),
+            CancellationToken.None);
+        StreamWorkerCommandResponse start = await host.SendAsync(
+            new WorkerIpcEnvelope
+            {
+                SessionId = "integration-session",
+                StartMedia = new StartMedia(),
+            },
+            CancellationToken.None);
+        StreamWorkerCommandResponse stop = await host.SendAsync(
+            new WorkerIpcEnvelope
+            {
+                SessionId = "integration-session",
+                StopMedia = new StopMedia { Reason = StopMediaReason.Explicit },
+            },
+            CancellationToken.None);
+
+        Assert.True(host.IsReady);
+        Assert.True(prepare.Completion.WorkerCompletion.Succeeded);
+        Assert.True(start.Completion.WorkerCompletion.Succeeded);
+        Assert.True(stop.Completion.WorkerCompletion.Succeeded);
+        Assert.Equal(3ul, start.Events.Single(e => e.BodyCase == WorkerIpcEnvelope.BodyOneofCase.MediaMetrics)
+            .MediaMetrics.EncodedFrames);
+
+        await host.ShutdownAsync(CancellationToken.None);
+
+        Assert.False(host.IsReady);
+        Assert.True(host.HasExited);
+        Assert.DoesNotContain(System.Diagnostics.Process.GetProcesses(), process => process.Id == processId);
+    }
+
+    private static WorkerIpcEnvelope Prepare(string sessionId) => new()
+    {
+        SessionId = sessionId,
+        PrepareSession = new PrepareSession
+        {
+            DisplayTarget = "virtual-test",
+            VideoCodec = WorkerVideoCodec.H264,
+            Width = 2560,
+            Height = 1600,
+            FramesPerSecondNumerator = 120,
+            FramesPerSecondDenominator = 1,
+            DynamicRange = WorkerDynamicRange.Sdr,
+            MinimumBitrateKbps = 1000,
+            InitialBitrateKbps = 45000,
+            MaximumBitrateKbps = 90000,
+        },
+    };
+}
