@@ -21,7 +21,7 @@
 - Test: `tests/Beacon.Server.Tests/BeaconServiceRegistrationTests.cs`
 - Test: `tests/Beacon.Platform.Windows.Tests/Streaming/StreamWorkerProcessHostTests.cs`
 
-- [ ] **Step 1: Write failing composition and path-resolution tests**
+- [x] **Step 1: Write failing composition and path-resolution tests**
 
 Add cases proving Fake/Fake remains the default, Windows/Worker remains the production
 default, Fake/Worker is explicitly selectable, and an explicit Worker path wins over the
@@ -45,7 +45,7 @@ public void FakeHostCanUseWorkerStreamingWithoutWindowsSideEffects()
 }
 ```
 
-- [ ] **Step 2: Run the focused tests and verify the expected failure**
+- [x] **Step 2: Run the focused tests and verify the expected failure**
 
 ```powershell
 dotnet test tests\Beacon.Server.Tests\Beacon.Server.Tests.csproj --filter BeaconServiceRegistrationTests
@@ -54,7 +54,7 @@ dotnet test tests\Beacon.Platform.Windows.Tests\Beacon.Platform.Windows.Tests.cs
 
 Expected: failure because streaming mode and explicit Worker path do not exist.
 
-- [ ] **Step 3: Add the minimal composition model**
+- [x] **Step 3: Add the minimal composition model**
 
 Use this closed enum and configuration surface:
 
@@ -71,7 +71,7 @@ Resolve defaults as Fake for Fake host mode and Worker for Windows host mode. Ke
 `AddHostBoundaries` selected only by host mode and `AddStreamingBoundary` selected only by
 streaming mode. Reject unknown values with the accepted values in the exception.
 
-- [ ] **Step 4: Run focused tests, full registration tests, and format**
+- [x] **Step 4: Run focused tests, full registration tests, and format**
 
 ```powershell
 dotnet test tests\Beacon.Server.Tests\Beacon.Server.Tests.csproj --filter BeaconServiceRegistrationTests
@@ -81,7 +81,7 @@ dotnet format Beacon.slnx --verify-no-changes
 
 Expected: all pass and format reports no changes.
 
-- [ ] **Step 5: Commit and push the slice**
+- [x] **Step 5: Commit and push the slice**
 
 ```powershell
 git add src/Beacon.Server/Hosting src/Beacon.Platform.Windows/Streaming/StreamWorkerProcessHost.cs tests/Beacon.Server.Tests/BeaconServiceRegistrationTests.cs tests/Beacon.Platform.Windows.Tests/Streaming/StreamWorkerProcessHostTests.cs
