@@ -1,6 +1,9 @@
 using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Beacon.Core.Sessions;
 
@@ -47,7 +50,8 @@ public static class SessionPlanner
             ClientId: profile.ClientId,
             AppId: game.Id,
             Display: display,
-            Stream: stream);
+            Stream: stream,
+            Revision: CreateRevision(profile.ClientId, game.Id, display, stream));
 
         return new SessionPlanResult(true, plan, null);
     }
@@ -256,4 +260,36 @@ public static class SessionPlanner
         telemetry.BatteryPercent is <= 15 ||
         telemetry.ThermalState?.Equals("hot", StringComparison.OrdinalIgnoreCase) == true ||
         telemetry.ThermalState?.Equals("critical", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static ulong CreateRevision(
+        ClientId clientId,
+        string appId,
+        PlannedDisplay display,
+        PlannedStream stream)
+    {
+        using var material = new MemoryStream();
+        using (var writer = new BinaryWriter(material, Encoding.UTF8, leaveOpen: true))
+        {
+            writer.Write(clientId.Value);
+            writer.Write(appId);
+            writer.Write(display.DisplayId);
+            writer.Write(display.Width);
+            writer.Write(display.Height);
+            writer.Write(display.RefreshHz);
+            writer.Write(display.Mode);
+            writer.Write((int)display.HdrPreference);
+            writer.Write(display.HdrEnabled);
+            writer.Write(display.HdrMode);
+            writer.Write(stream.Codec);
+            writer.Write(stream.Fps);
+            writer.Write(stream.InitialBitrateMbps);
+            writer.Write(stream.Transport);
+            writer.Write(stream.CongestionPolicy);
+        }
+
+        byte[] digest = SHA256.HashData(material.GetBuffer().AsSpan(0, checked((int)material.Length)));
+        ulong revision = BinaryPrimitives.ReadUInt64BigEndian(digest);
+        CryptographicOperations.ZeroMemory(digest);
+        return revision == 0 ? 1 : revision;
+    }
 }

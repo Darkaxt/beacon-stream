@@ -166,6 +166,33 @@ public sealed class CockpitShellViewModelTests
     }
 
     [Fact]
+    public async Task ApproveRegistrationDelegatesSelectedPendingClientToServer()
+    {
+        var registration = new CockpitPendingRegistration(
+            "registration-1",
+            "z-fold-7",
+            "Z Fold 7",
+            "pending");
+        var api = new FakeCockpitApi(new CockpitSnapshot(
+            [],
+            [],
+            [],
+            [],
+            CreateHealthyDisplay(),
+            CreateHealthyStreaming(),
+            CreateHealthyInput(),
+            new CockpitGameSummary(0, []),
+            [],
+            new CockpitSecuritySummary("fingerprint", [registration])));
+        var viewModel = new CockpitShellViewModel(api);
+        await viewModel.RefreshAsync(CancellationToken.None);
+
+        await viewModel.ApproveRegistrationAsync(CancellationToken.None);
+
+        Assert.Equal("registration-1", api.ApprovedRegistrationId);
+    }
+
+    [Fact]
     public async Task RecoverSelectedClientReportsMissingSelection()
     {
         var api = new FakeCockpitApi(new CockpitSnapshot([], [], [], [], CreateHealthyDisplay(), CreateHealthyStreaming(), CreateHealthyInput(), new CockpitGameSummary(0, []), []));
@@ -215,6 +242,8 @@ public sealed class CockpitShellViewModelTests
         public string? RemovedClientDisplayLeaseId { get; private set; }
 
         public string? StoppedClientStreamId { get; private set; }
+
+        public string? ApprovedRegistrationId { get; private set; }
 
         public string? PatchedClientId { get; private set; }
 
@@ -277,6 +306,12 @@ public sealed class CockpitShellViewModelTests
             StoppedClientStreamId = clientId;
             return Task.CompletedTask;
         }
+
+        public Task ApproveRegistrationAsync(string registrationId, CancellationToken cancellationToken)
+        {
+            ApprovedRegistrationId = registrationId;
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FailingCockpitApi(string message) : ICockpitApi
@@ -309,6 +344,9 @@ public sealed class CockpitShellViewModelTests
             Task.FromException(new InvalidOperationException(message));
 
         public Task StopClientStreamAsync(string clientId, CancellationToken cancellationToken) =>
+            Task.FromException(new InvalidOperationException(message));
+
+        public Task ApproveRegistrationAsync(string registrationId, CancellationToken cancellationToken) =>
             Task.FromException(new InvalidOperationException(message));
     }
 

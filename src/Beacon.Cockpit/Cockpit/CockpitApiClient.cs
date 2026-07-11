@@ -25,8 +25,7 @@ public interface ICockpitApi
 
     Task StopClientStreamAsync(string clientId, CancellationToken cancellationToken);
 
-    Task ApproveRegistrationAsync(string registrationId, CancellationToken cancellationToken) =>
-        Task.CompletedTask;
+    Task ApproveRegistrationAsync(string registrationId, CancellationToken cancellationToken);
 }
 
 public sealed class CockpitApiClient(HttpClient httpClient) : ICockpitApi

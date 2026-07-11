@@ -51,6 +51,7 @@ public static class BeaconServiceRegistration
         services.AddSingleton(_ => new BeaconServerIdentity(securityOptions.IdentityPath));
         services.AddSingleton(_ => new ClientCredentialService(securityOptions.CredentialsPath));
         services.AddSingleton<StreamTicketService>();
+        services.AddSingleton<StreamTicketProvisioningService>();
         services.AddSingleton<InMemoryDiagnosticEventJournal>();
         services.AddSingleton<IDiagnosticEventSink>(sp =>
             sp.GetRequiredService<InMemoryDiagnosticEventJournal>());

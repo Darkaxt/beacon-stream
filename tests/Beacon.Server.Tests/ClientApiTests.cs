@@ -452,7 +452,8 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal("av1", root.GetProperty("stream").GetProperty("codec").GetString());
         Assert.Equal(120, root.GetProperty("stream").GetProperty("fps").GetInt32());
         Assert.Equal(1, root.GetProperty("connection").GetProperty("protocolVersion").GetInt32());
-        Assert.Equal(1ul, root.GetProperty("connection").GetProperty("planRevision").GetUInt64());
+        ulong planRevision = root.GetProperty("connection").GetProperty("planRevision").GetUInt64();
+        Assert.NotEqual(0UL, planRevision);
         byte[] publicTicket = Convert.FromBase64String(Assert.IsType<string>(
             root.GetProperty("connection").GetProperty("ticket").GetString()));
         Assert.True(publicTicket.Length >= 32);
@@ -460,6 +461,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             factory.Services.GetRequiredService<IStreamSessionAuthorizer>());
         StreamWorkerAuthorization privateAuthorization = Assert.IsType<StreamWorkerAuthorization>(
             authorizer.Authorizations.LastOrDefault());
+        Assert.Equal(planRevision, privateAuthorization.PlanRevision);
         Assert.Equal(32, privateAuthorization.TicketHash.Length);
         Assert.False(CryptographicOperations.FixedTimeEquals(publicTicket, privateAuthorization.TicketHash));
         Assert.True(root.EnumerateObject().Select(property => property.Name).ToHashSet().SetEquals(
@@ -546,6 +548,9 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         string body = await response.Content.ReadAsStringAsync();
         Assert.Contains("encoder unavailable", body, StringComparison.OrdinalIgnoreCase);
+        FakeStreamSessionAuthorizer authorizer = Assert.IsType<FakeStreamSessionAuthorizer>(
+            failingFactory.Services.GetRequiredService<IStreamSessionAuthorizer>());
+        Assert.Single(authorizer.Revocations);
     }
 
     [Fact]
@@ -619,9 +624,13 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         HttpResponseMessage reconnect = await client.PostAsJsonAsync(
             "/clients/z-fold-7/reconnect",
             new { });
+        HttpResponseMessage stop = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/stream/stop",
+            new { });
 
         Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
         Assert.Equal(HttpStatusCode.OK, reconnect.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, stop.StatusCode);
         using JsonDocument launchJson = await JsonDocument.ParseAsync(await launch.Content.ReadAsStreamAsync());
         using JsonDocument reconnectJson = await JsonDocument.ParseAsync(await reconnect.Content.ReadAsStreamAsync());
         string first = Assert.IsType<string>(
@@ -633,7 +642,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal("reconnected", reconnectJson.RootElement.GetProperty("state").GetString());
         FakeStreamSessionAuthorizer authorizer = Assert.IsType<FakeStreamSessionAuthorizer>(
             factory.Services.GetRequiredService<IStreamSessionAuthorizer>());
-        Assert.NotEmpty(authorizer.Revocations);
+        Assert.True(authorizer.Revocations.Count >= 2);
     }
 
     [Fact]

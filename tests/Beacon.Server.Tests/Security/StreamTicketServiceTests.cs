@@ -128,4 +128,18 @@ public sealed class StreamTicketServiceTests
             WorkerInstance,
             Now.AddSeconds(2)).Success);
     }
+
+    [Fact]
+    public void ZeroPlanRevisionIsRejectedBeforeTicketIssuance()
+    {
+        var service = new StreamTicketService();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => service.Issue(
+            "z-fold-7",
+            "session-1",
+            planRevision: 0,
+            WorkerInstance,
+            Now,
+            TimeSpan.FromMinutes(2)));
+    }
 }

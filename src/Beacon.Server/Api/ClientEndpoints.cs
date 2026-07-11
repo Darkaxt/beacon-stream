@@ -8,8 +8,6 @@ using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Server.State;
 using Beacon.Server.Security;
-using Google.Protobuf;
-using WorkerAuthorizeTicket = Beacon.StreamWorker.Contracts.Worker.V1.AuthorizeTicket;
 
 namespace Beacon.Server.Api;
 
@@ -181,8 +179,7 @@ public static class ClientEndpoints
             IGameLauncher launcher,
             ISessionOwnershipTracker ownership,
             IStreamingBackend streaming,
-            IStreamSessionAuthorizer streamAuthorizer,
-            StreamTicketService streamTickets,
+            StreamTicketProvisioningService ticketProvisioning,
             CancellationToken cancellationToken) =>
         {
             ClientProfile? profile = clients.GetProfile(clientId);
@@ -241,70 +238,36 @@ public static class ClientEndpoints
 
             await ownership.RecordLaunchAsync(planResult.Plan, launchResult.State, cancellationToken);
 
-            IssuedStreamTicket issuedTicket;
-            try
-            {
-                StreamWorkerAuthorizationContext authorizationContext =
-                    await streamAuthorizer.GetContextAsync(cancellationToken);
-                issuedTicket = streamTickets.ReplaceForReconnect(
-                    clientId,
-                    planResult.Plan.SessionId,
-                    planResult.Plan.Revision,
-                    authorizationContext.WorkerInstanceId,
-                    DateTimeOffset.UtcNow,
-                    TimeSpan.FromMinutes(2));
-                foreach (PendingStreamTicketRevocation pendingRevocation in
-                    streamTickets.GetPendingWorkerRevocations(clientId, planResult.Plan.SessionId))
-                {
-                    StreamWorkerAuthorizationResult revocation = await streamAuthorizer.RevokeAsync(
-                        new StreamWorkerRevocation(
-                            pendingRevocation.SessionId,
-                            pendingRevocation.TicketHash),
-                        cancellationToken);
-                    if (!revocation.Success)
-                    {
-                        return Results.Problem(
-                            revocation.Error,
-                            statusCode: StatusCodes.Status503ServiceUnavailable);
-                    }
-                    streamTickets.MarkWorkerRevocationSent(pendingRevocation.TicketId);
-                }
-                WorkerAuthorizeTicket workerTicket = streamTickets.CreateWorkerAuthorization(issuedTicket.TicketId);
-                StreamWorkerAuthorizationResult authorization = await streamAuthorizer.AuthorizeAsync(
-                    new StreamWorkerAuthorization(
-                        planResult.Plan.SessionId,
-                        workerTicket.ClientId,
-                        workerTicket.PlanRevision,
-                        workerTicket.TicketHash.ToByteArray(),
-                        workerTicket.WorkerInstanceId.ToByteArray(),
-                        DateTimeOffset.FromUnixTimeMilliseconds(checked((long)workerTicket.ExpiresAtUnixMs))),
-                    cancellationToken);
-                if (!authorization.Success)
-                {
-                    streamTickets.Revoke(issuedTicket.TicketId);
-                    return Results.Problem(
-                        authorization.Error,
-                        statusCode: StatusCodes.Status503ServiceUnavailable);
-                }
-            }
-            catch (Exception error) when (error is not OperationCanceledException)
+            StreamTicketProvisioningResult ticketResult = await ticketProvisioning.ProvisionAsync(
+                clientId,
+                planResult.Plan.SessionId,
+                planResult.Plan.Revision,
+                cancellationToken);
+            if (!ticketResult.Success || ticketResult.Ticket is null)
             {
                 return Results.Problem(
-                    $"Stream ticket provisioning failed ({error.GetType().Name}).",
+                    ticketResult.Error,
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
+            IssuedStreamTicket issuedTicket = ticketResult.Ticket;
 
             StreamingStartResult streamResult = await streaming.StartAsync(planResult.Plan, cancellationToken);
             if (!streamResult.Success || streamResult.Session is null)
             {
-                streamTickets.Revoke(issuedTicket.TicketId);
+                StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
+                    clientId,
+                    planResult.Plan.SessionId,
+                    cancellationToken);
+                string revocationStatus = revoked.Success
+                    ? "Stream ticket revoked after stream start failure."
+                    : $"Stream ticket revocation failed after stream start failure: {revoked.Error}";
                 DisplayRestoreResult restore = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
                 string restoreStatus = restore.Success
                     ? "Physical primary restore requested after stream start failure."
                     : $"Physical primary restore failed after stream start failure: {restore.Error}";
 
                 return Results.Problem(
-                    $"{streamResult.Error} {restoreStatus}",
+                    $"{streamResult.Error} {revocationStatus} {restoreStatus}",
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
@@ -353,6 +316,7 @@ public static class ClientEndpoints
             string clientId,
             InMemorySessionStore sessions,
             IStreamingBackend streaming,
+            StreamTicketProvisioningService ticketProvisioning,
             CancellationToken cancellationToken) =>
         {
             SessionPlan? plan = sessions.Get(clientId);
@@ -362,9 +326,17 @@ public static class ClientEndpoints
             }
 
             StreamingStopResult stop = await streaming.StopAsync(plan.SessionId, cancellationToken);
-            return stop.Success && stop.Session is not null
+            if (!stop.Success || stop.Session is null)
+            {
+                return Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
+                clientId,
+                plan.SessionId,
+                cancellationToken);
+            return revoked.Success
                 ? Results.Ok(new { clientId, stream = stop.Session })
-                : Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+                : Results.Problem(revoked.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
         });
 
         clients.MapPost("/{clientId}/beacon", async (
@@ -587,8 +559,7 @@ public static class ClientEndpoints
             InMemoryClientStore clients,
             InMemorySessionStore sessions,
             DisplayLeaseManager leases,
-            IStreamSessionAuthorizer streamAuthorizer,
-            StreamTicketService streamTickets,
+            StreamTicketProvisioningService ticketProvisioning,
             CancellationToken cancellationToken) =>
         {
             ClientProfile? profile = clients.GetProfile(clientId);
@@ -609,70 +580,31 @@ public static class ClientEndpoints
                 return Results.Ok(new { clientId, displayId = leaseResult.Lease.DisplayId, state = "reconnected" });
             }
 
-            try
-            {
-                StreamWorkerAuthorizationContext authorizationContext =
-                    await streamAuthorizer.GetContextAsync(cancellationToken);
-                IssuedStreamTicket replacement = streamTickets.ReplaceForReconnect(
-                    clientId,
-                    plan.SessionId,
-                    plan.Revision,
-                    authorizationContext.WorkerInstanceId,
-                    DateTimeOffset.UtcNow,
-                    TimeSpan.FromMinutes(2));
-                foreach (PendingStreamTicketRevocation pendingRevocation in
-                    streamTickets.GetPendingWorkerRevocations(clientId, plan.SessionId))
-                {
-                    StreamWorkerAuthorizationResult revocation = await streamAuthorizer.RevokeAsync(
-                        new StreamWorkerRevocation(
-                            pendingRevocation.SessionId,
-                            pendingRevocation.TicketHash),
-                        cancellationToken);
-                    if (!revocation.Success)
-                    {
-                        return Results.Problem(
-                            revocation.Error,
-                            statusCode: StatusCodes.Status503ServiceUnavailable);
-                    }
-                    streamTickets.MarkWorkerRevocationSent(pendingRevocation.TicketId);
-                }
-                WorkerAuthorizeTicket workerTicket = streamTickets.CreateWorkerAuthorization(replacement.TicketId);
-                StreamWorkerAuthorizationResult authorization = await streamAuthorizer.AuthorizeAsync(
-                    new StreamWorkerAuthorization(
-                        plan.SessionId,
-                        workerTicket.ClientId,
-                        workerTicket.PlanRevision,
-                        workerTicket.TicketHash.ToByteArray(),
-                        workerTicket.WorkerInstanceId.ToByteArray(),
-                        DateTimeOffset.FromUnixTimeMilliseconds(checked((long)workerTicket.ExpiresAtUnixMs))),
-                    cancellationToken);
-                if (!authorization.Success)
-                {
-                    streamTickets.Revoke(replacement.TicketId);
-                    return Results.Problem(
-                        authorization.Error,
-                        statusCode: StatusCodes.Status503ServiceUnavailable);
-                }
-                return Results.Ok(new
-                {
-                    clientId,
-                    displayId = leaseResult.Lease.DisplayId,
-                    state = "reconnected",
-                    connection = new
-                    {
-                        protocolVersion = 1,
-                        ticket = replacement.Ticket,
-                        expiresAt = replacement.ExpiresAt,
-                        planRevision = plan.Revision,
-                    },
-                });
-            }
-            catch (Exception error) when (error is not OperationCanceledException)
+            StreamTicketProvisioningResult ticketResult = await ticketProvisioning.ProvisionAsync(
+                clientId,
+                plan.SessionId,
+                plan.Revision,
+                cancellationToken);
+            if (!ticketResult.Success || ticketResult.Ticket is null)
             {
                 return Results.Problem(
-                    $"Reconnect ticket provisioning failed ({error.GetType().Name}).",
+                    ticketResult.Error,
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
+            IssuedStreamTicket replacement = ticketResult.Ticket;
+            return Results.Ok(new
+            {
+                clientId,
+                displayId = leaseResult.Lease.DisplayId,
+                state = "reconnected",
+                connection = new
+                {
+                    protocolVersion = 1,
+                    ticket = replacement.Ticket,
+                    expiresAt = replacement.ExpiresAt,
+                    planRevision = plan.Revision,
+                },
+            });
         });
 
         clients.MapPost("/{clientId}/quit", async (
@@ -682,6 +614,7 @@ public static class ClientEndpoints
             DisplayLeaseManager leases,
             ISessionOwnershipTracker ownership,
             IStreamingBackend streaming,
+            StreamTicketProvisioningService ticketProvisioning,
             CancellationToken cancellationToken) =>
         {
             SessionPlan? plan = sessions.Get(clientId);
@@ -696,6 +629,16 @@ public static class ClientEndpoints
                 }
 
                 stream = stop.Session;
+                StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
+                    clientId,
+                    plan.SessionId,
+                    cancellationToken);
+                if (!revoked.Success)
+                {
+                    return Results.Problem(
+                        revoked.Error,
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
                 ownershipSnapshot = await ownership.GetSnapshotAsync(plan.SessionId, cancellationToken);
             }
 
