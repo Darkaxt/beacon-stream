@@ -1,4 +1,10 @@
-add_library(BeaconStreamProtocol STATIC src/media_datagram.cpp)
+add_library(
+  BeaconStreamProtocol
+  STATIC
+    src/frame_assembler.cpp
+    src/media_datagram.cpp
+    src/session.cpp
+)
 
 target_include_directories(
   BeaconStreamProtocol
