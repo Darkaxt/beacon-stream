@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [string]$Distribution = 'Ubuntu'
+    [string]$Distribution = 'Ubuntu',
+    [ValidateSet('Debug', 'Release')]
+    [string]$Configuration = 'Debug'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -12,7 +14,7 @@ if (-not $wslRepositoryRoot) {
     throw "Could not translate the repository path for WSL distribution '$Distribution'."
 }
 
-& wsl.exe -d $Distribution -- bash "$wslRepositoryRoot/scripts/build-native-android-wsl.sh"
+& wsl.exe -d $Distribution -- bash "$wslRepositoryRoot/scripts/build-native-android-wsl.sh" $Configuration
 if ($LASTEXITCODE -ne 0) {
     throw 'Android native build failed in WSL.'
 }

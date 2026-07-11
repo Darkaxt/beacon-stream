@@ -86,9 +86,6 @@ public final class BeaconViewModelSessionTest {
         public BeaconApiClient.BeaconResult launch(BeaconApiClient.GameSelection game) { return result; }
 
         @Override
-        public BeaconApiClient.BeaconResult sendInput(BeaconApiClient.InputBatch input) { return result; }
-
-        @Override
         public BeaconApiClient.BeaconResult stopStream() { return result; }
 
         @Override

@@ -27,6 +27,43 @@ add_executable(BeaconFrameAssemblerTests frame_assembler_tests.cpp)
 target_link_libraries(BeaconFrameAssemblerTests PRIVATE Beacon::StreamProtocol)
 add_test(NAME BeaconStreamProtocol.FrameAssembler COMMAND BeaconFrameAssemblerTests)
 
+if(ANDROID)
+  add_executable(
+    BeaconAndroidStreamCoreTests
+    ../../src/Beacon.Android/app/src/main/cpp/streamcore/tests/stream_core_tests.cpp
+  )
+  target_link_libraries(
+    BeaconAndroidStreamCoreTests
+    PRIVATE
+      BeaconAndroidStreamCore
+      Beacon::StreamContracts
+  )
+  add_test(NAME BeaconAndroid.StreamCore COMMAND BeaconAndroidStreamCoreTests)
+
+  add_executable(
+    BeaconAndroidCertificatePinTests
+    ../../src/Beacon.Android/app/src/main/cpp/streamcore/tests/certificate_pin_tests.cpp
+  )
+  target_link_libraries(
+    BeaconAndroidCertificatePinTests
+    PRIVATE
+      BeaconAndroidStreamCore
+      OpenSSL
+  )
+  add_test(NAME BeaconAndroid.CertificatePin COMMAND BeaconAndroidCertificatePinTests)
+
+  add_executable(
+    BeaconAndroidLifecycleTests
+    ../../src/Beacon.Android/app/src/main/cpp/streamcore/tests/lifecycle_tests.cpp
+  )
+  target_link_libraries(
+    BeaconAndroidLifecycleTests
+    PRIVATE
+      BeaconAndroidStreamCore
+  )
+  add_test(NAME BeaconAndroid.Lifecycle COMMAND BeaconAndroidLifecycleTests)
+endif()
+
 if(BEACON_WITH_MSQUIC)
   function(beacon_deploy_msquic target)
     if(WIN32)

@@ -1,14 +1,16 @@
 using System.Collections.Concurrent;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
+using Beacon.StreamWorker.Contracts.Framing;
 using Beacon.StreamWorker.Contracts.Worker.V1;
 
 namespace Beacon.Platform.Windows.Streaming;
 
 public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStreamingBackend
 {
-    private readonly ConcurrentDictionary<string, StreamingSessionState> sessions =
+    private readonly ConcurrentDictionary<string, WorkerBoundStreamingSession> sessions =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim lifecycleGate = new(1, 1);
 
     public async Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken)
     {
@@ -20,7 +22,7 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
                 State: host.IsReady ? "ready" : "unavailable",
                 Diagnostic: host.IsReady ? "Beacon StreamWorker ready." : "Beacon StreamWorker unavailable.",
                 Capabilities: Capabilities(),
-                ActiveSessions: sessions.Values.Count(session => session.State == "running"),
+                ActiveSessions: GetSessions().Count(session => session.State == "running"),
                 Diagnostics: []);
         }
         catch (Exception error) when (error is not OperationCanceledException)
@@ -30,7 +32,7 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
                 State: "unavailable",
                 Diagnostic: "Beacon StreamWorker failed readiness verification.",
                 Capabilities: Capabilities(),
-                ActiveSessions: sessions.Values.Count(session => session.State == "running"),
+                ActiveSessions: GetSessions().Count(session => session.State == "running"),
                 Diagnostics: [error.GetType().Name]);
         }
     }
@@ -68,7 +70,27 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
             return StreamingStartResult.Fail(invalid);
         }
 
+        await lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await StartCoreAsync(plan, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lifecycleGate.Release();
+        }
+    }
+
+    private async Task<StreamingStartResult> StartCoreAsync(
+        SessionPlan plan,
+        CancellationToken cancellationToken)
+    {
         await host.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
+        byte[] workerInstanceId = host.WorkerInstanceId.ToArray();
+        if (!host.IsReady || workerInstanceId.Length == 0)
+        {
+            return StreamingStartResult.Fail("Beacon StreamWorker runtime identity is unavailable.");
+        }
         StreamWorkerCommandResponse prepared = await host.SendAsync(
             CreatePrepareCommand(plan),
             cancellationToken).ConfigureAwait(false);
@@ -84,7 +106,7 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
                 SessionId = plan.SessionId,
                 StartMedia = new StartMedia
                 {
-                    ListenAddress = "127.0.0.1",
+                    ListenAddress = "0.0.0.0",
                     ListenPort = 0,
                 },
             },
@@ -93,6 +115,32 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
         if (startError is not null)
         {
             return StreamingStartResult.Fail(startError);
+        }
+
+        WorkerIpcEnvelope[] transportReadyEvents = started.Events
+            .Where(value => value.BodyCase == WorkerIpcEnvelope.BodyOneofCase.WorkerTransportReady)
+            .ToArray();
+        WorkerIpcEnvelope? transportReady = transportReadyEvents.Length == 1
+            ? transportReadyEvents[0]
+            : null;
+        if (transportReady is null
+            || transportReady.ProtocolVersion != ProtocolVersion.Current
+            || transportReady.RequestId == 0
+            || transportReady.RequestId != started.Completion.RequestId
+            || !string.Equals(transportReady.SessionId, plan.SessionId, StringComparison.Ordinal)
+            || transportReady.WorkerTransportReady.ListenerPort is 0 or > 65_535)
+        {
+            string? cleanupError = await CleanupInvalidTransportReadyAsync(
+                plan.SessionId,
+                cancellationToken).ConfigureAwait(false);
+            return StreamingStartResult.Fail(
+                cleanupError
+                ?? "StreamWorker start_media requires exactly one valid transport-ready event.");
+        }
+        if (!IsCurrentWorker(workerInstanceId))
+        {
+            return StreamingStartResult.Fail(
+                "Beacon StreamWorker runtime changed during start_media.");
         }
 
         var state = new StreamingSessionState(
@@ -104,26 +152,81 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
             plan.Stream.Fps,
             plan.Stream.InitialBitrateMbps,
             "running",
-            null);
-        sessions[plan.SessionId] = state;
+            null,
+            checked((int)transportReady.WorkerTransportReady.ListenerPort),
+            Guid.NewGuid());
+        sessions[plan.SessionId] = new WorkerBoundStreamingSession(state, workerInstanceId);
         return StreamingStartResult.Ok(state);
     }
 
     public async Task<StreamingStopResult> StopAsync(
         string sessionId,
+        CancellationToken cancellationToken) =>
+        await StopCoreAsync(
+            sessionId,
+            expectedGeneration: null,
+            StopMediaReason.Explicit,
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task<StreamingStopResult> StopRuntimeAsync(
+        string sessionId,
+        Guid expectedGeneration,
+        CancellationToken cancellationToken) =>
+        await StopCoreAsync(
+            sessionId,
+            expectedGeneration,
+            StopMediaReason.SessionFailed,
+            cancellationToken).ConfigureAwait(false);
+
+    private async Task<StreamingStopResult> StopCoreAsync(
+        string sessionId,
+        Guid? expectedGeneration,
+        StopMediaReason reason,
         CancellationToken cancellationToken)
     {
-        if (!sessions.TryGetValue(sessionId, out StreamingSessionState? session)
-            || session.State != "running")
+        await lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
+            return await StopUnderGateAsync(
+                sessionId,
+                expectedGeneration,
+                reason,
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lifecycleGate.Release();
+        }
+    }
+
+    private async Task<StreamingStopResult> StopUnderGateAsync(
+        string sessionId,
+        Guid? expectedGeneration,
+        StopMediaReason reason,
+        CancellationToken cancellationToken)
+    {
+        if (!sessions.TryGetValue(sessionId, out WorkerBoundStreamingSession? runtime)
+            || runtime.State.State != "running"
+            || !IsCurrentWorker(runtime.WorkerInstanceId))
+        {
+            if (runtime is not null)
+            {
+                RemoveIfCurrent(sessionId, runtime);
+            }
             return StreamingStopResult.Fail($"Stream session '{sessionId}' is not running.");
+        }
+        if (expectedGeneration.HasValue
+            && runtime.State.RuntimeGeneration != expectedGeneration.Value)
+        {
+            return StreamingStopResult.Fail(
+                $"Stream session '{sessionId}' runtime generation changed before compensation.");
         }
 
         StreamWorkerCommandResponse stopped = await host.SendAsync(
             new WorkerIpcEnvelope
             {
                 SessionId = sessionId,
-                StopMedia = new StopMedia { Reason = StopMediaReason.Explicit },
+                StopMedia = new StopMedia { Reason = reason },
             },
             cancellationToken).ConfigureAwait(false);
         string? stopError = CompletionError("stop_media", stopped.Completion.WorkerCompletion);
@@ -132,21 +235,113 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
             return StreamingStopResult.Fail(stopError);
         }
 
-        StreamingSessionState state = session with { State = "stopped", Error = null };
-        sessions[sessionId] = state;
+        StreamingSessionState state = runtime.State with
+        {
+            State = "stopped",
+            Error = null,
+            ActiveListenerPort = null,
+        };
+        if (!sessions.TryUpdate(sessionId, runtime with { State = state }, runtime))
+        {
+            return StreamingStopResult.Fail(
+                $"Stream session '{sessionId}' runtime changed while stop_media was in flight.");
+        }
         return StreamingStopResult.Ok(state);
     }
 
     public Task<StreamingSessionState?> GetSessionAsync(
         string sessionId,
-        CancellationToken cancellationToken) =>
-        Task.FromResult(sessions.GetValueOrDefault(sessionId));
+        CancellationToken cancellationToken)
+    {
+        if (!sessions.TryGetValue(sessionId, out WorkerBoundStreamingSession? runtime))
+        {
+            return Task.FromResult<StreamingSessionState?>(null);
+        }
+        if (runtime.State.State == "running" && !IsCurrentWorker(runtime.WorkerInstanceId))
+        {
+            RemoveIfCurrent(sessionId, runtime);
+            return Task.FromResult<StreamingSessionState?>(null);
+        }
 
-    public IReadOnlyList<StreamingSessionState> GetSessions() =>
-        sessions.Values
+        return Task.FromResult<StreamingSessionState?>(runtime.State);
+    }
+
+    public IReadOnlyList<StreamingSessionState> GetSessions()
+    {
+        foreach ((string sessionId, WorkerBoundStreamingSession runtime) in sessions.ToArray())
+        {
+            if (runtime.State.State == "running" && !IsCurrentWorker(runtime.WorkerInstanceId))
+            {
+                RemoveIfCurrent(sessionId, runtime);
+            }
+        }
+
+        return sessions.Values
+            .Select(runtime => runtime.State)
             .OrderBy(session => session.ClientId, StringComparer.OrdinalIgnoreCase)
             .ThenBy(session => session.SessionId, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    private bool IsCurrentWorker(byte[] workerInstanceId)
+    {
+        ReadOnlyMemory<byte> currentWorkerInstanceId = host.WorkerInstanceId;
+        return host.IsReady
+            && !currentWorkerInstanceId.IsEmpty
+            && currentWorkerInstanceId.Span.SequenceEqual(workerInstanceId);
+    }
+
+    private void RemoveIfCurrent(string sessionId, WorkerBoundStreamingSession runtime) =>
+        ((ICollection<KeyValuePair<string, WorkerBoundStreamingSession>>)sessions)
+            .Remove(new KeyValuePair<string, WorkerBoundStreamingSession>(sessionId, runtime));
+
+    private async Task<string?> CleanupInvalidTransportReadyAsync(
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            StreamWorkerCommandResponse stopped = await host.SendAsync(
+                new WorkerIpcEnvelope
+                {
+                    SessionId = sessionId,
+                    StopMedia = new StopMedia { Reason = StopMediaReason.SessionFailed },
+                },
+                cancellationToken).ConfigureAwait(false);
+            if (IsSuccessfulCompletion(stopped.Completion, sessionId))
+            {
+                return null;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await host.ShutdownAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+        catch (Exception)
+        {
+        }
+
+        try
+        {
+            await host.ShutdownAsync(CancellationToken.None).ConfigureAwait(false);
+            return "StreamWorker start_media transport-ready validation failed; " +
+                "stop_media cleanup was not confirmed and the Worker was shut down.";
+        }
+        catch (Exception)
+        {
+            return "StreamWorker start_media transport-ready validation failed; " +
+                "stop_media cleanup was not confirmed and Worker shutdown failed.";
+        }
+    }
+
+    private static bool IsSuccessfulCompletion(WorkerIpcEnvelope completion, string sessionId) =>
+        completion.ProtocolVersion == ProtocolVersion.Current
+        && completion.RequestId != 0
+        && string.Equals(completion.SessionId, sessionId, StringComparison.Ordinal)
+        && completion.BodyCase == WorkerIpcEnvelope.BodyOneofCase.WorkerCompletion
+        && completion.WorkerCompletion.Succeeded
+        && completion.WorkerCompletion.ErrorCode == WorkerErrorCode.None;
 
     private static StreamingCapabilities Capabilities() => new(
         Codecs: ["h264"],
@@ -201,4 +396,8 @@ public sealed class StreamWorkerStreamingBackend(IStreamWorkerHost host) : IStre
         WorkerErrorCode.OperationFailed => "operation_failed",
         _ => "unspecified",
     };
+
+    private sealed record WorkerBoundStreamingSession(
+        StreamingSessionState State,
+        byte[] WorkerInstanceId);
 }

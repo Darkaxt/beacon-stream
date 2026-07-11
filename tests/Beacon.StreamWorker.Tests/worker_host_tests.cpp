@@ -26,10 +26,15 @@ class RecordingTransport final : public IWorkerMediaTransport {
     return true;
   }
 
-  std::uint16_t local_port() const noexcept override { return listen_port; }
+  std::uint16_t local_port() const noexcept override {
+    return selected_port == 0 ? listen_port : selected_port;
+  }
 
   bool open_connection() override {
     ++open_count;
+    if (!open_result) {
+      return false;
+    }
     open = true;
     return true;
   }
@@ -52,8 +57,10 @@ class RecordingTransport final : public IWorkerMediaTransport {
   }
 
   bool open{};
+  bool open_result{true};
   std::string listen_address;
   std::uint16_t listen_port{};
+  std::uint16_t selected_port{};
   std::size_t open_count{};
   std::size_t close_count{};
   std::size_t shutdown_count{};
@@ -113,8 +120,9 @@ void unsupported_versions_receive_one_correlated_failure() {
                       }) == 1);
 }
 
-void prepared_session_starts_configured_listener_without_pre_auth_media() {
+void prepared_session_reports_selected_listener_port_without_pre_auth_media() {
   RecordingTransport transport;
+  transport.selected_port = 45999;
   AuthorizedQuicTicketStore tickets;
   WorkerHost host({std::byte{1}}, 42, transport, tickets);
 
@@ -130,18 +138,54 @@ void prepared_session_starts_configured_listener_without_pre_auth_media() {
   BEACON_TEST_REQUIRE(completion(host.dispatch(prepare)).worker_completion().succeeded());
 
   auto start = command(21, "session-a");
-  start.mutable_start_media()->set_listen_port(45999);
+  start.mutable_start_media()->set_listen_port(0);
   const auto responses = host.dispatch(start);
 
   BEACON_TEST_REQUIRE(completion(responses).request_id() == 21);
   BEACON_TEST_REQUIRE(completion(responses).worker_completion().succeeded());
   BEACON_TEST_REQUIRE(transport.open_count == 1);
   BEACON_TEST_REQUIRE(transport.listen_address.empty());
-  BEACON_TEST_REQUIRE(transport.listen_port == 45999);
+  BEACON_TEST_REQUIRE(transport.listen_port == 0);
   BEACON_TEST_REQUIRE(transport.packets.empty());
+  BEACON_TEST_REQUIRE(std::ranges::count_if(responses, [](const WorkerIpcEnvelope& value) {
+                        return value.body_case() ==
+                               WorkerIpcEnvelope::kWorkerTransportReady;
+                      }) == 1);
+  BEACON_TEST_REQUIRE(std::ranges::any_of(responses, [](const WorkerIpcEnvelope& value) {
+    return value.body_case() == WorkerIpcEnvelope::kWorkerTransportReady &&
+           value.worker_transport_ready().listener_port() == 45999;
+  }));
   BEACON_TEST_REQUIRE(std::ranges::any_of(responses, [](const WorkerIpcEnvelope& value) {
     return value.body_case() == WorkerIpcEnvelope::kMediaMetrics &&
            value.media_metrics().encoded_frames() == 0;
+  }));
+}
+
+void failed_listener_open_emits_no_transport_ready_event() {
+  RecordingTransport transport;
+  transport.open_result = false;
+  transport.selected_port = 45999;
+  AuthorizedQuicTicketStore tickets;
+  WorkerHost host({std::byte{1}}, 42, transport, tickets);
+
+  auto prepare = command(22, "session-a");
+  auto* plan = prepare.mutable_prepare_session();
+  plan->set_display_target("display-a");
+  plan->set_video_codec(beacon::worker::v1::WORKER_VIDEO_CODEC_H264);
+  plan->set_width(2560);
+  plan->set_height(1600);
+  plan->set_frames_per_second_numerator(120);
+  plan->set_frames_per_second_denominator(1);
+  plan->set_dynamic_range(beacon::worker::v1::WORKER_DYNAMIC_RANGE_SDR);
+  BEACON_TEST_REQUIRE(completion(host.dispatch(prepare)).worker_completion().succeeded());
+
+  auto start = command(23, "session-a");
+  start.mutable_start_media()->set_listen_port(0);
+  const auto responses = host.dispatch(start);
+
+  BEACON_TEST_REQUIRE(!completion(responses).worker_completion().succeeded());
+  BEACON_TEST_REQUIRE(std::ranges::none_of(responses, [](const WorkerIpcEnvelope& value) {
+    return value.body_case() == WorkerIpcEnvelope::kWorkerTransportReady;
   }));
 }
 
@@ -192,7 +236,8 @@ void explicit_shutdown_is_acknowledged_and_releases_once() {
 int main() {
   hello_and_ready_are_typed_and_instance_bound();
   unsupported_versions_receive_one_correlated_failure();
-  prepared_session_starts_configured_listener_without_pre_auth_media();
+  prepared_session_reports_selected_listener_port_without_pre_auth_media();
+  failed_listener_open_emits_no_transport_ready_event();
   ticket_authorization_is_hash_only_and_worker_bound();
   explicit_shutdown_is_acknowledged_and_releases_once();
   return 0;

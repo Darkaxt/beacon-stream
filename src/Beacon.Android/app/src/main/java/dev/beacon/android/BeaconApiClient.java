@@ -1,6 +1,5 @@
 package dev.beacon.android;
 
-import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
 import java.io.IOException;
@@ -92,8 +91,8 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
     }
 
     @Override
-    public BeaconResult sendInput(InputBatch input) throws IOException {
-        return post("/clients/" + config.clientId() + "/input", input.toJson());
+    public BeaconResult reconnect() throws IOException {
+        return post("/clients/" + config.clientId() + "/reconnect", new JsonObject());
     }
 
     @Override
@@ -350,19 +349,6 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             return batch;
         }
 
-        JsonObject toJson() {
-            JsonObject json = new JsonObject();
-            json.addProperty("sequence", sequence);
-            JsonArray array = new JsonArray();
-            if (events != null) {
-                for (InputEvent event : events) {
-                    array.add(event.toJson());
-                }
-            }
-
-            json.add("events", array);
-            return json;
-        }
     }
 
     public static final class InputEvent {
@@ -395,18 +381,6 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             return event;
         }
 
-        JsonObject toJson() {
-            JsonObject json = new JsonObject();
-            add(json, "type", type);
-            add(json, "action", action);
-            add(json, "pointerId", pointerId);
-            add(json, "x", x);
-            add(json, "y", y);
-            add(json, "buttons", buttons);
-            add(json, "key", key);
-            add(json, "code", code);
-            return json;
-        }
     }
 
     public static final class QuitState {

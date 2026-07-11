@@ -3,9 +3,15 @@ package dev.beacon.android;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertThrows;
 
 public final class BeaconViewModelTest {
     @Test
@@ -63,23 +69,57 @@ public final class BeaconViewModelTest {
     }
 
     @Test
-    public void launchRecordsServerResponseWithoutMediaHandoff() throws Exception {
+    public void launchHandsGrantToStreamCoreAndInputUsesNativeRoute() throws Exception {
         FakeService service = new FakeService();
-        service.next = new BeaconApiClient.BeaconResult(200, "launch body");
-        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
+        service.next = new BeaconApiClient.BeaconResult(200, grantBody());
+        RecordingCoreBindings bindings = new RecordingCoreBindings();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings, frame -> { }, Executors.newSingleThreadExecutor());
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "https://server", service, core);
         BeaconApiClient.GameSelection game = BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131");
 
         model.launch(game);
+        model.sendInput(BeaconApiClient.InputBatch.pointerTap(4, 0.5, 0.5));
+        model.close();
 
         assertEquals("launch", service.actions());
         assertEquals(game.gameId, service.lastGame.gameId);
-        assertEquals("launch body", model.latestStream());
+        assertEquals(grantBody(), model.latestStream());
+        assertEquals(1, bindings.startCount);
+        assertEquals(1, bindings.inputCount);
+        assertEquals(1, bindings.releaseCount);
+    }
+
+    @Test
+    public void reconnectHandsFreshSameSessionTicketToTheOwnedCore() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(200, grantBody("AQID"));
+        RecordingCoreBindings bindings = new RecordingCoreBindings();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings, frame -> { }, Executors.newSingleThreadExecutor());
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "https://server", service, core);
+
+        model.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+        service.next = new BeaconApiClient.BeaconResult(200, grantBody("BAUG"));
+        model.reconnect();
+
+        assertEquals(2, bindings.startCount);
+        assertEquals(1, bindings.stopCount);
+        assertEquals(Arrays.asList(
+            Arrays.asList((byte) 1, (byte) 2, (byte) 3),
+            Arrays.asList((byte) 4, (byte) 5, (byte) 6)), bindings.ticketSnapshots);
+        assertTrue(allZero(bindings.ticketReferences.get(0)));
+        assertTrue(allZero(bindings.ticketReferences.get(1)));
+        model.close();
     }
 
     @Test
     public void preflightAndLaunchKeepsServerOwnedOrdering() throws Exception {
         FakeService service = new FakeService();
-        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
+        service.next = new BeaconApiClient.BeaconResult(200, grantBody());
+        BeaconStreamCore core = new BeaconStreamCore(
+            new RecordingCoreBindings(), frame -> { }, Executors.newSingleThreadExecutor());
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "https://server", service, core);
 
         model.preflightAndLaunch(
             new BeaconApiClient.ProfilePatch(),
@@ -93,7 +133,9 @@ public final class BeaconViewModelTest {
     @Test
     public void controlActionsRemainAvailableDuringMediaRecovery() throws Exception {
         FakeService service = new FakeService();
-        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
+        BeaconStreamCore core = new BeaconStreamCore(
+            new RecordingCoreBindings(), frame -> { }, Executors.newSingleThreadExecutor());
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service, core);
 
         model.beacon(true);
         model.sendInput(BeaconApiClient.InputBatch.pointerTap(4, 0.5, 0.5));
@@ -102,7 +144,7 @@ public final class BeaconViewModelTest {
         model.quit(new BeaconApiClient.QuitState(false));
         model.emergencyRestore();
 
-        assertEquals("beacon,input,stop,disconnect,quit,restore", service.actions());
+        assertEquals("beacon,stop,disconnect,quit,restore", service.actions());
         assertEquals("stop body", model.latestStream());
         assertEquals("emergency restore: 200", model.status());
     }
@@ -119,12 +161,75 @@ public final class BeaconViewModelTest {
         assertEquals("launch: 503", model.status());
     }
 
+    @Test
+    public void terminalCloseRejectsEveryStreamCorePathWithoutAllocating() {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(200, grantBody());
+        AtomicInteger allocations = new AtomicInteger();
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7", "https://server", service,
+            sink -> {
+                allocations.incrementAndGet();
+                throw new AssertionError("StreamCore allocated after close.");
+            });
+
+        model.close();
+        model.close();
+
+        assertThrows(IllegalStateException.class, () -> model.launch(
+            BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131")));
+        assertThrows(IllegalStateException.class, () -> model.sendInput(
+            BeaconApiClient.InputBatch.pointerTap(1, 0.5, 0.5)));
+        assertThrows(IllegalStateException.class, model::reconnect);
+        assertThrows(IllegalStateException.class, model::ownedStreamCore);
+        assertEquals(0, allocations.get());
+        assertEquals("", service.actions());
+    }
+
     private static BeaconApiClient.ClientCapabilities capabilities() {
         return new BeaconApiClient.ClientCapabilities(true, true, true, false, false, 120, true, "2560x1600@120");
     }
 
     private static BeaconApiClient.ClientTelemetry telemetry() {
         return new BeaconApiClient.ClientTelemetry(8, 0.0, 20, 120, "wifi-7", 80, "nominal");
+    }
+
+    private static String grantBody() {
+        return grantBody("AQID");
+    }
+
+    private static String grantBody(String ticket) {
+        return "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"" + ticket + "\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"s\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"}}}";
+    }
+
+    private static boolean allZero(byte[] bytes) {
+        for (byte value : bytes) {
+            if (value != 0) return false;
+        }
+        return true;
+    }
+
+    private static final class RecordingCoreBindings implements BeaconStreamCore.Bindings {
+        int startCount;
+        int inputCount;
+        int releaseCount;
+        int stopCount;
+        final List<byte[]> ticketReferences = new ArrayList<>();
+        final List<List<Byte>> ticketSnapshots = new ArrayList<>();
+
+        @Override public long create(BeaconStreamCore.NativeCallbacks callbacks) { return 9; }
+        @Override public boolean start(long handle, BeaconStreamSession.NativeGrant grant) {
+            startCount++;
+            ticketReferences.add(grant.ticket);
+            List<Byte> snapshot = new ArrayList<>();
+            for (byte value : grant.ticket) snapshot.add(value);
+            ticketSnapshots.add(snapshot);
+            return true;
+        }
+        @Override public void sendInput(long handle, BeaconApiClient.InputBatch input) { inputCount++; }
+        @Override public void replaceSurface(long handle, Object surface) { }
+        @Override public void stop(long handle) { stopCount++; }
+        @Override public void release(long handle) { releaseCount++; }
     }
 
     private static final class FakeService implements BeaconViewModel.BeaconService {
@@ -188,8 +293,8 @@ public final class BeaconViewModelTest {
         }
 
         @Override
-        public BeaconApiClient.BeaconResult sendInput(BeaconApiClient.InputBatch input) throws IOException {
-            return record("input");
+        public BeaconApiClient.BeaconResult reconnect() throws IOException {
+            return record("reconnect");
         }
 
         @Override

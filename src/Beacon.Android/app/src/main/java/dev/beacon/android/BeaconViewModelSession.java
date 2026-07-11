@@ -31,6 +31,9 @@ public final class BeaconViewModelSession {
     }
 
     public synchronized void close() {
+        if (activeModel != null) {
+            activeModel.close();
+        }
         activeModel = null;
         activeClientId = "";
         activeServerUrl = "";

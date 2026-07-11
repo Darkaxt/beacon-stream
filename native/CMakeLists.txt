@@ -106,6 +106,10 @@ add_library(Beacon::StreamContracts ALIAS BeaconStreamContracts)
 
 add_subdirectory(../src/Beacon.StreamProtocol Beacon.StreamProtocol)
 
+if(ANDROID)
+  add_subdirectory(../src/Beacon.Android/app/src/main/cpp Beacon.Android.StreamCore)
+endif()
+
 if(WIN32)
   add_subdirectory(../src/Beacon.StreamWorker Beacon.StreamWorker)
 endif()

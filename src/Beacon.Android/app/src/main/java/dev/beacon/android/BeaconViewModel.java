@@ -4,10 +4,14 @@ import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
 
-public final class BeaconViewModel {
+public final class BeaconViewModel implements AutoCloseable {
     private final BeaconService service;
     private final String clientId;
     private final String serverUrl;
+    private final StreamCoreFactory streamCoreFactory;
+    private BeaconStreamCore streamCore;
+    private boolean creatingStreamCore;
+    private boolean closed;
 
     private String status = "Idle";
     private String latestGames = "";
@@ -17,9 +21,32 @@ public final class BeaconViewModel {
     private List<BeaconGameCatalog.GameEntry> latestGameEntries = Collections.emptyList();
 
     public BeaconViewModel(String clientId, String serverUrl, BeaconService service) {
+        this(clientId, serverUrl, service, null, BeaconStreamCore::new);
+    }
+
+    BeaconViewModel(String clientId, String serverUrl, BeaconService service, BeaconStreamCore streamCore) {
+        this(clientId, serverUrl, service, streamCore, null);
+    }
+
+    BeaconViewModel(
+        String clientId,
+        String serverUrl,
+        BeaconService service,
+        StreamCoreFactory streamCoreFactory) {
+        this(clientId, serverUrl, service, null, streamCoreFactory);
+    }
+
+    private BeaconViewModel(
+        String clientId,
+        String serverUrl,
+        BeaconService service,
+        BeaconStreamCore streamCore,
+        StreamCoreFactory streamCoreFactory) {
         this.clientId = clientId;
         this.serverUrl = serverUrl;
         this.service = service;
+        this.streamCore = streamCore;
+        this.streamCoreFactory = streamCoreFactory;
     }
 
     public String clientId() {
@@ -111,13 +138,20 @@ public final class BeaconViewModel {
     }
 
     public void launch(BeaconApiClient.GameSelection game) throws IOException {
+        requireOpen();
         BeaconApiClient.BeaconResult result = service.launch(game);
         record("launch", result);
         latestStream = result.body();
+        if (result.isSuccess()) {
+            startGrant(result.body());
+        }
     }
 
-    public void sendInput(BeaconApiClient.InputBatch input) throws IOException {
-        record("input", service.sendInput(input));
+    public void sendInput(BeaconApiClient.InputBatch input) {
+        requireOpen();
+        requireStreamCore().sendInput(input);
+        status = "input: native";
+        latestError = "";
     }
 
     public void preflightAndLaunch(
@@ -130,6 +164,10 @@ public final class BeaconViewModel {
     }
 
     public void stopStream() throws IOException {
+        requireOpen();
+        if (streamCore != null) {
+            streamCore.stop();
+        }
         BeaconApiClient.BeaconResult result = service.stopStream();
         record("stop stream", result);
         latestStream = result.body();
@@ -145,6 +183,98 @@ public final class BeaconViewModel {
 
     public void emergencyRestore() throws IOException {
         record("emergency restore", service.emergencyRestore());
+    }
+
+    public void reconnect() throws IOException {
+        requireOpen();
+        BeaconApiClient.BeaconResult result = service.reconnect();
+        record("reconnect", result);
+        latestStream = result.body();
+        if (result.isSuccess()) {
+            startGrant(result.body());
+        }
+    }
+
+    @Override
+    public void close() {
+        BeaconStreamCore owned;
+        synchronized (this) {
+            if (closed) return;
+            closed = true;
+            awaitCoreCreationLocked();
+            owned = streamCore;
+            streamCore = null;
+        }
+        if (owned != null) owned.close();
+    }
+
+    private void startGrant(String responseBody) {
+        requireStreamCore().start(BeaconStreamSession.parse(serverUrl, clientId, responseBody));
+    }
+
+    private BeaconStreamCore requireStreamCore() {
+        StreamCoreFactory factory;
+        synchronized (this) {
+            requireOpenLocked();
+            awaitCoreCreationLocked();
+            requireOpenLocked();
+            if (streamCore != null) return streamCore;
+            if (streamCoreFactory == null) {
+                throw new IllegalStateException("Beacon StreamCore is unavailable.");
+            }
+            creatingStreamCore = true;
+            factory = streamCoreFactory;
+        }
+        BeaconStreamCore created = null;
+        boolean accepted = false;
+        try {
+            created = factory.create(frame -> { });
+            synchronized (this) {
+                if (!closed) {
+                    streamCore = created;
+                    accepted = true;
+                }
+                creatingStreamCore = false;
+                notifyAll();
+            }
+        } catch (RuntimeException | Error error) {
+            synchronized (this) {
+                creatingStreamCore = false;
+                notifyAll();
+            }
+            throw error;
+        }
+        if (!accepted) {
+            created.close();
+            throw new IllegalStateException("BeaconViewModel is closed.");
+        }
+        return created;
+    }
+
+    BeaconStreamCore ownedStreamCore() {
+        return requireStreamCore();
+    }
+
+    private void requireOpen() {
+        synchronized (this) {
+            requireOpenLocked();
+        }
+    }
+
+    private void requireOpenLocked() {
+        if (closed) throw new IllegalStateException("BeaconViewModel is closed.");
+    }
+
+    private void awaitCoreCreationLocked() {
+        boolean interrupted = false;
+        while (creatingStreamCore) {
+            try {
+                wait();
+            } catch (InterruptedException error) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) Thread.currentThread().interrupt();
     }
 
     private void record(String action, BeaconApiClient.BeaconResult result) {
@@ -169,7 +299,9 @@ public final class BeaconViewModel {
 
         BeaconApiClient.BeaconResult launch(BeaconApiClient.GameSelection game) throws IOException;
 
-        BeaconApiClient.BeaconResult sendInput(BeaconApiClient.InputBatch input) throws IOException;
+        default BeaconApiClient.BeaconResult reconnect() throws IOException {
+            throw new IOException("Reconnect is unavailable.");
+        }
 
         BeaconApiClient.BeaconResult stopStream() throws IOException;
 
@@ -178,5 +310,9 @@ public final class BeaconViewModel {
         BeaconApiClient.BeaconResult quit(BeaconApiClient.QuitState state) throws IOException;
 
         BeaconApiClient.BeaconResult emergencyRestore() throws IOException;
+    }
+
+    interface StreamCoreFactory {
+        BeaconStreamCore create(BeaconStreamCore.EncodedFrameSink sink);
     }
 }

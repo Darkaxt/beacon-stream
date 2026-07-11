@@ -101,6 +101,7 @@ message WorkerIpcEnvelope {
     SessionStateChanged session_state_changed = 30;
     MediaMetrics media_metrics = 31;
     WorkerDiagnostic worker_diagnostic = 32;
+    WorkerTransportReady worker_transport_ready = 33;
     WorkerCompletion worker_completion = 40;
     ShutdownWorker shutdown_worker = 41;
   }
@@ -184,6 +185,10 @@ message WorkerDiagnostic {
   DiagnosticCode code = 3;
   uint32 platform_error_code = 4;
   uint64 numeric_value = 5;
+}
+
+message WorkerTransportReady {
+  uint32 listener_port = 1;
 }
 
 message WorkerCompletion {

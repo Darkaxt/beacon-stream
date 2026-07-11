@@ -9,6 +9,16 @@ namespace Beacon.StreamWorker.Contracts.Tests;
 public sealed class ProtocolContractTests
 {
     [Fact]
+    public void SelectedVideoEnums_RepresentEveryServerGrantMode()
+    {
+        Assert.Equal(1, (int)VideoCodec.H264);
+        Assert.Equal(2, (int)VideoCodec.Hevc);
+        Assert.Equal(3, (int)VideoCodec.Av1);
+        Assert.Equal(1, (int)DynamicRange.Sdr);
+        Assert.Equal(2, (int)DynamicRange.Hdr10);
+    }
+
+    [Fact]
     public void ProtocolVersion_RejectsUnsupportedVersions()
     {
         ProtocolVersion.EnsureSupported(ProtocolVersion.Current);

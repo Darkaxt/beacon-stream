@@ -178,8 +178,15 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::start_media(
       !transport_.open_connection()) {
     return reject(request, v1::WORKER_ERROR_CODE_OPERATION_FAILED);
   }
+  const auto listener_port = transport_.local_port();
+  if (listener_port == 0) {
+    transport_.close_connection();
+    return reject(request, v1::WORKER_ERROR_CODE_OPERATION_FAILED);
+  }
 
   streaming_ = true;
+  auto transport_ready = response_envelope(request);
+  transport_ready.mutable_worker_transport_ready()->set_listener_port(listener_port);
   auto state = response_envelope(request);
   state.mutable_session_state_changed()->set_state(v1::WORKER_SESSION_STATE_STREAMING);
   state.mutable_session_state_changed()->set_error_code(v1::WORKER_ERROR_CODE_NONE);
@@ -187,7 +194,7 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::start_media(
   metrics.mutable_media_metrics()->set_encoded_frames(0);
   metrics.mutable_media_metrics()->set_sent_datagrams(0);
   metrics.mutable_media_metrics()->set_bytes_sent(0);
-  return {std::move(state), std::move(metrics),
+  return {std::move(transport_ready), std::move(state), std::move(metrics),
           completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }
 
