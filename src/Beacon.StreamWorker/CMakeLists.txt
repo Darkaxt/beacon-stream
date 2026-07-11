@@ -2,6 +2,7 @@ add_library(
   BeaconStreamWorkerCore
   STATIC
     src/named_pipe_channel.cpp
+    src/quic_listener.cpp
     src/worker_host.cpp
 )
 
@@ -15,6 +16,11 @@ target_link_libraries(
   PUBLIC
     Beacon::StreamContracts
     Beacon::StreamProtocol
+  PRIVATE
+    bcrypt
+    crypt32
+    ncrypt
+    ntdll
 )
 target_compile_definitions(BeaconStreamWorkerCore PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(BeaconStreamWorkerCore PRIVATE /W4 /WX /permissive-)

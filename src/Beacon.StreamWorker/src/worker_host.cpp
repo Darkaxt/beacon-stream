@@ -20,10 +20,12 @@ std::string bytes_to_string(const std::vector<std::byte>& bytes) {
 
 WorkerHost::WorkerHost(std::vector<std::byte> worker_instance_id,
                        std::uint32_t process_id,
-                       stream::IStreamTransport& transport)
+                       IWorkerMediaTransport& transport,
+                       AuthorizedQuicTicketStore& authorized_tickets)
     : worker_instance_id_(std::move(worker_instance_id)),
       process_id_(process_id),
-      transport_(transport) {}
+      transport_(transport),
+      authorized_tickets_(authorized_tickets) {}
 
 v1::WorkerIpcEnvelope WorkerHost::hello() const {
   v1::WorkerIpcEnvelope envelope;
@@ -76,7 +78,7 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::dispatch(
 
 bool WorkerHost::shutdown_requested() const noexcept { return shutdown_requested_; }
 
-std::size_t WorkerHost::authorized_ticket_count() const noexcept {
+std::size_t WorkerHost::authorized_ticket_count() const {
   return authorized_tickets_.size();
 }
 
@@ -137,7 +139,19 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::authorize_ticket(
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);
   }
 
-  authorized_tickets_.push_back(ticket);
+  TicketHash hash{};
+  for (std::size_t index = 0; index < hash.size(); ++index) {
+    hash[index] = static_cast<std::byte>(ticket.ticket_hash()[index]);
+  }
+  if (!authorized_tickets_.authorize({
+          .hash = hash,
+          .client_id = ticket.client_id(),
+          .session_id = request.session_id(),
+          .plan_revision = ticket.plan_revision(),
+          .expires_at_unix_ms = ticket.expires_at_unix_ms(),
+      })) {
+    return reject(request, v1::WORKER_ERROR_CODE_INVALID_STATE);
+  }
   return {completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }
 
@@ -148,9 +162,7 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::revoke_ticket(
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);
   }
 
-  std::erase_if(authorized_tickets_, [&hash](const v1::AuthorizeTicket& ticket) {
-    return ticket.ticket_hash() == hash;
-  });
+  authorized_tickets_.revoke({reinterpret_cast<const std::byte*>(hash.data()), hash.size()});
   return {completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }
 
@@ -159,20 +171,12 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::start_media(
   if (!prepared_ || streaming_ || request.session_id() != session_id_) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_STATE);
   }
-  if (!transport_.open_connection()) {
+  const auto& media = request.start_media();
+  if (media.listen_port() > 65'535 ||
+      !transport_.configure_listener(
+          media.listen_address(), static_cast<std::uint16_t>(media.listen_port())) ||
+      !transport_.open_connection()) {
     return reject(request, v1::WORKER_ERROR_CODE_OPERATION_FAILED);
-  }
-
-  for (std::uint64_t sequence = 1; sequence <= 3; ++sequence) {
-    stream::TransportPacket packet{
-        .channel = stream::StreamChannel::media,
-        .sequence = sequence,
-        .payload = {std::byte{'B'}, static_cast<std::byte>(sequence)},
-    };
-    if (transport_.send(std::move(packet)) != stream::TransportSendResult::accepted) {
-      transport_.close_connection();
-      return reject(request, v1::WORKER_ERROR_CODE_OPERATION_FAILED);
-    }
   }
 
   streaming_ = true;
@@ -180,9 +184,9 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::start_media(
   state.mutable_session_state_changed()->set_state(v1::WORKER_SESSION_STATE_STREAMING);
   state.mutable_session_state_changed()->set_error_code(v1::WORKER_ERROR_CODE_NONE);
   auto metrics = response_envelope(request);
-  metrics.mutable_media_metrics()->set_encoded_frames(3);
-  metrics.mutable_media_metrics()->set_sent_datagrams(3);
-  metrics.mutable_media_metrics()->set_bytes_sent(6);
+  metrics.mutable_media_metrics()->set_encoded_frames(0);
+  metrics.mutable_media_metrics()->set_sent_datagrams(0);
+  metrics.mutable_media_metrics()->set_bytes_sent(0);
   return {std::move(state), std::move(metrics),
           completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }

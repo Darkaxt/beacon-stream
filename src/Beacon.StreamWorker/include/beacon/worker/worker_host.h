@@ -1,6 +1,7 @@
 #pragma once
 
 #include "beacon/stream/transport.h"
+#include "beacon/worker/quic_listener.h"
 #include "worker_ipc.pb.h"
 
 #include <cstddef>
@@ -16,14 +17,15 @@ class WorkerHost {
  public:
   WorkerHost(std::vector<std::byte> worker_instance_id,
              std::uint32_t process_id,
-             stream::IStreamTransport& transport);
+             IWorkerMediaTransport& transport,
+             AuthorizedQuicTicketStore& authorized_tickets);
 
   [[nodiscard]] v1::WorkerIpcEnvelope hello() const;
   [[nodiscard]] v1::WorkerIpcEnvelope ready() const;
   [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> dispatch(
       const v1::WorkerIpcEnvelope& request);
   [[nodiscard]] bool shutdown_requested() const noexcept;
-  [[nodiscard]] std::size_t authorized_ticket_count() const noexcept;
+  [[nodiscard]] std::size_t authorized_ticket_count() const;
 
  private:
   [[nodiscard]] v1::WorkerIpcEnvelope response_envelope(
@@ -50,12 +52,12 @@ class WorkerHost {
 
   std::vector<std::byte> worker_instance_id_;
   std::uint32_t process_id_{};
-  stream::IStreamTransport& transport_;
+  IWorkerMediaTransport& transport_;
+  AuthorizedQuicTicketStore& authorized_tickets_;
   bool prepared_{};
   bool streaming_{};
   bool shutdown_requested_{};
   std::string session_id_;
-  std::vector<v1::AuthorizeTicket> authorized_tickets_;
 };
 
 }  // namespace beacon::worker

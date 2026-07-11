@@ -6,10 +6,10 @@ using Beacon.StreamWorker.Contracts.Worker.V1;
 
 namespace Beacon.Platform.Windows.Streaming;
 
-public sealed record StreamWorkerProcessHostOptions(string ExecutablePath)
+public sealed record StreamWorkerProcessHostOptions(string ExecutablePath, string IdentityPath)
 {
-    public static StreamWorkerProcessHostOptions CreateDefault() =>
-        new(Path.Combine(AppContext.BaseDirectory, "Beacon.StreamWorker.exe"));
+    public static StreamWorkerProcessHostOptions CreateDefault(string identityPath) =>
+        new(Path.Combine(AppContext.BaseDirectory, "Beacon.StreamWorker.exe"), identityPath);
 }
 
 public interface IStreamWorkerHost
@@ -155,6 +155,10 @@ public sealed class StreamWorkerProcessHost : IStreamWorkerHost, IAsyncDisposabl
         {
             throw new FileNotFoundException("Beacon StreamWorker executable was not found.", options.ExecutablePath);
         }
+        if (!File.Exists(options.IdentityPath))
+        {
+            throw new FileNotFoundException("Beacon server identity was not found.", options.IdentityPath);
+        }
 
         string pipeName = $"beacon-stream-worker-{Guid.NewGuid():N}";
         SecurityIdentifier owner = launcher.GetInteractiveUserSid();
@@ -176,7 +180,10 @@ public sealed class StreamWorkerProcessHost : IStreamWorkerHost, IAsyncDisposabl
         try
         {
             string pipePath = $@"\\.\pipe\{pipeName}";
-            newProcess = launcher.Launch(options.ExecutablePath, ["--pipe", pipePath], newJob);
+            newProcess = launcher.Launch(
+                options.ExecutablePath,
+                ["--pipe", pipePath, "--identity", options.IdentityPath],
+                newJob);
             Task<int> newProcessExit = ObserveExitAsync(newProcess);
             Task connection = newPipe.WaitForConnectionAsync(cancellationToken);
             Task winner = await Task.WhenAny(connection, newProcessExit)

@@ -134,7 +134,8 @@ public static class BeaconServiceRegistration
     {
         if (mode == BeaconHostMode.Windows)
         {
-            services.AddSingleton(StreamWorkerProcessHostOptions.CreateDefault());
+            services.AddSingleton(sp => StreamWorkerProcessHostOptions.CreateDefault(
+                sp.GetRequiredService<BeaconServerIdentity>().IdentityPath));
             services.AddSingleton<StreamWorkerProcessHost>();
             services.AddSingleton<IStreamWorkerHost>(sp =>
                 sp.GetRequiredService<StreamWorkerProcessHost>());
