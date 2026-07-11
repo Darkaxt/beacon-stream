@@ -1,8 +1,10 @@
+#include "beacon/worker/named_pipe_channel.h"
 #include "beacon/worker/quic_listener.h"
 
 #include "beacon/stream/media_datagram.h"
 
 #include "stream_control.pb.h"
+#include "worker_ipc.pb.h"
 
 #include <Windows.h>
 #include <msquic.h>
@@ -17,6 +19,7 @@
 #include <filesystem>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -27,6 +30,96 @@ namespace {
 constexpr std::string_view kAlpn{"beacon-stream/1"};
 constexpr std::string_view kRawTicket{"loopback-ticket"};
 namespace stream_v1 = beacon::stream::v1;
+namespace worker_v1 = beacon::worker::v1;
+
+class UniqueHandle {
+public:
+  UniqueHandle() = default;
+  explicit UniqueHandle(HANDLE value) noexcept : value_(value) {}
+  ~UniqueHandle() { reset(); }
+
+  UniqueHandle(const UniqueHandle &) = delete;
+  UniqueHandle &operator=(const UniqueHandle &) = delete;
+
+  UniqueHandle(UniqueHandle &&other) noexcept
+      : value_(std::exchange(other.value_, nullptr)) {}
+  UniqueHandle &operator=(UniqueHandle &&other) noexcept {
+    if (this != &other) {
+      reset();
+      value_ = std::exchange(other.value_, nullptr);
+    }
+    return *this;
+  }
+
+  [[nodiscard]] HANDLE get() const noexcept { return value_; }
+  [[nodiscard]] HANDLE release() noexcept {
+    return std::exchange(value_, nullptr);
+  }
+  void reset(HANDLE value = nullptr) noexcept {
+    if (value_ != nullptr && value_ != INVALID_HANDLE_VALUE) {
+      CloseHandle(value_);
+    }
+    value_ = value;
+  }
+
+private:
+  HANDLE value_{};
+};
+
+class WorkerProcess {
+public:
+  WorkerProcess() = default;
+  ~WorkerProcess() {
+    if (process_.get() != nullptr && !reaped_) {
+      DWORD exit_code = 0;
+      if (GetExitCodeProcess(process_.get(), &exit_code) != FALSE &&
+          exit_code == STILL_ACTIVE) {
+        TerminateProcess(process_.get(), 127);
+      }
+      WaitForSingleObject(process_.get(), INFINITE);
+    }
+  }
+
+  WorkerProcess(const WorkerProcess &) = delete;
+  WorkerProcess &operator=(const WorkerProcess &) = delete;
+
+  [[nodiscard]] bool start(const std::wstring &worker_path,
+                           const std::wstring &pipe_name,
+                           const std::wstring &identity_path) {
+    std::wstring command_line = L"\"" + worker_path + L"\" --pipe \"" +
+                                pipe_name + L"\" --identity \"" +
+                                identity_path + L"\"";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (CreateProcessW(worker_path.c_str(), command_line.data(), nullptr,
+                       nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
+                       &startup, &process) == FALSE) {
+      return false;
+    }
+    process_.reset(process.hProcess);
+    thread_.reset(process.hThread);
+    return true;
+  }
+
+  [[nodiscard]] std::optional<DWORD> wait() {
+    if (process_.get() == nullptr ||
+        WaitForSingleObject(process_.get(), INFINITE) != WAIT_OBJECT_0) {
+      return std::nullopt;
+    }
+    DWORD exit_code = 0;
+    if (GetExitCodeProcess(process_.get(), &exit_code) == FALSE) {
+      return std::nullopt;
+    }
+    reaped_ = true;
+    return exit_code;
+  }
+
+private:
+  UniqueHandle process_;
+  UniqueHandle thread_;
+  bool reaped_{};
+};
 
 bool decode_fingerprint(std::string_view text,
                         beacon::worker::TicketHash &output) {
@@ -308,11 +401,13 @@ QUIC_STATUS QUIC_API connection_callback(HQUIC connection, void *context,
     state.changed.notify_all();
     break;
   case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
-    state.api->ConnectionClose(connection);
     {
       std::lock_guard lock{state.mutex};
-      state.connection = nullptr;
+      if (state.connection == connection) {
+        state.connection = nullptr;
+      }
       state.connection_closed = true;
+      state.api->ConnectionClose(connection);
     }
     state.changed.notify_all();
     break;
@@ -360,11 +455,14 @@ bool start_client(ClientState &state, std::uint16_t port,
 }
 
 void stop_client(ClientState &state, std::uint64_t error_code = 0) {
-  if (state.connection != nullptr) {
-    state.api->ConnectionShutdown(
-        state.connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, error_code);
+  {
     std::unique_lock lock{state.mutex};
-    state.changed.wait(lock, [&state] { return state.connection_closed; });
+    if (state.connection != nullptr) {
+      state.api->ConnectionShutdown(
+          state.connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, error_code);
+      state.changed.wait(lock,
+                         [&state] { return state.connection_closed; });
+    }
   }
   if (state.configuration != nullptr)
     state.api->ConfigurationClose(state.configuration);
@@ -374,9 +472,302 @@ void stop_client(ClientState &state, std::uint64_t error_code = 0) {
     MsQuicClose(state.api);
 }
 
+worker_v1::WorkerIpcEnvelope worker_command(std::uint64_t request_id,
+                                            std::string_view session_id) {
+  worker_v1::WorkerIpcEnvelope command;
+  command.set_protocol_version(1);
+  command.set_request_id(request_id);
+  command.set_session_id(session_id);
+  return command;
+}
+
+bool exchange_worker_command(
+    beacon::worker::NamedPipeChannel &channel,
+    const worker_v1::WorkerIpcEnvelope &command,
+    std::vector<worker_v1::WorkerIpcEnvelope> &responses,
+    std::vector<worker_v1::WorkerIpcEnvelope> &events) {
+  if (!channel.write(command)) {
+    return false;
+  }
+  for (;;) {
+    worker_v1::WorkerIpcEnvelope envelope;
+    if (channel.read(envelope) != beacon::worker::FrameDecodeStatus::success) {
+      return false;
+    }
+    if (envelope.request_id() == 0) {
+      events.push_back(std::move(envelope));
+      continue;
+    }
+    if (envelope.request_id() != command.request_id() ||
+        envelope.session_id() != command.session_id()) {
+      return false;
+    }
+    const bool completion = envelope.body_case() ==
+                            worker_v1::WorkerIpcEnvelope::kWorkerCompletion;
+    const bool succeeded = completion && envelope.worker_completion().succeeded();
+    responses.push_back(std::move(envelope));
+    if (completion) {
+      return succeeded;
+    }
+  }
+}
+
+bool collect_stream_events(
+    beacon::worker::NamedPipeChannel &channel,
+    std::vector<worker_v1::WorkerIpcEnvelope> &events) {
+  bool authenticated = false;
+  bool input = false;
+  bool feedback = false;
+  bool media = false;
+  while (!authenticated || !input || !feedback || !media) {
+    worker_v1::WorkerIpcEnvelope event;
+    if (channel.read(event) != beacon::worker::FrameDecodeStatus::success ||
+        event.protocol_version() != 1 || event.request_id() != 0 ||
+        event.session_id() != "session-a") {
+      return false;
+    }
+    switch (event.body_case()) {
+    case worker_v1::WorkerIpcEnvelope::kTransportAuthenticated:
+      authenticated = event.transport_authenticated().session_generation() == 1 &&
+                      event.transport_authenticated().maximum_datagram_bytes() > 0;
+      break;
+    case worker_v1::WorkerIpcEnvelope::kInputReceived:
+      input = event.input_received().session_generation() == 1 &&
+              event.input_received().input().sequence() == 1 &&
+              event.input_received().input().input_batch().events_size() == 1 &&
+              event.input_received()
+                      .input()
+                      .input_batch()
+                      .events(0)
+                      .keyboard()
+                      .scan_code() == 30 &&
+              event.input_received()
+                  .input()
+                  .input_batch()
+                  .events(0)
+                  .keyboard()
+                  .pressed();
+      break;
+    case worker_v1::WorkerIpcEnvelope::kFeedbackReceived:
+      feedback = event.feedback_received().session_generation() == 1 &&
+                 event.feedback_received().feedback().sequence() == 1 &&
+                 event.feedback_received().feedback().has_queue_depth() &&
+                 event.feedback_received()
+                         .feedback()
+                         .queue_depth()
+                         .queued_access_units() == 2;
+      break;
+    case worker_v1::WorkerIpcEnvelope::kMediaEvidence:
+      media = event.media_evidence().session_generation() == 1 &&
+              event.media_evidence().sequence() == 1 &&
+              event.media_evidence().presentation_time_us() == 1'000'000 &&
+              event.media_evidence().datagram_bytes() > 0;
+      break;
+    default:
+      return false;
+    }
+    events.push_back(std::move(event));
+  }
+  return true;
+}
+
+bool collect_disconnect_event(
+    beacon::worker::NamedPipeChannel &channel,
+    std::vector<worker_v1::WorkerIpcEnvelope> &events) {
+  for (;;) {
+    worker_v1::WorkerIpcEnvelope event;
+    if (channel.read(event) != beacon::worker::FrameDecodeStatus::success ||
+        event.protocol_version() != 1 || event.request_id() != 0 ||
+        event.session_id() != "session-a") {
+      return false;
+    }
+    const bool disconnected =
+        event.body_case() ==
+            worker_v1::WorkerIpcEnvelope::kTransportDisconnected &&
+        event.transport_disconnected().session_generation() == 1;
+    events.push_back(std::move(event));
+    if (disconnected) {
+      return true;
+    }
+  }
+}
+
+int run_worker_process_probe(const std::wstring &worker_path,
+                             const std::wstring &identity_path,
+                             const beacon::worker::TicketHash &fingerprint) {
+  const auto pipe_name = L"\\\\.\\pipe\\beacon-worker-process-probe-" +
+                         std::to_wstring(GetCurrentProcessId()) + L"-" +
+                         std::to_wstring(GetTickCount64());
+  UniqueHandle pipe{CreateNamedPipeW(
+      pipe_name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+      PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1,
+      beacon::worker::maximum_worker_message_bytes + 4,
+      beacon::worker::maximum_worker_message_bytes + 4, 0, nullptr)};
+  if (pipe.get() == INVALID_HANDLE_VALUE) {
+    return 80;
+  }
+  UniqueHandle connected_event{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+  if (connected_event.get() == nullptr) {
+    return 81;
+  }
+  OVERLAPPED connected{};
+  connected.hEvent = connected_event.get();
+  const BOOL connected_immediately = ConnectNamedPipe(pipe.get(), &connected);
+  const DWORD connect_error =
+      connected_immediately == FALSE ? GetLastError() : ERROR_SUCCESS;
+  if (connected_immediately == FALSE && connect_error != ERROR_IO_PENDING) {
+    return 82;
+  }
+
+  WorkerProcess process;
+  if (!process.start(worker_path, pipe_name, identity_path)) {
+    CancelIoEx(pipe.get(), &connected);
+    return 83;
+  }
+  if (connected_immediately == FALSE) {
+    if (WaitForSingleObject(connected_event.get(), INFINITE) != WAIT_OBJECT_0) {
+      return 84;
+    }
+    DWORD transferred = 0;
+    if (GetOverlappedResult(pipe.get(), &connected, &transferred, FALSE) ==
+        FALSE) {
+      return 85;
+    }
+  }
+
+  beacon::worker::NamedPipeChannel channel(pipe.release());
+  worker_v1::WorkerIpcEnvelope hello;
+  worker_v1::WorkerIpcEnvelope ready;
+  if (channel.read(hello) != beacon::worker::FrameDecodeStatus::success ||
+      channel.read(ready) != beacon::worker::FrameDecodeStatus::success ||
+      hello.body_case() != worker_v1::WorkerIpcEnvelope::kWorkerHello ||
+      ready.body_case() != worker_v1::WorkerIpcEnvelope::kWorkerReady ||
+      hello.worker_hello().worker_instance_id().empty() ||
+      hello.worker_hello().worker_instance_id() !=
+          ready.worker_ready().worker_instance_id()) {
+    return 86;
+  }
+
+  std::vector<worker_v1::WorkerIpcEnvelope> events;
+  std::vector<worker_v1::WorkerIpcEnvelope> responses;
+  auto authorize = worker_command(1, "session-a");
+  const auto ticket_hash = beacon::worker::hash_stream_ticket(
+      {reinterpret_cast<const std::byte *>(kRawTicket.data()),
+       kRawTicket.size()});
+  auto *ticket = authorize.mutable_authorize_ticket();
+  ticket->set_ticket_hash(reinterpret_cast<const char *>(ticket_hash.data()),
+                          ticket_hash.size());
+  ticket->set_client_id("z-fold-7");
+  ticket->set_plan_revision(8);
+  ticket->set_expires_at_unix_ms(std::numeric_limits<std::uint64_t>::max());
+  ticket->set_worker_instance_id(hello.worker_hello().worker_instance_id());
+  if (!exchange_worker_command(channel, authorize, responses, events)) {
+    return 87;
+  }
+
+  responses.clear();
+  auto prepare = worker_command(2, "session-a");
+  auto *plan = prepare.mutable_prepare_session();
+  plan->set_display_target("display-a");
+  plan->set_video_codec(worker_v1::WORKER_VIDEO_CODEC_H264);
+  plan->set_width(2560);
+  plan->set_height(1600);
+  plan->set_frames_per_second_numerator(120);
+  plan->set_frames_per_second_denominator(1);
+  plan->set_dynamic_range(worker_v1::WORKER_DYNAMIC_RANGE_SDR);
+  if (!exchange_worker_command(channel, prepare, responses, events)) {
+    return 88;
+  }
+
+  responses.clear();
+  auto start = worker_command(3, "session-a");
+  auto *media = start.mutable_start_media();
+  media->set_listen_address("127.0.0.1");
+  media->set_listen_port(0);
+  media->set_certificate_fingerprint(
+      reinterpret_cast<const char *>(fingerprint.data()), fingerprint.size());
+  if (!exchange_worker_command(channel, start, responses, events)) {
+    return 89;
+  }
+  const auto transport_ready =
+      std::ranges::find_if(responses, [](const auto &response) {
+        return response.body_case() ==
+               worker_v1::WorkerIpcEnvelope::kWorkerTransportReady;
+      });
+  if (transport_ready == responses.end() ||
+      transport_ready->worker_transport_ready().listener_port() == 0 ||
+      !events.empty()) {
+    return 90;
+  }
+
+  ClientState client;
+  client.expected_fingerprint = fingerprint;
+  if (!start_client(
+          client,
+          static_cast<std::uint16_t>(
+              transport_ready->worker_transport_ready().listener_port()))) {
+    stop_client(client);
+    return 91;
+  }
+  {
+    std::unique_lock lock{client.mutex};
+    client.changed.wait(lock, [&client] {
+      return client.datagram_received || client.failed ||
+             client.connection_closed;
+    });
+    if (!client.datagram_received || client.failed ||
+        !client.authenticated || !client.certificate_seen) {
+      lock.unlock();
+      stop_client(client);
+      return 92;
+    }
+  }
+  if (!collect_stream_events(channel, events)) {
+    stop_client(client);
+    return 93;
+  }
+
+  stop_client(client);
+  if (!collect_disconnect_event(channel, events)) {
+    return 94;
+  }
+
+  responses.clear();
+  auto shutdown = worker_command(4, "");
+  shutdown.mutable_shutdown_worker();
+  if (!exchange_worker_command(channel, shutdown, responses, events)) {
+    return 95;
+  }
+  const auto exit_code = process.wait();
+  if (!exit_code || *exit_code != 0) {
+    return 96;
+  }
+  std::printf("BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK MEDIA "
+              "DISCONNECT SHUTDOWN\n");
+  return 0;
+}
+
 } // namespace
 
 int wmain(int argument_count, wchar_t **arguments) {
+  if (argument_count == 7 && std::wstring_view(arguments[1]) == L"--worker" &&
+      std::wstring_view(arguments[3]) == L"--identity" &&
+      std::wstring_view(arguments[5]) == L"--fingerprint") {
+    beacon::worker::TicketHash fingerprint{};
+    const std::wstring_view wide_fingerprint{arguments[6]};
+    std::string fingerprint_text;
+    fingerprint_text.reserve(wide_fingerprint.size());
+    for (const wchar_t value : wide_fingerprint) {
+      if (value < 0 || value > 0x7f) {
+        return 65;
+      }
+      fingerprint_text.push_back(static_cast<char>(value));
+    }
+    if (!decode_fingerprint(fingerprint_text, fingerprint)) {
+      return 66;
+    }
+    return run_worker_process_probe(arguments[2], arguments[4], fingerprint);
+  }
   if (argument_count != 4)
     return 64;
   beacon::worker::TicketHash expected_fingerprint{};

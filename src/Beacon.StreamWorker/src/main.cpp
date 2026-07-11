@@ -85,14 +85,18 @@ int wmain(int argument_count, wchar_t** arguments) {
           }
           auto responses = host.dispatch(request);
           const bool shutdown_requested = host.shutdown_requested();
-          if (!outbound.enqueue(std::move(responses))) {
+          const bool enqueued =
+              shutdown_requested
+                  ? outbound.enqueue_terminal(std::move(responses))
+                  : outbound.enqueue(std::move(responses));
+          if (!enqueued) {
             record_failure(5);
             transport.shutdown();
+            outbound.close();
             channel.cancel_pending_io();
             return;
           }
           if (shutdown_requested) {
-            outbound.close();
             return;
           }
         }
@@ -105,8 +109,8 @@ int wmain(int argument_count, wchar_t** arguments) {
     });
 
     bool write_failed = false;
-    while (auto batch = outbound.wait_pop()) {
-      for (const auto &response : *batch) {
+    while (auto item = outbound.wait_pop()) {
+      for (const auto &response : item->batch) {
         if (!channel.write(response)) {
           write_failed = true;
           break;
@@ -118,6 +122,10 @@ int wmain(int argument_count, wchar_t** arguments) {
         outbound.close();
         channel.cancel_pending_io();
         break;
+      }
+      if (item->kind ==
+          beacon::worker::WorkerOutboundBatchKind::terminal) {
+        outbound.close();
       }
     }
     channel.cancel_pending_io();

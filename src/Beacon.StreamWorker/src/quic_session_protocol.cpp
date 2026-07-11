@@ -83,6 +83,24 @@ void QuicSessionProtocol::set_maximum_datagram_bytes(
   maximum_datagram_bytes_ = value;
 }
 
+void QuicSessionProtocol::begin_connection(
+    std::uint64_t connection_generation) {
+  reset();
+  active_connection_generation_ = connection_generation;
+}
+
+QuicSessionProtocolOutput QuicSessionProtocol::receive(
+    std::uint64_t connection_generation, QuicPeerStreamRole role,
+    std::span<const std::byte> bytes, std::uint64_t now_unix_ms) {
+  if (connection_generation == 0 ||
+      connection_generation != active_connection_generation_) {
+    QuicSessionProtocolOutput output;
+    output.stale_callback = true;
+    return output;
+  }
+  return receive(role, bytes, now_unix_ms);
+}
+
 QuicSessionProtocolOutput
 QuicSessionProtocol::receive(QuicPeerStreamRole role,
                              std::span<const std::byte> bytes,
@@ -280,6 +298,7 @@ void QuicSessionProtocol::reset() {
   last_input_sequence_ = 0;
   last_feedback_sequence_ = 0;
   current_generation_ = 0;
+  active_connection_generation_ = 0;
   authenticated_ = false;
   started_ = false;
 }

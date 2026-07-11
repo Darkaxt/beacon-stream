@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
@@ -38,8 +39,8 @@ struct FrameLengthResult {
 
 class NamedPipeChannel {
  public:
-  NamedPipeChannel() = default;
-  explicit NamedPipeChannel(void* handle) noexcept;
+  NamedPipeChannel() noexcept;
+  explicit NamedPipeChannel(void* handle);
   ~NamedPipeChannel();
 
   NamedPipeChannel(const NamedPipeChannel&) = delete;
@@ -52,16 +53,19 @@ class NamedPipeChannel {
   [[nodiscard]] FrameDecodeStatus read(v1::WorkerIpcEnvelope& envelope) noexcept;
   [[nodiscard]] bool write(const v1::WorkerIpcEnvelope& envelope) noexcept;
   void cancel_pending_io() noexcept;
+  void release_owner() noexcept;
 
  private:
-  [[nodiscard]] std::uint32_t
-  read_exact(std::span<std::byte> output) noexcept;
-  [[nodiscard]] std::uint32_t
-  write_exact(std::span<const std::byte> input) noexcept;
-  void close() noexcept;
+  struct State;
 
-  void* handle_{};
-  std::atomic_bool canceled_{};
+  [[nodiscard]] std::uint32_t
+  read_exact(const std::shared_ptr<State> &state,
+             std::span<std::byte> output) noexcept;
+  [[nodiscard]] std::uint32_t
+  write_exact(const std::shared_ptr<State> &state,
+              std::span<const std::byte> input) noexcept;
+
+  std::atomic<std::shared_ptr<State>> state_;
 };
 
 }  // namespace beacon::worker

@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <future>
+#include <latch>
 #include <string>
 #include <thread>
 #include <vector>
@@ -34,15 +35,18 @@ struct PipePair {
   PipePair &operator=(const PipePair &) = delete;
 };
 
-PipePair create_pipe_pair() {
+bool read_exact(HANDLE handle, std::span<std::byte> output);
+
+PipePair create_pipe_pair(DWORD buffer_bytes =
+                              beacon::worker::maximum_worker_message_bytes +
+                              4) {
   const auto name = L"\\\\.\\pipe\\beacon-worker-test-" +
                     std::to_wstring(GetCurrentProcessId()) + L"-" +
                     std::to_wstring(GetTickCount64());
   const auto server = CreateNamedPipeW(
       name.c_str(), PIPE_ACCESS_DUPLEX,
       PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1,
-      beacon::worker::maximum_worker_message_bytes + 4,
-      beacon::worker::maximum_worker_message_bytes + 4, 0, nullptr);
+      buffer_bytes, buffer_bytes, 0, nullptr);
   BEACON_TEST_REQUIRE(server != INVALID_HANDLE_VALUE);
   const auto client =
       CreateFileW(name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
@@ -51,6 +55,35 @@ PipePair create_pipe_pair() {
   const auto connected = ConnectNamedPipe(server, nullptr);
   BEACON_TEST_REQUIRE(connected != FALSE || GetLastError() == ERROR_PIPE_CONNECTED);
   return PipePair(server, client);
+}
+
+WorkerIpcEnvelope large_envelope(std::uint64_t request_id) {
+  WorkerIpcEnvelope envelope;
+  envelope.set_protocol_version(1);
+  envelope.set_request_id(request_id);
+  envelope.set_session_id("large-frame");
+  envelope.mutable_worker_hello()->set_worker_instance_id(
+      std::string(900'000, static_cast<char>('a' + request_id % 20)));
+  envelope.mutable_worker_hello()->set_process_id(42);
+  return envelope;
+}
+
+FrameDecodeStatus read_worker_frame(HANDLE handle,
+                                    WorkerIpcEnvelope &envelope) {
+  std::array<std::byte, 4> prefix{};
+  if (!read_exact(handle, prefix)) {
+    return FrameDecodeStatus::io_error;
+  }
+  const auto length = beacon::worker::decode_worker_frame_length(prefix);
+  if (length.status != FrameDecodeStatus::success) {
+    return length.status;
+  }
+  std::vector<std::byte> frame(4 + length.message_bytes);
+  std::ranges::copy(prefix, frame.begin());
+  if (!read_exact(handle, std::span<std::byte>{frame}.subspan(4))) {
+    return FrameDecodeStatus::io_error;
+  }
+  return beacon::worker::decode_worker_frame(frame, envelope);
 }
 
 bool read_exact(HANDLE handle, std::span<std::byte> output) {
@@ -191,6 +224,91 @@ void one_reader_and_one_writer_are_full_duplex_and_keep_frames_intact() {
   BEACON_TEST_REQUIRE(decoded_outbound.session_id() == "from-worker");
 }
 
+
+void blocked_write_is_released_by_terminal_cancellation() {
+  auto pair = create_pipe_pair(64);
+  const auto outbound = large_envelope(101);
+  std::promise<void> first_byte_read;
+  auto write_started = first_byte_read.get_future();
+  bool write_result = true;
+
+  std::thread server_reader([&] {
+    std::byte first{};
+    BEACON_TEST_REQUIRE(read_exact(pair.server, {&first, 1}));
+    first_byte_read.set_value();
+  });
+  std::thread writer([&] { write_result = pair.client.write(outbound); });
+
+  write_started.wait();
+  pair.client.cancel_pending_io();
+  writer.join();
+  server_reader.join();
+
+  BEACON_TEST_REQUIRE(!write_result);
+}
+
+void owner_release_cancels_operation_without_closing_its_live_handle() {
+  auto pair = create_pipe_pair(64);
+  const auto outbound = large_envelope(102);
+  std::promise<void> first_byte_read;
+  auto write_started = first_byte_read.get_future();
+  bool write_result = true;
+
+  std::thread server_reader([&] {
+    std::byte first{};
+    BEACON_TEST_REQUIRE(read_exact(pair.server, {&first, 1}));
+    first_byte_read.set_value();
+  });
+  std::thread writer([&] { write_result = pair.client.write(outbound); });
+
+  write_started.wait();
+  pair.client.release_owner();
+  writer.join();
+  server_reader.join();
+
+  BEACON_TEST_REQUIRE(!write_result);
+  BEACON_TEST_REQUIRE(!pair.client.valid());
+}
+
+void concurrent_writers_deliver_only_complete_non_interleaved_frames() {
+  auto pair = create_pipe_pair(64);
+  const auto first = large_envelope(201);
+  const auto second = large_envelope(202);
+  std::latch start{3};
+  bool first_written = false;
+  bool second_written = false;
+  std::array<WorkerIpcEnvelope, 2> received;
+  std::array results{FrameDecodeStatus::io_error,
+                     FrameDecodeStatus::io_error};
+
+  std::thread server_reader([&] {
+    start.arrive_and_wait();
+    results[0] = read_worker_frame(pair.server, received[0]);
+    results[1] = read_worker_frame(pair.server, received[1]);
+  });
+  std::thread first_writer([&] {
+    start.arrive_and_wait();
+    first_written = pair.client.write(first);
+  });
+  std::thread second_writer([&] {
+    start.arrive_and_wait();
+    second_written = pair.client.write(second);
+  });
+
+  server_reader.join();
+  first_writer.join();
+  second_writer.join();
+
+  BEACON_TEST_REQUIRE(first_written);
+  BEACON_TEST_REQUIRE(second_written);
+  BEACON_TEST_REQUIRE(results[0] == FrameDecodeStatus::success);
+  BEACON_TEST_REQUIRE(results[1] == FrameDecodeStatus::success);
+  std::array request_ids{received[0].request_id(), received[1].request_id()};
+  std::ranges::sort(request_ids);
+  BEACON_TEST_REQUIRE(request_ids[0] == 201);
+  BEACON_TEST_REQUIRE(request_ids[1] == 202);
+}
+
 }  // namespace
 
 int main() {
@@ -198,5 +316,8 @@ int main() {
   malformed_and_oversized_frames_are_rejected_before_message_allocation();
   blocked_read_is_released_by_terminal_cancellation();
   one_reader_and_one_writer_are_full_duplex_and_keep_frames_intact();
+  blocked_write_is_released_by_terminal_cancellation();
+  owner_release_cancels_operation_without_closing_its_live_handle();
+  concurrent_writers_deliver_only_complete_non_interleaved_frames();
   return 0;
 }

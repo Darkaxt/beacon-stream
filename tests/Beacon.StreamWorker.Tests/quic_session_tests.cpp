@@ -302,6 +302,47 @@ void reset_and_fresh_authentication_allocate_a_new_generation() {
   BEACON_TEST_REQUIRE(second.accepted_authentication->session_generation == 2);
 }
 
+void stale_old_connection_receive_does_not_touch_current_protocol_state() {
+  AuthorizedQuicTicketStore store;
+  BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-connection-a")));
+  BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-connection-b")));
+  QuicSessionProtocol protocol(store);
+  protocol.set_maximum_datagram_bytes(1232);
+  protocol.begin_connection(10);
+  BEACON_TEST_REQUIRE(
+      protocol
+          .receive(10, QuicPeerStreamRole::session,
+                   frame(authenticate("raw-ticket-connection-a")), 1'000)
+          .accepted_authentication.has_value());
+
+  protocol.begin_connection(11);
+  protocol.set_maximum_datagram_bytes(1232);
+  BEACON_TEST_REQUIRE(
+      protocol
+          .receive(11, QuicPeerStreamRole::session,
+                   frame(authenticate("raw-ticket-connection-b")), 1'000)
+          .accepted_authentication.has_value());
+
+  stream_v1::InputStreamEnvelope stale_input;
+  stale_input.set_protocol_version(1);
+  stale_input.set_session_id("session-a");
+  stale_input.set_sequence(99);
+  stale_input.mutable_input_batch()->add_events()->mutable_keyboard()->set_scan_code(
+      31);
+  const auto stale = protocol.receive(10, QuicPeerStreamRole::input,
+                                      frame(stale_input), 1'000);
+
+  stream_v1::InputStreamEnvelope current_input = stale_input;
+  current_input.set_sequence(1);
+  const auto current = protocol.receive(11, QuicPeerStreamRole::input,
+                                        frame(current_input), 1'000);
+  BEACON_TEST_REQUIRE(stale.stale_callback);
+  BEACON_TEST_REQUIRE(stale.inputs.empty());
+  BEACON_TEST_REQUIRE(protocol.authenticated());
+  BEACON_TEST_REQUIRE(current.inputs.size() == 1);
+  BEACON_TEST_REQUIRE(current.inputs[0].input.sequence() == 1);
+}
+
 void unauthenticated_data_and_oversized_frames_fail_closed() {
   AuthorizedQuicTicketStore store;
   QuicSessionProtocol protocol(store);
@@ -334,6 +375,7 @@ int main() {
   authenticated_streams_are_routed_independently();
   start_session_is_typed_once_per_authenticated_generation();
   reset_and_fresh_authentication_allocate_a_new_generation();
+  stale_old_connection_receive_does_not_touch_current_protocol_state();
   unauthenticated_data_and_oversized_frames_fail_closed();
   return 0;
 }

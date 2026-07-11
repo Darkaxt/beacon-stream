@@ -47,6 +47,7 @@ struct QuicSessionProtocolOutput {
   };
 
   bool close_connection{};
+  bool stale_callback{};
   std::vector<std::vector<std::byte>> session_replies;
   std::vector<stream::TransportPacket> packets;
   std::optional<AcceptedAuthentication> accepted_authentication;
@@ -63,6 +64,10 @@ public:
   explicit QuicSessionProtocol(AuthorizedQuicTicketStore &authorized_tickets);
 
   void set_maximum_datagram_bytes(std::uint16_t value) noexcept;
+  void begin_connection(std::uint64_t connection_generation);
+  [[nodiscard]] QuicSessionProtocolOutput
+  receive(std::uint64_t connection_generation, QuicPeerStreamRole role,
+          std::span<const std::byte> bytes, std::uint64_t now_unix_ms);
   [[nodiscard]] QuicSessionProtocolOutput
   receive(QuicPeerStreamRole role, std::span<const std::byte> bytes,
           std::uint64_t now_unix_ms);
@@ -81,6 +86,7 @@ private:
   std::uint64_t last_feedback_sequence_{};
   std::uint64_t current_generation_{};
   std::uint64_t next_generation_{};
+  std::uint64_t active_connection_generation_{};
   bool authenticated_{};
   bool started_{};
 };
