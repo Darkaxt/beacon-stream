@@ -135,7 +135,7 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
         WorkerIpcEnvelope command = request.Clone();
         command.ProtocolVersion = ProtocolVersion.Current;
         command.RequestId = checked((ulong)Interlocked.Increment(ref nextRequestId));
-        var operation = new PendingRequest();
+        var operation = new PendingRequest(command.SessionId);
         if (!pending.TryAdd(command.RequestId, operation))
         {
             throw new InvalidOperationException("StreamWorker request id collision.");
@@ -257,6 +257,11 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
                 }
                 else if (pending.TryGetValue(envelope.RequestId, out PendingRequest? request))
                 {
+                    if (!string.Equals(envelope.SessionId, request.SessionId, StringComparison.Ordinal))
+                    {
+                        throw new StreamWorkerProtocolException(
+                            "StreamWorker response session identity is invalid.");
+                    }
                     if (envelope.BodyCase == WorkerIpcEnvelope.BodyOneofCase.WorkerCompletion)
                     {
                         pending.TryRemove(envelope.RequestId, out _);
@@ -542,6 +547,13 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
         private readonly List<WorkerIpcEnvelope> events = [];
         private readonly TaskCompletionSource<StreamWorkerCommandResponse> completion = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public PendingRequest(string sessionId)
+        {
+            SessionId = sessionId;
+        }
+
+        public string SessionId { get; }
 
         public Task<StreamWorkerCommandResponse> Task => completion.Task;
 

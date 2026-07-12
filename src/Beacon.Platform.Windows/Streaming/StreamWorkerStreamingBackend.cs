@@ -35,6 +35,7 @@ public sealed class StreamWorkerStreamingBackend : IStreamingBackend, IStreamWor
     private readonly SemaphoreSlim lifecycleGate = new(1, 1);
     private readonly Lock runtimeGate = new();
     private readonly Dictionary<(long ProcessGeneration, string SessionId), ulong> highestWorkerGenerations = [];
+    private long latestExitedProcessGeneration;
 
     public StreamWorkerStreamingBackend(IStreamWorkerHost host)
     {
@@ -205,12 +206,6 @@ public sealed class StreamWorkerStreamingBackend : IStreamingBackend, IStreamWor
                 cleanupError
                 ?? "StreamWorker start_media requires exactly one valid transport-ready event.");
         }
-        if (!IsCurrentWorker(workerInstanceId, processGeneration))
-        {
-            return StreamingStartResult.Fail(
-                "Beacon StreamWorker runtime changed during start_media.");
-        }
-
         var state = new StreamingSessionState(
             plan.SessionId,
             plan.ClientId.Value,
@@ -225,6 +220,12 @@ public sealed class StreamWorkerStreamingBackend : IStreamingBackend, IStreamWor
             Guid.NewGuid());
         lock (runtimeGate)
         {
+            bool isCurrentWorker = IsCurrentWorker(workerInstanceId, processGeneration);
+            if (!isCurrentWorker || processGeneration <= latestExitedProcessGeneration)
+            {
+                return StreamingStartResult.Fail(
+                    "Beacon StreamWorker runtime changed during start_media.");
+            }
             sessions[plan.SessionId] = new WorkerBoundStreamingSession(
                 state,
                 workerInstanceId,
@@ -469,6 +470,9 @@ public sealed class StreamWorkerStreamingBackend : IStreamingBackend, IStreamWor
     {
         lock (runtimeGate)
         {
+            latestExitedProcessGeneration = Math.Max(
+                latestExitedProcessGeneration,
+                exited.ProcessGeneration);
             RemoveWorkerGenerationHistory(exited.ProcessGeneration);
             foreach ((string sessionId, WorkerBoundStreamingSession runtime) in sessions.ToArray())
             {
