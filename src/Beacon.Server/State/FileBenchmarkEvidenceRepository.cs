@@ -4,7 +4,7 @@ using Beacon.Core.Benchmarks;
 
 namespace Beacon.Server.State;
 
-public sealed class FileBenchmarkEvidenceRepository(string path) : IBenchmarkEvidenceRepository
+public sealed class FileBenchmarkEvidenceRepository : IBenchmarkEvidenceRepository, IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -12,10 +12,19 @@ public sealed class FileBenchmarkEvidenceRepository(string path) : IBenchmarkEvi
     };
 
     private readonly object gate = new();
+    private readonly string path;
+    private readonly FileStream writerLease;
+    private bool disposed;
 
     static FileBenchmarkEvidenceRepository()
     {
         JsonOptions.Converters.Add(new JsonStringEnumConverter());
+    }
+
+    public FileBenchmarkEvidenceRepository(string path)
+    {
+        this.path = Path.GetFullPath(path);
+        writerLease = AcquireWriterLease(this.path);
     }
 
     public string Kind => "file";
@@ -26,6 +35,8 @@ public sealed class FileBenchmarkEvidenceRepository(string path) : IBenchmarkEvi
     {
         lock (gate)
         {
+            ObjectDisposedException.ThrowIf(disposed, this);
+
             if (!File.Exists(path))
             {
                 return [];
@@ -64,6 +75,8 @@ public sealed class FileBenchmarkEvidenceRepository(string path) : IBenchmarkEvi
     {
         lock (gate)
         {
+            ObjectDisposedException.ThrowIf(disposed, this);
+
             string? directory = Path.GetDirectoryName(path);
             if (!string.IsNullOrWhiteSpace(directory))
             {
@@ -89,6 +102,48 @@ public sealed class FileBenchmarkEvidenceRepository(string path) : IBenchmarkEvi
                     File.Delete(temporaryPath);
                 }
             }
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (gate)
+        {
+            if (disposed)
+            {
+                return;
+            }
+
+            disposed = true;
+            writerLease.Dispose();
+        }
+    }
+
+    private static FileStream AcquireWriterLease(string evidencePath)
+    {
+        string writerLeasePath = $"{evidencePath}.writer.lock";
+
+        try
+        {
+            string? directory = Path.GetDirectoryName(writerLeasePath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            return new FileStream(
+                writerLeasePath,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException(
+                $"Cannot open benchmark evidence store '{evidencePath}' because its exclusive writer lease " +
+                $"'{writerLeasePath}' could not be acquired. Another live Beacon Server instance may already " +
+                "be using this benchmark evidence path.",
+                ex);
         }
     }
 }

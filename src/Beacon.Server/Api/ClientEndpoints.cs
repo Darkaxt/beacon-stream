@@ -228,13 +228,19 @@ public static class ClientEndpoints
                 return Results.BadRequest(new { error = "Benchmark sample collections are required." });
             }
 
+            ClientProfile? profile = store.GetProfile(clientId);
+            if (profile is null)
+            {
+                return Results.NotFound(new { error = $"Client '{clientId}' is not registered." });
+            }
+
             try
             {
                 var scoringInput = new BenchmarkScoringInput(
                     request.NetworkSamples,
                     request.DecoderSamples,
                     request.PowerSamples,
-                    store.GetProfile(clientId)!.Stream.CodecPreference,
+                    profile.Stream.CodecPreference,
                     BenchmarkSuitePolicy.NetworkCoverage);
                 SelectedBenchmarkResult selected = BenchmarkScorer.Select(scoringInput);
                 BenchmarkEvidence completed = pending with
@@ -276,54 +282,21 @@ public static class ClientEndpoints
             GameLibraryService games,
             CancellationToken cancellationToken) =>
         {
-            ClientProfile? profile = clients.GetProfile(clientId);
-            if (profile is null)
+            PlanResolutionResult resolution = await ResolvePlanAsync(
+                clientId,
+                request,
+                clients,
+                games,
+                "Completed benchmark evidence is required before session planning.",
+                cancellationToken);
+            if (resolution is PlanResolutionFailure failure)
             {
-                return Results.NotFound(new { error = $"Client '{clientId}' is not registered." });
+                return failure.Error;
             }
 
-            GameResolution resolution = await ResolveRequestedGameAsync(request, games, cancellationToken);
-            if (resolution.Error is not null)
-            {
-                return resolution.Error;
-            }
-
-            BenchmarkPlanEvidence? benchmark;
-            try
-            {
-                benchmark = clients.GetLatestBenchmarkPlanEvidence(
-                    clientId,
-                    DateTimeOffset.UtcNow,
-                    MaximumBenchmarkEvidenceAge,
-                    profile.Stream.CodecPreference);
-            }
-            catch (Exception error) when (error is InvalidOperationException or ArgumentException)
-            {
-                return Results.Conflict(new
-                {
-                    error = $"Benchmark evidence does not certify codec preference " +
-                        $"'{profile.Stream.CodecPreference}': {error.Message}"
-                });
-            }
-
-            if (benchmark is null)
-            {
-                return Results.Conflict(new { error = "Completed benchmark evidence is required before session planning." });
-            }
-
-            SessionPlanResult result = SessionPlanner.CreatePlan(
-                profile,
-                clients.GetCapabilities(clientId),
-                benchmark,
-                resolution.Game!);
-
-            if (!result.Success || result.Plan is null)
-            {
-                return Results.BadRequest(new { error = result.Error });
-            }
-
-            sessions.Save(result.Plan);
-            return Results.Ok(CreatePlanResponse(result.Plan, profile));
+            var resolved = (ResolvedPlan)resolution;
+            sessions.Save(resolved.Plan);
+            return Results.Ok(CreatePlanResponse(resolved.Plan, resolved.Profile));
         });
 
         clients.MapPost("/{clientId}/launch", async (
@@ -341,53 +314,21 @@ public static class ClientEndpoints
             BeaconServerIdentity serverIdentity,
             CancellationToken cancellationToken) =>
         {
-            ClientProfile? profile = clients.GetProfile(clientId);
-            if (profile is null)
+            PlanResolutionResult resolution = await ResolvePlanAsync(
+                clientId,
+                request,
+                clients,
+                games,
+                "Completed benchmark evidence is required before launch.",
+                cancellationToken);
+            if (resolution is PlanResolutionFailure failure)
             {
-                return Results.NotFound(new { error = $"Client '{clientId}' is not registered." });
+                return failure.Error;
             }
 
-            GameResolution resolution = await ResolveRequestedGameAsync(request, games, cancellationToken);
-            if (resolution.Error is not null)
-            {
-                return resolution.Error;
-            }
+            var resolved = (ResolvedPlan)resolution;
 
-            BenchmarkPlanEvidence? benchmark;
-            try
-            {
-                benchmark = clients.GetLatestBenchmarkPlanEvidence(
-                    clientId,
-                    DateTimeOffset.UtcNow,
-                    MaximumBenchmarkEvidenceAge,
-                    profile.Stream.CodecPreference);
-            }
-            catch (Exception error) when (error is InvalidOperationException or ArgumentException)
-            {
-                return Results.Conflict(new
-                {
-                    error = $"Benchmark evidence does not certify codec preference " +
-                        $"'{profile.Stream.CodecPreference}': {error.Message}"
-                });
-            }
-
-            if (benchmark is null)
-            {
-                return Results.Conflict(new { error = "Completed benchmark evidence is required before launch." });
-            }
-
-            SessionPlanResult planResult = SessionPlanner.CreatePlan(
-                profile,
-                clients.GetCapabilities(clientId),
-                benchmark,
-                resolution.Game!);
-
-            if (!planResult.Success || planResult.Plan is null)
-            {
-                return Results.BadRequest(new { error = planResult.Error });
-            }
-
-            StreamingPreflightResult streamingPreflight = await streaming.CheckReadinessAsync(planResult.Plan, cancellationToken);
+            StreamingPreflightResult streamingPreflight = await streaming.CheckReadinessAsync(resolved.Plan, cancellationToken);
             if (!streamingPreflight.Success)
             {
                 return Results.Problem(
@@ -395,16 +336,16 @@ public static class ClientEndpoints
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
-            DisplayLeaseResult leaseResult = await leases.EnsureLeaseAsync(profile, cancellationToken);
+            DisplayLeaseResult leaseResult = await leases.EnsureLeaseAsync(resolved.Profile, cancellationToken);
             if (!leaseResult.Success || leaseResult.Lease is null)
             {
                 return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
             }
 
-            sessions.Save(planResult.Plan);
+            sessions.Save(resolved.Plan);
 
             GameLaunchResult launchResult = await launcher.LaunchAsync(
-                new GameLaunchRequest(resolution.Game!, planResult.Plan, leaseResult.Lease.DisplayId),
+                new GameLaunchRequest(resolved.Game, resolved.Plan, leaseResult.Lease.DisplayId),
                 cancellationToken);
             if (!launchResult.Success || launchResult.State is null)
             {
@@ -418,12 +359,12 @@ public static class ClientEndpoints
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
-            await ownership.RecordLaunchAsync(planResult.Plan, launchResult.State, cancellationToken);
+            await ownership.RecordLaunchAsync(resolved.Plan, launchResult.State, cancellationToken);
 
             StreamTicketProvisioningResult ticketResult = await ticketProvisioning.ProvisionAsync(
                 clientId,
-                planResult.Plan.SessionId,
-                planResult.Plan.Revision,
+                resolved.Plan.SessionId,
+                resolved.Plan.Revision,
                 cancellationToken);
             if (!ticketResult.Success || ticketResult.Ticket is null)
             {
@@ -433,7 +374,7 @@ public static class ClientEndpoints
             }
             IssuedStreamTicket issuedTicket = ticketResult.Ticket;
 
-            StreamingStartResult streamResult = await streaming.StartAsync(planResult.Plan, cancellationToken);
+            StreamingStartResult streamResult = await streaming.StartAsync(resolved.Plan, cancellationToken);
             if (!streamResult.Success
                 || streamResult.Session is null
                 || !string.Equals(streamResult.Session.State, "running", StringComparison.Ordinal)
@@ -441,12 +382,12 @@ public static class ClientEndpoints
                 || streamResult.Session.RuntimeGeneration == Guid.Empty)
             {
                 string streamError = streamResult.Error
-                    ?? $"Stream session '{planResult.Plan.SessionId}' has no active streaming runtime.";
+                    ?? $"Stream session '{resolved.Plan.SessionId}' has no active streaming runtime.";
                 string stopStatus = string.Empty;
                 if (streamResult.Success)
                 {
                     StreamingStopResult stopped = await streaming.StopRuntimeAsync(
-                        planResult.Plan.SessionId,
+                        resolved.Plan.SessionId,
                         streamResult.Session?.RuntimeGeneration ?? Guid.Empty,
                         cancellationToken);
                     stopStatus = stopped.Success
@@ -455,7 +396,7 @@ public static class ClientEndpoints
                 }
                 StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
                     clientId,
-                    planResult.Plan.SessionId,
+                    resolved.Plan.SessionId,
                     cancellationToken);
                 string revocationStatus = revoked.Success
                     ? "Stream ticket revoked after stream start failure."
@@ -478,7 +419,7 @@ public static class ClientEndpoints
                 launch = launchResult.State,
                 stream = streamResult.Session,
                 connection = CreateConnectionGrant(
-                    planResult.Plan,
+                    resolved.Plan,
                     streamResult.Session,
                     issuedTicket,
                     serverIdentity),
@@ -1021,6 +962,63 @@ public static class ClientEndpoints
         int FramesPerSecondDenominator,
         string DynamicRange);
 
+    private static async Task<PlanResolutionResult> ResolvePlanAsync(
+        string clientId,
+        PlanRequest request,
+        InMemoryClientStore clients,
+        GameLibraryService games,
+        string missingBenchmarkError,
+        CancellationToken cancellationToken)
+    {
+        ClientProfile? profile = clients.GetProfile(clientId);
+        if (profile is null)
+        {
+            return new PlanResolutionFailure(
+                Results.NotFound(new { error = $"Client '{clientId}' is not registered." }));
+        }
+
+        GameResolution gameResolution = await ResolveRequestedGameAsync(request, games, cancellationToken);
+        if (gameResolution.Error is not null)
+        {
+            return new PlanResolutionFailure(gameResolution.Error);
+        }
+
+        BenchmarkPlanEvidence? benchmark;
+        try
+        {
+            benchmark = clients.GetLatestBenchmarkPlanEvidence(
+                clientId,
+                DateTimeOffset.UtcNow,
+                MaximumBenchmarkEvidenceAge,
+                profile.Stream.CodecPreference);
+        }
+        catch (Exception error) when (error is InvalidOperationException or ArgumentException)
+        {
+            return new PlanResolutionFailure(Results.Conflict(new
+            {
+                error = $"Benchmark evidence does not certify codec preference " +
+                    $"'{profile.Stream.CodecPreference}': {error.Message}"
+            }));
+        }
+
+        if (benchmark is null)
+        {
+            return new PlanResolutionFailure(Results.Conflict(new { error = missingBenchmarkError }));
+        }
+
+        SessionPlanResult planResult = SessionPlanner.CreatePlan(
+            profile,
+            clients.GetCapabilities(clientId),
+            benchmark,
+            gameResolution.Game!);
+        if (!planResult.Success || planResult.Plan is null)
+        {
+            return new PlanResolutionFailure(Results.BadRequest(new { error = planResult.Error }));
+        }
+
+        return new ResolvedPlan(profile, gameResolution.Game!, planResult.Plan);
+    }
+
     private static async Task<GameResolution> ResolveRequestedGameAsync(
         PlanRequest request,
         GameLibraryService games,
@@ -1181,6 +1179,15 @@ public static class ClientEndpoints
                 ["eventCount"] = eventCount.ToString(System.Globalization.CultureInfo.InvariantCulture)
             }));
     }
+
+    private abstract record PlanResolutionResult;
+
+    private sealed record ResolvedPlan(
+        ClientProfile Profile,
+        GameDescriptor Game,
+        SessionPlan Plan) : PlanResolutionResult;
+
+    private sealed record PlanResolutionFailure(IResult Error) : PlanResolutionResult;
 }
 
 public sealed record BenchmarkPrepareRequest(

@@ -105,9 +105,10 @@ void malformed_datagrams_are_rejected() {
 }  // namespace
 
 int main() {
-  static_assert(beacon::stream::media_datagram_header_bytes == 40);
-  serialization_uses_the_fixed_network_order_vector();
-  parsing_returns_header_and_zero_copy_payload();
-  malformed_datagrams_are_rejected();
-  return 0;
+  return beacon::stream::testing::run_tests([] {
+    static_assert(beacon::stream::media_datagram_header_bytes == 40);
+    serialization_uses_the_fixed_network_order_vector();
+    parsing_returns_header_and_zero_copy_payload();
+    malformed_datagrams_are_rejected();
+  });
 }

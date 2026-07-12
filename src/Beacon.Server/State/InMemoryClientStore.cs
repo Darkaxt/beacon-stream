@@ -118,16 +118,6 @@ public sealed class InMemoryClientStore
         }
     }
 
-    public void SaveBenchmarkEvidence(BenchmarkEvidence evidence)
-    {
-        BenchmarkEvidenceValidator.Validate(evidence);
-        lock (gate)
-        {
-            PersistAndPublishBenchmarkEvidence(evidence);
-            currentFingerprints[evidence.ClientId.Value] = evidence.Fingerprints;
-        }
-    }
-
     public BenchmarkPreparationResult PrepareBenchmarkRun(
         ClientId clientId,
         BenchmarkTrigger trigger,

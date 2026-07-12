@@ -81,12 +81,19 @@ public final class BeaconNetworkIdentityHasher {
                 throw new IllegalStateException("The local network identity salt generator returned invalid data.");
             }
 
-            String encoded = Base64.getEncoder().withoutPadding().encodeToString(generated);
-            if (!storage.write(encoded)) {
-                Arrays.fill(generated, (byte) 0);
-                throw new IllegalStateException("Could not persist the local network identity salt.");
+            boolean persisted = false;
+            try {
+                String encoded = Base64.getEncoder().withoutPadding().encodeToString(generated);
+                if (!storage.write(encoded)) {
+                    throw new IllegalStateException("Could not persist the local network identity salt.");
+                }
+                persisted = true;
+                return generated;
+            } finally {
+                if (!persisted) {
+                    Arrays.fill(generated, (byte) 0);
+                }
             }
-            return generated;
         }
     }
 

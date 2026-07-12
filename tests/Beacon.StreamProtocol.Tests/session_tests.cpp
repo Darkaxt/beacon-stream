@@ -118,9 +118,10 @@ void shutdown_from_connected_closes_and_releases_once() {
 }  // namespace
 
 int main() {
-  tickets_are_bound_and_accepted_once();
-  reconnect_requires_a_new_ticket_and_preserves_session_identity();
-  stop_and_shutdown_release_each_resource_once();
-  shutdown_from_connected_closes_and_releases_once();
-  return 0;
+  return beacon::stream::testing::run_tests([] {
+    tickets_are_bound_and_accepted_once();
+    reconnect_requires_a_new_ticket_and_preserves_session_identity();
+    stop_and_shutdown_release_each_resource_once();
+    shutdown_from_connected_closes_and_releases_once();
+  });
 }

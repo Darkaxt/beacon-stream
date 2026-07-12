@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Beacon.Core.Benchmarks;
+using Beacon.Core.Clients;
 using Beacon.Server.State;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -172,6 +173,54 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
             new { networkSamples = (object?)null, decoderSamples = (object?)null, powerSamples = (object?)null });
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task CompletingPersistedBenchmarkWithoutClientProfileReturnsNotFound()
+    {
+        string clientId = $"missing-profile-{Guid.NewGuid():N}";
+        Guid runId = Guid.NewGuid();
+        BenchmarkEvidence pending = BenchmarkEvidenceRepositoryTests.CreateEvidence(
+            runId,
+            DateTimeOffset.UtcNow) with
+        {
+            ClientId = new ClientId(clientId),
+            CompletedAt = null,
+            NetworkSamples = [],
+            DecoderSamples = [],
+            PowerSamples = [],
+            SelectedResult = null,
+            NetworkCoverage = null
+        };
+        WebApplicationFactory<Program> persistedFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IBenchmarkEvidenceRepository>();
+                services.AddSingleton<IBenchmarkEvidenceRepository>(
+                    new InMemoryBenchmarkEvidenceRepository([pending]));
+            }));
+        HttpClient client = persistedFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/{runId:D}/complete",
+            new
+            {
+                networkSamples = new[]
+                {
+                    new { sequence = 1, payloadBytes = 1200, rttMs = 8, jitterMs = 1.0, received = true, throughputMbps = 100, reorderDistance = 0 }
+                },
+                decoderSamples = new[]
+                {
+                    new { codec = "h264", profile = "high", bitDepth = 8, width = 2560, height = 1600, targetFps = 120, configured = true, sustainedFps = 120, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0 }
+                },
+                powerSamples = new[]
+                {
+                    new { batteryPercent = 80, isCharging = false, thermalState = "nominal" }
+                }
+            });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Contains("not registered", await response.Content.ReadAsStringAsync(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

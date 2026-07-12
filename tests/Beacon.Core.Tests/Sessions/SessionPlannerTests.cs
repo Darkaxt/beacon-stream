@@ -278,6 +278,8 @@ public sealed class SessionPlannerTests
                 BitDepth: codec.Equals("h264", StringComparison.OrdinalIgnoreCase) ? 8 : 10,
                 Width: 2560,
                 Height: 1600,
+                TenBitPresentationVerified: false,
+                HdrPresentationVerified: false,
                 P95DecodeLatencyMs: 5,
                 P95PresentationLatencyMs: 9));
 }

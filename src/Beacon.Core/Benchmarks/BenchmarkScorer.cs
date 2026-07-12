@@ -11,6 +11,12 @@ public static class BenchmarkScorer
     {
         ArgumentNullException.ThrowIfNull(input);
         BenchmarkEvidenceValidator.Validate(input);
+
+        return SelectValidated(input);
+    }
+
+    internal static SelectedBenchmarkResult SelectValidated(BenchmarkScoringInput input)
+    {
         if (input.NetworkSamples.Count == 0)
         {
             throw new InvalidOperationException("Benchmark scoring requires network samples.");
@@ -26,7 +32,7 @@ public static class BenchmarkScorer
 
         var reasons = new List<string>();
         DecoderBenchmarkSample[] sustainable = input.DecoderSamples
-            .Where(IsSustainable)
+            .Where(DecoderBenchmarkCertification.IsCertified)
             .ToArray();
 
         foreach (DecoderBenchmarkSample rejected in input.DecoderSamples.Except(sustainable))
@@ -49,6 +55,21 @@ public static class BenchmarkScorer
             .OrderByDescending(sample => CodecPriority(sample.Codec))
             .ThenByDescending(sample => sample.BitDepth)
             .ThenByDescending(sample => sample.TargetFps)
+            .ThenByDescending(sample => (long)sample.Width * sample.Height)
+            .ThenBy(sample => sample.P95PresentationLatencyMs!.Value)
+            .ThenBy(sample => sample.P95DecodeLatencyMs)
+            .ThenByDescending(sample => sample.Width)
+            .ThenByDescending(sample => sample.Height)
+            .ThenBy(sample => sample.Codec, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(sample => sample.Codec, StringComparer.Ordinal)
+            .ThenBy(sample => sample.Profile, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(sample => sample.Profile, StringComparer.Ordinal)
+            .ThenByDescending(sample => sample.SustainedFps)
+            .ThenByDescending(sample => sample.TenBitPresentationVerified)
+            .ThenByDescending(sample => sample.HdrPresentationVerified)
+            .ThenByDescending(sample => sample.Configured)
+            .ThenBy(sample => sample.DroppedFrames)
+            .ThenBy(sample => sample.OutputErrors)
             .FirstOrDefault();
         if (selectedDecoder is null)
         {
@@ -112,17 +133,6 @@ public static class BenchmarkScorer
             P95DecodeLatencyMs: selectedDecoder.P95DecodeLatencyMs,
             P95PresentationLatencyMs: selectedDecoder.P95PresentationLatencyMs);
     }
-
-    private static bool IsSustainable(DecoderBenchmarkSample sample) =>
-        sample.Configured &&
-        sample.DroppedFrames == 0 &&
-        sample.OutputErrors == 0 &&
-        sample.SustainedFps >= sample.TargetFps &&
-        sample.P95DecodeLatencyMs <= FrameDurationMs(sample.TargetFps) &&
-        sample.P95PresentationLatencyMs is not null &&
-        sample.P95PresentationLatencyMs.Value <= 2 * FrameDurationMs(sample.TargetFps);
-
-    private static double FrameDurationMs(int targetFps) => 1000.0 / targetFps;
 
     private static bool IsThermallyConstrained(IReadOnlyList<EndpointPowerSample> samples) =>
         samples.Any(sample =>

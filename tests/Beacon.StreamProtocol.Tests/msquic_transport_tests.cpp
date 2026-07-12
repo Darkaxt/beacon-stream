@@ -77,9 +77,10 @@ void peer_and_transport_close_are_distinct_facts() {
 }  // namespace
 
 int main() {
-  alpn_must_match_the_single_beacon_protocol();
-  datagram_negotiation_owns_the_packet_size_limit();
-  final_datagram_states_preserve_loss_evidence();
-  peer_and_transport_close_are_distinct_facts();
-  return 0;
+  return beacon::stream::testing::run_tests([] {
+    alpn_must_match_the_single_beacon_protocol();
+    datagram_negotiation_owns_the_packet_size_limit();
+    final_datagram_states_preserve_loss_evidence();
+    peer_and_transport_close_are_distinct_facts();
+  });
 }
