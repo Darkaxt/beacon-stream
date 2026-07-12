@@ -14,6 +14,7 @@
 #include <msquic.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -233,7 +234,10 @@ public:
 
   QuicListenerMetrics metrics() const noexcept {
     std::lock_guard lock{mutex_};
-    return metrics_;
+    auto result = metrics_;
+    result.live_datagram_send_contexts =
+        live_datagram_send_contexts_.load(std::memory_order_relaxed);
+    return result;
   }
 
   std::vector<stream::MsQuicTransportEvent> take_transport_events() {
@@ -360,7 +364,8 @@ public:
     inject_fault(QuicListenerFaultPoint::datagram_context_allocation);
     auto *context = new DatagramSendContext(std::move(packet.payload), sequence,
                                             session_generation,
-                                            connection_generation);
+                                            connection_generation,
+                                            live_datagram_send_contexts_);
     const auto status = api_->DatagramSend(connection, &context->buffer, 1,
                                            QUIC_SEND_FLAG_NONE, context);
     {
@@ -428,12 +433,19 @@ private:
     explicit DatagramSendContext(std::vector<std::byte> payload,
                                  std::uint64_t value,
                                  std::uint64_t session_value,
-                                 std::uint64_t connection_value)
+                                 std::uint64_t connection_value,
+                                 std::atomic_uint64_t &live_contexts_value)
         : bytes(std::move(payload)), sequence(value),
           session_generation(session_value),
-          connection_generation(connection_value) {
+          connection_generation(connection_value),
+          live_contexts(&live_contexts_value) {
       buffer.Length = static_cast<std::uint32_t>(bytes.size());
       buffer.Buffer = reinterpret_cast<std::uint8_t *>(bytes.data());
+      live_contexts->fetch_add(1, std::memory_order_relaxed);
+    }
+
+    ~DatagramSendContext() {
+      live_contexts->fetch_sub(1, std::memory_order_relaxed);
     }
 
     std::vector<std::byte> bytes;
@@ -441,6 +453,7 @@ private:
     std::uint64_t session_generation{};
     std::uint64_t connection_generation{};
     QUIC_BUFFER buffer{};
+    std::atomic_uint64_t *live_contexts{};
   };
 
   struct ActiveApiCallGuard {
@@ -1091,6 +1104,15 @@ private:
     case QUIC_CONNECTION_EVENT_DATAGRAM_SEND_STATE_CHANGED: {
       auto *send = static_cast<DatagramSendContext *>(
           event->DATAGRAM_SEND_STATE_CHANGED.ClientContext);
+      const bool final_state =
+          send != nullptr && QUIC_DATAGRAM_SEND_STATE_IS_FINAL(
+                                 event->DATAGRAM_SEND_STATE_CHANGED.State);
+      std::unique_ptr<DatagramSendContext> final_send;
+      if (final_state) {
+        final_send.reset(send);
+        self.inject_fault(
+            QuicListenerFaultPoint::datagram_final_state_telemetry);
+      }
       {
         std::lock_guard lock{self.mutex_};
         const bool current =
@@ -1135,10 +1157,6 @@ private:
           self.metrics_.smoothed_rtt_us = statistics.Rtt;
           self.metrics_.path_mtu = statistics.SendPathMtu;
         }
-      }
-      if (send != nullptr && QUIC_DATAGRAM_SEND_STATE_IS_FINAL(
-                                 event->DATAGRAM_SEND_STATE_CHANGED.State)) {
-        delete send;
       }
       break;
     }
@@ -1307,6 +1325,7 @@ private:
   QUIC_ADDR listen_address_{};
   stream::MsQuicTransportState transport_state_;
   QuicListenerMetrics metrics_;
+  std::atomic_uint64_t live_datagram_send_contexts_{};
   std::vector<stream::TransportPacket> received_packets_;
   std::vector<std::byte> pending_session_bytes_;
   std::string current_session_id_;
