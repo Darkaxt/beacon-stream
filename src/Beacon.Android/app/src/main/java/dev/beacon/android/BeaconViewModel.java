@@ -1,20 +1,16 @@
 package dev.beacon.android;
 
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
-
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
-import java.util.UUID;
 
 public final class BeaconViewModel implements AutoCloseable {
     private final BeaconService service;
     private final String clientId;
     private final String serverUrl;
     private final StreamCoreFactory streamCoreFactory;
+    private final BeaconBenchmarkCoordinator benchmarkCoordinator;
     private BeaconStreamCore streamCore;
-    private ActiveBenchmark activeBenchmark;
     private boolean creatingStreamCore;
     private boolean closed;
 
@@ -61,6 +57,19 @@ public final class BeaconViewModel implements AutoCloseable {
         this.service = service;
         this.streamCore = streamCore;
         this.streamCoreFactory = streamCoreFactory;
+        this.benchmarkCoordinator = new BeaconBenchmarkCoordinator(
+            service,
+            new BeaconBenchmarkCoordinator.ResultObserver() {
+                @Override
+                public void onResult(String action, BeaconApiClient.BeaconResult result) {
+                    record(action, result);
+                }
+
+                @Override
+                public void onFailure(String action, Throwable failure) {
+                    recordFailure(action, failure);
+                }
+            });
     }
 
     public String clientId() {
@@ -164,69 +173,13 @@ public final class BeaconViewModel implements AutoCloseable {
     public void runBenchmark(
         BeaconBenchmarkPrepareRequest request,
         BeaconBenchmarkDeviceEvidence deviceEvidence) throws IOException {
-        if (request == null || deviceEvidence == null) {
-            throw new IllegalArgumentException("Benchmark request and device evidence are required.");
-        }
         requireOpen();
-        synchronized (this) {
-            if (activeBenchmark != null) {
-                throw new IllegalStateException("A benchmark run is already active.");
-            }
-        }
-
-        BeaconApiClient.BeaconResult result = service.prepareBenchmark(request);
-        record("benchmark prepare", result);
-        if (!result.isSuccess()) {
-            return;
-        }
-
-        BenchmarkPreparation preparation;
-        try {
-            preparation = BenchmarkPreparation.parse(result.body());
-        } catch (RuntimeException failure) {
-            String preparedRunId = BenchmarkPreparation.tryExtractRunId(result.body());
-            if (preparedRunId != null) {
-                cancelPreparedBenchmark(preparedRunId, failure);
-            }
-            throw failure;
-        }
-        if (preparation.reused) {
-            status = "benchmark reuse: " + result.statusCode();
-            latestError = "";
-            return;
-        }
-
-        ActiveBenchmark run = new ActiveBenchmark(preparation.runId, deviceEvidence);
-        try {
-            synchronized (this) {
-                requireOpenLocked();
-                if (activeBenchmark != null) {
-                    throw new IllegalStateException("A benchmark run is already active.");
-                }
-                activeBenchmark = run;
-            }
-            startGrant(result.body());
-        } catch (RuntimeException | Error failure) {
-            clearActiveBenchmark(run);
-            cancelPreparedBenchmark(run.runId, failure);
-            throw failure;
-        }
+        benchmarkCoordinator.run(request, deviceEvidence, this::startGrant);
     }
 
     public void cancelBenchmark() throws IOException {
         requireOpen();
-        ActiveBenchmark run;
-        synchronized (this) {
-            run = activeBenchmark;
-            activeBenchmark = null;
-        }
-        if (run == null) {
-            return;
-        }
-        if (streamCore != null) {
-            streamCore.stop();
-        }
-        record("benchmark cancel", service.cancelBenchmark(run.runId));
+        benchmarkCoordinator.cancel(this::stopOwnedStreamCore);
     }
 
     public void sendInput(BeaconApiClient.InputBatch input) {
@@ -312,8 +265,10 @@ public final class BeaconViewModel implements AutoCloseable {
         try {
             created = factory.create(
                 frame -> { },
-                this::onStreamCoreFailure,
-                this::onBenchmarkCompleted);
+                benchmarkCoordinator::onStreamCoreFailure,
+                result -> benchmarkCoordinator.onNetworkCompleted(
+                    result,
+                    this::stopOwnedStreamCore));
             synchronized (this) {
                 if (!closed) {
                     streamCore = created;
@@ -367,78 +322,21 @@ public final class BeaconViewModel implements AutoCloseable {
         latestError = result.isSuccess() ? "" : result.body();
     }
 
-    private void onBenchmarkCompleted(BeaconStreamCore.BenchmarkNetworkResult networkResult) {
-        ActiveBenchmark run;
-        synchronized (this) {
-            run = activeBenchmark;
-            activeBenchmark = null;
-        }
-        if (run == null) {
-            return;
-        }
+    private void recordFailure(String action, Throwable failure) {
+        status = action + ": failed";
+        latestError = failure.getMessage() == null
+            ? failure.getClass().getSimpleName()
+            : failure.getMessage();
+    }
 
-        try {
-            BeaconBenchmarkCompletionRequest completion =
-                BeaconBenchmarkCompletionRequest.fromNetworkResult(
-                    networkResult,
-                    run.deviceEvidence.decoderSamples(),
-                    run.deviceEvidence.powerSamples());
-            BeaconApiClient.BeaconResult result = service.completeBenchmark(run.runId, completion);
-            record("benchmark complete", result);
-            if (!result.isSuccess()) {
-                cancelPreparedBenchmark(run.runId, null);
-            }
-        } catch (IOException | RuntimeException failure) {
-            status = "benchmark complete: failed";
-            latestError = failure.getMessage() == null
-                ? failure.getClass().getSimpleName()
-                : failure.getMessage();
-            cancelPreparedBenchmark(run.runId, failure);
-        } finally {
-            BeaconStreamCore owned = streamCore;
-            if (owned != null) {
-                owned.stop();
-            }
+    private void stopOwnedStreamCore() {
+        BeaconStreamCore owned = streamCore;
+        if (owned != null) {
+            owned.stop();
         }
     }
 
-    private void onStreamCoreFailure(String stage) {
-        ActiveBenchmark run;
-        synchronized (this) {
-            run = activeBenchmark;
-            activeBenchmark = null;
-        }
-        if (run == null) {
-            return;
-        }
-        status = "benchmark " + stage + ": failed";
-        latestError = "Benchmark " + stage + " failed.";
-        cancelPreparedBenchmark(run.runId, null);
-    }
-
-    private void clearActiveBenchmark(ActiveBenchmark expected) {
-        synchronized (this) {
-            if (activeBenchmark == expected) {
-                activeBenchmark = null;
-            }
-        }
-    }
-
-    private void cancelPreparedBenchmark(String runId, Throwable primaryFailure) {
-        try {
-            service.cancelBenchmark(runId);
-        } catch (IOException | RuntimeException cancellationFailure) {
-            if (primaryFailure != null) {
-                primaryFailure.addSuppressed(cancellationFailure);
-            } else {
-                latestError = cancellationFailure.getMessage() == null
-                    ? cancellationFailure.getClass().getSimpleName()
-                    : cancellationFailure.getMessage();
-            }
-        }
-    }
-
-    public interface BeaconService {
+    public interface BeaconService extends BeaconBenchmarkCoordinator.Service {
         BeaconApiClient.BeaconResult hello() throws IOException;
 
         BeaconApiClient.BeaconResult patchProfile(BeaconApiClient.ProfilePatch patch) throws IOException;
@@ -490,57 +388,4 @@ public final class BeaconViewModel implements AutoCloseable {
             BeaconStreamCore.BenchmarkObserver benchmarkObserver);
     }
 
-    private static final class ActiveBenchmark {
-        private final String runId;
-        private final BeaconBenchmarkDeviceEvidence deviceEvidence;
-
-        ActiveBenchmark(String runId, BeaconBenchmarkDeviceEvidence deviceEvidence) {
-            this.runId = runId;
-            this.deviceEvidence = deviceEvidence;
-        }
-    }
-
-    private static final class BenchmarkPreparation {
-        private final String runId;
-        private final boolean reused;
-
-        BenchmarkPreparation(String runId, boolean reused) {
-            this.runId = runId;
-            this.reused = reused;
-        }
-
-        static BenchmarkPreparation parse(String responseBody) {
-            try {
-                JsonObject root = JsonParser.parseString(responseBody).getAsJsonObject();
-                String disposition = root.get("disposition").getAsString();
-                boolean reused = "reuse".equals(disposition);
-                if (!reused && !"continue".equals(disposition) &&
-                    !"start-new".equals(disposition)) {
-                    throw new IllegalArgumentException("Benchmark disposition is invalid.");
-                }
-                String runId = UUID.fromString(root.get("runId").getAsString()).toString();
-                boolean hasConnection = root.has("connection") && root.get("connection").isJsonObject();
-                if (reused == hasConnection) {
-                    throw new IllegalArgumentException(
-                        reused
-                            ? "Reused benchmark evidence cannot include a connection grant."
-                            : "New benchmark work requires a connection grant.");
-                }
-                return new BenchmarkPreparation(runId, reused);
-            } catch (IllegalArgumentException error) {
-                throw error;
-            } catch (RuntimeException error) {
-                throw new IllegalArgumentException("Invalid benchmark preparation response.", error);
-            }
-        }
-
-        static String tryExtractRunId(String responseBody) {
-            try {
-                JsonObject root = JsonParser.parseString(responseBody).getAsJsonObject();
-                return UUID.fromString(root.get("runId").getAsString()).toString();
-            } catch (RuntimeException ignored) {
-                return null;
-            }
-        }
-    }
 }
