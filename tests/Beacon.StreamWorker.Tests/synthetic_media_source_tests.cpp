@@ -64,7 +64,8 @@ void negotiated_limit_too_small_fails_without_partial_packets() {
 } // namespace
 
 int main() {
-  non_decodable_access_unit_marker_has_protocol_idr_flags();
-  negotiated_limit_too_small_fails_without_partial_packets();
-  return 0;
+  return beacon::stream::testing::run_tests([] {
+    non_decodable_access_unit_marker_has_protocol_idr_flags();
+    negotiated_limit_too_small_fails_without_partial_packets();
+  });
 }

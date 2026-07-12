@@ -378,14 +378,15 @@ void input_received_wrapper_overhead_is_rejected_before_pipe_write() {
 } // namespace
 
 int main() {
-  worker_events_are_uncorrelated_typed_and_generation_bound();
-  response_batches_remain_contiguous_with_concurrent_event_producers();
-  terminal_batch_remains_open_until_the_writer_closes_after_progress();
-  command_response_progresses_contiguously_through_event_backlog();
-  count_capacity_reserves_one_atomic_terminal_batch();
-  serialized_byte_capacity_is_exact_and_batch_atomic();
-  oversized_batch_and_terminal_fail_without_partial_admission();
-  per_envelope_pipe_limit_is_exact_and_batch_atomic();
-  input_received_wrapper_overhead_is_rejected_before_pipe_write();
-  return 0;
+  return beacon::stream::testing::run_tests([] {
+    worker_events_are_uncorrelated_typed_and_generation_bound();
+    response_batches_remain_contiguous_with_concurrent_event_producers();
+    terminal_batch_remains_open_until_the_writer_closes_after_progress();
+    command_response_progresses_contiguously_through_event_backlog();
+    count_capacity_reserves_one_atomic_terminal_batch();
+    serialized_byte_capacity_is_exact_and_batch_atomic();
+    oversized_batch_and_terminal_fail_without_partial_admission();
+    per_envelope_pipe_limit_is_exact_and_batch_atomic();
+    input_received_wrapper_overhead_is_rejected_before_pipe_write();
+  });
 }
