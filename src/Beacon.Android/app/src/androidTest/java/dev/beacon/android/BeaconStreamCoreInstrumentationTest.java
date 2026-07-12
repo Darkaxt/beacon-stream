@@ -28,6 +28,7 @@ import static org.junit.Assert.assertNotEquals;
 
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assume.assumeTrue;
 
 @RunWith(AndroidJUnit4.class)
 public final class BeaconStreamCoreInstrumentationTest {
@@ -201,8 +202,11 @@ public final class BeaconStreamCoreInstrumentationTest {
     @Test
     public void gate3ConnectSendAndDisconnect() throws Exception {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
-        String serverUrl = requireArgument(InstrumentationRegistry.getArguments(), "serverUrl");
-        String clientId = requireArgument(InstrumentationRegistry.getArguments(), "clientId");
+        Bundle arguments = requireGate3Arguments();
+        String serverUrl = requireArgument(arguments, "serverUrl");
+        String clientId = requireArgument(arguments, "clientId");
+        String inputMarker = requireArgument(arguments, "inputMarker");
+        installCredential(instrumentation, arguments, clientId);
         Gate3SessionEvidence evidence = Gate3SessionEvidence.startFirstInvocation(
             instrumentation.getTargetContext(), clientId);
         BeaconStreamCore core = new BeaconStreamCore(
@@ -214,7 +218,7 @@ public final class BeaconStreamCoreInstrumentationTest {
             registerAndLaunch(model);
             evidence.recordGrant(model.latestStream());
             evidence.awaitMarkerAndFeedback();
-            model.sendInput(BeaconApiClient.InputBatch.pointerTap(1, 0.5, 0.5));
+            model.sendInput(BeaconApiClient.InputBatch.keyboardPress(1, inputMarker, "Escape"));
             evidence.recordInputSent();
             evidence.persistForReconnect();
         } finally {
@@ -246,8 +250,10 @@ public final class BeaconStreamCoreInstrumentationTest {
     @Test
     public void gate3ReconnectAndStop() throws Exception {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
-        String serverUrl = requireArgument(InstrumentationRegistry.getArguments(), "serverUrl");
-        String clientId = requireArgument(InstrumentationRegistry.getArguments(), "clientId");
+        Bundle arguments = requireGate3Arguments();
+        String serverUrl = requireArgument(arguments, "serverUrl");
+        String clientId = requireArgument(arguments, "clientId");
+        installCredential(instrumentation, arguments, clientId);
         Gate3SessionEvidence.PreviousInvocation previous = Gate3SessionEvidence.loadPrevious(
             instrumentation.getTargetContext(), clientId);
         Gate3SessionEvidence evidence = Gate3SessionEvidence.startReconnect(
@@ -282,8 +288,10 @@ public final class BeaconStreamCoreInstrumentationTest {
     @Test
     public void gate3ConnectAndAwaitWorkerCrash() throws Exception {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
-        String serverUrl = requireArgument(InstrumentationRegistry.getArguments(), "serverUrl");
-        String clientId = requireArgument(InstrumentationRegistry.getArguments(), "clientId");
+        Bundle arguments = requireGate3Arguments();
+        String serverUrl = requireArgument(arguments, "serverUrl");
+        String clientId = requireArgument(arguments, "clientId");
+        installCredential(instrumentation, arguments, clientId);
         Gate3SessionEvidence evidence = Gate3SessionEvidence.startReconnect(
             instrumentation.getTargetContext(), clientId);
         BeaconStreamCore core = new BeaconStreamCore(
@@ -319,6 +327,24 @@ public final class BeaconStreamCoreInstrumentationTest {
                 "Missing required instrumentation argument: " + name);
         }
         return value.trim();
+    }
+
+    private static Bundle requireGate3Arguments() {
+        Bundle arguments = InstrumentationRegistry.getArguments();
+        String serverUrl = arguments.getString("serverUrl");
+        assumeTrue(
+            "Gate 3 host-dependent instrumentation requires an explicit serverUrl.",
+            serverUrl != null && !serverUrl.trim().isEmpty());
+        return arguments;
+    }
+
+    private static void installCredential(
+        Instrumentation instrumentation,
+        Bundle arguments,
+        String clientId) {
+        String credential = requireArgument(arguments, "credential");
+        new AndroidKeyStoreCredentialStore(
+            instrumentation.getTargetContext(), clientId).saveCredential(credential);
     }
 
     private static void registerAndLaunch(BeaconViewModel model) throws Exception {

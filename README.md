@@ -1,24 +1,27 @@
 # Beacon Stream
 
 Beacon Stream is a personal Windows-to-Android game streaming system built around one
-Beacon-owned control plane and one future Beacon-owned media path. The server owns client
+Beacon-owned control plane and one Beacon-owned media path. The server owns client
 profiles, session planning, virtual-display lifecycle, application launch, ownership,
 recovery, and stream policy. The Android app owns only client-local interaction settings,
 device facts, game selection, and control requests.
 
 ## Current State
 
-Architecture Recovery Gates 0-2 define the current repository state:
+Architecture Recovery Gates 0-2 and the Gate 3 implementation define the current repository
+state:
 
 - Core, Server, Cockpit, Client Lab, FakeEndpoint, and Android expose protocol-neutral
   Beacon session state.
 - Per-client display leases, the inactive **AND** no-owned-work cleanup rule, physical
   restore, process/window ownership, game discovery, artwork, input, and recovery remain.
 - Fake host mode provides deterministic end-to-end control-plane testing.
-- Windows host mode intentionally fails media preflight with
-  `Beacon StreamWorker is not implemented during architecture recovery.`
-- The APK intentionally performs no media handoff during recovery. Generic Android
-  codec, surface, and decoder primitives remain for the future StreamCore boundary.
+- A Beacon-owned C++ StreamWorker runs behind typed named-pipe IPC and carries authenticated
+  control, input, feedback, and media datagrams over MsQuic.
+- The APK has one JNI StreamCore route. Gate 3 proves it against the real Server and Worker on
+  the Android emulator with a deterministic, non-decodable access-unit marker.
+- Gate 3 does not claim real video. WGC capture, D3D11 conversion, NVENC H.264, and MediaCodec
+  presentation remain Gate 5 work behind the existing Worker/StreamCore contract.
 
 The approved Gates 3-5 implementation is a source-audited Beacon StreamWorker/StreamCore
 vertical slice: fake transport proof first, benchmark traffic through the production
@@ -38,18 +41,18 @@ transport, then real H.264 video to the Android emulator.
 | `Beacon.GameProbe` | Read-only Steam, Heroic, Hydra, and manual-library inspection. |
 | `Beacon.Android` | Thin APK for client facts, catalog selection, local settings, input requests, and recovery controls. |
 
-The production media boundary has exactly two current implementations:
+The streaming boundary has one production route and one test implementation:
 
-- fake host mode uses `FakeStreamingBackend` for deterministic tests;
-- Windows host mode uses `UnavailableStreamingBackend` and fails closed until StreamWorker
-  is implemented.
+- fake streaming mode uses `FakeStreamingBackend` only for deterministic control-plane tests;
+- production and Gate 3 acceptance use `StreamWorkerStreamingBackend`, typed Worker IPC,
+  MsQuic, and Android StreamCore. There is no compatibility transport or external wrapper.
 
 ## Prerequisites
 
 - Windows 11 for the real host boundaries
 - .NET SDK selected by `global.json`
 - Node.js and pnpm
-- JDK 17 or newer, Android SDK 35, and Gradle 8.14.1
+- JDK 21, Android SDK 35, and Gradle 8.14.1
 - Android platform tools for emulator validation
 - Visual Studio C++ tools with CMake 3.25 or newer for StreamWorker builds
 - WSL2 Ubuntu for the reproducible local Linux/Android native cross-build
@@ -72,9 +75,8 @@ $env:BEACON_HOST_MODE='windows'
 dotnet run --project src\Beacon.Server
 ```
 
-Windows mode can exercise the real display, launcher, activity, input, and recovery
-boundaries. Launch media preflight fails before display or application side effects until
-StreamWorker lands.
+Windows mode exercises the real display, launcher, activity, input, recovery, and
+StreamWorker boundaries. Real encoded video is intentionally unavailable until Gate 5.
 
 Optional profile persistence and pairing:
 
@@ -145,8 +147,8 @@ adb shell am start -W -n dev.beacon.android/.BeaconActivity
 
 For the standard Android emulator, the APK server URL is `http://10.0.2.2:5000`.
 Validate catalog selection, local settings persistence, capability and telemetry reports,
-input controls, stop/disconnect/quit, and emergency restore. A successful launch displays
-the explicit StreamWorker recovery message and does not open a media surface or another app.
+input controls, stop/disconnect/quit, and emergency restore. Gate 3 instrumentation drives
+the production JNI route; the normal APK still has no claim of moving video before Gate 5.
 
 ## Validation
 
@@ -190,8 +192,19 @@ pnpm --dir tests\Beacon.ClientLab.Playwright lint
 pnpm --dir tests\Beacon.ClientLab.Playwright test
 ```
 
-The architecture guard scans every runtime and test project. It rejects reintroduction of
-removed compatibility paths and contracts instead of maintaining an exception ledger.
+With `emulator-5554` online, run the complete Gate 3 matrix through one command:
+
+```powershell
+.\scripts\test-gate3.ps1 -Serial emulator-5554
+```
+
+The runner covers managed, native Windows, Android native/JNI, Client Lab, live FakeEndpoint,
+DisplayProbe, GameProbe, the real Server-to-emulator marker path, tracked-file architecture
+absence, and five-channel secret absence. It targets only the requested Android serial.
+
+The architecture guard enumerates Git-tracked source, test, build, script, CI, solution, web,
+and properties files. It rejects reintroduction of removed compatibility paths and contracts
+instead of maintaining an exception ledger.
 
 ## Lifecycle Invariants
 

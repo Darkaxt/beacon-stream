@@ -89,3 +89,5 @@ finally {
     Remove-Item Env:BEACON_SERVER_IDENTITY_PATH -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $identityPath -Force -ErrorAction SilentlyContinue
 }
+
+exit 0

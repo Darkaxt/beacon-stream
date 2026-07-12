@@ -6,6 +6,9 @@ import android.content.SharedPreferences;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -23,10 +26,12 @@ final class Gate3SessionEvidence implements BeaconStreamCore.EncodedFrameSink {
     private static final String TicketFingerprintKey = "ticketFingerprint";
     private static final String SessionIdKey = "sessionId";
     private static final String MarkerSequenceKey = "markerSequence";
+    private static final String TicketEvidenceFile = "beacon-gate3-ticket-evidence";
     private static final byte[] MarkerBytes =
         "BEACON-G3-MARKER".getBytes(StandardCharsets.US_ASCII);
 
     private final SharedPreferences preferences;
+    private final File ticketEvidence;
     private final CountDownLatch markerReceived = new CountDownLatch(1);
     private final CountDownLatch feedbackSent = new CountDownLatch(1);
     private final AtomicLong receivedFrameCount = new AtomicLong();
@@ -42,11 +47,15 @@ final class Gate3SessionEvidence implements BeaconStreamCore.EncodedFrameSink {
     private Gate3SessionEvidence(Context context, String clientId) {
         preferences = context.getSharedPreferences(
             PreferencesName + "." + clientId, Context.MODE_PRIVATE);
+        ticketEvidence = new File(context.getFilesDir(), TicketEvidenceFile);
     }
 
     static Gate3SessionEvidence startFirstInvocation(Context context, String clientId) {
         Gate3SessionEvidence evidence = new Gate3SessionEvidence(context, clientId);
         evidence.clearPersistedReconnect();
+        if (evidence.ticketEvidence.exists() && !evidence.ticketEvidence.delete()) {
+            throw new IllegalStateException("Could not clear Gate 3 ticket evidence.");
+        }
         return evidence;
     }
 
@@ -105,7 +114,9 @@ final class Gate3SessionEvidence implements BeaconStreamCore.EncodedFrameSink {
         JsonObject connection = JsonParser.parseString(responseBody)
             .getAsJsonObject().getAsJsonObject("connection");
         sessionId = connection.get("sessionId").getAsString();
-        ticketFingerprint = fingerprint(connection.get("ticket").getAsString());
+        String ticket = connection.get("ticket").getAsString();
+        ticketFingerprint = fingerprint(ticket);
+        appendTicketEvidence(ticket);
     }
 
     void awaitMarkerAndFeedback() throws InterruptedException {
@@ -200,6 +211,18 @@ final class Gate3SessionEvidence implements BeaconStreamCore.EncodedFrameSink {
             throw new AssertionError("SHA-256 is unavailable.", error);
         } finally {
             Arrays.fill(ticketBytes, (byte) 0);
+        }
+    }
+
+    private void appendTicketEvidence(String ticket) {
+        byte[] bytes = ticket.getBytes(StandardCharsets.UTF_8);
+        try (FileOutputStream output = new FileOutputStream(ticketEvidence, true)) {
+            output.write(bytes);
+            output.write('\n');
+        } catch (IOException error) {
+            throw new AssertionError("Could not write private Gate 3 ticket evidence.", error);
+        } finally {
+            Arrays.fill(bytes, (byte) 0);
         }
     }
 

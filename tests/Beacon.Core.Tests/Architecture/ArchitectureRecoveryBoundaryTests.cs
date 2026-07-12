@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 
 namespace Beacon.Core.Tests.Architecture;
@@ -26,6 +27,7 @@ public sealed class ArchitectureRecoveryBoundaryTests
 
     private static readonly string[] ScannedRoots =
     [
+        ".github",
         "contracts",
         "native",
         "scripts",
@@ -33,31 +35,63 @@ public sealed class ArchitectureRecoveryBoundaryTests
         "tests"
     ];
 
+    private static readonly HashSet<string> ScannedRootFiles = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Beacon.slnx",
+        "CMakeLists.txt",
+        "Directory.Build.props",
+        "Directory.Build.targets",
+        "Directory.Packages.props",
+        "README.md",
+        "build.gradle",
+        "build.gradle.kts",
+        "global.json",
+        "gradle.properties",
+        "package-lock.json",
+        "package.json",
+        "settings.gradle",
+        "settings.gradle.kts"
+    };
+
     private static readonly HashSet<string> ScannedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".c",
+        ".bat",
         ".cmake",
+        ".cmd",
         ".cpp",
         ".cs",
         ".csproj",
+        ".css",
         ".gradle",
         ".h",
+        ".html",
         ".java",
         ".json",
         ".kt",
+        ".kts",
+        ".mjs",
+        ".md",
         ".ps1",
+        ".properties",
+        ".props",
         ".proto",
+        ".sh",
+        ".slnx",
+        ".targets",
         ".ts",
         ".tsx",
         ".txt",
         ".yml",
         ".yaml",
+        ".xaml",
         ".xml"
     };
 
     private static readonly Regex CompatibilityPattern = new(
-        @"Apollo|Sunshine|Moonlight|GameStream|\b(?:RTSP|RTP)\b|ExternalProcessStreaming|StreamingWrapper|" +
-        "WrapperChild|RuntimeDescriptor|LaunchUri|nativeSession",
+        @"Apollo|Sunshine|Moonlight|GameStream|Web[_-]?RTC|HTTP[-_ ]?media|MediaOverHttp|" +
+        @"\b(?:RTSP|RTP)\b|ExternalProcessStreaming|StreamingWrapper|WrapperChild|RuntimeDescriptor|" +
+        "LaunchUri|nativeSession",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     private static readonly NativeBoundaryRule[] NativeBoundaryRules =
@@ -120,7 +154,7 @@ public sealed class ArchitectureRecoveryBoundaryTests
     }
 
     [Fact]
-    public void RuntimeAndTestsContainNoCompatibilityPathsOrTokens()
+    public async Task RuntimeAndTestsContainNoCompatibilityPathsOrTokens()
     {
         string root = FindRepositoryRoot();
         foreach (string relativeRoot in ForbiddenDirectories)
@@ -129,55 +163,89 @@ public sealed class ArchitectureRecoveryBoundaryTests
         }
 
         var matches = new List<string>();
-        foreach (string relativeRoot in ScannedRoots)
+        foreach (string file in await EnumerateTrackedSourceFilesAsync(root))
         {
-            string path = ToPlatformPath(root, relativeRoot);
-            if (!Directory.Exists(path))
+            if (CompatibilityPattern.IsMatch(Path.GetFileName(file))
+                || CompatibilityPattern.IsMatch(await File.ReadAllTextAsync(file)))
             {
-                continue;
-            }
-
-            foreach (string file in EnumerateSourceFiles(path))
-            {
-                if (CompatibilityPattern.IsMatch(Path.GetFileName(file))
-                    || CompatibilityPattern.IsMatch(File.ReadAllText(file)))
-                {
-                    matches.Add(ToRepositoryRelativePath(root, file));
-                }
+                matches.Add(ToRepositoryRelativePath(root, file));
             }
         }
 
         Assert.Empty(matches.Order());
     }
 
+    [Theory]
+    [InlineData(".github/workflows/ci.yml")]
+    [InlineData("Beacon.slnx")]
+    [InlineData("Directory.Build.props")]
+    [InlineData("scripts/build-native.sh")]
+    [InlineData("src/Beacon.ClientLab/index.html")]
+    [InlineData("src/Beacon.ClientLab/styles.css")]
+    [InlineData("src/Beacon.Android/gradle.properties")]
+    [InlineData("src/Beacon.Cockpit/MainWindow.xaml")]
+    [InlineData("contracts/media_datagram_v1.md")]
+    [InlineData("README.md")]
+    public void CompatibilityGuardCoversTrackedSourceBuildScriptAndCiFiles(string relativePath)
+    {
+        string normalized = NormalizeRelativePath(relativePath);
+
+        Assert.True(IsTrackedScanCandidate(normalized), normalized);
+    }
+
+    [Theory]
+    [InlineData("WebRTC")]
+    [InlineData("web_rtc")]
+    [InlineData("HTTP-media")]
+    [InlineData("http media")]
+    [InlineData("HttpMedia")]
+    [InlineData("MediaOverHttp")]
+    public void CompatibilityGuardRejectsUnselectedMediaAliases(string alias)
+    {
+        Assert.Matches(CompatibilityPattern, alias);
+    }
+
     [Fact]
-    public void NativeStreamingApisRemainInsideSelectedWorkerAndStreamCoreBoundaries()
+    public void TrackedFileScanIgnoresWorkingTreeDeletions()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            $"beacon-architecture-deletion-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            Assert.Empty(ResolveExistingTrackedFiles(root, ["src/deleted.cs"]));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task NativeStreamingApisRemainInsideSelectedWorkerAndStreamCoreBoundaries()
     {
         string root = FindRepositoryRoot();
         var violations = new List<string>();
 
-        foreach (string relativeRoot in ScannedRoots)
+        foreach (string file in await EnumerateTrackedSourceFilesAsync(root))
         {
-            string path = ToPlatformPath(root, relativeRoot);
-            if (!Directory.Exists(path))
+            if (Path.GetExtension(file).Equals(".md", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            foreach (string file in EnumerateSourceFiles(path))
+            string relativePath = ToRepositoryRelativePath(root, file);
+            string contents = await File.ReadAllTextAsync(file);
+            foreach (NativeBoundaryRule rule in NativeBoundaryRules)
             {
-                string relativePath = ToRepositoryRelativePath(root, file);
-                string contents = File.ReadAllText(file);
-                foreach (NativeBoundaryRule rule in NativeBoundaryRules)
+                if (rule.Pattern.IsMatch(Path.GetFileName(file)) || rule.Pattern.IsMatch(contents))
                 {
-                    if (rule.Pattern.IsMatch(Path.GetFileName(file)) || rule.Pattern.IsMatch(contents))
+                    bool allowed = rule.AllowedPrefixes.Any(prefix =>
+                        relativePath.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase));
+                    if (!allowed)
                     {
-                        bool allowed = rule.AllowedPrefixes.Any(prefix =>
-                            relativePath.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase));
-                        if (!allowed)
-                        {
-                            violations.Add($"{rule.Name}: {relativePath}");
-                        }
+                        violations.Add($"{rule.Name}: {relativePath}");
                     }
                 }
             }
@@ -210,13 +278,66 @@ public sealed class ArchitectureRecoveryBoundaryTests
         Assert.Empty(violations);
     }
 
-    private static IEnumerable<string> EnumerateSourceFiles(string root) =>
-        Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-            .Where(path => ScannedExtensions.Contains(Path.GetExtension(path)))
-            .Where(path => !path.EndsWith(
-                "ArchitectureRecoveryBoundaryTests.cs",
+    private static async Task<IReadOnlyList<string>> EnumerateTrackedSourceFilesAsync(string root)
+    {
+        var startInfo = new ProcessStartInfo("git")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        startInfo.ArgumentList.Add("-C");
+        startInfo.ArgumentList.Add(root);
+        startInfo.ArgumentList.Add("ls-files");
+        startInfo.ArgumentList.Add("-z");
+        startInfo.ArgumentList.Add("--cached");
+        startInfo.ArgumentList.Add("--others");
+        startInfo.ArgumentList.Add("--exclude-standard");
+
+        using var process = new Process { StartInfo = startInfo };
+        if (!process.Start())
+        {
+            throw new InvalidOperationException("Could not start git tracked-file scan.");
+        }
+
+        Task<string> output = process.StandardOutput.ReadToEndAsync();
+        Task<string> error = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"git ls-files failed with exit code {process.ExitCode}: {await error}");
+        }
+
+        IEnumerable<string> trackedPaths = (await output)
+            .Split('\0', StringSplitOptions.RemoveEmptyEntries)
+            .Select(NormalizeRelativePath)
+            .Where(IsTrackedScanCandidate)
+            .Where(path => !path.Equals(
+                "tests/Beacon.Core.Tests/Architecture/ArchitectureRecoveryBoundaryTests.cs",
                 StringComparison.OrdinalIgnoreCase))
             .Where(path => !HasGeneratedSegment(path));
+        return ResolveExistingTrackedFiles(root, trackedPaths);
+    }
+
+    private static IReadOnlyList<string> ResolveExistingTrackedFiles(
+        string root,
+        IEnumerable<string> relativePaths) =>
+        relativePaths
+            .Select(path => ToPlatformPath(root, path))
+            .Where(File.Exists)
+            .ToArray();
+
+    private static bool IsTrackedScanCandidate(string relativePath)
+    {
+        string normalized = NormalizeRelativePath(relativePath);
+        string firstSegment = normalized.Split('/', 2)[0];
+        bool inScannedTree = ScannedRoots.Contains(firstSegment, StringComparer.OrdinalIgnoreCase);
+        bool scannedRootFile = !normalized.Contains('/') && ScannedRootFiles.Contains(normalized);
+        return (inScannedTree || scannedRootFile)
+            && ScannedExtensions.Contains(Path.GetExtension(normalized));
+    }
 
     private static bool HasGeneratedSegment(string path)
     {

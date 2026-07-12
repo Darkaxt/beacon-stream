@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$Serial = 'emulator-5554',
+    [string]$EvidenceDirectory,
+    [switch]$ArtifactsReady,
     [switch]$ValidateKestrelParser
 )
 
@@ -499,7 +501,9 @@ function Test-AndroidInstrumentationSucceeded([int]$ExitCode, [string]$Output) {
 function Start-AndroidInstrumentation(
     [string]$Method,
     [string]$ServerUrl,
-    [string]$ClientId) {
+    [string]$ClientId,
+    [string]$InputMarker,
+    [string]$Credential) {
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = 'adb'
     $startInfo.UseShellExecute = $false
@@ -512,6 +516,8 @@ function Start-AndroidInstrumentation(
         '-e', 'class', "dev.beacon.android.BeaconStreamCoreInstrumentationTest#$Method",
         '-e', 'serverUrl', $ServerUrl,
         '-e', 'clientId', $ClientId,
+        '-e', 'inputMarker', $InputMarker,
+        '-e', 'credential', $Credential,
         'dev.beacon.android.test/androidx.test.runner.AndroidJUnitRunner')) {
         $startInfo.ArgumentList.Add($argument)
     }
@@ -646,19 +652,26 @@ function Stop-ServerProcess(
     }
 }
 
-function Invoke-AndroidInstrumentation([string]$Method, [string]$ServerUrl, [string]$ClientId) {
+function Invoke-AndroidInstrumentation(
+    [string]$Method,
+    [string]$ServerUrl,
+    [string]$ClientId,
+    [string]$InputMarker,
+    [string]$Credential) {
     return Complete-AndroidInstrumentation (
-        Start-AndroidInstrumentation $Method $ServerUrl $ClientId)
+        Start-AndroidInstrumentation $Method $ServerUrl $ClientId $InputMarker $Credential)
 }
 
 function Invoke-ServerJson(
     [System.Net.Http.HttpClient]$HttpClient,
     [System.Net.Http.HttpMethod]$Method,
-    [string]$Path) {
+    [string]$Path,
+    [object]$Body = $null) {
     $request = [System.Net.Http.HttpRequestMessage]::new($Method, $Path)
     if ($Method -ne [System.Net.Http.HttpMethod]::Get) {
+        $json = if ($null -eq $Body) { '{}' } else { $Body | ConvertTo-Json -Depth 8 -Compress }
         $request.Content = [System.Net.Http.StringContent]::new(
-            '{}', [System.Text.Encoding]::UTF8, 'application/json')
+            $json, [System.Text.Encoding]::UTF8, 'application/json')
     }
     try {
         $response = $HttpClient.Send($request)
@@ -671,6 +684,139 @@ function Invoke-ServerJson(
     finally {
         $request.Dispose()
     }
+}
+
+function New-Gate3ClientCredential(
+    [string]$CredentialPath,
+    [string]$ClientId) {
+    $credentialBytes = [Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
+    $salt = [Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
+    $material = [byte[]]::new($salt.Length + $credentialBytes.Length)
+    $hash = $null
+    try {
+        [Array]::Copy($salt, 0, $material, 0, $salt.Length)
+        [Array]::Copy(
+            $credentialBytes, 0, $material, $salt.Length, $credentialBytes.Length)
+        $hash = [Security.Cryptography.SHA256]::HashData($material)
+        ConvertTo-Json -InputObject @(@{
+            clientId = $ClientId
+            salt = [Convert]::ToBase64String($salt)
+            hash = [Convert]::ToBase64String($hash)
+            revoked = $false
+        }) | Set-Content -LiteralPath $CredentialPath -Encoding utf8NoBOM
+        return [Convert]::ToBase64String($credentialBytes)
+    }
+    finally {
+        [Security.Cryptography.CryptographicOperations]::ZeroMemory($credentialBytes)
+        [Security.Cryptography.CryptographicOperations]::ZeroMemory($salt)
+        [Security.Cryptography.CryptographicOperations]::ZeroMemory($material)
+        if ($null -ne $hash) {
+            [Security.Cryptography.CryptographicOperations]::ZeroMemory($hash)
+        }
+    }
+}
+
+function Get-Gate3PrivateKeyEvidence([string]$IdentityPath) {
+    $pfx = [IO.File]::ReadAllBytes($IdentityPath)
+    $certificate = $null
+    $privateKey = $null
+    $pkcs8 = $null
+    try {
+        $certificate = [Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12FromFile(
+            $IdentityPath,
+            $null,
+            [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable -bor
+                [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+        $privateKey = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey(
+            $certificate)
+        Require-Condition ($null -ne $privateKey) 'Gate 3 identity has no RSA private key.'
+        $pkcs8 = $privateKey.ExportPkcs8PrivateKey()
+        return @(
+            [Convert]::ToBase64String($pfx),
+            [Convert]::ToBase64String($pkcs8))
+    }
+    finally {
+        if ($null -ne $pkcs8) {
+            [Security.Cryptography.CryptographicOperations]::ZeroMemory($pkcs8)
+        }
+        if ($null -ne $privateKey) {
+            $privateKey.Dispose()
+        }
+        if ($null -ne $certificate) {
+            $certificate.Dispose()
+        }
+        [Security.Cryptography.CryptographicOperations]::ZeroMemory($pfx)
+    }
+}
+
+function Get-Gate3StreamTicketEvidence([string]$AndroidSerial) {
+    try {
+        $rendered = (& adb -s $AndroidSerial exec-out run-as dev.beacon.android `
+            cat files/beacon-gate3-ticket-evidence 2>$null) -join [Environment]::NewLine
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not read private Gate 3 ticket evidence.'
+        }
+        $tickets = @(
+            $rendered -split '\r?\n' |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $uniqueTickets = @($tickets | Sort-Object -Unique)
+        Require-Condition (
+            $tickets.Count -eq 3 -and $uniqueTickets.Count -eq 3) `
+            'Gate 3 did not capture three unique real-session tickets.'
+        return $tickets
+    }
+    finally {
+        Remove-Gate3StreamTicketEvidence $AndroidSerial
+    }
+}
+
+function Remove-Gate3StreamTicketEvidence(
+    [string]$AndroidSerial,
+    [switch]$BestEffort) {
+    & adb -s $AndroidSerial shell run-as dev.beacon.android `
+        rm -f files/beacon-gate3-ticket-evidence 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0 -and -not $BestEffort) {
+        throw 'Could not delete private Gate 3 ticket evidence.'
+    }
+}
+
+function Add-Gate3JournalEvidence(
+    [Collections.Generic.List[object]]$Journal,
+    [Collections.Generic.List[object]]$WorkerDiagnostics,
+    $Snapshot) {
+    foreach ($entry in @($Snapshot.diagnostics)) {
+        $Journal.Add($entry)
+        if ([string]$entry.operation -like 'worker.*') {
+            $WorkerDiagnostics.Add($entry)
+        }
+    }
+}
+
+function Write-Gate3Evidence(
+    [string]$Directory,
+    [string]$ServerOutput,
+    [Collections.Generic.List[string]]$Instrumentation,
+    [Collections.Generic.List[object]]$Journal,
+    [Collections.Generic.List[object]]$WorkerDiagnostics,
+    [string]$Logcat,
+    [hashtable]$Canaries) {
+    if ([string]::IsNullOrWhiteSpace($Directory)) {
+        return
+    }
+
+    New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $Directory 'server-output.log') `
+        -Value $ServerOutput -Encoding utf8NoBOM
+    @($WorkerDiagnostics) | ConvertTo-Json -Depth 12 | Set-Content `
+        -LiteralPath (Join-Path $Directory 'worker-diagnostics.json') -Encoding utf8NoBOM
+    @($Journal) | ConvertTo-Json -Depth 12 | Set-Content `
+        -LiteralPath (Join-Path $Directory 'diagnostic-journal.json') -Encoding utf8NoBOM
+    Set-Content -LiteralPath (Join-Path $Directory 'instrumentation.log') `
+        -Value ($Instrumentation -join [Environment]::NewLine) -Encoding utf8NoBOM
+    Set-Content -LiteralPath (Join-Path $Directory 'logcat.log') `
+        -Value $Logcat -Encoding utf8NoBOM
+    $Canaries | ConvertTo-Json | Set-Content `
+        -LiteralPath (Join-Path $Directory 'canaries.json') -Encoding utf8NoBOM
 }
 
 if ($ValidateKestrelParser) {
@@ -699,6 +845,20 @@ $serverStarted = $false
 $serverJob = $null
 $serverCapture = $null
 $serverAddress = $null
+$instrumentationEvidence = [Collections.Generic.List[string]]::new()
+$journalEvidence = [Collections.Generic.List[object]]::new()
+$workerDiagnosticEvidence = [Collections.Generic.List[object]]::new()
+$logcatEvidence = ''
+$serverOutputEvidence = ''
+$runCanaryId = [Guid]::NewGuid().ToString('N')
+$clientId = "gate3-emulator-$runCanaryId"
+$credentialPath = Join-Path $ownedRoot 'credentials.json'
+$credentialCanary = $null
+$privateKeyPathMarker = "BEACON-G3-PRIVATE-KEY-PATH-$runCanaryId"
+$privateKeyCanary = @()
+$inputPayloadCanary = "BEACON-G3-INPUT-$runCanaryId"
+$streamTicketCanary = @()
+$evidenceReady = $false
 
 try {
     Write-Gate3Stage 'parser-fixture'
@@ -710,17 +870,20 @@ try {
     Assert-UnstartedServerCleanupFixture
 
     New-Item -ItemType Directory -Path $ownedRoot | Out-Null
+    $credentialCanary = New-Gate3ClientCredential $credentialPath $clientId
 
-    Write-Gate3Stage 'managed-build'
-    & dotnet build $serverProject --configuration Debug --warnaserror
-    if ($LASTEXITCODE -ne 0) { throw 'Beacon.Server build failed.' }
-    Write-Gate3Stage 'native-build'
-    & (Join-Path $repositoryRoot 'scripts\build-native-windows.ps1')
-    if ($LASTEXITCODE -ne 0) { throw 'Beacon.StreamWorker build failed.' }
-    Write-Gate3Stage 'android-build'
-    & (Join-Path $repositoryRoot 'scripts\test-android.ps1') `
-        -Tasks @('assembleDebug', 'assembleDebugAndroidTest')
-    if ($LASTEXITCODE -ne 0) { throw 'Beacon Android APK build failed.' }
+    if (-not $ArtifactsReady) {
+        Write-Gate3Stage 'managed-build'
+        & dotnet build $serverProject --configuration Debug --warnaserror
+        if ($LASTEXITCODE -ne 0) { throw 'Beacon.Server build failed.' }
+        Write-Gate3Stage 'native-build'
+        & (Join-Path $repositoryRoot 'scripts\build-native-windows.ps1')
+        if ($LASTEXITCODE -ne 0) { throw 'Beacon.StreamWorker build failed.' }
+        Write-Gate3Stage 'android-build'
+        & (Join-Path $repositoryRoot 'scripts\test-android.ps1') `
+            -Tasks @('assembleDebug', 'assembleDebugAndroidTest')
+        if ($LASTEXITCODE -ne 0) { throw 'Beacon Android APK build failed.' }
+    }
 
     foreach ($path in @($workerPath, $serverDll, $appApk, $testApk)) {
         Require-Condition (Test-Path -LiteralPath $path -PathType Leaf) 'Expected Gate 3 artifact is unavailable.'
@@ -752,8 +915,9 @@ try {
     $startInfo.Environment['Beacon__StreamingMode'] = 'worker'
     $startInfo.Environment['Beacon__Streaming__WorkerPath'] = $workerPath
     $startInfo.Environment['Beacon__Security__TestHost'] = 'true'
-    $startInfo.Environment['Beacon__Security__IdentityPath'] = Join-Path $ownedRoot 'identity.pfx'
-    $startInfo.Environment['Beacon__Security__CredentialsPath'] = Join-Path $ownedRoot 'credentials.json'
+    $startInfo.Environment['Beacon__Security__IdentityPath'] =
+        Join-Path $ownedRoot "$privateKeyPathMarker.pfx"
+    $startInfo.Environment['Beacon__Security__CredentialsPath'] = $credentialPath
     $startInfo.Environment['Beacon__Profiles__Path'] = Join-Path $ownedRoot 'profiles.json'
     $startInfo.Environment['Logging__Console__FormatterName'] = 'json'
     $startInfo.Environment['Logging__LogLevel__Default'] = 'Information'
@@ -773,19 +937,26 @@ try {
     Require-Condition ($listeningUri.Port -gt 0) 'Kestrel did not select an endpoint port.'
     $emulatorServerUrl = "http://10.0.2.2:$($listeningUri.Port)"
     $hostServerUrl = Get-HostServerUrl $listeningUri
-    $clientId = "gate3-emulator-$([Guid]::NewGuid().ToString('N'))"
+    $privateKeyCanary = @(
+        $privateKeyPathMarker
+        Get-Gate3PrivateKeyEvidence $startInfo.Environment['Beacon__Security__IdentityPath'])
 
     $httpClient = [System.Net.Http.HttpClient]::new()
     $httpClient.BaseAddress = [Uri]$hostServerUrl
     $httpClient.Timeout = [Threading.Timeout]::InfiniteTimeSpan
     try {
         Write-Gate3Stage 'first-instrumentation'
-        [void](Invoke-AndroidInstrumentation 'gate3ConnectSendAndDisconnect' $emulatorServerUrl $clientId)
+        $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
+            'gate3ConnectSendAndDisconnect' $emulatorServerUrl $clientId `
+            $inputPayloadCanary $credentialCanary))
         Write-Gate3Stage 'reconnect-instrumentation'
-        [void](Invoke-AndroidInstrumentation 'gate3ReconnectAndStop' $emulatorServerUrl $clientId)
+        $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
+            'gate3ReconnectAndStop' $emulatorServerUrl $clientId `
+            $inputPayloadCanary $credentialCanary))
 
         Write-Gate3Stage 'session-evidence'
         $firstSnapshot = Invoke-ServerJson $httpClient ([System.Net.Http.HttpMethod]::Get) '/admin/snapshot'
+        Add-Gate3JournalEvidence $journalEvidence $workerDiagnosticEvidence $firstSnapshot
         $operations = @($firstSnapshot.diagnostics | ForEach-Object { $_.operation })
         foreach ($operation in @(
             'worker.connection_observed',
@@ -825,7 +996,8 @@ try {
         try {
             $crashLogcat = Start-AndroidGate3Logcat
             $crashInvocation = Start-AndroidInstrumentation `
-                'gate3ConnectAndAwaitWorkerCrash' $emulatorServerUrl $clientId
+                'gate3ConnectAndAwaitWorkerCrash' $emulatorServerUrl $clientId `
+                $inputPayloadCanary $credentialCanary
             $armed = Wait-AndroidGate3Marker `
                 $crashLogcat $crashInvocation 'BEACON_GATE3_WORKER_CRASH_ARMED'
             if (-not $armed) {
@@ -866,7 +1038,7 @@ try {
                 'The retained Worker process identity changed before termination.'
             Write-Gate3Stage 'worker-crash'
             Stop-ExactProcessAndWait $workerProcess
-            [void](Complete-AndroidInstrumentation $crashInvocation)
+            $instrumentationEvidence.Add((Complete-AndroidInstrumentation $crashInvocation))
             $crashInvocation = $null
         }
         finally {
@@ -889,6 +1061,7 @@ try {
 
         [void](Invoke-ServerJson $httpClient ([System.Net.Http.HttpMethod]::Get) '/health')
         $afterCrash = Invoke-ServerJson $httpClient ([System.Net.Http.HttpMethod]::Get) '/admin/snapshot'
+        Add-Gate3JournalEvidence $journalEvidence $workerDiagnosticEvidence $afterCrash
         $invalidated = @($afterCrash.streams | Where-Object { $_.clientId -eq $clientId })
         Require-Condition ($invalidated.Count -eq 0) 'Worker crash did not invalidate the active streaming runtime.'
         Write-Output 'BEACON_GATE3_WORKER_CRASH_ISOLATED'
@@ -897,6 +1070,14 @@ try {
         $restore = Invoke-ServerJson $httpClient ([System.Net.Http.HttpMethod]::Post) "/clients/$clientId/emergency-restore"
         Require-Condition ([bool]$restore.recovered) 'Emergency restore did not succeed after Worker isolation.'
         Write-Output 'BEACON_GATE3_EMERGENCY_RESTORE_OK'
+
+        Write-Gate3Stage 'real-secret-evidence'
+        $streamTicketCanary = @(Get-Gate3StreamTicketEvidence $Serial)
+        $finalSnapshot = Invoke-ServerJson `
+            $httpClient ([System.Net.Http.HttpMethod]::Get) '/admin/snapshot'
+        Add-Gate3JournalEvidence $journalEvidence $workerDiagnosticEvidence $finalSnapshot
+        $logcatEvidence = (& adb -s $Serial logcat -d -v raw) -join [Environment]::NewLine
+        $evidenceReady = $true
     }
     finally {
         if ($null -ne $httpClient) {
@@ -905,18 +1086,53 @@ try {
     }
 }
 finally {
-    if ($null -ne $serverJob) {
-        $serverJob.Dispose()
+    try {
+        if ($null -ne $serverJob) {
+            $serverJob.Dispose()
+        }
+        if ($null -ne $server) {
+            $completedCapture = $serverCapture
+            Stop-ServerProcess $server $serverStarted $serverCapture
+            if ($null -ne $completedCapture) {
+                $serverOutputEvidence = @(
+                    $completedCapture.StandardOutput,
+                    $completedCapture.StandardError
+                ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                    Join-String -Separator ([Environment]::NewLine)
+            }
+            $server = $null
+            $serverCapture = $null
+        }
+        if ($evidenceReady -and -not [string]::IsNullOrWhiteSpace($EvidenceDirectory)) {
+            Require-Condition ($streamTicketCanary.Count -eq 3) `
+                'Gate 3 real-session ticket evidence is unavailable.'
+            Require-Condition (-not [string]::IsNullOrWhiteSpace($credentialCanary)) `
+                'Gate 3 client credential evidence is unavailable.'
+            Require-Condition ($privateKeyCanary.Count -ge 3) `
+                'Gate 3 private-key evidence is unavailable.'
+            Write-Gate3Evidence `
+                $EvidenceDirectory `
+                $serverOutputEvidence `
+                $instrumentationEvidence `
+                $journalEvidence `
+                $workerDiagnosticEvidence `
+                $logcatEvidence `
+                @{
+                    stream_ticket = $streamTicketCanary
+                    client_credential = $credentialCanary
+                    private_key = $privateKeyCanary
+                    worker_executable_path = $workerPath
+                    input_payload = $inputPayloadCanary
+                }
+        }
     }
-    if ($null -ne $server) {
-        Stop-ServerProcess $server $serverStarted $serverCapture
-        $server = $null
-        $serverCapture = $null
-    }
-    $temporaryRoot = [IO.Path]::GetFullPath($ownedRoot)
-    $temporaryBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
-    if ($temporaryRoot.StartsWith($temporaryBase, [StringComparison]::OrdinalIgnoreCase) -and
-        (Test-Path -LiteralPath $temporaryRoot)) {
-        Remove-Item -LiteralPath $temporaryRoot -Recurse -Force
+    finally {
+        Remove-Gate3StreamTicketEvidence $Serial -BestEffort
+        $temporaryRoot = [IO.Path]::GetFullPath($ownedRoot)
+        $temporaryBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+        if ($temporaryRoot.StartsWith($temporaryBase, [StringComparison]::OrdinalIgnoreCase) -and
+            (Test-Path -LiteralPath $temporaryRoot)) {
+            Remove-Item -LiteralPath $temporaryRoot -Recurse -Force
+        }
     }
 }
