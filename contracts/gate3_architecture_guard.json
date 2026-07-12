@@ -1,0 +1,85 @@
+{
+  "scannedRoots": [
+    ".github",
+    "contracts",
+    "native",
+    "scripts",
+    "src",
+    "tests"
+  ],
+  "scannedRootFiles": [
+    "Beacon.slnx",
+    "CMakeLists.txt",
+    "Directory.Build.props",
+    "Directory.Build.targets",
+    "Directory.Packages.props",
+    "README.md",
+    "build.gradle",
+    "build.gradle.kts",
+    "global.json",
+    "gradle.properties",
+    "package-lock.json",
+    "package.json",
+    "settings.gradle",
+    "settings.gradle.kts"
+  ],
+  "scannedExtensions": [
+    ".c",
+    ".bat",
+    ".cmake",
+    ".cmd",
+    ".cpp",
+    ".cs",
+    ".csproj",
+    ".css",
+    ".gradle",
+    ".h",
+    ".html",
+    ".java",
+    ".json",
+    ".kt",
+    ".kts",
+    ".md",
+    ".mjs",
+    ".ps1",
+    ".properties",
+    ".props",
+    ".proto",
+    ".sh",
+    ".slnx",
+    ".targets",
+    ".ts",
+    ".tsx",
+    ".txt",
+    ".xaml",
+    ".yml",
+    ".yaml",
+    ".xml"
+  ],
+  "forbiddenDirectoryFragments": [
+    ["src/Beacon.StreamingProbe"],
+    ["tests/Beacon.StreamingProbe.Tests"],
+    ["src/Beacon.Android/streaming-", "moon", "light"]
+  ],
+  "literalTokenFragments": [
+    ["Apol", "lo"],
+    ["Sun", "shine"],
+    ["Moon", "light"],
+    ["Game", "Stream"],
+    ["ExternalProcess", "Streaming"],
+    ["Streaming", "Wrapper"],
+    ["Wrapper", "Child"],
+    ["Runtime", "Descriptor"],
+    ["Launch", "Uri"],
+    ["native", "Session"]
+  ],
+  "regexTokenFragments": [
+    ["Web[_-]?", "R", "TC"],
+    ["H", "TTP", "[-_ ]?media"],
+    ["MediaOver", "H", "ttp"],
+    ["\\b(?:", "RT", "SP", "|", "R", "TP", ")\\b"]
+  ],
+  "excludedPaths": [
+    "tests/Beacon.Core.Tests/Architecture/ArchitectureRecoveryBoundaryTests.cs"
+  ]
+}

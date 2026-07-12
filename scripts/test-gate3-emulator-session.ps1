@@ -8,6 +8,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'gate3-validation-common.ps1')
 
 # The job owns only the Server process and inherited Worker children.
 if ($null -eq ('Beacon.Gate3.OwnedProcessJob' -as [type])) {
@@ -374,15 +375,29 @@ FAILURES!!!
 Tests run: 1,  Failures: 1
 INSTRUMENTATION_CODE: -1
 '@
+    $zeroTests = @'
+INSTRUMENTATION_STATUS: numtests=0
+OK (0 tests)
+INSTRUMENTATION_CODE: -1
+'@
     Require-Condition (
-        (Test-AndroidInstrumentationSucceeded 0 $success)) `
+        (Test-Gate3AndroidInstrumentationSucceeded 0 $success)) `
         'Android instrumentation success fixture was rejected.'
     Require-Condition (
-        -not (Test-AndroidInstrumentationSucceeded 0 $failure)) `
+        -not (Test-Gate3AndroidInstrumentationSucceeded 0 $failure)) `
         'Android instrumentation failure fixture was accepted.'
     Require-Condition (
-        -not (Test-AndroidInstrumentationSucceeded 1 $success)) `
+        -not (Test-Gate3AndroidInstrumentationSucceeded 1 $success)) `
         'Android instrumentation process failure was accepted.'
+    Require-Condition (
+        -not (Test-Gate3AndroidInstrumentationSucceeded 0 $zeroTests)) `
+        'Android instrumentation zero-test result was accepted.'
+
+    $startInfo = New-AndroidInstrumentationStartInfo `
+        'gate3ConnectSendAndDisconnect' 'http://10.0.2.2:43125' 'fixture-client' 'fixture-input'
+    $arguments = $startInfo.ArgumentList -join ' '
+    Require-Condition (-not $arguments.Contains('credential', [StringComparison]::OrdinalIgnoreCase)) `
+        'Android instrumentation command line contains a credential argument.'
 }
 
 function Assert-OwnedProcessJobFixture() {
@@ -492,18 +507,11 @@ function Assert-UnstartedServerCleanupFixture() {
     Stop-ServerProcess $process $false $null
 }
 
-function Test-AndroidInstrumentationSucceeded([int]$ExitCode, [string]$Output) {
-    return $ExitCode -eq 0 -and
-        $Output -match 'INSTRUMENTATION_CODE:\s+-1' -and
-        $Output -notmatch 'FAILURES!!!|INSTRUMENTATION_FAILED|INSTRUMENTATION_ABORTED|Process crashed'
-}
-
-function Start-AndroidInstrumentation(
+function New-AndroidInstrumentationStartInfo(
     [string]$Method,
     [string]$ServerUrl,
     [string]$ClientId,
-    [string]$InputMarker,
-    [string]$Credential) {
+    [string]$InputMarker) {
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = 'adb'
     $startInfo.UseShellExecute = $false
@@ -517,12 +525,20 @@ function Start-AndroidInstrumentation(
         '-e', 'serverUrl', $ServerUrl,
         '-e', 'clientId', $ClientId,
         '-e', 'inputMarker', $InputMarker,
-        '-e', 'credential', $Credential,
         'dev.beacon.android.test/androidx.test.runner.AndroidJUnitRunner')) {
         $startInfo.ArgumentList.Add($argument)
     }
+    return $startInfo
+}
+
+function Start-AndroidInstrumentation(
+    [string]$Method,
+    [string]$ServerUrl,
+    [string]$ClientId,
+    [string]$InputMarker) {
     $process = [Diagnostics.Process]::new()
-    $process.StartInfo = $startInfo
+    $process.StartInfo = New-AndroidInstrumentationStartInfo `
+        $Method $ServerUrl $ClientId $InputMarker
     Require-Condition $process.Start() "Could not start instrumentation method '$Method'."
     return [PSCustomObject]@{
         Method = $Method
@@ -541,7 +557,7 @@ function Complete-AndroidInstrumentation($Invocation) {
         $rendered = @($standardOutput, $standardError) |
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             Join-String -Separator ([Environment]::NewLine)
-        if (-not (Test-AndroidInstrumentationSucceeded $Invocation.Process.ExitCode $rendered)) {
+        if (-not (Test-Gate3AndroidInstrumentationSucceeded $Invocation.Process.ExitCode $rendered)) {
             throw "Instrumentation method '$($Invocation.Method)' failed.`n$rendered"
         }
         return $rendered
@@ -656,10 +672,9 @@ function Invoke-AndroidInstrumentation(
     [string]$Method,
     [string]$ServerUrl,
     [string]$ClientId,
-    [string]$InputMarker,
-    [string]$Credential) {
+    [string]$InputMarker) {
     return Complete-AndroidInstrumentation (
-        Start-AndroidInstrumentation $Method $ServerUrl $ClientId $InputMarker $Credential)
+        Start-AndroidInstrumentation $Method $ServerUrl $ClientId $InputMarker)
 }
 
 function Invoke-ServerJson(
@@ -713,6 +728,59 @@ function New-Gate3ClientCredential(
         if ($null -ne $hash) {
             [Security.Cryptography.CryptographicOperations]::ZeroMemory($hash)
         }
+    }
+}
+
+function Set-Gate3ClientCredential(
+    [string]$AndroidSerial,
+    [string]$Credential) {
+    & adb -s $AndroidSerial shell run-as dev.beacon.android mkdir -p files | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not prepare private Gate 3 credential storage.'
+    }
+
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'adb'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in @(
+        '-s', $AndroidSerial,
+        'shell', 'run-as', 'dev.beacon.android',
+        'sh', '-c',
+        'cat > /data/user/0/dev.beacon.android/files/beacon-gate3-client-credential')) {
+        $startInfo.ArgumentList.Add($argument)
+    }
+
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        Require-Condition $process.Start() 'Could not start private credential transfer.'
+        $standardOutput = $process.StandardOutput.ReadToEndAsync()
+        $standardError = $process.StandardError.ReadToEndAsync()
+        $process.StandardInput.Write($Credential)
+        $process.StandardInput.Close()
+        $process.WaitForExit()
+        [void]$standardOutput.GetAwaiter().GetResult()
+        [void]$standardError.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) {
+            throw 'Could not transfer the private Gate 3 credential.'
+        }
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
+function Remove-Gate3ClientCredentialEvidence(
+    [string]$AndroidSerial,
+    [switch]$BestEffort) {
+    & adb -s $AndroidSerial shell run-as dev.beacon.android `
+        rm -f files/beacon-gate3-client-credential 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0 -and -not $BestEffort) {
+        throw 'Could not delete private Gate 3 credential evidence.'
     }
 }
 
@@ -898,6 +966,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Could not install the Beacon instrumentation APK.' }
     & adb -s $Serial shell pm clear dev.beacon.android | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not clear the owned Beacon app state.' }
+    Set-Gate3ClientCredential $Serial $credentialCanary
     & adb -s $Serial logcat -c
     if ($LASTEXITCODE -ne 0) { throw 'Could not clear the emulator log buffer.' }
 
@@ -948,11 +1017,11 @@ try {
         Write-Gate3Stage 'first-instrumentation'
         $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
             'gate3ConnectSendAndDisconnect' $emulatorServerUrl $clientId `
-            $inputPayloadCanary $credentialCanary))
+            $inputPayloadCanary))
         Write-Gate3Stage 'reconnect-instrumentation'
         $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
             'gate3ReconnectAndStop' $emulatorServerUrl $clientId `
-            $inputPayloadCanary $credentialCanary))
+            $inputPayloadCanary))
 
         Write-Gate3Stage 'session-evidence'
         $firstSnapshot = Invoke-ServerJson $httpClient ([System.Net.Http.HttpMethod]::Get) '/admin/snapshot'
@@ -997,7 +1066,7 @@ try {
             $crashLogcat = Start-AndroidGate3Logcat
             $crashInvocation = Start-AndroidInstrumentation `
                 'gate3ConnectAndAwaitWorkerCrash' $emulatorServerUrl $clientId `
-                $inputPayloadCanary $credentialCanary
+                $inputPayloadCanary
             $armed = Wait-AndroidGate3Marker `
                 $crashLogcat $crashInvocation 'BEACON_GATE3_WORKER_CRASH_ARMED'
             if (-not $armed) {
@@ -1127,6 +1196,7 @@ finally {
         }
     }
     finally {
+        Remove-Gate3ClientCredentialEvidence $Serial -BestEffort
         Remove-Gate3StreamTicketEvidence $Serial -BestEffort
         $temporaryRoot = [IO.Path]::GetFullPath($ownedRoot)
         $temporaryBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())

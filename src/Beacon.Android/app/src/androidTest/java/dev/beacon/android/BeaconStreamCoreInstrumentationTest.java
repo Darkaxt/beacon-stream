@@ -17,6 +17,11 @@ import androidx.test.runner.lifecycle.Stage;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -32,6 +37,8 @@ import static org.junit.Assume.assumeTrue;
 
 @RunWith(AndroidJUnit4.class)
 public final class BeaconStreamCoreInstrumentationTest {
+    private static final String CredentialEvidenceFile = "beacon-gate3-client-credential";
+
     @Test
     public void testFrameCallbackUsesDedicatedThreadAndStopsAfterClose() throws InterruptedException {
         RecordingBindings bindings = new RecordingBindings();
@@ -206,7 +213,7 @@ public final class BeaconStreamCoreInstrumentationTest {
         String serverUrl = requireArgument(arguments, "serverUrl");
         String clientId = requireArgument(arguments, "clientId");
         String inputMarker = requireArgument(arguments, "inputMarker");
-        installCredential(instrumentation, arguments, clientId);
+        installCredential(instrumentation, clientId);
         Gate3SessionEvidence evidence = Gate3SessionEvidence.startFirstInvocation(
             instrumentation.getTargetContext(), clientId);
         BeaconStreamCore core = new BeaconStreamCore(
@@ -253,7 +260,7 @@ public final class BeaconStreamCoreInstrumentationTest {
         Bundle arguments = requireGate3Arguments();
         String serverUrl = requireArgument(arguments, "serverUrl");
         String clientId = requireArgument(arguments, "clientId");
-        installCredential(instrumentation, arguments, clientId);
+        installCredential(instrumentation, clientId);
         Gate3SessionEvidence.PreviousInvocation previous = Gate3SessionEvidence.loadPrevious(
             instrumentation.getTargetContext(), clientId);
         Gate3SessionEvidence evidence = Gate3SessionEvidence.startReconnect(
@@ -291,7 +298,7 @@ public final class BeaconStreamCoreInstrumentationTest {
         Bundle arguments = requireGate3Arguments();
         String serverUrl = requireArgument(arguments, "serverUrl");
         String clientId = requireArgument(arguments, "clientId");
-        installCredential(instrumentation, arguments, clientId);
+        installCredential(instrumentation, clientId);
         Gate3SessionEvidence evidence = Gate3SessionEvidence.startReconnect(
             instrumentation.getTargetContext(), clientId);
         BeaconStreamCore core = new BeaconStreamCore(
@@ -340,11 +347,39 @@ public final class BeaconStreamCoreInstrumentationTest {
 
     private static void installCredential(
         Instrumentation instrumentation,
-        Bundle arguments,
         String clientId) {
-        String credential = requireArgument(arguments, "credential");
-        new AndroidKeyStoreCredentialStore(
-            instrumentation.getTargetContext(), clientId).saveCredential(credential);
+        AndroidKeyStoreCredentialStore store = new AndroidKeyStoreCredentialStore(
+            instrumentation.getTargetContext(), clientId);
+        File evidence = new File(
+            instrumentation.getTargetContext().getFilesDir(), CredentialEvidenceFile);
+        if (!evidence.exists()) {
+            assertTrue("Gate 3 credential is unavailable.", store.loadCredential() != null);
+            return;
+        }
+
+        long length = evidence.length();
+        if (length <= 0 || length > 1024) {
+            throw new IllegalStateException("Gate 3 credential evidence has an invalid size.");
+        }
+        byte[] bytes = new byte[(int) length];
+        try (FileInputStream input = new FileInputStream(evidence)) {
+            int offset = 0;
+            while (offset < bytes.length) {
+                int read = input.read(bytes, offset, bytes.length - offset);
+                if (read < 0) {
+                    throw new IOException("Unexpected end of credential evidence.");
+                }
+                offset += read;
+            }
+            store.saveCredential(new String(bytes, StandardCharsets.UTF_8));
+        } catch (IOException error) {
+            throw new AssertionError("Could not read private Gate 3 credential evidence.", error);
+        } finally {
+            Arrays.fill(bytes, (byte) 0);
+            if (evidence.exists() && !evidence.delete()) {
+                throw new IllegalStateException("Could not delete Gate 3 credential evidence.");
+            }
+        }
     }
 
     private static void registerAndLaunch(BeaconViewModel model) throws Exception {
