@@ -83,6 +83,9 @@ stream_v1::SessionStreamEnvelope start_benchmark(std::uint64_t sequence) {
   auto *benchmark = message.mutable_start_benchmark();
   benchmark->set_run_id("11111111-1111-1111-1111-111111111111");
   benchmark->set_schema_version(3);
+  benchmark->set_run_token(
+      "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f",
+      16);
   auto *reliable = benchmark->mutable_reliable_round();
   reliable->set_packet_count(4);
   reliable->set_payload_bytes(1024);
@@ -335,6 +338,9 @@ void benchmark_start_and_cancel_are_typed_for_the_authenticated_generation() {
   BEACON_TEST_REQUIRE(
       started.accepted_start_benchmark->start_benchmark.datagram_round()
           .packet_count() == 8);
+  BEACON_TEST_REQUIRE(
+      started.accepted_start_benchmark->start_benchmark.run_token().size() ==
+      16);
 
   auto canceled = protocol.receive(QuicPeerStreamRole::session,
                                    frame(cancel_benchmark(3)), 1'002);

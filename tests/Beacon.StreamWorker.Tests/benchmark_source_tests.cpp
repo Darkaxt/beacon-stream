@@ -59,11 +59,44 @@ void cancellation_ends_generation_without_fabricating_completion() {
   BEACON_TEST_REQUIRE(!source.next_datagram(1).has_value());
 }
 
+void every_datagram_must_reach_a_final_state_before_completion() {
+  beacon::worker::BenchmarkSource source;
+  BEACON_TEST_REQUIRE(source.start({.run_token = {},
+                                    .reliable_packet_count = 1,
+                                    .reliable_payload_bytes = 16,
+                                    .datagram_packet_count = 3,
+                                    .datagram_payload_bytes = 16}));
+  BEACON_TEST_REQUIRE(source.next_reliable(1).has_value());
+  BEACON_TEST_REQUIRE(source.next_datagram(10).has_value());
+  BEACON_TEST_REQUIRE(source.next_datagram(20).has_value());
+  BEACON_TEST_REQUIRE(source.next_datagram(30).has_value());
+  BEACON_TEST_REQUIRE(!source.ready_to_complete());
+
+  BEACON_TEST_REQUIRE(source.record_datagram_final(
+      2, beacon::worker::BenchmarkDatagramFinalState::acknowledged, 3'000));
+  BEACON_TEST_REQUIRE(source.record_datagram_final(
+      0, beacon::worker::BenchmarkDatagramFinalState::lost, 0));
+  BEACON_TEST_REQUIRE(!source.ready_to_complete());
+  BEACON_TEST_REQUIRE(source.record_datagram_final(
+      1, beacon::worker::BenchmarkDatagramFinalState::acknowledged, 2'000));
+  BEACON_TEST_REQUIRE(source.ready_to_complete());
+  BEACON_TEST_REQUIRE(!source.record_datagram_final(
+      1, beacon::worker::BenchmarkDatagramFinalState::acknowledged, 2'000));
+
+  const auto rtt = source.rtt_observations();
+  BEACON_TEST_REQUIRE(rtt.size() == 2);
+  BEACON_TEST_REQUIRE(rtt[0].sequence == 1);
+  BEACON_TEST_REQUIRE(rtt[0].rtt_us == 2'000);
+  BEACON_TEST_REQUIRE(rtt[1].sequence == 2);
+  BEACON_TEST_REQUIRE(rtt[1].rtt_us == 3'000);
+}
+
 }  // namespace
 
 int main() {
   return beacon::stream::testing::run_tests([] {
     source_emits_exact_counts_sequences_and_bytes();
     cancellation_ends_generation_without_fabricating_completion();
+    every_datagram_must_reach_a_final_state_before_completion();
   });
 }

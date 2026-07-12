@@ -153,6 +153,7 @@ message StartBenchmark {
   uint32 schema_version = 2;
   BenchmarkRoundPlan reliable_round = 3;
   BenchmarkRoundPlan datagram_round = 4;
+  bytes run_token = 5;
 }
 
 message CancelBenchmark {

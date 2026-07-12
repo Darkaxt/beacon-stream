@@ -33,6 +33,7 @@ bool BenchmarkSource::start(BenchmarkSourcePlan plan) {
   plan_ = plan;
   next_reliable_sequence_ = 0;
   next_datagram_sequence_ = 0;
+  datagram_final_results_.assign(plan.datagram_packet_count, std::nullopt);
   active_ = true;
   canceled_ = false;
   return true;
@@ -81,6 +82,21 @@ BenchmarkSource::next_datagram(std::uint64_t sent_at_us) {
                                  .bytes = std::move(bytes)};
 }
 
+bool BenchmarkSource::record_datagram_final(
+    std::uint64_t sequence, BenchmarkDatagramFinalState state,
+    std::uint64_t rtt_us) {
+  if (!active_ || canceled_ || sequence >= next_datagram_sequence_ ||
+      datagram_final_results_[sequence].has_value() ||
+      (state == BenchmarkDatagramFinalState::acknowledged && rtt_us == 0) ||
+      (state != BenchmarkDatagramFinalState::acknowledged && rtt_us != 0)) {
+    return false;
+  }
+  datagram_final_results_[sequence] = DatagramFinalResult{
+      .state = state,
+      .rtt_us = rtt_us};
+  return true;
+}
+
 void BenchmarkSource::cancel() noexcept {
   if (active_) {
     canceled_ = true;
@@ -94,6 +110,26 @@ bool BenchmarkSource::complete() const noexcept {
          next_datagram_sequence_ == plan_.datagram_packet_count;
 }
 
+bool BenchmarkSource::ready_to_complete() const noexcept {
+  return complete() &&
+         std::ranges::all_of(datagram_final_results_, [](const auto &result) {
+           return result.has_value();
+         });
+}
+
 bool BenchmarkSource::canceled() const noexcept { return canceled_; }
+
+std::vector<BenchmarkRttResult> BenchmarkSource::rtt_observations() const {
+  std::vector<BenchmarkRttResult> result;
+  for (std::uint64_t sequence = 0;
+       sequence < datagram_final_results_.size(); ++sequence) {
+    const auto &final = datagram_final_results_[sequence];
+    if (final.has_value() &&
+        final->state == BenchmarkDatagramFinalState::acknowledged) {
+      result.push_back({.sequence = sequence, .rtt_us = final->rtt_us});
+    }
+  }
+  return result;
+}
 
 }  // namespace beacon::worker

@@ -311,6 +311,7 @@ void accepted_auth_starts_benchmark_without_starting_video() {
   BEACON_TEST_REQUIRE(start.start_benchmark().run_id() ==
                       "11111111-1111-1111-1111-111111111111");
   BEACON_TEST_REQUIRE(start.start_benchmark().schema_version() == 3);
+  BEACON_TEST_REQUIRE(start.start_benchmark().run_token().size() == 16);
   BEACON_TEST_REQUIRE(
       start.start_benchmark().reliable_round().packet_count() == 4);
   BEACON_TEST_REQUIRE(

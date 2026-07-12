@@ -1,6 +1,7 @@
 #include "beacon/worker/quic_listener.h"
 
 #include "beacon/stream/msquic_transport.h"
+#include "beacon/worker/benchmark_source.h"
 #include "beacon/worker/quic_session_protocol.h"
 #include "beacon/worker/secure_bytes.h"
 #include "beacon/worker/synthetic_media_source.h"
@@ -29,6 +30,29 @@ namespace {
 constexpr std::string_view kBeaconAlpn{"beacon-stream/1"};
 constexpr std::size_t kMaximumIdentityBytes{1024U * 1024U};
 constexpr std::uint64_t kSyntheticPresentationTimeUs{1'000'000};
+
+void write_u32(std::span<std::byte, 4> bytes, std::uint32_t value) noexcept {
+  for (std::size_t index = 0; index < bytes.size(); ++index) {
+    bytes[index] =
+        static_cast<std::byte>((value >> ((3U - index) * 8U)) & 0xffU);
+  }
+}
+
+template <typename Message>
+std::vector<std::byte> frame_session_message(const Message &message) {
+  const auto size = message.ByteSizeLong();
+  if (size == 0 || size > maximum_stream_message_bytes ||
+      size > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+    return {};
+  }
+  std::vector<std::byte> result(4U + size);
+  write_u32(std::span<std::byte, 4>{result.data(), 4},
+            static_cast<std::uint32_t>(size));
+  if (!message.SerializeToArray(result.data() + 4, static_cast<int>(size))) {
+    return {};
+  }
+  return result;
+}
 
 bool hashes_equal(const TicketHash &left,
                   std::span<const std::byte> right) noexcept {
@@ -335,7 +359,8 @@ public:
 
   stream::TransportSendResult
   send_for_generation(stream::TransportPacket packet,
-                      std::uint64_t session_generation) {
+                      std::uint64_t session_generation,
+                      bool benchmark = false) {
     if (packet.channel != stream::StreamChannel::media ||
         packet.payload.empty()) {
       return stream::TransportSendResult::connection_closed;
@@ -365,12 +390,13 @@ public:
     auto *context = new DatagramSendContext(std::move(packet.payload), sequence,
                                             session_generation,
                                             connection_generation,
-                                            live_datagram_send_contexts_);
+                                            live_datagram_send_contexts_,
+                                            benchmark);
     const auto status = api_->DatagramSend(connection, &context->buffer, 1,
                                            QUIC_SEND_FLAG_NONE, context);
     {
       std::lock_guard lock{mutex_};
-      if (QUIC_SUCCEEDED(status) &&
+      if (!benchmark && QUIC_SUCCEEDED(status) &&
           connection_ == connection &&
           current_connection_generation_ == connection_generation &&
           session_generation == current_generation_) {
@@ -434,11 +460,13 @@ private:
                                  std::uint64_t value,
                                  std::uint64_t session_value,
                                  std::uint64_t connection_value,
-                                 std::atomic_uint64_t &live_contexts_value)
+                                 std::atomic_uint64_t &live_contexts_value,
+                                 bool benchmark_value)
         : bytes(std::move(payload)), sequence(value),
           session_generation(session_value),
           connection_generation(connection_value),
-          live_contexts(&live_contexts_value) {
+          live_contexts(&live_contexts_value),
+          benchmark(benchmark_value) {
       buffer.Length = static_cast<std::uint32_t>(bytes.size());
       buffer.Buffer = reinterpret_cast<std::uint8_t *>(bytes.data());
       live_contexts->fetch_add(1, std::memory_order_relaxed);
@@ -454,6 +482,7 @@ private:
     std::uint64_t connection_generation{};
     QUIC_BUFFER buffer{};
     std::atomic_uint64_t *live_contexts{};
+    bool benchmark{};
   };
 
   struct ActiveApiCallGuard {
@@ -523,6 +552,117 @@ private:
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch())
             .count());
+  }
+
+  static std::uint64_t monotonic_us() noexcept {
+    return static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count());
+  }
+
+  bool start_benchmark_traffic(
+      HQUIC stream,
+      const QuicSessionProtocolOutput::AcceptedStartBenchmark &accepted) {
+    const auto &start = accepted.start_benchmark;
+    std::array<std::byte, 16> run_token{};
+    std::transform(start.run_token().begin(), start.run_token().end(),
+                   run_token.begin(), [](char value) {
+                     return static_cast<std::byte>(value);
+                   });
+    {
+      std::lock_guard lock{mutex_};
+      if (accepted.session_generation != current_generation_ ||
+          !benchmark_source_.start({
+              .run_token = run_token,
+              .reliable_packet_count = start.reliable_round().packet_count(),
+              .reliable_payload_bytes = start.reliable_round().payload_bytes(),
+              .datagram_packet_count = start.datagram_round().packet_count(),
+              .datagram_payload_bytes = start.datagram_round().payload_bytes()})) {
+        return false;
+      }
+      benchmark_run_id_ = start.run_id();
+      benchmark_session_id_ = accepted.session_id;
+      benchmark_expected_datagrams_ = start.datagram_round().packet_count();
+      benchmark_datagram_payload_bytes_ =
+          start.datagram_round().payload_bytes();
+      next_benchmark_server_sequence_ = 2;
+      benchmark_completion_sent_ = false;
+    }
+
+    for (;;) {
+      std::optional<BenchmarkReliablePacket> packet;
+      std::uint64_t envelope_sequence = 0;
+      {
+        std::lock_guard lock{mutex_};
+        packet = benchmark_source_.next_reliable(monotonic_us());
+        if (packet.has_value()) {
+          envelope_sequence = next_benchmark_server_sequence_++;
+        }
+      }
+      if (!packet.has_value()) {
+        break;
+      }
+      stream::v1::SessionStreamEnvelope envelope;
+      envelope.set_protocol_version(1);
+      envelope.set_session_id(accepted.session_id);
+      envelope.set_sequence(envelope_sequence);
+      auto *chunk = envelope.mutable_benchmark_reliable_chunk();
+      chunk->set_run_id(start.run_id());
+      chunk->set_round_id(1);
+      chunk->set_sequence(packet->sequence);
+      chunk->set_sent_at_us(packet->sent_at_us);
+      chunk->set_payload(packet->payload.data(), packet->payload.size());
+      auto framed = frame_session_message(envelope);
+      if (framed.empty() ||
+          !send_session_reply(stream, std::move(framed), false)) {
+        std::lock_guard lock{mutex_};
+        benchmark_source_.cancel();
+        return false;
+      }
+    }
+
+    for (;;) {
+      std::optional<BenchmarkDatagramPacket> packet;
+      {
+        std::lock_guard lock{mutex_};
+        packet = benchmark_source_.next_datagram(monotonic_us());
+      }
+      if (!packet.has_value()) {
+        break;
+      }
+      const auto result = send_for_generation(
+          {.channel = stream::StreamChannel::media,
+           .sequence = packet->sequence,
+           .payload = std::move(packet->bytes)},
+          accepted.session_generation, true);
+      if (result != stream::TransportSendResult::accepted) {
+        std::lock_guard lock{mutex_};
+        benchmark_source_.cancel();
+        return false;
+      }
+    }
+    return true;
+  }
+
+  std::vector<std::byte> make_benchmark_completion_locked() {
+    stream::v1::SessionStreamEnvelope envelope;
+    envelope.set_protocol_version(1);
+    envelope.set_session_id(benchmark_session_id_);
+    envelope.set_sequence(next_benchmark_server_sequence_++);
+    auto *completed = envelope.mutable_benchmark_round_completed();
+    completed->set_run_id(benchmark_run_id_);
+    completed->set_round_id(2);
+    completed->set_expected_packet_count(benchmark_expected_datagrams_);
+    completed->set_payload_bytes(benchmark_datagram_payload_bytes_);
+    for (const BenchmarkRttResult &result :
+         benchmark_source_.rtt_observations()) {
+      auto *rtt = completed->add_rtt_observations();
+      rtt->set_sequence(result.sequence);
+      rtt->set_rtt_us(result.rtt_us);
+    }
+    benchmark_completion_sent_ = true;
+    return frame_session_message(envelope);
   }
 
   void inject_fault(QuicListenerFaultPoint point) {
@@ -686,6 +826,8 @@ private:
     QuicSessionProtocolOutput output;
     std::optional<QuicSessionProtocolOutput::AcceptedStartSession>
         accepted_start;
+    std::optional<QuicSessionProtocolOutput::AcceptedStartBenchmark>
+        accepted_benchmark;
     {
       std::lock_guard lock{mutex_};
       if (connection_ != connection ||
@@ -718,6 +860,10 @@ private:
             feedback.session_generation, feedback.feedback));
       }
       accepted_start = output.accepted_start_session;
+      accepted_benchmark = output.accepted_start_benchmark;
+      if (output.accepted_cancel_benchmark.has_value()) {
+        benchmark_source_.cancel();
+      }
       for (auto &packet : output.packets) {
         switch (packet.channel) {
         case stream::StreamChannel::session:
@@ -773,6 +919,11 @@ private:
         static_cast<void>(send_for_generation(
             std::move(packets.front()), accepted_start->session_generation));
       }
+    }
+    if (accepted_benchmark &&
+        !start_benchmark_traffic(stream, *accepted_benchmark)) {
+      api_->ConnectionShutdown(connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE,
+                               5);
     }
   }
 
@@ -981,6 +1132,10 @@ private:
             self.current_connection_generation_ = 0;
             self.clear_pending_session_bytes();
             self.protocol_.reset();
+            self.benchmark_source_.cancel();
+            self.benchmark_run_id_.clear();
+            self.benchmark_session_id_.clear();
+            self.benchmark_completion_sent_ = false;
           }
         }
         self.changed_.notify_all();
@@ -1113,6 +1268,16 @@ private:
         self.inject_fault(
             QuicListenerFaultPoint::datagram_final_state_telemetry);
       }
+      QUIC_STATISTICS_V2 statistics{};
+      std::uint32_t statistics_size = sizeof(statistics);
+      const bool has_statistics =
+          is_current() &&
+          QUIC_SUCCEEDED(self.api_->GetParam(
+              connection, QUIC_PARAM_CONN_STATISTICS_V2, &statistics_size,
+              &statistics));
+      std::vector<std::byte> benchmark_completion;
+      HQUIC benchmark_stream = nullptr;
+      bool benchmark_measurement_failed = false;
       {
         std::lock_guard lock{self.mutex_};
         const bool current =
@@ -1124,6 +1289,45 @@ private:
         if (current) {
           self.transport_state_.datagram_send_state_changed(
               send->sequence, event->DATAGRAM_SEND_STATE_CHANGED.State);
+        }
+        if (current && final_state && send->benchmark) {
+          std::optional<BenchmarkDatagramFinalState> benchmark_state;
+          switch (event->DATAGRAM_SEND_STATE_CHANGED.State) {
+          case QUIC_DATAGRAM_SEND_ACKNOWLEDGED:
+          case QUIC_DATAGRAM_SEND_ACKNOWLEDGED_SPURIOUS:
+            benchmark_state = BenchmarkDatagramFinalState::acknowledged;
+            break;
+          case QUIC_DATAGRAM_SEND_LOST_DISCARDED:
+            benchmark_state = BenchmarkDatagramFinalState::lost;
+            break;
+          case QUIC_DATAGRAM_SEND_CANCELED:
+            benchmark_state = BenchmarkDatagramFinalState::canceled;
+            break;
+          default:
+            break;
+          }
+          if (benchmark_state.has_value()) {
+            const bool missing_rtt =
+                *benchmark_state == BenchmarkDatagramFinalState::acknowledged &&
+                (!has_statistics || statistics.Rtt == 0);
+            if (missing_rtt) {
+              self.benchmark_source_.cancel();
+              benchmark_measurement_failed = true;
+            } else {
+              const std::uint64_t rtt_us =
+                  *benchmark_state == BenchmarkDatagramFinalState::acknowledged
+                      ? statistics.Rtt
+                      : 0;
+              static_cast<void>(self.benchmark_source_.record_datagram_final(
+                  send->sequence, *benchmark_state, rtt_us));
+              if (!self.benchmark_completion_sent_ &&
+                  self.benchmark_source_.ready_to_complete()) {
+                benchmark_completion =
+                    self.make_benchmark_completion_locked();
+                benchmark_stream = self.session_stream_;
+              }
+            }
+          }
         }
         switch (current ? event->DATAGRAM_SEND_STATE_CHANGED.State
                         : QUIC_DATAGRAM_SEND_UNKNOWN) {
@@ -1145,12 +1349,16 @@ private:
           break;
         }
       }
-      QUIC_STATISTICS_V2 statistics{};
-      std::uint32_t statistics_size = sizeof(statistics);
-      if (is_current() &&
-          QUIC_SUCCEEDED(self.api_->GetParam(connection,
-                                             QUIC_PARAM_CONN_STATISTICS_V2,
-                                             &statistics_size, &statistics))) {
+      if (!benchmark_completion.empty() && benchmark_stream != nullptr &&
+          !self.send_session_reply(benchmark_stream,
+                                   std::move(benchmark_completion), false)) {
+        self.record_callback_exception(connection, true);
+      }
+      if (benchmark_measurement_failed) {
+        self.api_->ConnectionShutdown(connection,
+                                      QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 6);
+      }
+      if (has_statistics) {
         std::lock_guard lock{self.mutex_};
         if (self.connection_ == connection &&
             self.current_connection_generation_ == connection_generation) {
@@ -1307,6 +1515,7 @@ private:
   QuicSessionProtocol protocol_;
   QuicListenerFaultInjector fault_injector_;
   SyntheticMediaSource synthetic_media_source_;
+  BenchmarkSource benchmark_source_;
   mutable std::mutex mutex_;
   std::condition_variable changed_;
   std::mutex event_mutex_;
@@ -1331,6 +1540,11 @@ private:
   std::string current_session_id_;
   std::uint64_t current_generation_{};
   std::uint64_t next_marker_sequence_{1};
+  std::string benchmark_run_id_;
+  std::string benchmark_session_id_;
+  std::uint64_t next_benchmark_server_sequence_{2};
+  std::uint32_t benchmark_expected_datagrams_{};
+  std::uint32_t benchmark_datagram_payload_bytes_{};
   std::uint64_t current_connection_generation_{};
   std::uint64_t next_connection_generation_{};
   std::uint16_t local_port_{};
@@ -1341,6 +1555,7 @@ private:
   bool pending_session_invalid_{};
   bool close_after_session_fin_{};
   bool draining_events_{};
+  bool benchmark_completion_sent_{};
   QuicListenerFailure failure_{QuicListenerFailure::none};
   std::uint64_t platform_error_{};
 };

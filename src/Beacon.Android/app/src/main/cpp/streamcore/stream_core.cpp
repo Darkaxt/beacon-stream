@@ -499,6 +499,7 @@ bool StreamCore::send_start_benchmark() {
   auto *start = envelope.mutable_start_benchmark();
   start->set_run_id(benchmark.run_id);
   start->set_schema_version(benchmark.schema_version);
+  start->set_run_token(benchmark.run_token.data(), benchmark.run_token.size());
   auto *reliable = start->mutable_reliable_round();
   reliable->set_packet_count(benchmark.reliable_packet_count);
   reliable->set_payload_bytes(benchmark.reliable_payload_bytes);

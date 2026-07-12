@@ -70,6 +70,7 @@ bool valid_benchmark_round(const stream_v1::BenchmarkRoundPlan &round,
 bool valid_benchmark_start(const stream_v1::StartBenchmark &benchmark,
                            std::uint16_t maximum_datagram_bytes) noexcept {
   return !benchmark.run_id().empty() && benchmark.schema_version() != 0 &&
+         benchmark.run_token().size() == 16 &&
          valid_benchmark_round(benchmark.reliable_round(),
                                maximum_stream_message_bytes) &&
          maximum_datagram_bytes != 0 &&

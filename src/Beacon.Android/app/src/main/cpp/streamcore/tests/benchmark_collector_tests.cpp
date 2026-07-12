@@ -100,11 +100,26 @@ void cancellation_and_run_replacement_never_fabricate_completion() {
       collector.observe_datagram(datagram(second, 0, 1, 10), 2));
 }
 
+void received_datagrams_require_correlated_rtt_evidence() {
+  BenchmarkCollector collector;
+  const auto run_token = token(std::byte{0x60});
+  BEACON_TEST_REQUIRE(collector.start({.run_token = run_token,
+                                      .reliable_packet_count = 1,
+                                      .reliable_payload_bytes = 10,
+                                      .datagram_packet_count = 1,
+                                      .datagram_payload_bytes = 10}));
+  BEACON_TEST_REQUIRE(collector.observe_reliable(0, 10, 10));
+  BEACON_TEST_REQUIRE(
+      collector.observe_datagram(datagram(run_token, 0, 1, 10), 11));
+  BEACON_TEST_REQUIRE(!collector.complete(20, {}).has_value());
+}
+
 }  // namespace
 
 int main() {
   return beacon::stream::testing::run_tests([] {
     completion_produces_measured_throughput_loss_reorder_jitter_and_rtt();
     cancellation_and_run_replacement_never_fabricate_completion();
+    received_datagrams_require_correlated_rtt_evidence();
   });
 }

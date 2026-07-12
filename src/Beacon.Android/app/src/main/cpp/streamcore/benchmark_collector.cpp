@@ -114,6 +114,11 @@ std::optional<BenchmarkCollectionResult> BenchmarkCollector::complete(
     has_rtt[observation.sequence] = true;
     rtt_by_sequence[observation.sequence] = observation.rtt_us;
   }
+  for (std::size_t sequence = 0; sequence < datagrams_.size(); ++sequence) {
+    if (datagrams_[sequence].has_value() && !has_rtt[sequence]) {
+      return std::nullopt;
+    }
+  }
 
   std::vector<std::uint64_t> jitter_by_sequence(plan_.datagram_packet_count, 0);
   for (std::size_t index = 1; index < arrival_order_.size(); ++index) {
