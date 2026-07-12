@@ -519,7 +519,7 @@ git diff --check
 
 Expected: the same Gate 3 evidence passes after refactoring.
 
-- [ ] **Step 5: Commit, push, merge, and synchronize again**
+- [x] **Step 5: Commit, push, merge, and synchronize again**
 
 ```powershell
 git add -A
