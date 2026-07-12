@@ -38,6 +38,11 @@ if(ANDROID)
       BeaconAndroidStreamCore
       Beacon::StreamContracts
   )
+  target_include_directories(
+    BeaconAndroidStreamCoreTests
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+  )
   add_test(NAME BeaconAndroid.StreamCore COMMAND BeaconAndroidStreamCoreTests)
 
   add_executable(
@@ -50,6 +55,11 @@ if(ANDROID)
       BeaconAndroidStreamCore
       OpenSSL
   )
+  target_include_directories(
+    BeaconAndroidCertificatePinTests
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+  )
   add_test(NAME BeaconAndroid.CertificatePin COMMAND BeaconAndroidCertificatePinTests)
 
   add_executable(
@@ -60,6 +70,11 @@ if(ANDROID)
     BeaconAndroidLifecycleTests
     PRIVATE
       BeaconAndroidStreamCore
+  )
+  target_include_directories(
+    BeaconAndroidLifecycleTests
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
   )
   add_test(NAME BeaconAndroid.Lifecycle COMMAND BeaconAndroidLifecycleTests)
 endif()
