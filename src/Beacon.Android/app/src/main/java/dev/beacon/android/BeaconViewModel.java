@@ -172,14 +172,17 @@ public final class BeaconViewModel implements AutoCloseable {
 
     public void runBenchmark(
         BeaconBenchmarkPrepareRequest request,
-        BeaconBenchmarkDeviceEvidence deviceEvidence) throws IOException {
+        BeaconDeviceBenchmarkRunner deviceRunner) throws IOException {
         requireOpen();
-        benchmarkCoordinator.run(request, deviceEvidence, this::startGrant);
+        benchmarkCoordinator.run(
+            request,
+            deviceRunner,
+            benchmarkStreamController());
     }
 
     public void cancelBenchmark() throws IOException {
         requireOpen();
-        benchmarkCoordinator.cancel(this::stopOwnedStreamCore);
+        benchmarkCoordinator.cancel(benchmarkStreamController());
     }
 
     public void sendInput(BeaconApiClient.InputBatch input) {
@@ -266,9 +269,7 @@ public final class BeaconViewModel implements AutoCloseable {
             created = factory.create(
                 frame -> { },
                 benchmarkCoordinator::onStreamCoreFailure,
-                result -> benchmarkCoordinator.onNetworkCompleted(
-                    result,
-                    this::stopOwnedStreamCore));
+                benchmarkCoordinator::onNetworkCompleted);
             synchronized (this) {
                 if (!closed) {
                     streamCore = created;
@@ -334,6 +335,13 @@ public final class BeaconViewModel implements AutoCloseable {
         if (owned != null) {
             owned.stop();
         }
+    }
+
+    private BeaconBenchmarkCoordinator.StreamController benchmarkStreamController() {
+        return new BeaconBenchmarkCoordinator.StreamController() {
+            @Override public void start(String responseBody) { startGrant(responseBody); }
+            @Override public void stop() { stopOwnedStreamCore(); }
+        };
     }
 
     public interface BeaconService extends BeaconBenchmarkCoordinator.Service {

@@ -192,19 +192,21 @@ public final class BeaconViewModelTest {
         FakeService service = new FakeService();
         service.benchmarkPrepare = new BeaconApiClient.BeaconResult(200, benchmarkGrantBody());
         RecordingBenchmarkCoreFactory factory = new RecordingBenchmarkCoreFactory();
+        RecordingDeviceBenchmarkRunner deviceRunner = new RecordingDeviceBenchmarkRunner();
         BeaconViewModel model = new BeaconViewModel(
             "z-fold-7", "https://server", service, factory);
 
-        model.runBenchmark(
-            benchmarkRequest("manual"),
-            new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples()));
+        model.runBenchmark(benchmarkRequest("manual"), deviceRunner);
         factory.emitCompletedNetworkResult();
+        assertEquals("benchmark prepare", service.actions());
+        deviceRunner.emitCompleted();
         service.awaitBenchmarkCompletion();
 
         assertEquals("benchmark prepare,benchmark complete", service.actions());
         assertEquals(1, factory.bindings.startCount);
         assertEquals(1, factory.bindings.stopCount);
         assertEquals("benchmark complete: 200", model.status());
+        assertEquals("beacon-h264-high-8-1280x720-60-v1", deviceRunner.plan.decoderRounds().get(0).vectorId());
         assertTrue(service.lastBenchmarkCompletion.toJson().toString().contains("\"rttMs\":2.5"));
         model.close();
     }
@@ -216,6 +218,7 @@ public final class BeaconViewModelTest {
             200,
             "{\"disposition\":\"reuse\",\"runId\":\"3c13df40-26c4-40c6-8414-268734f1024d\",\"connection\":null}");
         AtomicInteger allocations = new AtomicInteger();
+        RecordingDeviceBenchmarkRunner deviceRunner = new RecordingDeviceBenchmarkRunner();
         BeaconViewModel model = new BeaconViewModel(
             "z-fold-7", "https://server", service,
             (sink, failureObserver, benchmarkObserver) -> {
@@ -223,12 +226,11 @@ public final class BeaconViewModelTest {
                 throw new AssertionError("Reused evidence allocated StreamCore.");
             });
 
-        model.runBenchmark(
-            benchmarkRequest("automatic"),
-            new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples()));
+        model.runBenchmark(benchmarkRequest("automatic"), deviceRunner);
 
         assertEquals("benchmark prepare", service.actions());
         assertEquals(0, allocations.get());
+        assertEquals(0, deviceRunner.startCount);
         assertEquals("benchmark reuse: 200", model.status());
         model.close();
     }
@@ -237,6 +239,7 @@ public final class BeaconViewModelTest {
     public void nativeStartFailureCancelsPreparedBenchmarkRun() throws Exception {
         FakeService service = new FakeService();
         service.benchmarkPrepare = new BeaconApiClient.BeaconResult(200, benchmarkGrantBody());
+        RecordingDeviceBenchmarkRunner deviceRunner = new RecordingDeviceBenchmarkRunner();
         BeaconViewModel model = new BeaconViewModel(
             "z-fold-7", "https://server", service,
             (sink, failureObserver, benchmarkObserver) -> new BeaconStreamCore(
@@ -247,9 +250,8 @@ public final class BeaconViewModelTest {
                 failureObserver,
                 benchmarkObserver));
 
-        assertThrows(IllegalStateException.class, () -> model.runBenchmark(
-            benchmarkRequest("manual"),
-            new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples())));
+        assertThrows(IllegalStateException.class, () ->
+            model.runBenchmark(benchmarkRequest("manual"), deviceRunner));
 
         assertEquals("benchmark prepare,benchmark cancel", service.actions());
         model.close();
@@ -260,16 +262,16 @@ public final class BeaconViewModelTest {
         FakeService service = new FakeService();
         service.benchmarkPrepare = new BeaconApiClient.BeaconResult(200, benchmarkGrantBody());
         RecordingBenchmarkCoreFactory factory = new RecordingBenchmarkCoreFactory();
+        RecordingDeviceBenchmarkRunner deviceRunner = new RecordingDeviceBenchmarkRunner();
         BeaconViewModel model = new BeaconViewModel(
             "z-fold-7", "https://server", service, factory);
 
-        model.runBenchmark(
-            benchmarkRequest("manual"),
-            new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples()));
+        model.runBenchmark(benchmarkRequest("manual"), deviceRunner);
         model.cancelBenchmark();
 
         assertEquals("benchmark prepare,benchmark cancel", service.actions());
         assertEquals(1, factory.bindings.stopCount);
+        assertEquals(1, deviceRunner.cancelCount);
         assertEquals("benchmark cancel: 200", model.status());
         model.close();
     }
@@ -279,16 +281,16 @@ public final class BeaconViewModelTest {
         FakeService service = new FakeService();
         service.benchmarkPrepare = new BeaconApiClient.BeaconResult(200, benchmarkGrantBody());
         RecordingBenchmarkCoreFactory factory = new RecordingBenchmarkCoreFactory();
+        RecordingDeviceBenchmarkRunner deviceRunner = new RecordingDeviceBenchmarkRunner();
         BeaconViewModel model = new BeaconViewModel(
             "z-fold-7", "https://server", service, factory);
 
-        model.runBenchmark(
-            benchmarkRequest("automatic"),
-            new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples()));
+        model.runBenchmark(benchmarkRequest("automatic"), deviceRunner);
         factory.emitConnectionLost();
         service.awaitBenchmarkCancellation();
 
         assertEquals("benchmark prepare,benchmark cancel", service.actions());
+        assertEquals(1, deviceRunner.cancelCount);
         assertEquals("benchmark transport: failed", model.status());
         model.close();
     }
@@ -299,13 +301,13 @@ public final class BeaconViewModelTest {
         service.benchmarkPrepare = new BeaconApiClient.BeaconResult(200, benchmarkGrantBody());
         service.next = new BeaconApiClient.BeaconResult(400, "invalid benchmark evidence");
         RecordingBenchmarkCoreFactory factory = new RecordingBenchmarkCoreFactory();
+        RecordingDeviceBenchmarkRunner deviceRunner = new RecordingDeviceBenchmarkRunner();
         BeaconViewModel model = new BeaconViewModel(
             "z-fold-7", "https://server", service, factory);
 
-        model.runBenchmark(
-            benchmarkRequest("manual"),
-            new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples()));
+        model.runBenchmark(benchmarkRequest("manual"), deviceRunner);
         factory.emitCompletedNetworkResult();
+        deviceRunner.emitCompleted();
         service.awaitBenchmarkCancellation();
 
         assertEquals(
@@ -324,12 +326,13 @@ public final class BeaconViewModelTest {
             "{\"disposition\":\"start-new\",\"runId\":\"3c13df40-26c4-40c6-8414-268734f1024d\",\"connection\":null}");
         BeaconViewModel model = new BeaconViewModel(
             "z-fold-7", "https://server", service);
+        RecordingDeviceBenchmarkRunner deviceRunner = new RecordingDeviceBenchmarkRunner();
 
-        assertThrows(IllegalArgumentException.class, () -> model.runBenchmark(
-            benchmarkRequest("manual"),
-            new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples())));
+        assertThrows(IllegalArgumentException.class, () ->
+            model.runBenchmark(benchmarkRequest("manual"), deviceRunner));
 
         assertEquals("benchmark prepare,benchmark cancel", service.actions());
+        assertEquals(0, deviceRunner.startCount);
         model.close();
     }
 
@@ -395,7 +398,11 @@ public final class BeaconViewModelTest {
     }
 
     private static String benchmarkGrantBody() {
-        return "{\"disposition\":\"start-new\",\"runId\":\"3c13df40-26c4-40c6-8414-268734f1024d\",\"connection\":{" +
+        return "{\"disposition\":\"start-new\",\"runId\":\"3c13df40-26c4-40c6-8414-268734f1024d\"," +
+            "\"hardwarePlan\":{\"schemaVersion\":1,\"samplePowerBeforeAndAfterEachRound\":true,\"decoderRounds\":[{" +
+            "\"vectorId\":\"beacon-h264-high-8-1280x720-60-v1\",\"codec\":\"h264\",\"profile\":\"high\"," +
+            "\"bitDepth\":8,\"width\":1280,\"height\":720,\"targetFps\":60,\"repetitionCount\":3}]}," +
+            "\"connection\":{" +
             "\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\"," +
             "\"planRevision\":9,\"planExplanation\":\"benchmark\"," +
             "\"sessionId\":\"benchmark:3c13df40-26c4-40c6-8414-268734f1024d\"," +
@@ -467,6 +474,25 @@ public final class BeaconViewModelTest {
 
         void emitConnectionLost() {
             bindings.callbacks.onConnectionLost(bindings.generation);
+        }
+    }
+
+    private static final class RecordingDeviceBenchmarkRunner implements BeaconDeviceBenchmarkRunner {
+        private BeaconBenchmarkHardwarePlan plan;
+        private Observer observer;
+        private int startCount;
+        private int cancelCount;
+
+        @Override
+        public Run start(BeaconBenchmarkHardwarePlan plan, Observer observer) {
+            this.plan = plan;
+            this.observer = observer;
+            startCount++;
+            return () -> cancelCount++;
+        }
+
+        void emitCompleted() {
+            observer.onCompleted(new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples()));
         }
     }
 

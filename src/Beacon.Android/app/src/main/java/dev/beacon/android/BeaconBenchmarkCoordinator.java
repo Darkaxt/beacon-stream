@@ -21,10 +21,10 @@ final class BeaconBenchmarkCoordinator {
 
     void run(
         BeaconBenchmarkPrepareRequest request,
-        BeaconBenchmarkDeviceEvidence deviceEvidence,
-        GrantStarter starter) throws IOException {
-        if (request == null || deviceEvidence == null || starter == null) {
-            throw new IllegalArgumentException("Benchmark request, evidence, and starter are required.");
+        BeaconDeviceBenchmarkRunner deviceRunner,
+        StreamController stream) throws IOException {
+        if (request == null || deviceRunner == null || stream == null) {
+            throw new IllegalArgumentException("Benchmark request, device runner, and stream are required.");
         }
         synchronized (this) {
             if (activeRun != null) {
@@ -53,7 +53,7 @@ final class BeaconBenchmarkCoordinator {
             return;
         }
 
-        ActiveRun run = new ActiveRun(preparation.runId, deviceEvidence);
+        ActiveRun run = new ActiveRun(preparation.runId, stream);
         try {
             synchronized (this) {
                 if (activeRun != null) {
@@ -61,38 +61,108 @@ final class BeaconBenchmarkCoordinator {
                 }
                 activeRun = run;
             }
-            starter.start(result.body());
+            stream.start(result.body());
+            BeaconDeviceBenchmarkRunner.Run deviceRun = deviceRunner.start(
+                preparation.hardwarePlan,
+                new BeaconDeviceBenchmarkRunner.Observer() {
+                    @Override
+                    public void onCompleted(BeaconBenchmarkDeviceEvidence evidence) {
+                        onDeviceCompleted(run, evidence);
+                    }
+
+                    @Override
+                    public void onFailure(Throwable failure) {
+                        onDeviceFailure(run, failure);
+                    }
+                });
+            attachDeviceRun(run, deviceRun);
         } catch (RuntimeException | Error failure) {
-            clearActiveRun(run);
-            cancelPreparedRun(run.runId, failure);
+            ActiveRun removed = takeActiveRun(run);
+            if (removed != null) {
+                cancelDeviceRun(removed);
+                stream.stop();
+                cancelPreparedRun(run.runId, failure);
+            }
             throw failure;
         }
     }
 
-    void cancel(StreamStopper stopper) throws IOException {
-        if (stopper == null) {
-            throw new IllegalArgumentException("Benchmark stream stopper is required.");
+    void cancel(StreamController stream) throws IOException {
+        if (stream == null) {
+            throw new IllegalArgumentException("Benchmark stream is required.");
         }
-        ActiveRun run = takeActiveRun();
+        ActiveRun run = takeActiveRun(null);
         if (run == null) {
             return;
         }
-        stopper.stop();
+        cancelDeviceRun(run);
+        stream.stop();
         resultObserver.onResult("benchmark cancel", service.cancelBenchmark(run.runId));
     }
 
-    void onNetworkCompleted(
-        BeaconStreamCore.BenchmarkNetworkResult networkResult,
-        StreamStopper stopper) {
-        ActiveRun run = takeActiveRun();
+    void onNetworkCompleted(BeaconStreamCore.BenchmarkNetworkResult networkResult) {
+        ActiveRun ready;
+        synchronized (this) {
+            if (activeRun == null) {
+                return;
+            }
+            activeRun.networkResult = networkResult;
+            ready = takeReadyRunLocked(activeRun);
+        }
+        if (ready != null) {
+            complete(ready);
+        }
+    }
+
+    void onStreamCoreFailure(String stage) {
+        ActiveRun run = takeActiveRun(null);
         if (run == null) {
             return;
         }
+        cancelDeviceRun(run);
+        IllegalStateException failure = new IllegalStateException(
+            "Benchmark " + stage + " failed.");
+        resultObserver.onFailure("benchmark " + stage, failure);
+        cancelPreparedRun(run.runId, failure);
+    }
 
+    private void onDeviceCompleted(ActiveRun run, BeaconBenchmarkDeviceEvidence evidence) {
+        if (evidence == null) {
+            onDeviceFailure(run, new IllegalArgumentException("Device benchmark evidence is required."));
+            return;
+        }
+        ActiveRun ready;
+        synchronized (this) {
+            if (activeRun != run) {
+                return;
+            }
+            run.deviceEvidence = evidence;
+            ready = takeReadyRunLocked(run);
+        }
+        if (ready != null) {
+            complete(ready);
+        }
+    }
+
+    private void onDeviceFailure(ActiveRun expected, Throwable failure) {
+        ActiveRun run = takeActiveRun(expected);
+        if (run == null) {
+            return;
+        }
+        cancelDeviceRun(run);
+        run.stream.stop();
+        Throwable reported = failure == null
+            ? new IllegalStateException("Device benchmark failed.")
+            : failure;
+        resultObserver.onFailure("benchmark device", reported);
+        cancelPreparedRun(run.runId, reported);
+    }
+
+    private void complete(ActiveRun run) {
         try {
             BeaconBenchmarkCompletionRequest completion =
                 BeaconBenchmarkCompletionRequest.fromNetworkResult(
-                    networkResult,
+                    run.networkResult,
                     run.deviceEvidence.decoderSamples(),
                     run.deviceEvidence.powerSamples());
             BeaconApiClient.BeaconResult result = service.completeBenchmark(run.runId, completion);
@@ -104,30 +174,47 @@ final class BeaconBenchmarkCoordinator {
             resultObserver.onFailure("benchmark complete", failure);
             cancelPreparedRun(run.runId, failure);
         } finally {
-            stopper.stop();
+            run.stream.stop();
         }
     }
 
-    void onStreamCoreFailure(String stage) {
-        ActiveRun run = takeActiveRun();
-        if (run == null) {
-            return;
+    private void attachDeviceRun(ActiveRun run, BeaconDeviceBenchmarkRunner.Run deviceRun) {
+        if (deviceRun == null) {
+            throw new IllegalStateException("Device benchmark runner returned no active run.");
         }
-        IllegalStateException failure = new IllegalStateException(
-            "Benchmark " + stage + " failed.");
-        resultObserver.onFailure("benchmark " + stage, failure);
-        cancelPreparedRun(run.runId, failure);
+        boolean retained;
+        synchronized (this) {
+            retained = activeRun == run;
+            if (retained) {
+                run.deviceRun = deviceRun;
+            }
+        }
+        if (!retained) {
+            deviceRun.cancel();
+        }
     }
 
-    private synchronized ActiveRun takeActiveRun() {
+    private synchronized ActiveRun takeActiveRun(ActiveRun expected) {
+        if (activeRun == null || (expected != null && activeRun != expected)) {
+            return null;
+        }
         ActiveRun run = activeRun;
         activeRun = null;
         return run;
     }
 
-    private synchronized void clearActiveRun(ActiveRun expected) {
-        if (activeRun == expected) {
-            activeRun = null;
+    private ActiveRun takeReadyRunLocked(ActiveRun run) {
+        if (run.networkResult == null || run.deviceEvidence == null) {
+            return null;
+        }
+        activeRun = null;
+        return run;
+    }
+
+    private static void cancelDeviceRun(ActiveRun run) {
+        BeaconDeviceBenchmarkRunner.Run deviceRun = run.deviceRun;
+        if (deviceRun != null) {
+            deviceRun.cancel();
         }
     }
 
@@ -146,11 +233,9 @@ final class BeaconBenchmarkCoordinator {
     interface Service {
         BeaconApiClient.BeaconResult prepareBenchmark(
             BeaconBenchmarkPrepareRequest request) throws IOException;
-
         BeaconApiClient.BeaconResult completeBenchmark(
             String runId,
             BeaconBenchmarkCompletionRequest request) throws IOException;
-
         BeaconApiClient.BeaconResult cancelBenchmark(String runId) throws IOException;
     }
 
@@ -159,31 +244,36 @@ final class BeaconBenchmarkCoordinator {
         void onFailure(String action, Throwable failure);
     }
 
-    interface GrantStarter {
+    interface StreamController {
         void start(String responseBody);
-    }
-
-    interface StreamStopper {
         void stop();
     }
 
     private static final class ActiveRun {
         private final String runId;
-        private final BeaconBenchmarkDeviceEvidence deviceEvidence;
+        private final StreamController stream;
+        private BeaconDeviceBenchmarkRunner.Run deviceRun;
+        private BeaconStreamCore.BenchmarkNetworkResult networkResult;
+        private BeaconBenchmarkDeviceEvidence deviceEvidence;
 
-        ActiveRun(String runId, BeaconBenchmarkDeviceEvidence deviceEvidence) {
+        ActiveRun(String runId, StreamController stream) {
             this.runId = runId;
-            this.deviceEvidence = deviceEvidence;
+            this.stream = stream;
         }
     }
 
     private static final class Preparation {
         private final String runId;
         private final boolean reused;
+        private final BeaconBenchmarkHardwarePlan hardwarePlan;
 
-        Preparation(String runId, boolean reused) {
+        Preparation(
+            String runId,
+            boolean reused,
+            BeaconBenchmarkHardwarePlan hardwarePlan) {
             this.runId = runId;
             this.reused = reused;
+            this.hardwarePlan = hardwarePlan;
         }
 
         static Preparation parse(String responseBody) {
@@ -203,7 +293,10 @@ final class BeaconBenchmarkCoordinator {
                             ? "Reused benchmark evidence cannot include a connection grant."
                             : "New benchmark work requires a connection grant.");
                 }
-                return new Preparation(runId, reused);
+                BeaconBenchmarkHardwarePlan hardwarePlan = reused
+                    ? null
+                    : BeaconBenchmarkHardwarePlan.parse(root.getAsJsonObject("hardwarePlan"));
+                return new Preparation(runId, reused, hardwarePlan);
             } catch (IllegalArgumentException error) {
                 throw error;
             } catch (RuntimeException error) {

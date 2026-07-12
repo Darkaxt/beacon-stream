@@ -190,6 +190,9 @@ public static class ClientEndpoints
                 DateTimeOffset.UtcNow,
                 MaximumBenchmarkEvidenceAge);
             BenchmarkTransportPlan transportPlan = BenchmarkSuitePolicy.Create(request.Trigger);
+            BenchmarkHardwarePlan hardwarePlan = BenchmarkSuitePolicy.CreateHardware(
+                request.Trigger,
+                store.GetCapabilities(clientId));
             if (preparation.Disposition == BenchmarkPreparationDisposition.Reuse)
             {
                 return Results.Ok(new
@@ -199,6 +202,7 @@ public static class ClientEndpoints
                     evidenceRevision = preparation.Evidence.Revision,
                     selectedResult = preparation.Evidence.SelectedResult,
                     transportPlan,
+                    hardwarePlan,
                     networkCoverage = BenchmarkSuitePolicy.Coverage(transportPlan),
                     connection = (object?)null,
                     reason = preparation.Reason
@@ -240,6 +244,7 @@ public static class ClientEndpoints
                     : preparation.Evidence.Revision,
                 selectedResult = preparation.Evidence.SelectedResult,
                 transportPlan,
+                hardwarePlan,
                 networkCoverage = BenchmarkSuitePolicy.Coverage(transportPlan),
                 connection = grant.Connection,
                 reason = preparation.Reason

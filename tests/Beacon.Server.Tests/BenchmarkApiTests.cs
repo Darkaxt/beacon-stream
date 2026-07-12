@@ -23,13 +23,14 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
 
         HttpResponseMessage response = await client.PostAsJsonAsync(
             $"/clients/{clientId}/benchmarks/prepare",
-            new { trigger = "sessionPreflight", fingerprints = CreateFingerprints() });
+            new { trigger = "manual", fingerprints = CreateFingerprints() });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
         JsonElement root = document.RootElement;
         Guid runId = root.GetProperty("runId").GetGuid();
         JsonElement plan = root.GetProperty("transportPlan");
+        JsonElement hardwarePlan = root.GetProperty("hardwarePlan");
         JsonElement connection = root.GetProperty("connection");
         JsonElement benchmark = connection.GetProperty("benchmark");
 
@@ -46,6 +47,8 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
             plan.GetProperty("datagramPacketCount").GetInt32(),
             benchmark.GetProperty("datagramRound").GetProperty("packetCount").GetInt32());
         Assert.Equal(16, Convert.FromBase64String(benchmark.GetProperty("runToken").GetString()!).Length);
+        Assert.Equal(1, hardwarePlan.GetProperty("schemaVersion").GetInt32());
+        Assert.NotEmpty(hardwarePlan.GetProperty("decoderRounds").EnumerateArray());
         Assert.False(connection.TryGetProperty("selectedVideo", out _));
     }
 

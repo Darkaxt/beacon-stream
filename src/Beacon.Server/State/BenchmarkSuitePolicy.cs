@@ -1,4 +1,5 @@
 using Beacon.Core.Benchmarks;
+using Beacon.Core.Clients;
 
 namespace Beacon.Server.State;
 
@@ -11,4 +12,29 @@ public static class BenchmarkSuitePolicy
 
     public static NetworkBenchmarkCoverage Coverage(BenchmarkTransportPlan plan) =>
         new(FirstSequence: 0, ExpectedPacketCount: plan.DatagramPacketCount);
+
+    public static BenchmarkHardwarePlan CreateHardware(
+        BenchmarkTrigger trigger,
+        EndpointCapabilities capabilities)
+    {
+        ArgumentNullException.ThrowIfNull(capabilities);
+        var rounds = new List<DecoderBenchmarkRoundPlan>();
+        if (trigger != BenchmarkTrigger.SessionPreflight && capabilities.H264)
+        {
+            rounds.Add(new DecoderBenchmarkRoundPlan(
+                VectorId: "beacon-h264-high-8-1280x720-60-v1",
+                Codec: "h264",
+                Profile: "high",
+                BitDepth: 8,
+                Width: 1280,
+                Height: 720,
+                TargetFps: 60,
+                RepetitionCount: 3));
+        }
+
+        return new BenchmarkHardwarePlan(
+            SchemaVersion: 1,
+            DecoderRounds: rounds,
+            SamplePowerBeforeAndAfterEachRound: true);
+    }
 }
