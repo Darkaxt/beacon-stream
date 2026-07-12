@@ -1,6 +1,8 @@
 package dev.beacon.android;
 
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -17,7 +19,34 @@ public final class AndroidSystemTelemetrySource implements AndroidDeviceTelemetr
 
     @Override
     public AndroidDeviceTelemetry read() {
-        return new AndroidDeviceTelemetry(readBatteryPercent(), readThermalState(), readWifiBand());
+        return new AndroidDeviceTelemetry(
+            readBatteryPercent(),
+            readChargingState(),
+            readThermalState(),
+            readWifiBand());
+    }
+
+    private Boolean readChargingState() {
+        try {
+            Intent battery = context.registerReceiver(
+                null,
+                new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            if (battery == null) {
+                return null;
+            }
+            int status = battery.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+            if (status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                status == BatteryManager.BATTERY_STATUS_FULL) {
+                return true;
+            }
+            if (status == BatteryManager.BATTERY_STATUS_DISCHARGING ||
+                status == BatteryManager.BATTERY_STATUS_NOT_CHARGING) {
+                return false;
+            }
+            return null;
+        } catch (SecurityException error) {
+            return null;
+        }
     }
 
     private Integer readBatteryPercent() {
