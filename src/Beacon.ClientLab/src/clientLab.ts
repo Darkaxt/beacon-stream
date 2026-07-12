@@ -1,5 +1,7 @@
 export type HdrPreference = 'Off' | 'Prefer' | 'Require';
 export type TelemetryProfileName = 'excellent-lan' | 'congested-lan' | 'high-rtt' | 'packet-loss' | 'low-bitrate-cap' | 'thermal-battery';
+export type BenchmarkTrigger = 'automatic' | 'manual' | 'sessionPreflight';
+export type BenchmarkNetworkProfileName = 'home-wifi' | 'mobile-hotspot';
 
 export const telemetryProfileNames: TelemetryProfileName[] = [
   'excellent-lan',
@@ -145,6 +147,74 @@ export interface BeaconResponse {
   displayRemoved: boolean;
 }
 
+export interface BenchmarkPreparePayload {
+  trigger: BenchmarkTrigger;
+  fingerprints: {
+    network: {
+      schemaVersion: number;
+      serverRoute: string;
+      transport: string;
+      localNetworkPrefix: string;
+      wifiBand: string;
+      wifiChannel: number;
+      linkSpeedBucket: string;
+      saltedNetworkIdHash: string;
+    };
+    hardware: {
+      schemaVersion: number;
+      deviceCapabilityRevision: string;
+      androidVersion: string;
+      apkVersion: string;
+      displayModeInventoryRevision: string;
+      codecInventoryRevision: string;
+    };
+  };
+}
+
+export interface BenchmarkDecoderRound {
+  codec: string;
+  profile: string;
+  bitDepth: number;
+  width: number;
+  height: number;
+  targetFps: number;
+}
+
+export interface BenchmarkPrepareResponse {
+  disposition: 'start-new' | 'continue' | 'reuse';
+  runId: string;
+  networkCoverage: { firstSequence: number; expectedPacketCount: number };
+  transportPlan: { datagramPayloadBytes: number };
+  hardwarePlan: { decoderRounds: BenchmarkDecoderRound[] };
+}
+
+export interface BenchmarkCompletionPayload {
+  networkSamples: Array<{
+    sequence: number;
+    payloadBytes: number;
+    rttMs: number;
+    jitterMs: number;
+    received: boolean;
+    throughputMbps: number;
+    reorderDistance: number;
+  }>;
+  decoderSamples: Array<BenchmarkDecoderRound & {
+    configured: boolean;
+    sustainedFps: number;
+    p95DecodeLatencyMs: number;
+    p95PresentationLatencyMs: number;
+    droppedFrames: number;
+    outputErrors: number;
+    tenBitPresentationVerified: boolean;
+    hdrPresentationVerified: boolean;
+  }>;
+  powerSamples: Array<{
+    batteryPercent: number;
+    isCharging: boolean;
+    thermalState: string;
+  }>;
+}
+
 export function createDefaultProfile(): ProfileDraft {
   return {
     clientId: 'z-fold-7',
@@ -209,6 +279,83 @@ export function createTelemetryPayload(profile: TelemetryProfileName): Telemetry
     case 'excellent-lan':
       return createTelemetry(8, 0, 20, 120, 'wifi-7', 80, 'nominal');
   }
+}
+
+export function createBenchmarkPreparePayload(
+  trigger: BenchmarkTrigger,
+  networkProfile: BenchmarkNetworkProfileName
+): BenchmarkPreparePayload {
+  const network = networkProfile === 'mobile-hotspot'
+    ? {
+        schemaVersion: 3,
+        serverRoute: '192.168.43.1',
+        transport: 'wifi',
+        localNetworkPrefix: '192.168.43.0/24',
+        wifiBand: '5-ghz',
+        wifiChannel: 149,
+        linkSpeedBucket: '100-499-mbps',
+        saltedNetworkIdHash: 'b'.repeat(64)
+      }
+    : {
+        schemaVersion: 3,
+        serverRoute: '192.168.1.10',
+        transport: 'wifi',
+        localNetworkPrefix: '192.168.1.0/24',
+        wifiBand: '6-ghz',
+        wifiChannel: 37,
+        linkSpeedBucket: '500-999-mbps',
+        saltedNetworkIdHash: 'a'.repeat(64)
+      };
+  return {
+    trigger,
+    fingerprints: {
+      network,
+      hardware: {
+        schemaVersion: 3,
+        deviceCapabilityRevision: 'client-lab-z-fold-7-v1',
+        androidVersion: '16',
+        apkVersion: 'client-lab-0.1.0',
+        displayModeInventoryRevision: '2560x1600-120',
+        codecInventoryRevision: 'av1-hevc-h264'
+      }
+    }
+  };
+}
+
+export function createBenchmarkCompletionPayload(
+  prepared: BenchmarkPrepareResponse
+): BenchmarkCompletionPayload {
+  const networkSamples = Array.from(
+    { length: prepared.networkCoverage.expectedPacketCount },
+    (_, index) => ({
+      sequence: prepared.networkCoverage.firstSequence + index,
+      payloadBytes: prepared.transportPlan.datagramPayloadBytes,
+      rttMs: 8,
+      jitterMs: 1,
+      received: true,
+      throughputMbps: 100,
+      reorderDistance: 0
+    })
+  );
+  const decoderSamples = prepared.hardwarePlan.decoderRounds.map(round => ({
+    ...round,
+    configured: true,
+    sustainedFps: round.targetFps,
+    p95DecodeLatencyMs: 1,
+    p95PresentationLatencyMs: 2,
+    droppedFrames: 0,
+    outputErrors: 0,
+    tenBitPresentationVerified: round.bitDepth === 10,
+    hdrPresentationVerified: false
+  }));
+  const powerSamples = prepared.hardwarePlan.decoderRounds.flatMap(() => [
+    { batteryPercent: 100, isCharging: true, thermalState: 'nominal' },
+    { batteryPercent: 100, isCharging: true, thermalState: 'nominal' }
+  ]);
+  if (powerSamples.length === 0) {
+    powerSamples.push({ batteryPercent: 100, isCharging: true, thermalState: 'nominal' });
+  }
+  return { networkSamples, decoderSamples, powerSamples };
 }
 
 export function formatPlanDetails(plan: PlanResponse): string {

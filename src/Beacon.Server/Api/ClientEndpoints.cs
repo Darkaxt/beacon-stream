@@ -183,6 +183,19 @@ public static class ClientEndpoints
                 return Results.BadRequest(new { error = "Benchmark fingerprints are invalid." });
             }
 
+            if (request.Trigger == BenchmarkTrigger.SessionPreflight &&
+                store.GetLatestBenchmarkHardwareEvidence(
+                    clientId,
+                    request.Fingerprints.Hardware,
+                    DateTimeOffset.UtcNow,
+                    MaximumBenchmarkEvidenceAge) is null)
+            {
+                return Results.Conflict(new
+                {
+                    error = "A completed full hardware benchmark is required before session preflight."
+                });
+            }
+
             BenchmarkPreparationResult preparation = store.PrepareBenchmarkRun(
                 new ClientId(clientId),
                 request.Trigger,
@@ -320,10 +333,36 @@ public static class ClientEndpoints
             {
                 BenchmarkTransportPlan transportPlan = BenchmarkSuitePolicy.Create(pending.Trigger);
                 NetworkBenchmarkCoverage coverage = BenchmarkSuitePolicy.Coverage(transportPlan);
+                IReadOnlyList<DecoderBenchmarkSample> decoderSamples = request.DecoderSamples;
+                IReadOnlyList<EndpointPowerSample> powerSamples = request.PowerSamples;
+                if (pending.Trigger == BenchmarkTrigger.SessionPreflight)
+                {
+                    if (request.DecoderSamples.Count != 0 || request.PowerSamples.Count == 0)
+                    {
+                        return Results.BadRequest(new
+                        {
+                            error = "Session preflight accepts network and current power samples only."
+                        });
+                    }
+
+                    BenchmarkEvidence? hardware = store.GetLatestBenchmarkHardwareEvidence(
+                        clientId,
+                        pending.Fingerprints.Hardware,
+                        DateTimeOffset.UtcNow,
+                        MaximumBenchmarkEvidenceAge);
+                    if (hardware is null)
+                    {
+                        return Results.Conflict(new
+                        {
+                            error = "The full hardware benchmark required by session preflight is unavailable."
+                        });
+                    }
+                    decoderSamples = hardware.DecoderSamples;
+                }
                 var scoringInput = new BenchmarkScoringInput(
                     request.NetworkSamples,
-                    request.DecoderSamples,
-                    request.PowerSamples,
+                    decoderSamples,
+                    powerSamples,
                     profile.Stream.CodecPreference,
                     coverage);
                 SelectedBenchmarkResult selected = BenchmarkScorer.Select(scoringInput);
@@ -331,8 +370,8 @@ public static class ClientEndpoints
                 {
                     CompletedAt = DateTimeOffset.UtcNow,
                     NetworkSamples = request.NetworkSamples.ToArray(),
-                    DecoderSamples = request.DecoderSamples.ToArray(),
-                    PowerSamples = request.PowerSamples.ToArray(),
+                    DecoderSamples = decoderSamples.ToArray(),
+                    PowerSamples = powerSamples.ToArray(),
                     SelectedResult = selected,
                     NetworkCoverage = coverage
                 };

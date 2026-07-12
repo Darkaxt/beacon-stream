@@ -1,5 +1,7 @@
 import './style.css';
 import {
+  createBenchmarkCompletionPayload,
+  createBenchmarkPreparePayload,
   createCapabilitiesPayload,
   createDefaultProfile,
   createGamePlanRequest,
@@ -17,6 +19,9 @@ import {
   type GameDescriptor,
   type GameLibrarySnapshot,
   type BeaconResponse,
+  type BenchmarkNetworkProfileName,
+  type BenchmarkPrepareResponse,
+  type BenchmarkTrigger,
   type HdrPreference,
   type InputAcceptedResponse,
   type LaunchResponse,
@@ -34,6 +39,7 @@ const hdrInput = select('hdrInput');
 const codecInput = select('codecInput');
 const bitrateInput = input('bitrateInput');
 const telemetryProfileInput = select('telemetryProfileInput');
+const benchmarkNetworkInput = select('benchmarkNetworkInput');
 const gameSelect = select('gameSelect');
 const gameCover = element('gameCover');
 const gameTitle = element('gameTitle');
@@ -75,6 +81,14 @@ element('profileForm').addEventListener('submit', async event => {
   appendLog('profile saved');
 });
 
+element('automaticBenchmarkButton').addEventListener('click', async () => {
+  await runBenchmark('automatic');
+});
+
+element('manualBenchmarkButton').addEventListener('click', async () => {
+  await runBenchmark('manual');
+});
+
 element('planButton').addEventListener('click', async () => {
   await submitClientFacts();
   const plan = await postJson<PlanResponse>(`/clients/${clientId}/plan`, createPlanRequest());
@@ -83,6 +97,7 @@ element('planButton').addEventListener('click', async () => {
 
 element('launchButton').addEventListener('click', async () => {
   await submitClientFacts();
+  await runBenchmark('sessionPreflight', false);
   const launch = await postJson<LaunchResponse>(`/clients/${clientId}/launch`, createPlanRequest());
   for (const message of formatLaunchEvents(launch)) {
     appendLog(message);
@@ -160,6 +175,27 @@ async function submitClientFacts(): Promise<void> {
   await postJson(`/clients/${clientId}/capabilities`, createCapabilitiesPayload());
   await postJson(`/clients/${clientId}/telemetry`, createTelemetryPayload(readTelemetryProfile()));
   appendLog(`facts ${telemetryProfileInput.value}`);
+}
+
+async function runBenchmark(
+  trigger: BenchmarkTrigger,
+  reportCapabilities = true
+): Promise<void> {
+  if (reportCapabilities) {
+    await postJson(`/clients/${clientId}/capabilities`, createCapabilitiesPayload());
+  }
+  const prepared = await postJson<BenchmarkPrepareResponse>(
+    `/clients/${clientId}/benchmarks/prepare`,
+    createBenchmarkPreparePayload(
+      trigger,
+      benchmarkNetworkInput.value as BenchmarkNetworkProfileName));
+  appendLog(`${trigger} benchmark ${prepared.disposition}`);
+  if (prepared.disposition === 'reuse') return;
+
+  await postJson(
+    `/clients/${clientId}/benchmarks/${prepared.runId}/complete`,
+    createBenchmarkCompletionPayload(prepared));
+  appendLog(`${trigger} benchmark complete ${prepared.runId}`);
 }
 
 function readTelemetryProfile(): TelemetryProfileName {

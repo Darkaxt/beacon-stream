@@ -33,8 +33,14 @@ public final class BeaconActivity extends Activity {
     private final List<BeaconGameCatalog.GameEntry> gameEntries = new ArrayList<>();
     private final BeaconTouchInputMapper touchInputMapper = new BeaconTouchInputMapper();
     private final AndroidDeviceCapabilityProbe capabilityProbe = AndroidDeviceCapabilityProbe.system();
+    private final AutomaticBenchmarkGate automaticBenchmarkGate = new AutomaticBenchmarkGate();
 
     private BeaconViewModelSession modelSession;
+    private AndroidBenchmarkChangeMonitor benchmarkChangeMonitor;
+    private AndroidBenchmarkFingerprintProbe benchmarkFingerprintProbe;
+    private AndroidBenchmarkNetworkState benchmarkNetwork =
+        AndroidBenchmarkNetworkState.disconnected();
+    private boolean automaticBenchmarkEnabled;
     private AndroidDeviceTelemetryProbe telemetryProbe;
     private BeaconLocalSettingsStore localSettingsStore;
     private BeaconLocalSettings localSettings;
@@ -85,10 +91,18 @@ public final class BeaconActivity extends Activity {
         applyWindowFlags(uiState);
         setContentView(createContent());
         modelSession = new BeaconViewModelSession(this::createModel);
+        benchmarkFingerprintProbe = new AndroidBenchmarkFingerprintProbe(
+            BeaconNetworkIdentityHasher.system(this),
+            new AndroidSystemBenchmarkHardwareSource(this, new AndroidMediaCodecCatalog()));
+        benchmarkChangeMonitor = new AndroidBenchmarkChangeMonitor(this);
+        benchmarkChangeMonitor.start(this::onBenchmarkEnvironmentChanged);
     }
 
     @Override
     protected void onDestroy() {
+        if (benchmarkChangeMonitor != null) {
+            benchmarkChangeMonitor.close();
+        }
         if (modelSession != null) {
             modelSession.close();
         }
@@ -166,7 +180,10 @@ public final class BeaconActivity extends Activity {
         root.addView(controllerOverlayMarker);
         updateControllerOverlay();
 
-        root.addView(button("Hello / Refresh", model -> model.refresh()));
+        root.addView(button("Hello / Refresh", model -> {
+            model.refresh();
+            runOnUiThread(this::enableAutomaticBenchmark);
+        }));
         root.addView(button("Load Games", model -> {
             model.loadGames();
             setGameEntries(model.latestGameEntries());
@@ -174,6 +191,7 @@ public final class BeaconActivity extends Activity {
         root.addView(button("Patch Profile", model -> model.patchProfile(readPatch())));
         root.addView(button("Report Capabilities", model -> model.reportCapabilities(readCapabilities())));
         root.addView(button("Report Telemetry", model -> model.reportTelemetry(readTelemetry())));
+        root.addView(localButton("Run Benchmark", () -> scheduleBenchmark("manual", benchmarkNetwork)));
         root.addView(button("Beacon Active", model -> model.beacon(true)));
         root.addView(button("Beacon Inactive", model -> model.beacon(false)));
         root.addView(button("Plan", model -> model.preflightAndPlan(
@@ -181,11 +199,20 @@ public final class BeaconActivity extends Activity {
             readCapabilities(),
             readTelemetry(),
             readGame())));
-        root.addView(button("Launch", model -> model.preflightAndLaunch(
-            readPatch(),
-            readCapabilities(),
-            readTelemetry(),
-            readGame())));
+        root.addView(button("Launch", model -> {
+            BeaconApiClient.ClientCapabilities capabilities = readCapabilities();
+            model.preflightBenchmarkAndLaunch(
+                readPatch(),
+                capabilities,
+                readTelemetry(),
+                benchmarkFingerprintProbe.create(
+                    "sessionPreflight",
+                    serverUrl.getText().toString(),
+                    capabilities,
+                    benchmarkNetwork),
+                AndroidDeviceBenchmarkRunner.system(this),
+                readGame());
+        }));
         root.addView(touchSurface());
         root.addView(button("Send Pointer", model -> model.sendInput(BeaconApiClient.InputBatch.pointerTap(1, 0.5, 0.5))));
         root.addView(button("Send Escape", model -> model.sendInput(BeaconApiClient.InputBatch.keyboardPress(2, "Escape", "Escape"))));
@@ -381,6 +408,60 @@ public final class BeaconActivity extends Activity {
                     error);
             } catch (IOException | RuntimeException ex) {
                 setStatus(label + " failed: " + ex.getMessage());
+            }
+        });
+    }
+
+    private void onBenchmarkEnvironmentChanged(AndroidBenchmarkNetworkState network) {
+        runOnUiThread(() -> {
+            benchmarkNetwork = network;
+            if (automaticBenchmarkEnabled) scheduleBenchmark("automatic", network);
+        });
+    }
+
+    private void enableAutomaticBenchmark() {
+        automaticBenchmarkEnabled = true;
+        scheduleBenchmark("automatic", benchmarkNetwork);
+    }
+
+    private void scheduleBenchmark(
+        String trigger,
+        AndroidBenchmarkNetworkState network) {
+        BeaconApiClient.ClientCapabilities capabilities;
+        BeaconBenchmarkPrepareRequest request;
+        try {
+            capabilities = readCapabilities();
+            request = benchmarkFingerprintProbe.create(
+                trigger,
+                serverUrl.getText().toString(),
+                capabilities,
+                network);
+        } catch (RuntimeException failure) {
+            setStatus("Benchmark facts failed: " + failure.getMessage());
+            return;
+        }
+
+        String fingerprint = request.fingerprints().toString();
+        boolean automatic = "automatic".equals(trigger);
+        if (automatic && !automaticBenchmarkGate.begin(fingerprint)) return;
+        status.setText((automatic ? "Automatic benchmark" : "Manual benchmark") + "...");
+        BeaconViewModel model = currentModel();
+        executor.execute(() -> {
+            boolean started = false;
+            try {
+                model.refresh();
+                model.reportCapabilities(capabilities);
+                model.cancelBenchmark();
+                BeaconApiClient.BeaconResult result = model.runBenchmarkAndWait(
+                    request,
+                    AndroidDeviceBenchmarkRunner.system(this));
+                started = result.isSuccess();
+                String error = started ? "" : "\nError: " + model.latestError();
+                setStatus(model.status() + error);
+            } catch (IOException | RuntimeException failure) {
+                setStatus("Benchmark failed: " + failure.getMessage());
+            } finally {
+                if (automatic) automaticBenchmarkGate.finish(fingerprint, started);
             }
         });
     }

@@ -88,7 +88,16 @@
 
         <section class="panel">
           <h2>Session</h2>
+          <label>
+            <span>Benchmark network</span>
+            <select id="benchmarkNetworkInput" name="benchmarkNetwork">
+              <option value="home-wifi">Home Wi-Fi</option>
+              <option value="mobile-hotspot">Mobile hotspot</option>
+            </select>
+          </label>
           <div class="actions stack">
+            <button id="automaticBenchmarkButton" type="button">Automatic Benchmark</button>
+            <button id="manualBenchmarkButton" type="button">Manual Benchmark</button>
             <button id="activeBeaconButton" type="button">Active Beacon</button>
             <button id="inactiveBeaconButton" type="button">Inactive Beacon</button>
             <button id="inputButton" type="button">Send Pointer</button>

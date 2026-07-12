@@ -3,8 +3,12 @@ import { expect, test } from '@playwright/test';
 test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit, and emergency restore', async ({ page }) => {
   const capabilityBodies: unknown[] = [];
   const telemetryBodies: unknown[] = [];
+  const benchmarkPrepareBodies: any[] = [];
+  const benchmarkCompletionBodies: any[] = [];
   const beaconBodies: unknown[] = [];
   const inputBodies: unknown[] = [];
+  let homeAutomaticCompleted = false;
+  let benchmarkRun = 0;
 
   await page.route('**/clients/hello', async route => {
     await route.fulfill({
@@ -66,6 +70,43 @@ test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit,
   await page.route('**/clients/z-fold-7/telemetry', async route => {
     telemetryBodies.push(route.request().postDataJSON());
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ accepted: true }) });
+  });
+  await page.route('**/clients/z-fold-7/benchmarks/prepare', async route => {
+    const body = route.request().postDataJSON();
+    benchmarkPrepareBodies.push(body);
+    const homeAutomatic = body.trigger === 'automatic' &&
+      body.fingerprints.network.localNetworkPrefix === '192.168.1.0/24';
+    const disposition = homeAutomatic && homeAutomaticCompleted ? 'reuse' : 'start-new';
+    if (homeAutomatic) homeAutomaticCompleted = true;
+    benchmarkRun++;
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        disposition,
+        runId: `00000000-0000-0000-0000-${String(benchmarkRun).padStart(12, '0')}`,
+        networkCoverage: { firstSequence: 0, expectedPacketCount: 3 },
+        transportPlan: { datagramPayloadBytes: 1000 },
+        hardwarePlan: {
+          decoderRounds: body.trigger === 'sessionPreflight' ? [] : [
+            {
+              codec: 'h264',
+              profile: 'high',
+              bitDepth: 8,
+              width: 640,
+              height: 360,
+              targetFps: 30
+            }
+          ]
+        }
+      })
+    });
+  });
+  await page.route('**/clients/z-fold-7/benchmarks/*/complete', async route => {
+    benchmarkCompletionBodies.push(route.request().postDataJSON());
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ selectedResult: { codec: 'h264', initialBitrateMbps: 70 } })
+    });
   });
   await page.route('**/clients/z-fold-7/beacon', async route => {
     const body = route.request().postDataJSON();
@@ -192,6 +233,11 @@ test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit,
   await expect(page.getByText('running av1 120fps')).toBeVisible();
   expect(capabilityBodies).toHaveLength(2);
   expect(telemetryBodies).toHaveLength(2);
+  expect(benchmarkPrepareBodies).toHaveLength(1);
+  expect(benchmarkPrepareBodies[0].trigger).toBe('sessionPreflight');
+  expect(benchmarkCompletionBodies).toHaveLength(1);
+  expect(benchmarkCompletionBodies[0].decoderSamples).toEqual([]);
+  expect(benchmarkCompletionBodies[0].powerSamples).toHaveLength(1);
 
   await page.getByRole('button', { name: 'Send Pointer' }).click();
   await expect(page.getByText('input accepted 3 event(s) z-fold-7-steam-shortcut:3767414131')).toBeVisible();
@@ -238,4 +284,34 @@ test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit,
 
   await page.getByRole('button', { name: 'Restore' }).click();
   await expect(page.getByText('recovered client-z-fold-7')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Automatic Benchmark' }).click();
+  await expect(page.getByText('automatic benchmark complete')).toBeVisible();
+  await page.getByRole('button', { name: 'Automatic Benchmark' }).click();
+  await expect(page.getByText('automatic benchmark reuse')).toBeVisible();
+  await page.getByLabel('Benchmark network').selectOption('mobile-hotspot');
+  await page.getByRole('button', { name: 'Automatic Benchmark' }).click();
+  await expect.poll(() => benchmarkPrepareBodies.length).toBe(4);
+  await expect.poll(() => benchmarkCompletionBodies.length).toBe(3);
+  await page.getByRole('button', { name: 'Manual Benchmark' }).click();
+  await expect.poll(() => benchmarkPrepareBodies.length).toBe(5);
+  await expect.poll(() => benchmarkCompletionBodies.length).toBe(4);
+
+  expect(benchmarkPrepareBodies).toHaveLength(5);
+  expect(benchmarkPrepareBodies.map(body => body.trigger)).toEqual([
+    'sessionPreflight',
+    'automatic',
+    'automatic',
+    'automatic',
+    'manual'
+  ]);
+  expect(benchmarkPrepareBodies[1].fingerprints.network.saltedNetworkIdHash).toHaveLength(64);
+  expect(benchmarkPrepareBodies[3].fingerprints.network.localNetworkPrefix).toBe('192.168.43.0/24');
+  expect(benchmarkCompletionBodies).toHaveLength(4);
+  expect(benchmarkCompletionBodies[1].networkSamples).toHaveLength(3);
+  expect(benchmarkCompletionBodies[1].decoderSamples[0]).toMatchObject({
+    codec: 'h264',
+    targetFps: 30,
+    configured: true
+  });
 });

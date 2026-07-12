@@ -11,9 +11,8 @@ public final class BeaconBenchmarkDeviceEvidence {
     public BeaconBenchmarkDeviceEvidence(
         List<BeaconBenchmarkCompletionRequest.DecoderSample> decoderSamples,
         List<BeaconBenchmarkCompletionRequest.PowerSample> powerSamples) {
-        if (decoderSamples == null || decoderSamples.isEmpty() ||
-            powerSamples == null || powerSamples.isEmpty()) {
-            throw new IllegalArgumentException("Decoder and power benchmark evidence are required.");
+        if (decoderSamples == null || powerSamples == null || powerSamples.isEmpty()) {
+            throw new IllegalArgumentException("Decoder evidence and at least one power sample are required.");
         }
         this.decoderSamples = Collections.unmodifiableList(new ArrayList<>(decoderSamples));
         this.powerSamples = Collections.unmodifiableList(new ArrayList<>(powerSamples));

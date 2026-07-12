@@ -23,7 +23,14 @@ final class SequentialDeviceBenchmarkRunner implements BeaconDeviceBenchmarkRunn
             throw new IllegalArgumentException("Device benchmark plan and observer are required.");
         }
         if (plan.decoderRounds().isEmpty()) {
-            throw new IllegalArgumentException("Device benchmark plan contains no decoder rounds.");
+            BeaconBenchmarkCompletionRequest.PowerSample power = powerSampler.sample();
+            if (power == null) {
+                throw new IllegalStateException("Device power sampler returned no sample.");
+            }
+            observer.onCompleted(new BeaconBenchmarkDeviceEvidence(
+                List.of(),
+                List.of(power)));
+            return () -> { };
         }
         RunState state = new RunState(plan, observer);
         state.startNextRound();

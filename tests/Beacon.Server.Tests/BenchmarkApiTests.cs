@@ -60,7 +60,7 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
         await RegisterAsync(client, clientId);
         HttpResponseMessage prepareResponse = await client.PostAsJsonAsync(
             $"/clients/{clientId}/benchmarks/prepare",
-            new { trigger = "sessionPreflight", fingerprints = CreateFingerprints() });
+            new { trigger = "manual", fingerprints = CreateFingerprints() });
         using JsonDocument prepare = await JsonDocument.ParseAsync(
             await prepareResponse.Content.ReadAsStreamAsync());
         Guid runId = prepare.RootElement.GetProperty("runId").GetGuid();
@@ -255,6 +255,60 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
         using JsonDocument manualDocument = await JsonDocument.ParseAsync(await manual.Content.ReadAsStreamAsync());
         Assert.Equal("start-new", manualDocument.RootElement.GetProperty("disposition").GetString());
         Assert.NotEqual(runId, manualDocument.RootElement.GetProperty("runId").GetGuid());
+    }
+
+    [Fact]
+    public async Task SessionPreflightMergesFreshNetworkWithStoredHardwareEvidence()
+    {
+        HttpClient client = factory.CreateClient();
+        string clientId = $"benchmark-preflight-{Guid.NewGuid():N}";
+        await RegisterAsync(client, clientId);
+        object fingerprints = CreateFingerprints();
+        (_, Guid fullRunId) = await PrepareAsync(client, clientId, fingerprints);
+        await CompleteRunAsync(client, clientId, fullRunId);
+
+        HttpResponseMessage prepare = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/prepare",
+            new { trigger = "sessionPreflight", fingerprints });
+        Assert.Equal(HttpStatusCode.OK, prepare.StatusCode);
+        using JsonDocument prepared = await JsonDocument.ParseAsync(
+            await prepare.Content.ReadAsStreamAsync());
+        Guid preflightRunId = prepared.RootElement.GetProperty("runId").GetGuid();
+        Assert.Empty(prepared.RootElement
+            .GetProperty("hardwarePlan")
+            .GetProperty("decoderRounds")
+            .EnumerateArray());
+
+        HttpResponseMessage complete = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/{preflightRunId:D}/complete",
+            new
+            {
+                networkSamples = new[]
+                {
+                    new { sequence = 0, payloadBytes = 1000, rttMs = 18, jitterMs = 2.0, received = true, throughputMbps = 80, reorderDistance = 0 }
+                },
+                decoderSamples = Array.Empty<object>(),
+                powerSamples = new[]
+                {
+                    new { batteryPercent = 70, isCharging = false, thermalState = "nominal" }
+                }
+            });
+
+        Assert.Equal(HttpStatusCode.OK, complete.StatusCode);
+        using JsonDocument completed = await JsonDocument.ParseAsync(
+            await complete.Content.ReadAsStreamAsync());
+        Assert.Equal(
+            "h264",
+            completed.RootElement.GetProperty("selectedResult").GetProperty("codec").GetString());
+
+        HttpResponseMessage history = await client.GetAsync($"/clients/{clientId}/benchmarks");
+        using JsonDocument stored = await JsonDocument.ParseAsync(
+            await history.Content.ReadAsStreamAsync());
+        JsonElement preflight = stored.RootElement.GetProperty("runs").EnumerateArray()
+            .Single(run => run.GetProperty("runId").GetGuid() == preflightRunId);
+        Assert.Equal("SessionPreflight", preflight.GetProperty("trigger").GetString());
+        Assert.Single(preflight.GetProperty("decoderSamples").EnumerateArray());
+        Assert.Equal(70, preflight.GetProperty("powerSamples")[0].GetProperty("batteryPercent").GetInt32());
     }
 
     [Theory]

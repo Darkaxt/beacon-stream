@@ -3,6 +3,8 @@ package dev.beacon.android;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 public final class BeaconViewModel implements AutoCloseable {
     private final BeaconService service;
@@ -170,14 +172,20 @@ public final class BeaconViewModel implements AutoCloseable {
         }
     }
 
-    public void runBenchmark(
+    public CompletableFuture<BeaconApiClient.BeaconResult> runBenchmark(
         BeaconBenchmarkPrepareRequest request,
         BeaconDeviceBenchmarkRunner deviceRunner) throws IOException {
         requireOpen();
-        benchmarkCoordinator.run(
+        return benchmarkCoordinator.run(
             request,
             deviceRunner,
             benchmarkStreamController());
+    }
+
+    public BeaconApiClient.BeaconResult runBenchmarkAndWait(
+        BeaconBenchmarkPrepareRequest request,
+        BeaconDeviceBenchmarkRunner deviceRunner) throws IOException {
+        return awaitBenchmark(runBenchmark(request, deviceRunner));
     }
 
     public void cancelBenchmark() throws IOException {
@@ -198,6 +206,22 @@ public final class BeaconViewModel implements AutoCloseable {
         BeaconApiClient.ClientTelemetry telemetry,
         BeaconApiClient.GameSelection game) throws IOException {
         preflight(patch, capabilities, telemetry);
+        launch(game);
+    }
+
+    public void preflightBenchmarkAndLaunch(
+        BeaconApiClient.ProfilePatch patch,
+        BeaconApiClient.ClientCapabilities capabilities,
+        BeaconApiClient.ClientTelemetry telemetry,
+        BeaconBenchmarkPrepareRequest benchmarkRequest,
+        BeaconDeviceBenchmarkRunner deviceRunner,
+        BeaconApiClient.GameSelection game) throws IOException {
+        preflight(patch, capabilities, telemetry);
+        BeaconApiClient.BeaconResult benchmark =
+            runBenchmarkAndWait(benchmarkRequest, deviceRunner);
+        if (!benchmark.isSuccess()) {
+            throw new IOException("Session preflight rejected: " + benchmark.body());
+        }
         launch(game);
     }
 
@@ -248,6 +272,22 @@ public final class BeaconViewModel implements AutoCloseable {
 
     private void startGrant(String responseBody) {
         requireStreamCore().start(BeaconStreamSession.parse(serverUrl, clientId, responseBody));
+    }
+
+    private static BeaconApiClient.BeaconResult awaitBenchmark(
+        CompletableFuture<BeaconApiClient.BeaconResult> completion) throws IOException {
+        try {
+            return completion.get();
+        } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Benchmark wait was interrupted.", failure);
+        } catch (ExecutionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof IOException ioFailure) throw ioFailure;
+            if (cause instanceof RuntimeException runtimeFailure) throw runtimeFailure;
+            if (cause instanceof Error error) throw error;
+            throw new IOException("Benchmark execution failed.", cause);
+        }
     }
 
     private BeaconStreamCore requireStreamCore() {

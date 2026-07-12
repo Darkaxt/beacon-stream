@@ -8,6 +8,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
@@ -132,6 +134,53 @@ public final class BeaconViewModelTest {
     }
 
     @Test
+    public void sessionPreflightMustCompleteBeforeLaunch() throws Exception {
+        FakeService service = new FakeService();
+        service.benchmarkPrepare = new BeaconApiClient.BeaconResult(
+            200,
+            sessionPreflightBenchmarkGrantBody());
+        service.next = new BeaconApiClient.BeaconResult(200, grantBody());
+        RecordingBenchmarkCoreFactory factory = new RecordingBenchmarkCoreFactory();
+        RecordingDeviceBenchmarkRunner deviceRunner = new RecordingDeviceBenchmarkRunner();
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7", "https://server", service, factory);
+
+        CompletableFuture<Void> launch = CompletableFuture.runAsync(() -> {
+            try {
+                model.preflightBenchmarkAndLaunch(
+                    new BeaconApiClient.ProfilePatch(),
+                    capabilities(),
+                    telemetry(),
+                    benchmarkRequest("sessionPreflight"),
+                    deviceRunner,
+                    BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+            } catch (IOException failure) {
+                throw new CompletionException(failure);
+            }
+        });
+
+        service.awaitBenchmarkPreparation();
+        assertEquals("patch,capabilities,telemetry,benchmark prepare", service.actions());
+        assertTrue(!launch.isDone());
+
+        factory.awaitStarted();
+        factory.emitCompletedNetworkResult();
+        deviceRunner.awaitStarted();
+        assertTrue(deviceRunner.plan.decoderRounds().isEmpty());
+        assertTrue(!launch.isDone());
+
+        deviceRunner.emitCompleted();
+        launch.get();
+
+        assertEquals(
+            "patch,capabilities,telemetry,benchmark prepare,benchmark complete,launch",
+            service.actions());
+        assertEquals(0, service.lastBenchmarkCompletion.toJson().getAsJsonArray("decoderSamples").size());
+        assertEquals(1, service.lastBenchmarkCompletion.toJson().getAsJsonArray("powerSamples").size());
+        model.close();
+    }
+
+    @Test
     public void controlActionsRemainAvailableDuringMediaRecovery() throws Exception {
         FakeService service = new FakeService();
         BeaconStreamCore core = new BeaconStreamCore(
@@ -196,7 +245,9 @@ public final class BeaconViewModelTest {
         BeaconViewModel model = new BeaconViewModel(
             "z-fold-7", "https://server", service, factory);
 
-        model.runBenchmark(benchmarkRequest("manual"), deviceRunner);
+        CompletableFuture<BeaconApiClient.BeaconResult> completion =
+            model.runBenchmark(benchmarkRequest("manual"), deviceRunner);
+        assertTrue(!completion.isDone());
         assertEquals(0, deviceRunner.startCount);
         factory.emitCompletedNetworkResult();
         deviceRunner.awaitStarted();
@@ -205,6 +256,7 @@ public final class BeaconViewModelTest {
         assertEquals("benchmark prepare", service.actions());
         deviceRunner.emitCompleted();
         service.awaitBenchmarkCompletion();
+        assertTrue(completion.get().isSuccess());
 
         assertEquals("benchmark prepare,benchmark complete", service.actions());
         assertEquals(1, factory.bindings.startCount);
@@ -230,9 +282,12 @@ public final class BeaconViewModelTest {
                 throw new AssertionError("Reused evidence allocated StreamCore.");
             });
 
-        model.runBenchmark(benchmarkRequest("automatic"), deviceRunner);
+        CompletableFuture<BeaconApiClient.BeaconResult> completion =
+            model.runBenchmark(benchmarkRequest("automatic"), deviceRunner);
 
         assertEquals("benchmark prepare", service.actions());
+        assertTrue(completion.isDone());
+        assertTrue(completion.get().isSuccess());
         assertEquals(0, allocations.get());
         assertEquals(0, deviceRunner.startCount);
         assertEquals("benchmark reuse: 200", model.status());
@@ -421,6 +476,12 @@ public final class BeaconViewModelTest {
             "\"runToken\":\"AAECAwQFBgcICQoLDA0ODw==\"}}}";
     }
 
+    private static String sessionPreflightBenchmarkGrantBody() {
+        return benchmarkGrantBody().replace(
+            "[{\"vectorId\":\"beacon-h264-high-8-1280x720-60-v1\",\"codec\":\"h264\",\"profile\":\"high\",\"bitDepth\":8,\"width\":1280,\"height\":720,\"targetFps\":60,\"repetitionCount\":3}]",
+            "[]");
+    }
+
     private static boolean allZero(byte[] bytes) {
         for (byte value : bytes) {
             if (value != 0) return false;
@@ -480,6 +541,10 @@ public final class BeaconViewModelTest {
                 bindings.generation);
         }
 
+        void awaitStarted() throws InterruptedException {
+            bindings.started.await();
+        }
+
         void emitConnectionLost() {
             bindings.callbacks.onConnectionLost(bindings.generation);
         }
@@ -514,7 +579,9 @@ public final class BeaconViewModelTest {
         }
 
         void emitCompleted() {
-            observer.onCompleted(new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples()));
+            List<BeaconBenchmarkCompletionRequest.DecoderSample> samples =
+                plan.decoderRounds().isEmpty() ? List.of() : decoderSamples();
+            observer.onCompleted(new BeaconBenchmarkDeviceEvidence(samples, powerSamples()));
         }
     }
 
@@ -523,6 +590,7 @@ public final class BeaconViewModelTest {
         private long generation;
         private int startCount;
         private int stopCount;
+        private final CountDownLatch started = new CountDownLatch(1);
 
         @Override public long create(BeaconStreamCore.NativeCallbacks callbacks) {
             this.callbacks = callbacks;
@@ -531,6 +599,7 @@ public final class BeaconViewModelTest {
         @Override public boolean start(long handle, BeaconStreamSession.NativeGrant grant) {
             startCount++;
             generation = grant.generation;
+            started.countDown();
             return true;
         }
         @Override public void sendInput(long handle, BeaconApiClient.InputBatch input) { }
@@ -556,6 +625,7 @@ public final class BeaconViewModelTest {
         private BeaconBenchmarkCompletionRequest lastBenchmarkCompletion;
         private final CountDownLatch benchmarkCompleted = new CountDownLatch(1);
         private final CountDownLatch benchmarkCancelled = new CountDownLatch(1);
+        private final CountDownLatch benchmarkPrepared = new CountDownLatch(1);
 
         String actions() {
             return actionLog.toString();
@@ -571,6 +641,10 @@ public final class BeaconViewModelTest {
 
         void awaitBenchmarkCompletion() throws InterruptedException {
             benchmarkCompleted.await();
+        }
+
+        void awaitBenchmarkPreparation() throws InterruptedException {
+            benchmarkPrepared.await();
         }
 
         void awaitBenchmarkCancellation() throws InterruptedException {
@@ -624,6 +698,7 @@ public final class BeaconViewModelTest {
         public BeaconApiClient.BeaconResult prepareBenchmark(
             BeaconBenchmarkPrepareRequest request) throws IOException {
             record("benchmark prepare");
+            benchmarkPrepared.countDown();
             return benchmarkPrepare;
         }
 

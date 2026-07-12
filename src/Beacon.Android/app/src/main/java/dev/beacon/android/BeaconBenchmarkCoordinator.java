@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import java.io.IOException;
+import java.util.concurrent.CompletableFuture;
 import java.util.UUID;
 
 final class BeaconBenchmarkCoordinator {
@@ -19,7 +20,7 @@ final class BeaconBenchmarkCoordinator {
         this.resultObserver = resultObserver;
     }
 
-    void run(
+    CompletableFuture<BeaconApiClient.BeaconResult> run(
         BeaconBenchmarkPrepareRequest request,
         BeaconDeviceBenchmarkRunner deviceRunner,
         StreamController stream) throws IOException {
@@ -32,10 +33,12 @@ final class BeaconBenchmarkCoordinator {
             }
         }
 
+        CompletableFuture<BeaconApiClient.BeaconResult> completion = new CompletableFuture<>();
         BeaconApiClient.BeaconResult result = service.prepareBenchmark(request);
         resultObserver.onResult("benchmark prepare", result);
         if (!result.isSuccess()) {
-            return;
+            completion.complete(result);
+            return completion;
         }
 
         Preparation preparation;
@@ -50,14 +53,16 @@ final class BeaconBenchmarkCoordinator {
         }
         if (preparation.reused) {
             resultObserver.onResult("benchmark reuse", result);
-            return;
+            completion.complete(result);
+            return completion;
         }
 
         ActiveRun run = new ActiveRun(
             preparation.runId,
             stream,
             deviceRunner,
-            preparation.hardwarePlan);
+            preparation.hardwarePlan,
+            completion);
         try {
             synchronized (this) {
                 if (activeRun != null) {
@@ -73,8 +78,10 @@ final class BeaconBenchmarkCoordinator {
                 stopStream(removed);
                 cancelPreparedRun(run.runId, failure);
             }
+            completion.completeExceptionally(failure);
             throw failure;
         }
+        return completion;
     }
 
     void cancel(StreamController stream) throws IOException {
@@ -87,7 +94,14 @@ final class BeaconBenchmarkCoordinator {
         }
         cancelDeviceRun(run);
         stopStream(run);
-        resultObserver.onResult("benchmark cancel", service.cancelBenchmark(run.runId));
+        try {
+            BeaconApiClient.BeaconResult result = service.cancelBenchmark(run.runId);
+            resultObserver.onResult("benchmark cancel", result);
+            run.completion.complete(result);
+        } catch (IOException | RuntimeException failure) {
+            run.completion.completeExceptionally(failure);
+            throw failure;
+        }
     }
 
     void onNetworkCompleted(BeaconStreamCore.BenchmarkNetworkResult networkResult) {
@@ -131,6 +145,7 @@ final class BeaconBenchmarkCoordinator {
             "Benchmark " + stage + " failed.");
         resultObserver.onFailure("benchmark " + stage, failure);
         cancelPreparedRun(run.runId, failure);
+        run.completion.completeExceptionally(failure);
     }
 
     private void onDeviceCompleted(ActiveRun run, BeaconBenchmarkDeviceEvidence evidence) {
@@ -163,6 +178,7 @@ final class BeaconBenchmarkCoordinator {
             : failure;
         resultObserver.onFailure("benchmark device", reported);
         cancelPreparedRun(run.runId, reported);
+        run.completion.completeExceptionally(reported);
     }
 
     private void complete(ActiveRun run) {
@@ -177,9 +193,11 @@ final class BeaconBenchmarkCoordinator {
                 cancelPreparedRun(run.runId, null);
             }
             resultObserver.onResult("benchmark complete", result);
+            run.completion.complete(result);
         } catch (IOException | RuntimeException failure) {
             resultObserver.onFailure("benchmark complete", failure);
             cancelPreparedRun(run.runId, failure);
+            run.completion.completeExceptionally(failure);
         } finally {
             stopStream(run);
         }
@@ -271,6 +289,7 @@ final class BeaconBenchmarkCoordinator {
         private final StreamController stream;
         private final BeaconDeviceBenchmarkRunner deviceRunner;
         private final BeaconBenchmarkHardwarePlan hardwarePlan;
+        private final CompletableFuture<BeaconApiClient.BeaconResult> completion;
         private BeaconDeviceBenchmarkRunner.Run deviceRun;
         private BeaconStreamCore.BenchmarkNetworkResult networkResult;
         private BeaconBenchmarkDeviceEvidence deviceEvidence;
@@ -280,11 +299,13 @@ final class BeaconBenchmarkCoordinator {
             String runId,
             StreamController stream,
             BeaconDeviceBenchmarkRunner deviceRunner,
-            BeaconBenchmarkHardwarePlan hardwarePlan) {
+            BeaconBenchmarkHardwarePlan hardwarePlan,
+            CompletableFuture<BeaconApiClient.BeaconResult> completion) {
             this.runId = runId;
             this.stream = stream;
             this.deviceRunner = deviceRunner;
             this.hardwarePlan = hardwarePlan;
+            this.completion = completion;
         }
     }
 

@@ -71,6 +71,22 @@ public final class SequentialDeviceBenchmarkRunnerTest {
     }
 
     @Test
+    public void networkOnlyPreflightSamplesCurrentPowerWithoutInventingDecoderEvidence() {
+        RecordingRoundExecutor executor = new RecordingRoundExecutor();
+        SequentialDeviceBenchmarkRunner runner = new SequentialDeviceBenchmarkRunner(
+            executor,
+            () -> new BeaconBenchmarkCompletionRequest.PowerSample(72, false, "nominal"));
+        RecordingObserver observer = new RecordingObserver();
+
+        runner.start(networkOnlyPlan(), observer);
+
+        assertTrue(observer.completed);
+        assertTrue(observer.evidence.decoderSamples().isEmpty());
+        assertEquals(1, observer.evidence.powerSamples().size());
+        assertTrue(executor.startedVectorIds.isEmpty());
+    }
+
+    @Test
     public void roundInfrastructureFailureEndsRunWithoutStartingAnotherRound() {
         RecordingRoundExecutor executor = new RecordingRoundExecutor();
         SequentialDeviceBenchmarkRunner runner = new SequentialDeviceBenchmarkRunner(
@@ -93,6 +109,13 @@ public final class SequentialDeviceBenchmarkRunnerTest {
                 "\"width\":1280,\"height\":720,\"targetFps\":60,\"repetitionCount\":3}," +
                 "{\"vectorId\":\"vector-b\",\"codec\":\"hevc\",\"profile\":\"main\",\"bitDepth\":8," +
                 "\"width\":1280,\"height\":720,\"targetFps\":60,\"repetitionCount\":3}]}")
+            .getAsJsonObject());
+    }
+
+    private static BeaconBenchmarkHardwarePlan networkOnlyPlan() {
+        return BeaconBenchmarkHardwarePlan.parse(JsonParser.parseString(
+            "{\"schemaVersion\":1,\"samplePowerBeforeAndAfterEachRound\":true," +
+                "\"decoderRounds\":[]}")
             .getAsJsonObject());
     }
 

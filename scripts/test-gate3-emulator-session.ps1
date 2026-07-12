@@ -1014,9 +1014,17 @@ try {
     $httpClient.BaseAddress = [Uri]$hostServerUrl
     $httpClient.Timeout = [Threading.Timeout]::InfiniteTimeSpan
     try {
+        Write-Gate3Stage 'gate4-network-change-instrumentation'
+        $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
+            'gate4DefaultNetworkChangeMonitor' $emulatorServerUrl $clientId `
+            $inputPayloadCanary))
         Write-Gate3Stage 'gate4-certified-benchmark-instrumentation'
         $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
             'gate4CertifiedBenchmarkEvidence' $emulatorServerUrl $clientId `
+            $inputPayloadCanary))
+        Write-Gate3Stage 'gate4-session-preflight-instrumentation'
+        $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
+            'gate4CertifiedSessionPreflight' $emulatorServerUrl $clientId `
             $inputPayloadCanary))
         Write-Gate3Stage 'gate4-real-hardware-instrumentation'
         $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
@@ -1049,8 +1057,12 @@ try {
                 Where-Object {
                     $null -eq $_.completedAt -or $null -eq $_.selectedResult
                 })
-        Require-Condition ($completedBenchmarks.Count -eq 1) `
-            'The deterministic Gate 4 benchmark did not retain exactly one completed certification.'
+        Require-Condition ($completedBenchmarks.Count -eq 2) `
+            'Gate 4 did not retain the full certification and its session preflight.'
+        Require-Condition (@(
+            $completedBenchmarks |
+                Where-Object { $_.trigger -eq 'SessionPreflight' }).Count -eq 1) `
+            'Gate 4 did not retain exactly one completed session preflight.'
         Require-Condition ($pendingBenchmarks.Count -eq 0) `
             'The real Gate 4 observation left an orphaned benchmark run.'
         $operations = @($firstSnapshot.diagnostics | ForEach-Object { $_.operation })
@@ -1082,6 +1094,8 @@ try {
             'BEACON_GATE3_FEEDBACK 1',
             'BEACON_GATE3_RECONNECT_FRESH_TICKET',
             'BEACON_GATE4_BENCHMARK_COMPLETE',
+            'BEACON_GATE4_SESSION_PREFLIGHT',
+            'BEACON_GATE4_CHANGE_MONITOR',
             'BEACON_GATE4_REAL_HARDWARE_OBSERVED')) {
             Require-Condition ($logcat -match [Regex]::Escape($marker)) 'Required Android Gate 3 evidence was not emitted.'
             Write-Output $marker

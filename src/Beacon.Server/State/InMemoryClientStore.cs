@@ -277,6 +277,26 @@ public sealed class InMemoryClientStore
             : null);
     }
 
+    public BenchmarkEvidence? GetLatestBenchmarkHardwareEvidence(
+        string clientId,
+        HardwareFingerprint hardware,
+        DateTimeOffset evaluatedAt,
+        TimeSpan maximumEvidenceAge)
+    {
+        ArgumentNullException.ThrowIfNull(hardware);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(maximumEvidenceAge, TimeSpan.Zero);
+        return WithLock(() => benchmarkEvidence.Values
+            .Where(value => value.ClientId.Value.Equals(clientId, StringComparison.OrdinalIgnoreCase))
+            .Where(value => value.Fingerprints.Hardware == hardware)
+            .Where(value => value.CompletedAt is not null && value.SelectedResult is not null)
+            .Where(value => value.DecoderSamples.Count > 0)
+            .Where(value => value.CompletedAt <= evaluatedAt)
+            .Where(value => evaluatedAt - value.CompletedAt!.Value <= maximumEvidenceAge)
+            .OrderByDescending(value => value.CompletedAt)
+            .ThenByDescending(value => value.RunId)
+            .FirstOrDefault());
+    }
+
     private void PersistAndPublishBenchmarkEvidence(BenchmarkEvidence evidence)
     {
         BenchmarkEvidence[] persisted = benchmarkEvidence.Values

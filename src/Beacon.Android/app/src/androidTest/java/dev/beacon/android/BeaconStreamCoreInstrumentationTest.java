@@ -375,6 +375,29 @@ public final class BeaconStreamCoreInstrumentationTest {
     }
 
     @Test
+    public void gate4DefaultNetworkChangeMonitor() throws Exception {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        CountDownLatch changed = new CountDownLatch(1);
+        AtomicReference<AndroidBenchmarkNetworkState> observed = new AtomicReference<>();
+        AndroidBenchmarkChangeMonitor monitor = new AndroidBenchmarkChangeMonitor(
+            instrumentation.getTargetContext());
+        try {
+            monitor.start(network -> {
+                observed.set(network);
+                changed.countDown();
+            });
+            changed.await();
+        } finally {
+            monitor.close();
+        }
+
+        assertNotNull(observed.get());
+        assertTrue(!"none".equals(observed.get().transport()));
+        assertTrue(!observed.get().localNetworkPrefix().isEmpty());
+        emit("BEACON_GATE4_CHANGE_MONITOR");
+    }
+
+    @Test
     public void gate4CertifiedBenchmarkEvidence() throws Exception {
         Gate4BenchmarkOutcome outcome = runGate4Benchmark(
             InstrumentationRegistry.getInstrumentation(),
@@ -384,10 +407,31 @@ public final class BeaconStreamCoreInstrumentationTest {
         emit("BEACON_GATE4_BENCHMARK_COMPLETE");
     }
 
+    @Test
+    public void gate4CertifiedSessionPreflight() throws Exception {
+        Gate4BenchmarkOutcome outcome = runGate4Benchmark(
+            InstrumentationRegistry.getInstrumentation(),
+            certifiedNetworkOnlyDeviceRunner(),
+            false,
+            "sessionPreflight");
+        assertTrue(outcome.completion.body(), outcome.completion.isSuccess());
+        assertTrue(outcome.deviceEvidence.decoderSamples().isEmpty());
+        assertEquals(1, outcome.deviceEvidence.powerSamples().size());
+        emit("BEACON_GATE4_SESSION_PREFLIGHT");
+    }
+
     private static Gate4BenchmarkOutcome runGate4Benchmark(
         Instrumentation instrumentation,
         BeaconDeviceBenchmarkRunner deviceRunner,
         boolean useNativeNetwork) throws Exception {
+        return runGate4Benchmark(instrumentation, deviceRunner, useNativeNetwork, "manual");
+    }
+
+    private static Gate4BenchmarkOutcome runGate4Benchmark(
+        Instrumentation instrumentation,
+        BeaconDeviceBenchmarkRunner deviceRunner,
+        boolean useNativeNetwork,
+        String trigger) throws Exception {
         Bundle arguments = requireGate3Arguments();
         String serverUrl = requireArgument(arguments, "serverUrl");
         String clientId = requireArgument(arguments, "clientId");
@@ -471,7 +515,10 @@ public final class BeaconStreamCoreInstrumentationTest {
             });
         try {
             coordinator.run(
-                gate4BenchmarkRequest(instrumentation.getTargetContext(), serverUrl),
+                gate4BenchmarkRequest(
+                    instrumentation.getTargetContext(),
+                    serverUrl,
+                    trigger),
                 observedRunner,
                 stream);
             finished.await();
@@ -555,6 +602,19 @@ public final class BeaconStreamCoreInstrumentationTest {
                     "nominal"));
             }
             observer.onCompleted(new BeaconBenchmarkDeviceEvidence(decoders, power));
+            return () -> { };
+        };
+    }
+
+    private static BeaconDeviceBenchmarkRunner certifiedNetworkOnlyDeviceRunner() {
+        return (plan, observer) -> {
+            assertTrue(plan.decoderRounds().isEmpty());
+            observer.onCompleted(new BeaconBenchmarkDeviceEvidence(
+                List.of(),
+                List.of(new BeaconBenchmarkCompletionRequest.PowerSample(
+                    100,
+                    true,
+                    "nominal"))));
             return () -> { };
         };
     }
@@ -724,9 +784,10 @@ public final class BeaconStreamCoreInstrumentationTest {
 
     private static BeaconBenchmarkPrepareRequest gate4BenchmarkRequest(
         Context context,
-        String serverUrl) {
+        String serverUrl,
+        String trigger) {
         return new BeaconBenchmarkPrepareRequest(
-            "manual",
+            trigger,
             new BeaconBenchmarkPrepareRequest.FingerprintSet(
                 BeaconBenchmarkPrepareRequest.NetworkFingerprint.fromLocalNetwork(
                     3,

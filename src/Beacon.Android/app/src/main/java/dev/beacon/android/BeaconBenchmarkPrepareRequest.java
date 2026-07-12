@@ -11,8 +11,10 @@ public final class BeaconBenchmarkPrepareRequest {
 
     public BeaconBenchmarkPrepareRequest(String trigger, FingerprintSet fingerprints) {
         this.trigger = requireText(trigger, "trigger");
-        if (!this.trigger.equals("automatic") && !this.trigger.equals("manual")) {
-            throw new IllegalArgumentException("trigger must be automatic or manual.");
+        if (!this.trigger.equals("automatic") && !this.trigger.equals("manual") &&
+            !this.trigger.equals("sessionPreflight")) {
+            throw new IllegalArgumentException(
+                "trigger must be automatic, manual, or sessionPreflight.");
         }
         if (fingerprints == null) {
             throw new IllegalArgumentException("fingerprints is required.");

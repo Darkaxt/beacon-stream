@@ -18,7 +18,7 @@ public final class BeaconBenchmarkCompletionRequest {
         List<DecoderSample> decoderSamples,
         List<PowerSample> powerSamples) {
         if (networkSamples == null || networkSamples.isEmpty() ||
-            decoderSamples == null || decoderSamples.isEmpty() ||
+            decoderSamples == null ||
             powerSamples == null || powerSamples.isEmpty()) {
             throw new IllegalArgumentException(
                 "Network, decoder, and power benchmark samples are required.");
