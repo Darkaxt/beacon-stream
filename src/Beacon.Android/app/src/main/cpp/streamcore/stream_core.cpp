@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -11,6 +12,17 @@
 namespace beacon::android::streamcore {
 
 namespace stream_v1 = beacon::stream::v1;
+
+namespace {
+
+std::uint64_t monotonic_us() noexcept {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
+
+}  // namespace
 
 #ifndef NDEBUG
 namespace {
@@ -104,6 +116,18 @@ bool StreamCore::start(ConnectionGrant grant) {
   }
   const auto selected_limit = derive_maximum_frame_bytes(
       grant.video.width, grant.video.height);
+  if (grant.benchmark.has_value()) {
+    const BenchmarkGrant &benchmark = *grant.benchmark;
+    if (benchmark.run_id.empty() || benchmark.schema_version == 0 ||
+        !benchmark_collector_.start({
+            .run_token = benchmark.run_token,
+            .reliable_packet_count = benchmark.reliable_packet_count,
+            .reliable_payload_bytes = benchmark.reliable_payload_bytes,
+            .datagram_packet_count = benchmark.datagram_packet_count,
+            .datagram_payload_bytes = benchmark.datagram_payload_bytes})) {
+      return false;
+    }
+  }
 #ifndef NDEBUG
   inject_start_fault(StartFaultPoint::assembler_allocation);
 #endif
@@ -116,6 +140,8 @@ bool StreamCore::start(ConnectionGrant grant) {
   input_sequence_ = 0;
   feedback_sequence_ = 0;
   last_complete_sequence_ = 0;
+  last_server_sequence_ = 0;
+  benchmark_result_.reset();
   shutdown_ = false;
   transition(State::connecting);
   if (!transport_.connect(grant_.endpoint)) {
@@ -138,7 +164,12 @@ bool StreamCore::on_connected() {
 }
 
 bool StreamCore::receive_session(std::span<const std::byte> bytes) {
-  if (state_ != State::authenticating) {
+  return receive_session(bytes, monotonic_us());
+}
+
+bool StreamCore::receive_session(std::span<const std::byte> bytes,
+                                 std::uint64_t received_at_us) {
+  if (state_ != State::authenticating && state_ != State::benchmarking) {
     fail();
     return false;
   }
@@ -162,16 +193,64 @@ bool StreamCore::receive_session(std::span<const std::byte> bytes) {
                                              static_cast<int>(length));
     session_bytes_.erase(session_bytes_.begin(),
                          session_bytes_.begin() + 4U + length);
-    if (state_ != State::authenticating || !parsed ||
-        reply.protocol_version() != 1 ||
+    if (!parsed || reply.protocol_version() != 1 ||
         reply.session_id() != grant_.session_id ||
-        reply.sequence() != 1 ||
-        reply.body_case() != stream_v1::SessionStreamEnvelope::kSessionAuthenticated ||
-        !reply.session_authenticated().accepted()) {
+        reply.sequence() <= last_server_sequence_) {
       fail();
       return false;
     }
-    if (!send_start()) {
+
+    if (state_ == State::authenticating) {
+      if (reply.sequence() != 1 ||
+          reply.body_case() !=
+              stream_v1::SessionStreamEnvelope::kSessionAuthenticated ||
+          !reply.session_authenticated().accepted()) {
+        fail();
+        return false;
+      }
+      last_server_sequence_ = reply.sequence();
+      if (!send_start()) {
+        return false;
+      }
+    } else if (reply.body_case() ==
+               stream_v1::SessionStreamEnvelope::kBenchmarkReliableChunk) {
+      const auto &chunk = reply.benchmark_reliable_chunk();
+      if (!grant_.benchmark.has_value() ||
+          chunk.run_id() != grant_.benchmark->run_id || chunk.round_id() != 1 ||
+          !benchmark_collector_.observe_reliable(
+              chunk.sequence(), static_cast<std::uint32_t>(chunk.payload().size()),
+              received_at_us)) {
+        fail();
+        return false;
+      }
+      last_server_sequence_ = reply.sequence();
+    } else if (reply.body_case() ==
+               stream_v1::SessionStreamEnvelope::kBenchmarkRoundCompleted) {
+      const auto &completed = reply.benchmark_round_completed();
+      if (!grant_.benchmark.has_value() ||
+          completed.run_id() != grant_.benchmark->run_id ||
+          completed.round_id() != 2 ||
+          completed.expected_packet_count() !=
+              grant_.benchmark->datagram_packet_count ||
+          completed.payload_bytes() !=
+              grant_.benchmark->datagram_payload_bytes) {
+        fail();
+        return false;
+      }
+      std::vector<BenchmarkRttObservation> rtt;
+      rtt.reserve(static_cast<std::size_t>(completed.rtt_observations_size()));
+      for (const auto &observation : completed.rtt_observations()) {
+        rtt.push_back({.sequence = observation.sequence(),
+                       .rtt_us = observation.rtt_us()});
+      }
+      benchmark_result_ = benchmark_collector_.complete(received_at_us, rtt);
+      if (!benchmark_result_.has_value()) {
+        fail();
+        return false;
+      }
+      last_server_sequence_ = reply.sequence();
+    } else {
+      fail();
       return false;
     }
   }
@@ -179,6 +258,19 @@ bool StreamCore::receive_session(std::span<const std::byte> bytes) {
 }
 
 bool StreamCore::receive_datagram(std::span<const std::byte> bytes) {
+  return receive_datagram(bytes, monotonic_us());
+}
+
+bool StreamCore::receive_datagram(std::span<const std::byte> bytes,
+                                  std::uint64_t received_at_us) {
+  if (state_ == State::benchmarking) {
+    auto parsed = stream::parse_benchmark_datagram(bytes);
+    if (!parsed.has_value() ||
+        !benchmark_collector_.observe_datagram(bytes, received_at_us)) {
+      return false;
+    }
+    return send_benchmark_echo(parsed->header);
+  }
   if (state_ != State::streaming) {
     return false;
   }
@@ -195,6 +287,23 @@ bool StreamCore::receive_datagram(std::span<const std::byte> bytes) {
                .presentation_time_us = frame.presentation_time_us,
                .sequence = frame.sequence,
                .idr = idr});
+  return true;
+}
+
+bool StreamCore::send_benchmark_echo(
+    const stream::BenchmarkDatagramHeader &header) {
+  stream_v1::FeedbackStreamEnvelope envelope;
+  envelope.set_protocol_version(1);
+  envelope.set_session_id(grant_.session_id);
+  envelope.set_sequence(++feedback_sequence_);
+  auto *echo = envelope.mutable_benchmark_datagram_echo();
+  echo->set_run_id(grant_.benchmark->run_id);
+  echo->set_round_id(header.round_id);
+  echo->set_sequence(header.sequence);
+  if (!transport_.send(StreamRole::feedback, frame_message(envelope))) {
+    fail();
+    return false;
+  }
   return true;
 }
 
@@ -261,7 +370,7 @@ void StreamCore::stop() noexcept {
   if (state_ == State::released || state_ == State::stopped) {
     return;
   }
-  if (state_ == State::streaming) {
+  if (state_ == State::streaming || state_ == State::benchmarking) {
     try {
 #ifndef NDEBUG
       inject_close_fault(CloseFaultPoint::stop_envelope_allocation);
@@ -270,8 +379,13 @@ void StreamCore::stop() noexcept {
       envelope.set_protocol_version(1);
       envelope.set_session_id(grant_.session_id);
       envelope.set_sequence(++session_sequence_);
-      envelope.mutable_stop_session()->set_reason(
-          stream_v1::SESSION_STOP_REASON_CLIENT_REQUEST);
+      if (state_ == State::benchmarking && grant_.benchmark.has_value()) {
+        envelope.mutable_cancel_benchmark()->set_run_id(
+            grant_.benchmark->run_id);
+      } else {
+        envelope.mutable_stop_session()->set_reason(
+            stream_v1::SESSION_STOP_REASON_CLIENT_REQUEST);
+      }
 #ifndef NDEBUG
       inject_close_fault(CloseFaultPoint::stop_serialization);
 #endif
@@ -279,6 +393,7 @@ void StreamCore::stop() noexcept {
     } catch (...) {
     }
   }
+  benchmark_collector_.cancel();
   if (!shutdown_) {
     shutdown_ = true;
     try {
@@ -314,6 +429,12 @@ State StreamCore::state() const noexcept { return state_; }
 
 bool StreamCore::ticket_consumed() const noexcept { return grant_.ticket.consumed(); }
 
+std::optional<BenchmarkCollectionResult> StreamCore::take_benchmark_result() {
+  auto result = std::move(benchmark_result_);
+  benchmark_result_.reset();
+  return result;
+}
+
 template <typename Message>
 std::vector<std::byte> StreamCore::frame_message(const Message &message) {
   const auto length = static_cast<std::uint32_t>(message.ByteSizeLong());
@@ -347,6 +468,9 @@ bool StreamCore::send_authenticate() {
 }
 
 bool StreamCore::send_start() {
+  if (grant_.benchmark.has_value()) {
+    return send_start_benchmark();
+  }
   stream_v1::SessionStreamEnvelope envelope;
   envelope.set_protocol_version(1);
   envelope.set_session_id(grant_.session_id);
@@ -366,12 +490,40 @@ bool StreamCore::send_start() {
   return true;
 }
 
+bool StreamCore::send_start_benchmark() {
+  const BenchmarkGrant &benchmark = *grant_.benchmark;
+  stream_v1::SessionStreamEnvelope envelope;
+  envelope.set_protocol_version(1);
+  envelope.set_session_id(grant_.session_id);
+  envelope.set_sequence(++session_sequence_);
+  auto *start = envelope.mutable_start_benchmark();
+  start->set_run_id(benchmark.run_id);
+  start->set_schema_version(benchmark.schema_version);
+  auto *reliable = start->mutable_reliable_round();
+  reliable->set_packet_count(benchmark.reliable_packet_count);
+  reliable->set_payload_bytes(benchmark.reliable_payload_bytes);
+  reliable->set_measurement_interval_us(
+      benchmark.reliable_measurement_interval_us);
+  auto *datagram = start->mutable_datagram_round();
+  datagram->set_packet_count(benchmark.datagram_packet_count);
+  datagram->set_payload_bytes(benchmark.datagram_payload_bytes);
+  datagram->set_measurement_interval_us(
+      benchmark.datagram_measurement_interval_us);
+  if (!transport_.send(StreamRole::session, frame_message(envelope))) {
+    fail();
+    return false;
+  }
+  transition(State::benchmarking);
+  return true;
+}
+
 void StreamCore::transition(State state) {
   state_ = state;
   sink_.state_changed(state);
 }
 
 void StreamCore::fail() {
+  benchmark_collector_.cancel();
   if (!shutdown_) {
     shutdown_ = true;
     transport_.shutdown();

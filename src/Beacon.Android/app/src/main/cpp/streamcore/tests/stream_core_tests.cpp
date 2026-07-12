@@ -121,6 +121,26 @@ android_stream::ConnectionGrant grant() {
   return result;
 }
 
+android_stream::ConnectionGrant benchmark_grant() {
+  auto result = grant();
+  result.benchmark = android_stream::BenchmarkGrant{
+      .run_id = "11111111-1111-1111-1111-111111111111",
+      .run_token = {std::byte{0x00}, std::byte{0x01}, std::byte{0x02},
+                    std::byte{0x03}, std::byte{0x04}, std::byte{0x05},
+                    std::byte{0x06}, std::byte{0x07}, std::byte{0x08},
+                    std::byte{0x09}, std::byte{0x0a}, std::byte{0x0b},
+                    std::byte{0x0c}, std::byte{0x0d}, std::byte{0x0e},
+                    std::byte{0x0f}},
+      .schema_version = 3,
+      .reliable_packet_count = 4,
+      .reliable_payload_bytes = 1024,
+      .reliable_measurement_interval_us = 500'000,
+      .datagram_packet_count = 8,
+      .datagram_payload_bytes = 1000,
+      .datagram_measurement_interval_us = 500'000};
+  return result;
+}
+
 stream_v1::SessionStreamEnvelope parse_session(std::span<const std::byte> bytes) {
   const auto message_bytes = payload(bytes);
   stream_v1::SessionStreamEnvelope message;
@@ -146,6 +166,52 @@ std::vector<std::byte> accepted_reply(std::uint64_t sequence = 1) {
   bytes[3] = static_cast<std::byte>(size);
   BEACON_TEST_REQUIRE(reply.SerializeToArray(bytes.data() + 4, static_cast<int>(size)));
   return bytes;
+}
+
+std::vector<std::byte> framed_session(
+    const stream_v1::SessionStreamEnvelope &message) {
+  std::vector<std::byte> bytes(4U + message.ByteSizeLong());
+  const auto size = static_cast<std::uint32_t>(message.ByteSizeLong());
+  bytes[0] = static_cast<std::byte>(size >> 24U);
+  bytes[1] = static_cast<std::byte>(size >> 16U);
+  bytes[2] = static_cast<std::byte>(size >> 8U);
+  bytes[3] = static_cast<std::byte>(size);
+  BEACON_TEST_REQUIRE(
+      message.SerializeToArray(bytes.data() + 4, static_cast<int>(size)));
+  return bytes;
+}
+
+std::vector<std::byte> reliable_benchmark_chunk(std::uint64_t envelope_sequence,
+                                                 std::uint64_t packet_sequence) {
+  stream_v1::SessionStreamEnvelope message;
+  message.set_protocol_version(1);
+  message.set_session_id("session-1");
+  message.set_sequence(envelope_sequence);
+  auto *chunk = message.mutable_benchmark_reliable_chunk();
+  chunk->set_run_id("11111111-1111-1111-1111-111111111111");
+  chunk->set_round_id(1);
+  chunk->set_sequence(packet_sequence);
+  chunk->set_sent_at_us(100 + packet_sequence);
+  chunk->set_payload(std::string(1024, 'b'));
+  return framed_session(message);
+}
+
+std::vector<std::byte> benchmark_completed() {
+  stream_v1::SessionStreamEnvelope message;
+  message.set_protocol_version(1);
+  message.set_session_id("session-1");
+  message.set_sequence(6);
+  auto *completed = message.mutable_benchmark_round_completed();
+  completed->set_run_id("11111111-1111-1111-1111-111111111111");
+  completed->set_round_id(2);
+  completed->set_expected_packet_count(8);
+  completed->set_payload_bytes(1000);
+  for (std::uint64_t sequence = 0; sequence < 7; ++sequence) {
+    auto *rtt = completed->add_rtt_observations();
+    rtt->set_sequence(sequence);
+    rtt->set_rtt_us(2'000 + sequence);
+  }
+  return framed_session(message);
 }
 
 std::vector<std::byte> media_datagram(
@@ -174,6 +240,25 @@ std::vector<std::byte> media_datagram(
           result.data(), beacon::stream::media_datagram_header_bytes}));
   std::ranges::copy(bytes,
                     result.begin() + beacon::stream::media_datagram_header_bytes);
+  return result;
+}
+
+std::vector<std::byte> benchmark_datagram(
+    const std::array<std::byte, 16> &run_token, std::uint64_t sequence,
+    std::uint64_t sent_at_us, std::uint32_t payload_bytes) {
+  std::vector<std::byte> result(
+      beacon::stream::benchmark_datagram_header_bytes + payload_bytes,
+      std::byte{0x44});
+  const beacon::stream::BenchmarkDatagramHeader header{
+      .run_token = run_token,
+      .round_id = 2,
+      .sequence = sequence,
+      .sent_at_us = sent_at_us,
+      .payload_bytes = payload_bytes};
+  BEACON_TEST_REQUIRE(beacon::stream::serialize_benchmark_datagram_header(
+      header,
+      std::span<std::byte, beacon::stream::benchmark_datagram_header_bytes>{
+          result.data(), beacon::stream::benchmark_datagram_header_bytes}));
   return result;
 }
 
@@ -209,6 +294,84 @@ void accepted_auth_starts_selected_video() {
   BEACON_TEST_REQUIRE(start.start_session().selected_video().width() == 1920);
   BEACON_TEST_REQUIRE(start.start_session().selected_video().height() == 1080);
   BEACON_TEST_REQUIRE(start.start_session().selected_video().frames_per_second_numerator() == 60);
+}
+
+void accepted_auth_starts_benchmark_without_starting_video() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(benchmark_grant()));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+  BEACON_TEST_REQUIRE(core.state() == android_stream::State::benchmarking);
+  BEACON_TEST_REQUIRE(transport.sends.size() == 2);
+  const auto start = parse_session(transport.sends[1].bytes);
+  BEACON_TEST_REQUIRE(
+      start.body_case() == stream_v1::SessionStreamEnvelope::kStartBenchmark);
+  BEACON_TEST_REQUIRE(start.start_benchmark().run_id() ==
+                      "11111111-1111-1111-1111-111111111111");
+  BEACON_TEST_REQUIRE(start.start_benchmark().schema_version() == 3);
+  BEACON_TEST_REQUIRE(
+      start.start_benchmark().reliable_round().packet_count() == 4);
+  BEACON_TEST_REQUIRE(
+      start.start_benchmark().datagram_round().packet_count() == 8);
+}
+
+void benchmark_packets_produce_echoes_and_explicit_completion_evidence() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(benchmark_grant()));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply(), 500));
+  for (std::uint64_t sequence = 0; sequence < 4; ++sequence) {
+    BEACON_TEST_REQUIRE(core.receive_session(
+        reliable_benchmark_chunk(2 + sequence, sequence), 1'000 + sequence * 500));
+  }
+
+  const auto run_token = benchmark_grant().benchmark->run_token;
+  for (std::uint64_t sequence = 0; sequence < 7; ++sequence) {
+    BEACON_TEST_REQUIRE(core.receive_datagram(
+        benchmark_datagram(run_token, sequence, 100 + sequence * 10, 1000),
+        2'000 + sequence * 12));
+  }
+  BEACON_TEST_REQUIRE(transport.sends.size() == 9);
+  for (std::size_t index = 2; index < transport.sends.size(); ++index) {
+    BEACON_TEST_REQUIRE(transport.sends[index].role ==
+                        android_stream::StreamRole::feedback);
+    stream_v1::FeedbackStreamEnvelope echo;
+    const auto message_bytes = payload(transport.sends[index].bytes);
+    BEACON_TEST_REQUIRE(echo.ParseFromArray(
+        message_bytes.data(), static_cast<int>(message_bytes.size())));
+    BEACON_TEST_REQUIRE(echo.benchmark_datagram_echo().sequence() == index - 2);
+  }
+
+  BEACON_TEST_REQUIRE(core.receive_session(benchmark_completed(), 4'000));
+  auto result = core.take_benchmark_result();
+  BEACON_TEST_REQUIRE(result.has_value());
+  BEACON_TEST_REQUIRE(result->samples.size() == 8);
+  BEACON_TEST_REQUIRE(result->received_datagrams == 7);
+  BEACON_TEST_REQUIRE(!result->samples[7].received);
+  BEACON_TEST_REQUIRE(!core.take_benchmark_result().has_value());
+}
+
+void benchmark_stop_cancels_and_allows_a_fresh_run() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(benchmark_grant()));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+
+  core.stop();
+  BEACON_TEST_REQUIRE(core.state() == android_stream::State::stopped);
+  BEACON_TEST_REQUIRE(transport.sends.size() == 3);
+  const auto cancel = parse_session(transport.sends[2].bytes);
+  BEACON_TEST_REQUIRE(cancel.body_case() ==
+                      stream_v1::SessionStreamEnvelope::kCancelBenchmark);
+  BEACON_TEST_REQUIRE(cancel.cancel_benchmark().run_id() ==
+                      "11111111-1111-1111-1111-111111111111");
+  BEACON_TEST_REQUIRE(core.start(benchmark_grant()));
 }
 
 void accepted_auth_forwards_every_selected_video_mode_exactly() {
@@ -506,6 +669,9 @@ int main() {
   return beacon::stream::testing::run_tests([] {
     starts_one_route_and_consumes_ticket();
     accepted_auth_starts_selected_video();
+    accepted_auth_starts_benchmark_without_starting_video();
+    benchmark_packets_produce_echoes_and_explicit_completion_evidence();
+    benchmark_stop_cancels_and_allows_a_fresh_run();
     accepted_auth_forwards_every_selected_video_mode_exactly();
     sequences_are_monotonic_per_typed_channel();
     frame_limit_is_derived_from_selected_resolution();

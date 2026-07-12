@@ -12,11 +12,13 @@ $remoteDirectory = '/data/local/tmp/beacon-native'
 $tests = @(
     'BeaconStreamProtocolVersionTests',
     'BeaconMediaDatagramTests',
+    'BeaconBenchmarkDatagramTests',
     'BeaconFakeTransportTests',
     'BeaconSessionTests',
     'BeaconFrameAssemblerTests',
     'BeaconMsQuicTransportTests',
     'BeaconAndroidStreamCoreTests',
+    'BeaconAndroidBenchmarkCollectorTests',
     'BeaconAndroidCertificatePinTests',
     'BeaconAndroidLifecycleTests'
 )

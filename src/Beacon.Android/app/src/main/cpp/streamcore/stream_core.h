@@ -1,11 +1,13 @@
 #pragma once
 
+#include "benchmark_collector.h"
 #include "stream_control.pb.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -19,7 +21,16 @@ inline constexpr std::uint32_t minimum_planned_frame_bytes = 1024U * 1024U;
     std::uint32_t width, std::uint32_t height) noexcept;
 
 enum class StreamRole { session, input, feedback };
-enum class State { idle, connecting, authenticating, streaming, stopped, failed, released };
+enum class State {
+  idle,
+  connecting,
+  authenticating,
+  benchmarking,
+  streaming,
+  stopped,
+  failed,
+  released
+};
 
 #ifndef NDEBUG
 enum class StartFaultPoint {
@@ -73,6 +84,18 @@ struct SelectedVideo {
   stream::v1::DynamicRange dynamic_range{stream::v1::DYNAMIC_RANGE_UNSPECIFIED};
 };
 
+struct BenchmarkGrant {
+  std::string run_id;
+  std::array<std::byte, 16> run_token{};
+  std::uint32_t schema_version{};
+  std::uint32_t reliable_packet_count{};
+  std::uint32_t reliable_payload_bytes{};
+  std::uint64_t reliable_measurement_interval_us{};
+  std::uint32_t datagram_packet_count{};
+  std::uint32_t datagram_payload_bytes{};
+  std::uint64_t datagram_measurement_interval_us{};
+};
+
 struct ConnectionGrant {
   Endpoint endpoint;
   std::string client_id;
@@ -81,6 +104,7 @@ struct ConnectionGrant {
   std::string plan_explanation;
   TicketSecret ticket;
   SelectedVideo video;
+  std::optional<BenchmarkGrant> benchmark;
 };
 
 struct EncodedFrame {
@@ -116,7 +140,11 @@ class StreamCore {
   bool start(ConnectionGrant grant);
   bool on_connected();
   bool receive_session(std::span<const std::byte> bytes);
+  bool receive_session(std::span<const std::byte> bytes,
+                       std::uint64_t received_at_us);
   bool receive_datagram(std::span<const std::byte> bytes);
+  bool receive_datagram(std::span<const std::byte> bytes,
+                        std::uint64_t received_at_us);
   bool send_input(const stream::v1::InputBatch &input);
   bool send_feedback(const stream::v1::QueueDepthFeedback &feedback);
   void on_connection_lost();
@@ -125,14 +153,18 @@ class StreamCore {
 
   [[nodiscard]] State state() const noexcept;
   [[nodiscard]] bool ticket_consumed() const noexcept;
+  [[nodiscard]] std::optional<BenchmarkCollectionResult>
+  take_benchmark_result();
 
  private:
   template <typename Message>
   static std::vector<std::byte> frame_message(const Message &message);
   bool send_authenticate();
   bool send_start();
+  bool send_start_benchmark();
   bool drain_assembler_events();
   bool send_request_idr();
+  bool send_benchmark_echo(const stream::BenchmarkDatagramHeader &header);
   void transition(State state);
   void fail();
 
@@ -140,6 +172,7 @@ class StreamCore {
   FrameSink &sink_;
   class FrameAssemblerHolder;
   std::unique_ptr<FrameAssemblerHolder> assembler_;
+  BenchmarkCollector benchmark_collector_;
   std::uint32_t maximum_frame_bytes_{};
   ConnectionGrant grant_;
   std::vector<std::byte> session_bytes_;
@@ -147,6 +180,8 @@ class StreamCore {
   std::uint64_t input_sequence_{};
   std::uint64_t feedback_sequence_{};
   std::uint64_t last_complete_sequence_{};
+  std::uint64_t last_server_sequence_{};
+  std::optional<BenchmarkCollectionResult> benchmark_result_;
   State state_{State::idle};
   bool shutdown_{};
   bool released_{};
