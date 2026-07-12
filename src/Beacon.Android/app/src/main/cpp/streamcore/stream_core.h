@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
@@ -21,6 +22,12 @@ enum class StreamRole { session, input, feedback };
 enum class State { idle, connecting, authenticating, streaming, stopped, failed, released };
 
 #ifndef NDEBUG
+enum class StartFaultPoint {
+  assembler_allocation,
+};
+using StartFaultHook = void (*)(StartFaultPoint);
+void set_start_fault_hook_for_test(StartFaultHook hook) noexcept;
+
 enum class CloseFaultPoint {
   stop_envelope_allocation,
   stop_serialization,
@@ -132,7 +139,7 @@ class StreamCore {
   Transport &transport_;
   FrameSink &sink_;
   class FrameAssemblerHolder;
-  FrameAssemblerHolder *assembler_;
+  std::unique_ptr<FrameAssemblerHolder> assembler_;
   std::uint32_t maximum_frame_bytes_{};
   ConnectionGrant grant_;
   std::vector<std::byte> session_bytes_;

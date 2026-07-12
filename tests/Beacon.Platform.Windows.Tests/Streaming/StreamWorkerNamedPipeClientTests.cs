@@ -424,6 +424,31 @@ public sealed class StreamWorkerNamedPipeClientTests
     }
 
     [Fact]
+    public async Task CompletionWithMismatchedSessionIdFailsPendingRequest()
+    {
+        await using PipePair pipes = await PipePair.CreateAsync();
+        var processExit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task worker = Task.Run(async () =>
+        {
+            await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Ready(1));
+            WorkerIpcEnvelope request = await ReadAsync(pipes.Worker);
+            WorkerIpcEnvelope completion = Completion(request, succeeded: true);
+            completion.SessionId = "session-b";
+            await WriteAsync(pipes.Worker, completion);
+        });
+        await using var client = new StreamWorkerNamedPipeClient(pipes.Service, processExit.Task, 42);
+        await client.InitializeAsync(CancellationToken.None);
+
+        StreamWorkerProtocolException error = await Assert.ThrowsAsync<StreamWorkerProtocolException>(
+            () => client.SendAsync(Command("session-a"), CancellationToken.None));
+
+        Assert.Equal("StreamWorker response session identity is invalid.", error.Message);
+        Assert.IsType<StreamWorkerProtocolException>(client.TerminalError);
+        await worker;
+    }
+
+    [Fact]
     public async Task OversizedFrameFailsPendingRequestBeforePayloadAllocation()
     {
         await using PipePair pipes = await PipePair.CreateAsync();

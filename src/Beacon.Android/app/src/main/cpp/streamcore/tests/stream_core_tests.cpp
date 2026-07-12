@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <new>
 #include <optional>
@@ -89,7 +90,15 @@ struct FakeSink final : android_stream::FrameSink {
 };
 
 #ifndef NDEBUG
+bool fail_assembler_allocation;
 std::optional<android_stream::CloseFaultPoint> close_fault;
+
+void inject_start_fault(android_stream::StartFaultPoint point) {
+  if (fail_assembler_allocation &&
+      point == android_stream::StartFaultPoint::assembler_allocation) {
+    throw std::bad_alloc();
+  }
+}
 
 void inject_close_fault(android_stream::CloseFaultPoint point) {
   if (close_fault != point) return;
@@ -467,6 +476,36 @@ void reconnect_reuses_the_one_core_after_connection_loss() {
   require(transport.connect_count == 2);
 }
 
+void failed_assembler_allocation_preserves_existing_core_ownership() {
+#ifndef NDEBUG
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  require(core.start(grant()));
+  require(core.on_connected());
+  require(core.ticket_consumed());
+  core.on_connection_lost();
+
+  fail_assembler_allocation = true;
+  android_stream::set_start_fault_hook_for_test(inject_start_fault);
+  try {
+    static_cast<void>(core.start(grant()));
+    require(false);
+  } catch (const std::bad_alloc &) {
+  }
+  android_stream::set_start_fault_hook_for_test(nullptr);
+  fail_assembler_allocation = false;
+
+  require(core.state() == android_stream::State::failed);
+  if (!core.ticket_consumed()) {
+    std::fputs("assembler allocation failure replaced the active grant\n", stderr);
+    std::abort();
+  }
+  require(core.start(grant()));
+  require(core.state() == android_stream::State::connecting);
+#endif
+}
+
 }  // namespace
 
 int main() {
@@ -481,5 +520,6 @@ int main() {
   authentication_reply_requires_state_and_exact_sequence();
   connection_loss_and_release_are_idempotent();
   reconnect_reuses_the_one_core_after_connection_loss();
+  failed_assembler_allocation_preserves_existing_core_ownership();
   return 0;
 }

@@ -407,7 +407,7 @@ git push
 - Modify: `.github/workflows/ci.yml`
 - Modify: `README.md`
 
-- [ ] **Step 1: Write failing lifecycle, scan, and canary tests**
+- [x] **Step 1: Write failing lifecycle, scan, and canary tests**
 
 Change the expected FakeEndpoint order to:
 
@@ -425,7 +425,7 @@ Make the test handler track whether a runtime is active and return 503 for recon
 disconnect. Add architecture cases covering `.github`, root build files, `.sh`, `.html`,
 `.css`, `.properties`, `.slnx`, and `.props`, including WebRTC and HTTP-media aliases.
 
-- [ ] **Step 2: Run focused tests and verify failures**
+- [x] **Step 2: Run focused tests and verify failures**
 
 ```powershell
 dotnet test tests\Beacon.FakeEndpoint.Tests\Beacon.FakeEndpoint.Tests.csproj
@@ -435,21 +435,21 @@ dotnet test tests\Beacon.Server.Tests\Beacon.Server.Tests.csproj --filter FakeEn
 
 Expected: old ordering and incomplete file/token coverage fail.
 
-- [ ] **Step 3: Implement lifecycle correction and tracked-file guard**
+- [x] **Step 3: Implement lifecycle correction and tracked-file guard**
 
 Reorder only the scenario; do not weaken Server lifecycle rules. Enumerate tracked files with
 `git ls-files -z` in the PowerShell guard and apply the same prohibited set used by the C#
 test. Exclude only audited generated dependency/build directories, never tracked runtime or
 test code.
 
-- [ ] **Step 4: Implement five-canary capture**
+- [x] **Step 4: Implement five-canary capture**
 
 Capture server stdout/stderr, Worker diagnostics, diagnostic journal JSON, instrumentation
 output, and logcat. Assert none contains the exact ticket, credential, private-key marker,
 Worker executable path, or input-payload marker generated for that run. Print only the canary
 category on failure, not its value.
 
-- [ ] **Step 5: Run every Gate 3 command through one runner**
+- [x] **Step 5: Run every Gate 3 command through one runner**
 
 ```powershell
 .\scripts\test-gate3.ps1 -Serial emulator-5554
@@ -461,7 +461,7 @@ FakeEndpoint live flow, DisplayProbe status, GameProbe scan, real emulator sessi
 absence, and secret absence. It returns nonzero at the first failed command and prints one
 structured summary after all required stages pass.
 
-- [ ] **Step 6: Commit and push**
+- [x] **Step 6: Commit and push**
 
 ```powershell
 git add src/Beacon.FakeEndpoint tests/Beacon.FakeEndpoint.Tests tests/Beacon.Server.Tests tests/Beacon.Core.Tests/Architecture scripts .github/workflows/ci.yml README.md
@@ -477,7 +477,7 @@ git push
 - Update: `docs/superpowers/plans/2026-07-11-gate3-real-path-validation.md`
 - Update: `docs/extraction-map.md`
 
-- [ ] **Step 1: Run static and dynamic validation**
+- [x] **Step 1: Run static and dynamic validation**
 
 ```powershell
 .\scripts\test-gate3.ps1 -Serial emulator-5554
@@ -487,7 +487,7 @@ git status --short
 
 Expected: every stage passes, diff check is clean, and only intended files are modified.
 
-- [ ] **Step 2: Open and merge the implementation PR**
+- [x] **Step 2: Open and merge the implementation PR**
 
 ```powershell
 gh pr create --fill --base main --head codex/beacon-gate3-validation
@@ -500,7 +500,7 @@ git pull --ff-only
 Wait for every duplicate CI job. Do not merge with a queued, skipped, canceled, or failed
 required job.
 
-- [ ] **Step 3: Create the refactor branch and audit from evidence**
+- [x] **Step 3: Create the refactor branch and audit from evidence**
 
 ```powershell
 git switch -c codex/beacon-gate3-refactor
@@ -510,7 +510,7 @@ Audit only duplication, ownership leaks, generated drift, JNI resource imbalance
 buffer lifetime, compatibility residue, and secret exposure. Before each change, add a test
 that fails against synchronized `main`. Do not add product features.
 
-- [ ] **Step 4: Re-run the complete matrix**
+- [x] **Step 4: Re-run the complete matrix**
 
 ```powershell
 .\scripts\test-gate3.ps1 -Serial emulator-5554

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Beacon.Core.Tests.Architecture;
@@ -18,81 +19,11 @@ public sealed class ArchitectureRecoveryBoundaryTests
         "src/Beacon.Android/app/src/main/java/dev/beacon/android"
     ];
 
-    private static readonly string[] ForbiddenDirectories =
-    [
-        "src/Beacon.StreamingProbe",
-        "tests/Beacon.StreamingProbe.Tests",
-        "src/Beacon.Android/streaming-moonlight"
-    ];
+    private static readonly Lazy<GuardDefinition> GuardValue = new(LoadGuardDefinition);
 
-    private static readonly string[] ScannedRoots =
-    [
-        ".github",
-        "contracts",
-        "native",
-        "scripts",
-        "src",
-        "tests"
-    ];
+    private static GuardDefinition Guard => GuardValue.Value;
 
-    private static readonly HashSet<string> ScannedRootFiles = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Beacon.slnx",
-        "CMakeLists.txt",
-        "Directory.Build.props",
-        "Directory.Build.targets",
-        "Directory.Packages.props",
-        "README.md",
-        "build.gradle",
-        "build.gradle.kts",
-        "global.json",
-        "gradle.properties",
-        "package-lock.json",
-        "package.json",
-        "settings.gradle",
-        "settings.gradle.kts"
-    };
-
-    private static readonly HashSet<string> ScannedExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".c",
-        ".bat",
-        ".cmake",
-        ".cmd",
-        ".cpp",
-        ".cs",
-        ".csproj",
-        ".css",
-        ".gradle",
-        ".h",
-        ".html",
-        ".java",
-        ".json",
-        ".kt",
-        ".kts",
-        ".mjs",
-        ".md",
-        ".ps1",
-        ".properties",
-        ".props",
-        ".proto",
-        ".sh",
-        ".slnx",
-        ".targets",
-        ".ts",
-        ".tsx",
-        ".txt",
-        ".yml",
-        ".yaml",
-        ".xaml",
-        ".xml"
-    };
-
-    private static readonly Regex CompatibilityPattern = new(
-        @"Apollo|Sunshine|Moonlight|GameStream|Web[_-]?RTC|HTTP[-_ ]?media|MediaOverHttp|" +
-        @"\b(?:RTSP|RTP)\b|ExternalProcessStreaming|StreamingWrapper|WrapperChild|RuntimeDescriptor|" +
-        "LaunchUri|nativeSession",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static Regex CompatibilityPattern => Guard.CompatibilityPattern;
 
     private static readonly NativeBoundaryRule[] NativeBoundaryRules =
     [
@@ -154,10 +85,23 @@ public sealed class ArchitectureRecoveryBoundaryTests
     }
 
     [Fact]
+    public void CompatibilityGuardUsesOneTrackedDefinitionManifest()
+    {
+        string root = FindRepositoryRoot();
+        string manifest = ToPlatformPath(root, "contracts/gate3_architecture_guard.json");
+
+        Assert.True(File.Exists(manifest), manifest);
+        Assert.Contains(
+            "contracts/gate3_architecture_guard.json",
+            File.ReadAllText(ToPlatformPath(root, "scripts/test-gate3.ps1")),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RuntimeAndTestsContainNoCompatibilityPathsOrTokens()
     {
         string root = FindRepositoryRoot();
-        foreach (string relativeRoot in ForbiddenDirectories)
+        foreach (string relativeRoot in Guard.ForbiddenDirectories)
         {
             Assert.False(Directory.Exists(ToPlatformPath(root, relativeRoot)), relativeRoot);
         }
@@ -314,9 +258,7 @@ public sealed class ArchitectureRecoveryBoundaryTests
             .Split('\0', StringSplitOptions.RemoveEmptyEntries)
             .Select(NormalizeRelativePath)
             .Where(IsTrackedScanCandidate)
-            .Where(path => !path.Equals(
-                "tests/Beacon.Core.Tests/Architecture/ArchitectureRecoveryBoundaryTests.cs",
-                StringComparison.OrdinalIgnoreCase))
+            .Where(path => !Guard.ExcludedPaths.Contains(path))
             .Where(path => !HasGeneratedSegment(path));
         return ResolveExistingTrackedFiles(root, trackedPaths);
     }
@@ -333,10 +275,10 @@ public sealed class ArchitectureRecoveryBoundaryTests
     {
         string normalized = NormalizeRelativePath(relativePath);
         string firstSegment = normalized.Split('/', 2)[0];
-        bool inScannedTree = ScannedRoots.Contains(firstSegment, StringComparer.OrdinalIgnoreCase);
-        bool scannedRootFile = !normalized.Contains('/') && ScannedRootFiles.Contains(normalized);
+        bool inScannedTree = Guard.ScannedRoots.Contains(firstSegment);
+        bool scannedRootFile = !normalized.Contains('/') && Guard.ScannedRootFiles.Contains(normalized);
         return (inScannedTree || scannedRootFile)
-            && ScannedExtensions.Contains(Path.GetExtension(normalized));
+            && Guard.ScannedExtensions.Contains(Path.GetExtension(normalized));
     }
 
     private static bool HasGeneratedSegment(string path)
@@ -379,6 +321,72 @@ public sealed class ArchitectureRecoveryBoundaryTests
 
         throw new InvalidOperationException("Could not locate repository root.");
     }
+
+    private static GuardDefinition LoadGuardDefinition()
+    {
+        string path = ToPlatformPath(
+            FindRepositoryRoot(),
+            "contracts/gate3_architecture_guard.json");
+        GuardManifest manifest = JsonSerializer.Deserialize<GuardManifest>(
+            File.ReadAllText(path),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))
+            ?? throw new InvalidDataException("Gate 3 architecture guard manifest is empty.");
+        string[] forbiddenDirectories = JoinFragments(
+            manifest.ForbiddenDirectoryFragments,
+            nameof(manifest.ForbiddenDirectoryFragments));
+        string[] literalPatterns = JoinFragments(
+                manifest.LiteralTokenFragments,
+                nameof(manifest.LiteralTokenFragments))
+            .Select(Regex.Escape)
+            .ToArray();
+        string[] regexPatterns = JoinFragments(
+            manifest.RegexTokenFragments,
+            nameof(manifest.RegexTokenFragments));
+
+        return new GuardDefinition(
+            new HashSet<string>(RequireValues(manifest.ScannedRoots, nameof(manifest.ScannedRoots)),
+                StringComparer.OrdinalIgnoreCase),
+            new HashSet<string>(RequireValues(
+                manifest.ScannedRootFiles,
+                nameof(manifest.ScannedRootFiles)), StringComparer.OrdinalIgnoreCase),
+            new HashSet<string>(RequireValues(
+                manifest.ScannedExtensions,
+                nameof(manifest.ScannedExtensions)), StringComparer.OrdinalIgnoreCase),
+            forbiddenDirectories,
+            new HashSet<string>(RequireValues(
+                manifest.ExcludedPaths,
+                nameof(manifest.ExcludedPaths)), StringComparer.OrdinalIgnoreCase),
+            new Regex(
+                string.Join('|', literalPatterns.Concat(regexPatterns)),
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
+    }
+
+    private static string[] JoinFragments(string[][] fragments, string name) =>
+        RequireValues(fragments, name)
+            .Select((parts, index) => string.Concat(RequireValues(parts, $"{name}[{index}]")))
+            .ToArray();
+
+    private static T[] RequireValues<T>(T[]? values, string name) =>
+        values is { Length: > 0 }
+            ? values
+            : throw new InvalidDataException($"Gate 3 architecture guard '{name}' is empty.");
+
+    private sealed record GuardDefinition(
+        HashSet<string> ScannedRoots,
+        HashSet<string> ScannedRootFiles,
+        HashSet<string> ScannedExtensions,
+        IReadOnlyList<string> ForbiddenDirectories,
+        HashSet<string> ExcludedPaths,
+        Regex CompatibilityPattern);
+
+    private sealed record GuardManifest(
+        string[] ScannedRoots,
+        string[] ScannedRootFiles,
+        string[] ScannedExtensions,
+        string[][] ForbiddenDirectoryFragments,
+        string[][] LiteralTokenFragments,
+        string[][] RegexTokenFragments,
+        string[] ExcludedPaths);
 
     private sealed record NativeBoundaryRule(
         string Name,

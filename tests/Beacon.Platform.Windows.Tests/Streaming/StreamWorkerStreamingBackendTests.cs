@@ -89,6 +89,27 @@ public sealed class StreamWorkerStreamingBackendTests
     }
 
     [Fact]
+    public async Task ProcessExitAfterFinalGenerationCheckCannotLeaveRunningSession()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        IStreamWorkerRuntimeEvents runtimeEvents = backend;
+        host.ProcessGenerationCheckObserved = checkCount =>
+        {
+            if (checkCount == 2)
+            {
+                runtimeEvents.ProcessExited(new StreamWorkerProcessExited(1, 23));
+            }
+        };
+
+        StreamingStartResult result = await backend.StartAsync(CreatePlan(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("Beacon StreamWorker runtime changed during start_media.", result.Error);
+        Assert.Empty(backend.GetSessions());
+    }
+
+    [Fact]
     public async Task AuthenticationBindsExactGenerationsAndResolvesInputRuntime()
     {
         var host = new RecordingStreamWorkerHost();
@@ -574,8 +595,16 @@ public sealed class StreamWorkerStreamingBackendTests
 
         public long CurrentProcessGeneration { get; private set; } = 1;
 
-        public bool IsCurrentProcessGeneration(long processGeneration) =>
-            processGeneration == CurrentProcessGeneration;
+        public Action<int>? ProcessGenerationCheckObserved { get; set; }
+
+        public int ProcessGenerationCheckCount { get; private set; }
+
+        public bool IsCurrentProcessGeneration(long processGeneration)
+        {
+            bool isCurrent = processGeneration == CurrentProcessGeneration;
+            ProcessGenerationCheckObserved?.Invoke(++ProcessGenerationCheckCount);
+            return isCurrent;
+        }
 
         public WorkerErrorCode NextError { get; set; } = WorkerErrorCode.None;
 

@@ -867,7 +867,8 @@ bool callback_fault_is_contained(
   listener.shutdown();
   return injected->load() &&
          listener.failure() ==
-             beacon::worker::QuicListenerFailure::callback_exception;
+             beacon::worker::QuicListenerFailure::callback_exception &&
+         listener.metrics().live_datagram_send_contexts == 0;
 }
 
 bool disconnect_callback_fault_is_contained(
@@ -983,6 +984,11 @@ int wmain(int argument_count, wchar_t **arguments) {
           beacon::worker::QuicListenerFaultPoint::datagram_context_allocation,
           "loopback-ticket-datagram-fault", true))
     return 26;
+  if (!callback_fault_is_contained(
+          arguments[1], expected_fingerprint,
+          beacon::worker::QuicListenerFaultPoint::datagram_final_state_telemetry,
+          "loopback-ticket-datagram-final-fault", true))
+    return 29;
   if (!disconnect_callback_fault_is_contained(
           arguments[1], expected_fingerprint,
           beacon::worker::QuicListenerFaultPoint::disconnect_event_construction,

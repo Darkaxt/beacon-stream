@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'gate3-validation-common.ps1')
 
 function Invoke-Gate3StaticAbsence([string]$Root) {
     $startInfo = [Diagnostics.ProcessStartInfo]::new('git')
@@ -39,32 +40,24 @@ function Invoke-Gate3StaticAbsence([string]$Root) {
         $process.Dispose()
     }
 
-    $scannedRoots = @('.github', 'contracts', 'native', 'scripts', 'src', 'tests')
-    $rootFiles = @(
-        'Beacon.slnx', 'CMakeLists.txt', 'Directory.Build.props', 'Directory.Build.targets',
-        'Directory.Packages.props', 'README.md', 'build.gradle', 'build.gradle.kts', 'global.json',
-        'gradle.properties', 'package-lock.json', 'package.json', 'settings.gradle',
-        'settings.gradle.kts')
-    $extensions = @(
-        '.c', '.bat', '.cmake', '.cmd', '.cpp', '.cs', '.csproj', '.css', '.gradle', '.h',
-        '.html', '.java', '.json', '.kt', '.kts', '.md', '.mjs', '.ps1', '.properties', '.props',
-        '.proto', '.sh', '.slnx', '.targets', '.ts', '.tsx', '.txt', '.xaml', '.yml', '.yaml', '.xml')
+    $guardPath = Join-Path $Root 'contracts/gate3_architecture_guard.json'
+    if (-not (Test-Path -LiteralPath $guardPath -PathType Leaf)) {
+        throw 'Gate 3 architecture guard manifest is unavailable.'
+    }
+    $guard = Get-Content -LiteralPath $guardPath -Raw | ConvertFrom-Json
+    $scannedRoots = @($guard.scannedRoots)
+    $rootFiles = @($guard.scannedRootFiles)
+    $extensions = @($guard.scannedExtensions)
+    $excludedPaths = @($guard.excludedPaths)
     $literalTokens = @(
-        ('Apol' + 'lo'), ('Sun' + 'shine'), ('Moon' + 'light'), ('Game' + 'Stream'),
-        ('ExternalProcess' + 'Streaming'), ('Streaming' + 'Wrapper'), ('Wrapper' + 'Child'),
-        ('Runtime' + 'Descriptor'), ('Launch' + 'Uri'), ('native' + 'Session'))
+        $guard.literalTokenFragments | ForEach-Object { -join @($_) })
     $patternParts = @($literalTokens | ForEach-Object { [Regex]::Escape($_) })
     $patternParts += @(
-        ('Web[_-]?' + ('R' + 'TC')),
-        (('H' + 'TTP') + '[-_ ]?media'),
-        ('MediaOver' + ('H' + 'ttp')),
-        ('\b(?:' + ('RT' + 'SP') + '|' + ('R' + 'TP') + ')\b'))
+        $guard.regexTokenFragments | ForEach-Object { -join @($_) })
     $compatibilityPattern = '(?i)' + ($patternParts -join '|')
     $violations = [Collections.Generic.List[string]]::new()
     foreach ($forbiddenDirectory in @(
-        'src/Beacon.StreamingProbe',
-        'tests/Beacon.StreamingProbe.Tests',
-        ('src/Beacon.Android/streaming-' + ('moon' + 'light')))) {
+        $guard.forbiddenDirectoryFragments | ForEach-Object { -join @($_) })) {
         if (Test-Path -LiteralPath (Join-Path $Root $forbiddenDirectory) -PathType Container) {
             $violations.Add($forbiddenDirectory)
         }
@@ -79,7 +72,7 @@ function Invoke-Gate3StaticAbsence([string]$Root) {
         if ((-not $inScannedTree -and -not $scannedRootFile) -or $extensions -notcontains $extension) {
             continue
         }
-        if ($normalized -eq 'tests/Beacon.Core.Tests/Architecture/ArchitectureRecoveryBoundaryTests.cs' -or
+        if ($excludedPaths -contains $normalized -or
             $normalized -match '(?i)(?:^|/)(?:bin|obj|build|coverage|dist|node_modules|out|_deps|\.cxx|\.gradle)(?:/|$)') {
             continue
         }
@@ -122,8 +115,7 @@ function Invoke-AndroidInstrumentationSuite([string]$Root, [string]$AndroidSeria
         dev.beacon.android.test/androidx.test.runner.AndroidJUnitRunner 2>&1) -join `
         [Environment]::NewLine
     Assert-LastExitCode 'Android instrumentation process'
-    if ($output -notmatch 'INSTRUMENTATION_CODE:\s+-1' -or
-        $output -match 'FAILURES!!!|INSTRUMENTATION_FAILED|INSTRUMENTATION_ABORTED|Process crashed') {
+    if (-not (Test-Gate3AndroidInstrumentationSucceeded $LASTEXITCODE $output)) {
         throw "Android instrumentation suite failed.`n$output"
     }
     Write-Output $output
