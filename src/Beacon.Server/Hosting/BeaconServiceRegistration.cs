@@ -13,6 +13,7 @@ using Beacon.Platform.Windows.Input;
 using Beacon.Platform.Windows.Recovery;
 using Beacon.Platform.Windows.Sessions;
 using Beacon.Platform.Windows.Streaming;
+using Beacon.Server.Benchmarks;
 using Beacon.Server.State;
 using Beacon.Server.Security;
 using Beacon.Server.Streaming;
@@ -101,6 +102,7 @@ public static class BeaconServiceRegistration
         services.AddSingleton(_ => new ClientCredentialService(securityOptions.CredentialsPath));
         services.AddSingleton<StreamTicketService>();
         services.AddSingleton<StreamTicketProvisioningService>();
+        services.AddSingleton<BenchmarkRuntimeOrchestrator>();
         services.AddSingleton<InMemoryDiagnosticEventJournal>();
         services.AddSingleton<IDiagnosticEventSink>(sp =>
             sp.GetRequiredService<InMemoryDiagnosticEventJournal>());

@@ -8,6 +8,7 @@ using Beacon.Core.Games;
 using Beacon.Core.Input;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
+using Beacon.Server.Benchmarks;
 using Beacon.Server.State;
 using Beacon.Server.Security;
 
@@ -145,9 +146,7 @@ public static class ClientEndpoints
             string clientId,
             JsonElement body,
             InMemoryClientStore store,
-            IBenchmarkRuntime benchmarkRuntime,
-            StreamTicketProvisioningService ticketProvisioning,
-            BeaconServerIdentity serverIdentity,
+            BenchmarkRuntimeOrchestrator benchmarkRuntime,
             CancellationToken cancellationToken) =>
         {
             if (store.GetProfile(clientId) is null)
@@ -206,90 +205,24 @@ public static class ClientEndpoints
                 });
             }
 
-            foreach (BenchmarkEvidence superseded in store.GetBenchmarkEvidence(clientId)
+            Guid[] supersededRunIds = store.GetBenchmarkEvidence(clientId)
                 .Where(value => value.RunId != preparation.Evidence.RunId)
-                .Where(value => value.CompletedAt is null))
-            {
-                string? cleanupError = await StopAndRevokeBenchmarkRuntimeAsync(
-                    clientId,
-                    $"benchmark:{superseded.RunId:D}",
-                    benchmarkRuntime,
-                    ticketProvisioning,
-                    cancellationToken);
-                if (cleanupError is not null)
-                {
-                    return Results.Problem(
-                        cleanupError,
-                        statusCode: StatusCodes.Status503ServiceUnavailable);
-                }
-            }
-
+                .Where(value => value.CompletedAt is null)
+                .Select(value => value.RunId)
+                .ToArray();
             var runtimePlan = new BenchmarkRuntimePlan(
                 preparation.Evidence.RunId,
                 new ClientId(clientId),
                 request.Trigger,
                 transportPlan);
-            BenchmarkRuntimeState? runtime = await benchmarkRuntime.GetAsync(
-                runtimePlan.SessionId,
+            BenchmarkRuntimeGrantResult grant = await benchmarkRuntime.StartAsync(
+                runtimePlan,
+                supersededRunIds,
                 cancellationToken);
-            bool startedHere = runtime is null || runtime.State != "running";
-            if (startedHere)
+            if (!grant.Success || grant.Connection is null)
             {
-                BenchmarkRuntimeStartResult started = await benchmarkRuntime.StartAsync(
-                    runtimePlan,
-                    cancellationToken);
-                if (!started.Success || started.Runtime is null)
-                {
-                    return Results.Problem(
-                        started.Error ?? "Benchmark runtime failed to start.",
-                        statusCode: StatusCodes.Status503ServiceUnavailable);
-                }
-                runtime = started.Runtime;
-            }
-
-            if (!IsSameActiveRuntime(runtimePlan, runtime))
-            {
-                if (startedHere)
-                {
-                    _ = await benchmarkRuntime.StopAsync(runtimePlan.SessionId, cancellationToken);
-                }
                 return Results.Problem(
-                    "Benchmark runtime returned invalid connection metadata.",
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
-
-            StreamTicketProvisioningResult ticketResult = await ticketProvisioning.ProvisionAsync(
-                clientId,
-                runtimePlan.SessionId,
-                runtimePlan.Revision,
-                cancellationToken);
-            if (!ticketResult.Success || ticketResult.Ticket is null)
-            {
-                if (startedHere)
-                {
-                    _ = await benchmarkRuntime.StopAsync(runtimePlan.SessionId, cancellationToken);
-                }
-                return Results.Problem(
-                    ticketResult.Error ?? "Benchmark ticket provisioning failed.",
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
-
-            BenchmarkRuntimeState? confirmed = await benchmarkRuntime.GetAsync(
-                runtimePlan.SessionId,
-                cancellationToken);
-            if (!IsSameActiveRuntime(runtimePlan, confirmed)
-                || confirmed!.RuntimeGeneration != runtime!.RuntimeGeneration)
-            {
-                _ = await ticketProvisioning.RevokeSessionAsync(
-                    clientId,
-                    runtimePlan.SessionId,
-                    cancellationToken);
-                if (startedHere)
-                {
-                    _ = await benchmarkRuntime.StopAsync(runtimePlan.SessionId, cancellationToken);
-                }
-                return Results.Problem(
-                    "Benchmark runtime changed while provisioning its connection ticket.",
+                    grant.Error ?? "Benchmark runtime failed to provide a connection grant.",
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
@@ -308,11 +241,7 @@ public static class ClientEndpoints
                 selectedResult = preparation.Evidence.SelectedResult,
                 transportPlan,
                 networkCoverage = BenchmarkSuitePolicy.Coverage(transportPlan),
-                connection = CreateBenchmarkConnectionGrant(
-                    runtimePlan,
-                    confirmed,
-                    ticketResult.Ticket,
-                    serverIdentity),
+                connection = grant.Connection,
                 reason = preparation.Reason
             });
         });
@@ -321,8 +250,7 @@ public static class ClientEndpoints
             string clientId,
             Guid runId,
             InMemoryClientStore store,
-            IBenchmarkRuntime benchmarkRuntime,
-            StreamTicketProvisioningService ticketProvisioning,
+            BenchmarkRuntimeOrchestrator benchmarkRuntime,
             CancellationToken cancellationToken) =>
         {
             BenchmarkEvidence? pending = store.GetBenchmarkEvidence(runId);
@@ -335,12 +263,9 @@ public static class ClientEndpoints
                 return Results.Conflict(new { error = "Completed benchmark runs cannot be cancelled." });
             }
 
-            string sessionId = $"benchmark:{runId:D}";
-            string? cleanupError = await StopAndRevokeBenchmarkRuntimeAsync(
+            string? cleanupError = await benchmarkRuntime.StopAsync(
                 clientId,
-                sessionId,
-                benchmarkRuntime,
-                ticketProvisioning,
+                runId,
                 cancellationToken);
             return cleanupError is null
                 ? Results.Ok(new { runId, state = "cancelled" })
@@ -354,8 +279,7 @@ public static class ClientEndpoints
             Guid runId,
             BenchmarkCompletionRequest request,
             InMemoryClientStore store,
-            IBenchmarkRuntime benchmarkRuntime,
-            StreamTicketProvisioningService ticketProvisioning,
+            BenchmarkRuntimeOrchestrator benchmarkRuntime,
             CancellationToken cancellationToken) =>
         {
             BenchmarkEvidence? pending = store.GetBenchmarkEvidence(runId);
@@ -402,12 +326,9 @@ public static class ClientEndpoints
                     SelectedResult = selected,
                     NetworkCoverage = coverage
                 };
-                string sessionId = $"benchmark:{runId:D}";
-                string? cleanupError = await StopAndRevokeBenchmarkRuntimeAsync(
+                string? cleanupError = await benchmarkRuntime.StopAsync(
                     clientId,
-                    sessionId,
-                    benchmarkRuntime,
-                    ticketProvisioning,
+                    runId,
                     cancellationToken);
                 if (cleanupError is not null)
                 {
@@ -1073,36 +994,6 @@ public static class ClientEndpoints
         return false;
     }
 
-    private static async Task<string?> StopAndRevokeBenchmarkRuntimeAsync(
-        string clientId,
-        string sessionId,
-        IBenchmarkRuntime benchmarkRuntime,
-        StreamTicketProvisioningService ticketProvisioning,
-        CancellationToken cancellationToken)
-    {
-        BenchmarkRuntimeState? runtime = await benchmarkRuntime.GetAsync(
-            sessionId,
-            cancellationToken);
-        if (runtime is not null && runtime.State == "running")
-        {
-            BenchmarkRuntimeStopResult stopped = await benchmarkRuntime.StopAsync(
-                sessionId,
-                cancellationToken);
-            if (!stopped.Success)
-            {
-                return stopped.Error ?? "Benchmark runtime failed to stop.";
-            }
-        }
-
-        StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
-            clientId,
-            sessionId,
-            cancellationToken);
-        return revoked.Success
-            ? null
-            : revoked.Error ?? "Benchmark ticket revocation failed.";
-    }
-
     private static ConnectionGrant CreateConnectionGrant(
         SessionPlan plan,
         StreamingSessionState streamingSession,
@@ -1125,33 +1016,6 @@ public static class ClientEndpoints
                 FramesPerSecondDenominator: 1,
                 DynamicRange: plan.Display.HdrMode));
 
-    private static BenchmarkConnectionGrant CreateBenchmarkConnectionGrant(
-        BenchmarkRuntimePlan plan,
-        BenchmarkRuntimeState runtime,
-        IssuedStreamTicket ticket,
-        BeaconServerIdentity serverIdentity) =>
-        new(
-            ProtocolVersion: 1,
-            Ticket: ticket.Ticket,
-            ExpiresAt: ticket.ExpiresAt,
-            PlanRevision: plan.Revision,
-            PlanExplanation: $"{plan.Trigger} benchmark suite selected by server policy.",
-            SessionId: plan.SessionId,
-            Port: runtime.ActiveListenerPort!.Value,
-            PublicKeyFingerprint: serverIdentity.PublicKeyFingerprint,
-            Benchmark: new BenchmarkGrant(
-                RunId: plan.RunId,
-                SchemaVersion: plan.SchemaVersion,
-                ReliableRound: new BenchmarkRoundGrant(
-                    plan.TransportPlan.ReliablePacketCount,
-                    plan.TransportPlan.ReliablePayloadBytes,
-                    plan.TransportPlan.MeasurementIntervalUs),
-                DatagramRound: new BenchmarkRoundGrant(
-                    plan.TransportPlan.DatagramPacketCount,
-                    plan.TransportPlan.DatagramPayloadBytes,
-                    plan.TransportPlan.MeasurementIntervalUs),
-                RunToken: (byte[])runtime.RunToken.Clone()));
-
     private static bool IsSameActiveRuntime(
         StreamingSessionState expected,
         StreamingSessionState? actual) =>
@@ -1162,21 +1026,6 @@ public static class ClientEndpoints
         && string.Equals(actual.SessionId, expected.SessionId, StringComparison.Ordinal)
         && actual.ActiveListenerPort == expected.ActiveListenerPort
         && actual.RuntimeGeneration == expected.RuntimeGeneration;
-
-    private static bool IsSameActiveRuntime(
-        BenchmarkRuntimePlan plan,
-        BenchmarkRuntimeState? runtime) =>
-        runtime is not null
-        && runtime.State == "running"
-        && runtime.ActiveListenerPort is > 0 and <= 65_535
-        && runtime.RuntimeGeneration != Guid.Empty
-        && runtime.RunToken.Length == 16
-        && runtime.RunId == plan.RunId
-        && runtime.SessionId == plan.SessionId
-        && runtime.ClientId == plan.ClientId.Value
-        && runtime.PlanRevision == plan.Revision
-        && runtime.SchemaVersion == plan.SchemaVersion
-        && runtime.TransportPlan == plan.TransportPlan;
 
     private sealed record ConnectionGrant(
         int ProtocolVersion,
@@ -1196,29 +1045,6 @@ public static class ClientEndpoints
         int FramesPerSecondNumerator,
         int FramesPerSecondDenominator,
         string DynamicRange);
-
-    private sealed record BenchmarkConnectionGrant(
-        int ProtocolVersion,
-        string Ticket,
-        DateTimeOffset ExpiresAt,
-        ulong PlanRevision,
-        string PlanExplanation,
-        string SessionId,
-        int Port,
-        string PublicKeyFingerprint,
-        BenchmarkGrant Benchmark);
-
-    private sealed record BenchmarkGrant(
-        Guid RunId,
-        int SchemaVersion,
-        BenchmarkRoundGrant ReliableRound,
-        BenchmarkRoundGrant DatagramRound,
-        byte[] RunToken);
-
-    private sealed record BenchmarkRoundGrant(
-        int PacketCount,
-        int PayloadBytes,
-        long MeasurementIntervalUs);
 
     private static async Task<PlanResolutionResult> ResolvePlanAsync(
         string clientId,
