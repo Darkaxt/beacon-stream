@@ -20,7 +20,9 @@ public sealed record PlannedStream(
     int InitialBitrateMbps,
     string Transport,
     string CongestionPolicy,
-    string Reason = "Default stream plan.");
+    string Reason,
+    Guid BenchmarkRunId,
+    string BenchmarkEvidenceRevision);
 
 public sealed record SessionPlan(
     string SessionId,

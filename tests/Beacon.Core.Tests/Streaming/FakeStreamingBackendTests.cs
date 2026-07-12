@@ -172,5 +172,13 @@ public sealed class FakeStreamingBackendTests
                 HdrEnabled: false,
                 "sdr",
                 "HDR disabled because virtual display does not report HDR capability."),
-            Stream: new PlannedStream("av1", 120, 65, "beacon", "measured"));
+            Stream: new PlannedStream(
+                "av1",
+                120,
+                65,
+                "beacon",
+                "measured",
+                "Test benchmark evidence.",
+                Guid.Parse("33acde60-b29f-4f03-b2b2-f51337bdb9a5"),
+                "test-benchmark-revision"));
 }

@@ -62,6 +62,7 @@ public sealed class BenchmarkScorerTests
         Assert.Equal(60, selected.MaxSustainableFps);
         Assert.True(selected.InitialBitrateMbps < 49);
         Assert.Equal(25, selected.PacketLossPercent);
+        Assert.True(selected.PowerConstrained);
         Assert.Contains(selected.Reasons, reason => reason.Contains("thermal", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(selected.Reasons, reason => reason.Contains("loss", StringComparison.OrdinalIgnoreCase));
     }
@@ -83,5 +84,47 @@ public sealed class BenchmarkScorerTests
         InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => BenchmarkScorer.Select(input));
 
         Assert.Contains("sustainable decoder", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void HighRttIsPreservedInServerSelectionReasons()
+    {
+        BenchmarkScoringInput input = new(
+            NetworkSamples:
+            [
+                new(1, PayloadBytes: 1200, RttMs: 95, JitterMs: 4, Received: true, ThroughputMbps: 40, ReorderDistance: 0)
+            ],
+            DecoderSamples:
+            [
+                new("hevc", "main", 8, 2560, 1600, 60, Configured: true, SustainedFps: 60, P95DecodeLatencyMs: 8, P95PresentationLatencyMs: 12, DroppedFrames: 0, OutputErrors: 0)
+            ],
+            PowerSamples: []);
+
+        SelectedBenchmarkResult selected = BenchmarkScorer.Select(input);
+
+        Assert.Contains(selected.Reasons, reason => reason.Contains("RTT", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(selected.Reasons, reason => reason.Contains("95", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ExplicitServerCodecPreferenceRestrictsCandidateSelection()
+    {
+        BenchmarkScoringInput input = new(
+            NetworkSamples:
+            [
+                new(1, PayloadBytes: 1200, RttMs: 8, JitterMs: 1, Received: true, ThroughputMbps: 100, ReorderDistance: 0)
+            ],
+            DecoderSamples:
+            [
+                new("av1", "main", 10, 2560, 1600, 120, Configured: true, SustainedFps: 120, P95DecodeLatencyMs: 5, P95PresentationLatencyMs: 9, DroppedFrames: 0, OutputErrors: 0),
+                new("hevc", "main10", 10, 2560, 1600, 120, Configured: true, SustainedFps: 120, P95DecodeLatencyMs: 5, P95PresentationLatencyMs: 9, DroppedFrames: 0, OutputErrors: 0)
+            ],
+            PowerSamples: [],
+            CodecPreference: "hevc");
+
+        SelectedBenchmarkResult selected = BenchmarkScorer.Select(input);
+
+        Assert.Equal("hevc", selected.Codec);
+        Assert.Contains(selected.Reasons, reason => reason.Contains("profile", StringComparison.OrdinalIgnoreCase));
     }
 }

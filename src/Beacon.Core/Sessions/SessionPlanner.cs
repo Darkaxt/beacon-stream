@@ -1,3 +1,4 @@
+using Beacon.Core.Benchmarks;
 using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
@@ -12,8 +13,87 @@ public static class SessionPlanner
     public static SessionPlanResult CreatePlan(
         ClientProfile profile,
         EndpointCapabilities capabilities,
-        TelemetrySnapshot telemetry,
+        BenchmarkPlanEvidence benchmark,
         GameDescriptor game)
+    {
+        ArgumentNullException.ThrowIfNull(benchmark);
+        if (benchmark.RunId == Guid.Empty)
+        {
+            throw new ArgumentException("Benchmark run id must not be empty.", nameof(benchmark));
+        }
+
+        if (string.IsNullOrWhiteSpace(benchmark.Revision))
+        {
+            throw new ArgumentException("Benchmark evidence revision is required.", nameof(benchmark));
+        }
+
+        SelectedBenchmarkResult measured = benchmark.SelectedResult;
+        if (!SupportsCodec(measured.Codec, capabilities))
+        {
+            return new SessionPlanResult(
+                false,
+                null,
+                $"Benchmark selected {DisplayCodec(measured.Codec)}, but current endpoint capabilities no longer advertise it.");
+        }
+
+        string codecPreference = profile.Stream.CodecPreference.Trim().ToLowerInvariant();
+        if (codecPreference is not ("" or "auto") &&
+            !codecPreference.Equals(measured.Codec, StringComparison.OrdinalIgnoreCase))
+        {
+            return new SessionPlanResult(
+                false,
+                null,
+                $"Benchmark evidence selected {DisplayCodec(measured.Codec)}, but server profile policy requires {DisplayCodec(codecPreference)}.");
+        }
+
+        int fps = Math.Min(
+            profile.Display.PreferredRefreshHz,
+            Math.Min(Math.Max(1, capabilities.MaxFps), Math.Max(1, measured.MaxSustainableFps)));
+        int bitrate = measured.InitialBitrateMbps;
+        bool bitrateCapApplied = false;
+        if (profile.Stream.BitrateCapMbps is > 0 && profile.Stream.BitrateCapMbps.Value < bitrate)
+        {
+            bitrate = profile.Stream.BitrateCapMbps.Value;
+            bitrateCapApplied = true;
+        }
+
+        string transport = measured.RttMs >= 80 || measured.PacketLossPercent >= 2
+            ? "lan-conservative"
+            : "lan-direct";
+        string congestionPolicy = measured.PowerConstrained
+            ? "power-save"
+            : measured.RttMs >= 80
+            ? "latency-protect"
+            : measured.PacketLossPercent >= 2
+                ? "loss-protect"
+                : "adaptive";
+        var reasons = new List<string>(measured.Reasons)
+        {
+            $"Benchmark run {benchmark.RunId:D} selected {DisplayCodec(measured.Codec)} at up to {fps} FPS and {bitrate} Mbps."
+        };
+        if (bitrateCapApplied)
+        {
+            reasons.Add("Client bitrate cap limited the measured initial bitrate.");
+        }
+
+        var selection = new StreamPlanningSelection(
+            Codec: measured.Codec.ToLowerInvariant(),
+            Fps: fps,
+            InitialBitrateMbps: bitrate,
+            Transport: transport,
+            CongestionPolicy: congestionPolicy,
+            Reason: string.Join(" ", reasons),
+            BenchmarkRunId: benchmark.RunId,
+            BenchmarkEvidenceRevision: benchmark.Revision);
+
+        return CreatePlan(profile, capabilities, game, selection);
+    }
+
+    private static SessionPlanResult CreatePlan(
+        ClientProfile profile,
+        EndpointCapabilities capabilities,
+        GameDescriptor game,
+        StreamPlanningSelection selection)
     {
         string? hdrBlocker = GetHdrBlocker(capabilities);
 
@@ -38,12 +118,14 @@ public static class SessionPlanner
             Reason: displayReason);
 
         var stream = new PlannedStream(
-            Codec: SelectCodec(profile.Stream.CodecPreference, capabilities, out string codecReason),
-            Fps: SelectFps(profile, capabilities, telemetry),
-            InitialBitrateMbps: SelectInitialBitrate(profile, telemetry, out bool bitrateCapApplied),
-            Transport: SelectTransport(telemetry),
-            CongestionPolicy: SelectCongestionPolicy(telemetry),
-            Reason: CreateStreamReason(codecReason, profile, capabilities, telemetry, bitrateCapApplied));
+            Codec: selection.Codec,
+            Fps: selection.Fps,
+            InitialBitrateMbps: selection.InitialBitrateMbps,
+            Transport: selection.Transport,
+            CongestionPolicy: selection.CongestionPolicy,
+            Reason: selection.Reason,
+            BenchmarkRunId: selection.BenchmarkRunId,
+            BenchmarkEvidenceRevision: selection.BenchmarkEvidenceRevision);
 
         var plan = new SessionPlan(
             SessionId: $"{profile.ClientId.Value}-{game.Id}",
@@ -81,6 +163,24 @@ public static class SessionPlanner
             _ => "HDR mode resolved."
         };
 
+    private static string DisplayCodec(string codec) =>
+        codec.ToLowerInvariant() switch
+        {
+            "av1" => "AV1",
+            "hevc" => "HEVC",
+            "h264" => "H.264",
+            _ => codec
+        };
+
+    private static bool SupportsCodec(string codec, EndpointCapabilities capabilities) =>
+        codec.ToLowerInvariant() switch
+        {
+            "av1" => capabilities.Av1,
+            "hevc" => capabilities.Hevc,
+            "h264" => capabilities.H264,
+            _ => false
+        };
+
     private static string CreateDisplayModeReason(string mode)
     {
         string normalized = mode.Trim().ToLowerInvariant();
@@ -93,173 +193,6 @@ public static class SessionPlanner
             _ => $"Display mode {mode} selected by server profile policy."
         };
     }
-
-    private static string SelectCodec(string preference, EndpointCapabilities capabilities, out string reason)
-    {
-        string normalized = preference.Trim().ToLowerInvariant();
-        if (normalized == "av1" && capabilities.Av1)
-        {
-            reason = "Codec selected from profile preference av1.";
-            return "av1";
-        }
-
-        if (normalized == "hevc" && capabilities.Hevc)
-        {
-            reason = "Codec selected from profile preference hevc.";
-            return "hevc";
-        }
-
-        if (normalized == "h264" && capabilities.H264)
-        {
-            reason = "Codec selected from profile preference h264.";
-            return "h264";
-        }
-
-        if (capabilities.Av1)
-        {
-            reason = normalized is "auto" or "" ? "Auto codec selected av1." : $"Profile codec preference {preference} unavailable; selected av1.";
-            return "av1";
-        }
-
-        if (capabilities.Hevc)
-        {
-            reason = normalized is "auto" or "" ? "Auto codec selected hevc." : $"Profile codec preference {preference} unavailable; selected hevc.";
-            return "hevc";
-        }
-
-        reason = normalized is "auto" or "" ? "Auto codec selected h264." : $"Profile codec preference {preference} unavailable; selected h264.";
-        return "h264";
-    }
-
-    private static int SelectFps(ClientProfile profile, EndpointCapabilities capabilities, TelemetrySnapshot telemetry)
-    {
-        int fps = Math.Min(profile.Display.PreferredRefreshHz, Math.Max(1, capabilities.MaxFps));
-
-        if (telemetry.RttMs >= 80 ||
-            telemetry.DecoderLoadPercent >= 85 ||
-            IsPowerConstrained(telemetry))
-        {
-            fps = Math.Min(fps, 60);
-        }
-
-        return fps;
-    }
-
-    private static int SelectInitialBitrate(ClientProfile profile, TelemetrySnapshot telemetry, out bool bitrateCapApplied)
-    {
-        int bitrate = 65;
-
-        if (telemetry.EstimatedBandwidthMbps is > 0)
-        {
-            bitrate = Math.Min(bitrate, Math.Max(10, (int)Math.Floor(telemetry.EstimatedBandwidthMbps.Value * 0.75)));
-        }
-
-        if (telemetry.RttMs >= 80)
-        {
-            bitrate = Math.Min(bitrate, 25);
-        }
-        else if (telemetry.PacketLossPercent >= 2.0)
-        {
-            bitrate = Math.Min(bitrate, 35);
-        }
-
-        if (telemetry.DecoderLoadPercent >= 85 || IsPowerConstrained(telemetry))
-        {
-            bitrate = Math.Min(bitrate, 30);
-        }
-
-        bitrateCapApplied = false;
-        if (profile.Stream.BitrateCapMbps is > 0)
-        {
-            int capped = Math.Min(bitrate, profile.Stream.BitrateCapMbps.Value);
-            bitrateCapApplied = capped != bitrate;
-            bitrate = capped;
-        }
-
-        return bitrate;
-    }
-
-    private static string SelectTransport(TelemetrySnapshot telemetry) =>
-        telemetry.RttMs >= 80 || telemetry.PacketLossPercent >= 2.0
-            ? "lan-conservative"
-            : "lan-direct";
-
-    private static string SelectCongestionPolicy(TelemetrySnapshot telemetry)
-    {
-        if (IsPowerConstrained(telemetry) || telemetry.DecoderLoadPercent >= 85)
-        {
-            return "power-save";
-        }
-
-        if (telemetry.RttMs >= 80)
-        {
-            return "latency-protect";
-        }
-
-        if (telemetry.PacketLossPercent >= 2.0)
-        {
-            return "loss-protect";
-        }
-
-        return "adaptive";
-    }
-
-    private static string CreateStreamReason(
-        string codecReason,
-        ClientProfile profile,
-        EndpointCapabilities capabilities,
-        TelemetrySnapshot telemetry,
-        bool bitrateCapApplied)
-    {
-        var reasons = new List<string> { codecReason };
-
-        if (profile.Display.PreferredRefreshHz <= capabilities.MaxFps &&
-            profile.Display.PreferredRefreshHz >= 120 &&
-            telemetry.RttMs < 40 &&
-            telemetry.PacketLossPercent < 1.0 &&
-            telemetry.DecoderLoadPercent is null or < 70 &&
-            !IsPowerConstrained(telemetry))
-        {
-            reasons.Add("Excellent LAN telemetry kept 120 FPS.");
-        }
-
-        if (telemetry.RttMs >= 80)
-        {
-            reasons.Add($"RTT {telemetry.RttMs}ms selected latency protection.");
-        }
-
-        if (telemetry.PacketLossPercent >= 2.0)
-        {
-            reasons.Add($"Packet loss {telemetry.PacketLossPercent:0.#}% selected loss protection.");
-        }
-
-        if (telemetry.DecoderLoadPercent >= 85)
-        {
-            reasons.Add($"Decoder load {telemetry.DecoderLoadPercent}% selected power-save planning.");
-        }
-
-        if (IsPowerConstrained(telemetry))
-        {
-            reasons.Add("Thermal or battery telemetry selected power-save planning.");
-        }
-
-        if (telemetry.EstimatedBandwidthMbps is > 0 and < 90)
-        {
-            reasons.Add($"Estimated bandwidth {telemetry.EstimatedBandwidthMbps}Mbps limited initial bitrate.");
-        }
-
-        if (bitrateCapApplied)
-        {
-            reasons.Add("Client bitrate cap limited initial bitrate.");
-        }
-
-        return string.Join(" ", reasons);
-    }
-
-    private static bool IsPowerConstrained(TelemetrySnapshot telemetry) =>
-        telemetry.BatteryPercent is <= 15 ||
-        telemetry.ThermalState?.Equals("hot", StringComparison.OrdinalIgnoreCase) == true ||
-        telemetry.ThermalState?.Equals("critical", StringComparison.OrdinalIgnoreCase) == true;
 
     private static ulong CreateRevision(
         ClientId clientId,
@@ -285,6 +218,8 @@ public static class SessionPlanner
             writer.Write(stream.InitialBitrateMbps);
             writer.Write(stream.Transport);
             writer.Write(stream.CongestionPolicy);
+            writer.Write(stream.BenchmarkRunId.ToByteArray());
+            writer.Write(stream.BenchmarkEvidenceRevision);
         }
 
         byte[] digest = SHA256.HashData(material.GetBuffer().AsSpan(0, checked((int)material.Length)));
@@ -292,4 +227,14 @@ public static class SessionPlanner
         CryptographicOperations.ZeroMemory(digest);
         return revision == 0 ? 1 : revision;
     }
+
+    private sealed record StreamPlanningSelection(
+        string Codec,
+        int Fps,
+        int InitialBitrateMbps,
+        string Transport,
+        string CongestionPolicy,
+        string Reason,
+        Guid BenchmarkRunId,
+        string BenchmarkEvidenceRevision);
 }

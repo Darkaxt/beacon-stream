@@ -105,7 +105,8 @@ public static class AdminEndpoints
                     clientId = profile.ClientId.Value,
                     profile,
                     capabilities = clients.GetCapabilities(profile.ClientId.Value),
-                    telemetry = clients.GetTelemetry(profile.ClientId.Value)
+                    telemetry = clients.GetTelemetry(profile.ClientId.Value),
+                    benchmarks = clients.GetBenchmarkEvidence(profile.ClientId.Value)
                 }),
                 sessions = sessions.GetAll(),
                 streams = streamSnapshots,
@@ -122,6 +123,11 @@ public static class AdminEndpoints
                 {
                     store = clients.ProfileStoreKind,
                     location = clients.ProfileStoreLocation
+                },
+                benchmarks = new
+                {
+                    store = clients.BenchmarkStoreKind,
+                    location = clients.BenchmarkStoreLocation
                 },
                 security = new
                 {

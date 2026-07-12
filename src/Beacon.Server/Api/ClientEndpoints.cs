@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using Beacon.Core.Benchmarks;
 using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 using Beacon.Core.Diagnostics;
@@ -13,7 +15,8 @@ namespace Beacon.Server.Api;
 
 public static class ClientEndpoints
 {
-    private static readonly JsonSerializerOptions WebJsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions WebJsonOptions = CreateWebJsonOptions();
+    private static readonly TimeSpan MaximumBenchmarkEvidenceAge = TimeSpan.FromDays(7);
 
     private static readonly string[] EditableFields =
     [
@@ -133,6 +136,135 @@ public static class ClientEndpoints
             return Results.Ok(new { clientId, accepted = true });
         });
 
+        clients.MapGet("/{clientId}/benchmarks", (string clientId, InMemoryClientStore store) =>
+            store.GetProfile(clientId) is null
+                ? Results.NotFound(new { error = $"Client '{clientId}' is not registered." })
+                : Results.Ok(new { clientId, runs = store.GetBenchmarkEvidence(clientId) }));
+
+        clients.MapPost("/{clientId}/benchmarks/prepare", (
+            string clientId,
+            JsonElement body,
+            InMemoryClientStore store) =>
+        {
+            if (store.GetProfile(clientId) is null)
+            {
+                return Results.NotFound(new { error = $"Client '{clientId}' is not registered." });
+            }
+
+            if (ContainsRawNetworkIdentity(body))
+            {
+                return Results.BadRequest(new { error = "Raw network identity fields are not accepted." });
+            }
+
+            BenchmarkPrepareRequest? request;
+            try
+            {
+                request = body.Deserialize<BenchmarkPrepareRequest>(WebJsonOptions);
+            }
+            catch (JsonException)
+            {
+                return Results.BadRequest(new { error = "Benchmark preparation JSON is invalid." });
+            }
+
+            if (request is null || !IsValid(request.Fingerprints))
+            {
+                return Results.BadRequest(new { error = "Complete network and hardware fingerprints are required." });
+            }
+
+            DateTimeOffset evaluatedAt = DateTimeOffset.UtcNow;
+            BenchmarkEvidence? existing = store.GetLatestCompletedBenchmarkEvidence(clientId);
+            BenchmarkReuseDecision decision = BenchmarkReuseEvaluator.Decide(
+                request.Trigger,
+                request.Fingerprints,
+                existing,
+                evaluatedAt,
+                MaximumBenchmarkEvidenceAge);
+            if (decision.Disposition == BenchmarkRunDisposition.Reuse && existing is not null)
+            {
+                return Results.Ok(new
+                {
+                    disposition = "reuse",
+                    runId = existing.RunId,
+                    evidenceRevision = existing.Revision,
+                    selectedResult = existing.SelectedResult,
+                    reason = decision.Reason
+                });
+            }
+
+            var pending = new BenchmarkEvidence(
+                RunId: Guid.NewGuid(),
+                ClientId: new ClientId(clientId),
+                Trigger: request.Trigger,
+                Fingerprints: request.Fingerprints,
+                StartedAt: evaluatedAt,
+                CompletedAt: null,
+                NetworkSamples: [],
+                DecoderSamples: [],
+                PowerSamples: [],
+                SelectedResult: null);
+            store.SaveBenchmarkEvidence(pending);
+            return Results.Ok(new
+            {
+                disposition = "start-new",
+                runId = pending.RunId,
+                reason = decision.Reason
+            });
+        });
+
+        clients.MapPost("/{clientId}/benchmarks/{runId:guid}/complete", (
+            string clientId,
+            Guid runId,
+            BenchmarkCompletionRequest request,
+            InMemoryClientStore store) =>
+        {
+            BenchmarkEvidence? pending = store.GetBenchmarkEvidence(runId);
+            if (pending is null || !pending.ClientId.Value.Equals(clientId, StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.NotFound(new { error = "Benchmark run was not found for this client." });
+            }
+
+            if (pending.CompletedAt is not null)
+            {
+                return Results.Conflict(new { error = "Benchmark run is already complete." });
+            }
+
+            if (request.NetworkSamples is null ||
+                request.DecoderSamples is null ||
+                request.PowerSamples is null)
+            {
+                return Results.BadRequest(new { error = "Benchmark sample collections are required." });
+            }
+
+            try
+            {
+                var scoringInput = new BenchmarkScoringInput(
+                    request.NetworkSamples,
+                    request.DecoderSamples,
+                    request.PowerSamples,
+                    store.GetProfile(clientId)!.Stream.CodecPreference);
+                SelectedBenchmarkResult selected = BenchmarkScorer.Select(scoringInput);
+                BenchmarkEvidence completed = pending with
+                {
+                    CompletedAt = DateTimeOffset.UtcNow,
+                    NetworkSamples = request.NetworkSamples.ToArray(),
+                    DecoderSamples = request.DecoderSamples.ToArray(),
+                    PowerSamples = request.PowerSamples.ToArray(),
+                    SelectedResult = selected
+                };
+                store.SaveBenchmarkEvidence(completed);
+                return Results.Ok(new
+                {
+                    runId = completed.RunId,
+                    evidenceRevision = completed.Revision,
+                    selectedResult = completed.SelectedResult
+                });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
         clients.MapPost("/{clientId}/plan", async (
             string clientId,
             PlanRequest request,
@@ -153,10 +285,19 @@ public static class ClientEndpoints
                 return resolution.Error;
             }
 
+            BenchmarkPlanEvidence? benchmark = clients.GetLatestBenchmarkPlanEvidence(
+                clientId,
+                DateTimeOffset.UtcNow,
+                MaximumBenchmarkEvidenceAge);
+            if (benchmark is null)
+            {
+                return Results.Conflict(new { error = "Completed benchmark evidence is required before session planning." });
+            }
+
             SessionPlanResult result = SessionPlanner.CreatePlan(
                 profile,
                 clients.GetCapabilities(clientId),
-                clients.GetTelemetry(clientId),
+                benchmark,
                 resolution.Game!);
 
             if (!result.Success || result.Plan is null)
@@ -195,10 +336,19 @@ public static class ClientEndpoints
                 return resolution.Error;
             }
 
+            BenchmarkPlanEvidence? benchmark = clients.GetLatestBenchmarkPlanEvidence(
+                clientId,
+                DateTimeOffset.UtcNow,
+                MaximumBenchmarkEvidenceAge);
+            if (benchmark is null)
+            {
+                return Results.Conflict(new { error = "Completed benchmark evidence is required before launch." });
+            }
+
             SessionPlanResult planResult = SessionPlanner.CreatePlan(
                 profile,
                 clients.GetCapabilities(clientId),
-                clients.GetTelemetry(clientId),
+                benchmark,
                 resolution.Game!);
 
             if (!planResult.Success || planResult.Plan is null)
@@ -759,6 +909,48 @@ public static class ClientEndpoints
             }
         };
 
+    private static JsonSerializerOptions CreateWebJsonOptions()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(new JsonStringEnumConverter());
+        return options;
+    }
+
+    private static bool ContainsRawNetworkIdentity(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            foreach (JsonProperty property in value.EnumerateObject())
+            {
+                if (property.Name.Equals("ssid", StringComparison.OrdinalIgnoreCase) ||
+                    property.Name.Equals("bssid", StringComparison.OrdinalIgnoreCase) ||
+                    ContainsRawNetworkIdentity(property.Value))
+                {
+                    return true;
+                }
+            }
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            return value.EnumerateArray().Any(ContainsRawNetworkIdentity);
+        }
+
+        return false;
+    }
+
+    private static bool IsValid(BenchmarkFingerprintSet fingerprints) =>
+        fingerprints.Network.SchemaVersion > 0 &&
+        !string.IsNullOrWhiteSpace(fingerprints.Network.ServerRoute) &&
+        !string.IsNullOrWhiteSpace(fingerprints.Network.Transport) &&
+        !string.IsNullOrWhiteSpace(fingerprints.Network.LocalNetworkPrefix) &&
+        !string.IsNullOrWhiteSpace(fingerprints.Network.LinkSpeedBucket) &&
+        fingerprints.Hardware.SchemaVersion > 0 &&
+        !string.IsNullOrWhiteSpace(fingerprints.Hardware.DeviceCapabilityRevision) &&
+        !string.IsNullOrWhiteSpace(fingerprints.Hardware.AndroidVersion) &&
+        !string.IsNullOrWhiteSpace(fingerprints.Hardware.ApkVersion) &&
+        !string.IsNullOrWhiteSpace(fingerprints.Hardware.DisplayModeInventoryRevision) &&
+        !string.IsNullOrWhiteSpace(fingerprints.Hardware.CodecInventoryRevision);
+
     private static ConnectionGrant CreateConnectionGrant(
         SessionPlan plan,
         StreamingSessionState streamingSession,
@@ -972,6 +1164,15 @@ public static class ClientEndpoints
             }));
     }
 }
+
+public sealed record BenchmarkPrepareRequest(
+    BenchmarkTrigger Trigger,
+    BenchmarkFingerprintSet Fingerprints);
+
+public sealed record BenchmarkCompletionRequest(
+    IReadOnlyList<NetworkBenchmarkSample> NetworkSamples,
+    IReadOnlyList<DecoderBenchmarkSample> DecoderSamples,
+    IReadOnlyList<EndpointPowerSample> PowerSamples);
 
 public sealed record ClientHelloRequest(string ClientId, string? Name);
 

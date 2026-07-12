@@ -33,7 +33,18 @@ public static class BenchmarkScorer
             reasons.Add($"{DisplayCodec(rejected.Codec)} {rejected.TargetFps} FPS was rejected by active decode evidence.");
         }
 
-        DecoderBenchmarkSample? selectedDecoder = sustainable
+        string codecPreference = input.CodecPreference.Trim().ToLowerInvariant();
+        DecoderBenchmarkSample[] eligible = codecPreference is "" or "auto"
+            ? sustainable
+            : sustainable
+                .Where(sample => sample.Codec.Equals(codecPreference, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+        if (codecPreference is not ("" or "auto"))
+        {
+            reasons.Add($"Server profile codec preference {codecPreference} constrained candidate selection.");
+        }
+
+        DecoderBenchmarkSample? selectedDecoder = eligible
             .OrderByDescending(sample => CodecPriority(sample.Codec))
             .ThenByDescending(sample => sample.BitDepth)
             .ThenByDescending(sample => sample.TargetFps)
@@ -47,8 +58,15 @@ public static class BenchmarkScorer
 
         double lossPercent = 100.0 * (input.NetworkSamples.Count - received.Length) / input.NetworkSamples.Count;
         double sustainableThroughput = received.Min(sample => sample.ThroughputMbps);
+        double rttMs = received.Average(sample => sample.RttMs);
+        double jitterMs = received.Average(sample => sample.JitterMs);
         double bitrate = sustainableThroughput * ThroughputBudgetRatio;
         int selectedFps = selectedDecoder.TargetFps;
+
+        if (rttMs >= 80)
+        {
+            reasons.Add($"Measured RTT {rttMs:0.#}ms requires latency protection.");
+        }
 
         if (lossPercent >= 2)
         {
@@ -56,7 +74,8 @@ public static class BenchmarkScorer
             reasons.Add($"Measured packet loss {lossPercent:0.#}% reduced the initial bitrate budget.");
         }
 
-        if (IsThermallyConstrained(input.PowerSamples))
+        bool powerConstrained = IsThermallyConstrained(input.PowerSamples);
+        if (powerConstrained)
         {
             bitrate *= ThermalProtectionRatio;
             selectedFps = Math.Min(selectedFps, 60);
@@ -68,9 +87,10 @@ public static class BenchmarkScorer
             MaxSustainableFps: selectedFps,
             InitialBitrateMbps: Math.Max(5, checked((int)Math.Floor(bitrate))),
             SustainableThroughputMbps: sustainableThroughput,
-            RttMs: received.Average(sample => sample.RttMs),
-            JitterMs: received.Average(sample => sample.JitterMs),
+            RttMs: rttMs,
+            JitterMs: jitterMs,
             PacketLossPercent: lossPercent,
+            PowerConstrained: powerConstrained,
             Reasons: reasons);
     }
 

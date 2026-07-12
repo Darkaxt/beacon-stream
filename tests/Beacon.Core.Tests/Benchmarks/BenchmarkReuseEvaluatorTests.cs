@@ -100,6 +100,7 @@ public sealed class BenchmarkReuseEvaluatorTests
             RttMs: 8,
             JitterMs: 1.2,
             PacketLossPercent: 0,
+            PowerConstrained: false,
             Reasons: ["H.264 120 FPS passed active decode validation."]);
 
         return new BenchmarkEvidence(

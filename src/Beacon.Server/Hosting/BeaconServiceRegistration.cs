@@ -28,6 +28,8 @@ public static class BeaconServiceRegistration
     public const string StreamWorkerPathEnvironmentVariable = "BEACON_STREAM_WORKER_PATH";
     public const string ClientProfilesPathConfigurationKey = "Beacon:Profiles:Path";
     public const string ClientProfilesPathEnvironmentVariable = "BEACON_CLIENT_PROFILES_PATH";
+    public const string BenchmarkEvidencePathConfigurationKey = "Beacon:Benchmarks:Path";
+    public const string BenchmarkEvidencePathEnvironmentVariable = "BEACON_BENCHMARK_EVIDENCE_PATH";
     public const string SecurityTestHostConfigurationKey = "Beacon:Security:TestHost";
     public const string SecurityIdentityPathConfigurationKey = "Beacon:Security:IdentityPath";
     public const string SecurityCredentialsPathConfigurationKey = "Beacon:Security:CredentialsPath";
@@ -82,6 +84,11 @@ public static class BeaconServiceRegistration
         services.AddSingleton(hostOptions);
         services.AddSingleton<IClientProfileRepository>(_ =>
             CreateClientProfileRepository(configuration, environmentClientProfilesPath));
+        services.AddSingleton<IBenchmarkEvidenceRepository>(_ =>
+            CreateBenchmarkEvidenceRepository(
+                configuration,
+                Environment.GetEnvironmentVariable(BenchmarkEvidencePathEnvironmentVariable),
+                hostMode));
         BeaconSecurityOptions securityOptions = CreateSecurityOptions(configuration);
         services.AddSingleton(securityOptions);
         services.AddSingleton<BeaconSecurityPolicy>();
@@ -277,6 +284,29 @@ public static class BeaconServiceRegistration
         string.IsNullOrWhiteSpace(environmentClientProfilesPath)
             ? configuration[ClientProfilesPathConfigurationKey]
             : environmentClientProfilesPath;
+
+    private static IBenchmarkEvidenceRepository CreateBenchmarkEvidenceRepository(
+        IConfiguration configuration,
+        string? environmentBenchmarkEvidencePath,
+        BeaconHostMode hostMode)
+    {
+        string? path = ResolveBenchmarkEvidencePath(configuration, environmentBenchmarkEvidencePath);
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            return new FileBenchmarkEvidenceRepository(path);
+        }
+
+        return hostMode == BeaconHostMode.Fake
+            ? new InMemoryBenchmarkEvidenceRepository([FakeBenchmarkEvidence.CreateZFold7(DateTimeOffset.UtcNow)])
+            : new InMemoryBenchmarkEvidenceRepository();
+    }
+
+    public static string? ResolveBenchmarkEvidencePath(
+        IConfiguration configuration,
+        string? environmentBenchmarkEvidencePath) =>
+        string.IsNullOrWhiteSpace(environmentBenchmarkEvidencePath)
+            ? configuration[BenchmarkEvidencePathConfigurationKey]
+            : environmentBenchmarkEvidencePath;
 
     public static string? ResolveStreamWorkerPath(
         IConfiguration configuration,
