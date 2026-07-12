@@ -75,6 +75,35 @@ stream_v1::SessionStreamEnvelope start_session(std::uint64_t sequence) {
   return message;
 }
 
+stream_v1::SessionStreamEnvelope start_benchmark(std::uint64_t sequence) {
+  stream_v1::SessionStreamEnvelope message;
+  message.set_protocol_version(1);
+  message.set_session_id("session-a");
+  message.set_sequence(sequence);
+  auto *benchmark = message.mutable_start_benchmark();
+  benchmark->set_run_id("11111111-1111-1111-1111-111111111111");
+  benchmark->set_schema_version(3);
+  auto *reliable = benchmark->mutable_reliable_round();
+  reliable->set_packet_count(4);
+  reliable->set_payload_bytes(1024);
+  reliable->set_measurement_interval_us(500'000);
+  auto *datagram = benchmark->mutable_datagram_round();
+  datagram->set_packet_count(8);
+  datagram->set_payload_bytes(1000);
+  datagram->set_measurement_interval_us(500'000);
+  return message;
+}
+
+stream_v1::SessionStreamEnvelope cancel_benchmark(std::uint64_t sequence) {
+  stream_v1::SessionStreamEnvelope message;
+  message.set_protocol_version(1);
+  message.set_session_id("session-a");
+  message.set_sequence(sequence);
+  message.mutable_cancel_benchmark()->set_run_id(
+      "11111111-1111-1111-1111-111111111111");
+  return message;
+}
+
 stream_v1::SessionStreamEnvelope
 reply_from(const beacon::worker::QuicSessionProtocolOutput &output) {
   BEACON_TEST_REQUIRE(output.session_replies.size() == 1);
@@ -284,6 +313,39 @@ void start_session_is_typed_once_per_authenticated_generation() {
   BEACON_TEST_REQUIRE(!duplicate.accepted_start_session.has_value());
 }
 
+void benchmark_start_and_cancel_are_typed_for_the_authenticated_generation() {
+  AuthorizedQuicTicketStore store;
+  BEACON_TEST_REQUIRE(store.authorize(grant("benchmark-ticket")));
+  QuicSessionProtocol protocol(store);
+  protocol.set_maximum_datagram_bytes(1200);
+
+  auto authenticated = protocol.receive(
+      QuicPeerStreamRole::session, frame(authenticate("benchmark-ticket")),
+      1'000);
+  BEACON_TEST_REQUIRE(authenticated.accepted_authentication.has_value());
+
+  auto started = protocol.receive(QuicPeerStreamRole::session,
+                                  frame(start_benchmark(2)), 1'001);
+  BEACON_TEST_REQUIRE(!started.close_connection);
+  BEACON_TEST_REQUIRE(started.accepted_start_benchmark.has_value());
+  BEACON_TEST_REQUIRE(started.accepted_start_benchmark->session_generation ==
+                      authenticated.accepted_authentication->session_generation);
+  BEACON_TEST_REQUIRE(started.accepted_start_benchmark->start_benchmark.run_id() ==
+                      "11111111-1111-1111-1111-111111111111");
+  BEACON_TEST_REQUIRE(
+      started.accepted_start_benchmark->start_benchmark.datagram_round()
+          .packet_count() == 8);
+
+  auto canceled = protocol.receive(QuicPeerStreamRole::session,
+                                   frame(cancel_benchmark(3)), 1'002);
+  BEACON_TEST_REQUIRE(!canceled.close_connection);
+  BEACON_TEST_REQUIRE(canceled.accepted_cancel_benchmark.has_value());
+  BEACON_TEST_REQUIRE(canceled.accepted_cancel_benchmark->session_generation ==
+                      authenticated.accepted_authentication->session_generation);
+  BEACON_TEST_REQUIRE(canceled.accepted_cancel_benchmark->cancel_benchmark.run_id() ==
+                      "11111111-1111-1111-1111-111111111111");
+}
+
 void reset_and_fresh_authentication_allocate_a_new_generation() {
   AuthorizedQuicTicketStore store;
   BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-generation-a")));
@@ -447,19 +509,21 @@ void unauthenticated_data_and_oversized_frames_fail_closed() {
 } // namespace
 
 int main() {
-  ticket_is_consumed_once_without_retaining_the_raw_secret();
-  ticket_identity_and_security_expiry_are_validated_before_consumption();
-  revocation_and_duplicate_authorization_are_deterministic();
-  stream_ids_have_one_unambiguous_role();
-  fragmented_authentication_consumes_ticket_and_returns_negotiated_limit();
-  replay_and_version_mismatch_return_typed_rejections();
-  authenticated_streams_are_routed_independently();
-  start_session_is_typed_once_per_authenticated_generation();
-  reset_and_fresh_authentication_allocate_a_new_generation();
-  stale_old_connection_receive_does_not_touch_current_protocol_state();
-  secure_clear_observes_zeroes_before_pending_bytes_are_released();
-  oversized_partial_authentication_is_wiped_before_buffer_reuse();
-  malformed_authentication_is_wiped_before_logical_clear();
-  unauthenticated_data_and_oversized_frames_fail_closed();
-  return 0;
+  return beacon::stream::testing::run_tests([] {
+    ticket_is_consumed_once_without_retaining_the_raw_secret();
+    ticket_identity_and_security_expiry_are_validated_before_consumption();
+    revocation_and_duplicate_authorization_are_deterministic();
+    stream_ids_have_one_unambiguous_role();
+    fragmented_authentication_consumes_ticket_and_returns_negotiated_limit();
+    replay_and_version_mismatch_return_typed_rejections();
+    authenticated_streams_are_routed_independently();
+    start_session_is_typed_once_per_authenticated_generation();
+    benchmark_start_and_cancel_are_typed_for_the_authenticated_generation();
+    reset_and_fresh_authentication_allocate_a_new_generation();
+    stale_old_connection_receive_does_not_touch_current_protocol_state();
+    secure_clear_observes_zeroes_before_pending_bytes_are_released();
+    oversized_partial_authentication_is_wiped_before_buffer_reuse();
+    malformed_authentication_is_wiped_before_logical_clear();
+    unauthenticated_data_and_oversized_frames_fail_closed();
+  });
 }

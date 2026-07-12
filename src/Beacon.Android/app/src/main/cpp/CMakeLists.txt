@@ -2,6 +2,7 @@ add_library(
   BeaconAndroidStreamCore
   STATIC
     streamcore/callback_gate.cpp
+    streamcore/benchmark_collector.cpp
     streamcore/certificate_pin.cpp
     streamcore/deferred_action_queue.cpp
     streamcore/grant_mapping.cpp

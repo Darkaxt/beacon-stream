@@ -60,6 +60,23 @@ stream_v1::SessionErrorCode error_for(QuicTicketConsumeResult result) noexcept {
   return stream_v1::SESSION_ERROR_CODE_AUTHENTICATION_FAILED;
 }
 
+bool valid_benchmark_round(const stream_v1::BenchmarkRoundPlan &round,
+                           std::uint32_t maximum_payload_bytes) noexcept {
+  return round.packet_count() != 0 && round.payload_bytes() != 0 &&
+         round.payload_bytes() <= maximum_payload_bytes &&
+         round.measurement_interval_us() != 0;
+}
+
+bool valid_benchmark_start(const stream_v1::StartBenchmark &benchmark,
+                           std::uint16_t maximum_datagram_bytes) noexcept {
+  return !benchmark.run_id().empty() && benchmark.schema_version() != 0 &&
+         valid_benchmark_round(benchmark.reliable_round(),
+                               maximum_stream_message_bytes) &&
+         maximum_datagram_bytes != 0 &&
+         valid_benchmark_round(benchmark.datagram_round(),
+                               maximum_datagram_bytes);
+}
+
 } // namespace
 
 QuicPeerStreamRole classify_peer_stream(std::uint64_t stream_id) noexcept {
@@ -216,12 +233,25 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
                 message.session_id() == session_id_ &&
                 message.sequence() > last_session_sequence_ &&
                 (body == stream_v1::SessionStreamEnvelope::kStartSession ||
+                 body == stream_v1::SessionStreamEnvelope::kStartBenchmark ||
+                 body == stream_v1::SessionStreamEnvelope::kCancelBenchmark ||
                  body == stream_v1::SessionStreamEnvelope::kStopSession ||
                  body == stream_v1::SessionStreamEnvelope::kRequestIdr);
+        if (valid && body == stream_v1::SessionStreamEnvelope::kStartSession) {
+          valid = !started_;
+        } else if (valid &&
+                   body == stream_v1::SessionStreamEnvelope::kStartBenchmark) {
+          valid = !started_ && valid_benchmark_start(
+                                   message.start_benchmark(),
+                                   maximum_datagram_bytes_);
+        } else if (valid &&
+                   body == stream_v1::SessionStreamEnvelope::kCancelBenchmark) {
+          valid = started_ && !benchmark_run_id_.empty() &&
+                  message.cancel_benchmark().run_id() == benchmark_run_id_;
+        }
         if (valid) {
           last_session_sequence_ = message.sequence();
-          if (body == stream_v1::SessionStreamEnvelope::kStartSession &&
-              !started_) {
+          if (body == stream_v1::SessionStreamEnvelope::kStartSession) {
             started_ = true;
             output.accepted_start_session =
                 QuicSessionProtocolOutput::AcceptedStartSession{
@@ -229,6 +259,24 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
                     .session_generation = current_generation_,
                     .maximum_datagram_bytes = maximum_datagram_bytes_,
                     .start_session = message.start_session()};
+          } else if (body ==
+                     stream_v1::SessionStreamEnvelope::kStartBenchmark) {
+            started_ = true;
+            benchmark_run_id_ = message.start_benchmark().run_id();
+            output.accepted_start_benchmark =
+                QuicSessionProtocolOutput::AcceptedStartBenchmark{
+                    .session_id = session_id_,
+                    .session_generation = current_generation_,
+                    .maximum_datagram_bytes = maximum_datagram_bytes_,
+                    .start_benchmark = message.start_benchmark()};
+          } else if (body ==
+                     stream_v1::SessionStreamEnvelope::kCancelBenchmark) {
+            output.accepted_cancel_benchmark =
+                QuicSessionProtocolOutput::AcceptedCancelBenchmark{
+                    .session_generation = current_generation_,
+                    .cancel_benchmark = message.cancel_benchmark()};
+            benchmark_run_id_.clear();
+            started_ = false;
           }
           output.packets.push_back({.channel = stream::StreamChannel::session,
                                     .sequence = message.sequence(),
@@ -318,6 +366,7 @@ void QuicSessionProtocol::consume_session_prefix(std::size_t bytes) noexcept {
 void QuicSessionProtocol::reset() noexcept {
   clear_stream_bytes();
   session_id_.clear();
+  benchmark_run_id_.clear();
   maximum_datagram_bytes_ = 0;
   last_session_sequence_ = 0;
   last_input_sequence_ = 0;

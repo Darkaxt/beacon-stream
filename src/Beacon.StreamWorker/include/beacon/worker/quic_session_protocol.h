@@ -37,6 +37,18 @@ struct QuicSessionProtocolOutput {
     stream::v1::StartSession start_session;
   };
 
+  struct AcceptedStartBenchmark {
+    std::string session_id;
+    std::uint64_t session_generation{};
+    std::uint16_t maximum_datagram_bytes{};
+    stream::v1::StartBenchmark start_benchmark;
+  };
+
+  struct AcceptedCancelBenchmark {
+    std::uint64_t session_generation{};
+    stream::v1::CancelBenchmark cancel_benchmark;
+  };
+
   struct ParsedInput {
     std::uint64_t session_generation{};
     stream::v1::InputStreamEnvelope input;
@@ -53,6 +65,8 @@ struct QuicSessionProtocolOutput {
   std::vector<stream::TransportPacket> packets;
   std::optional<AcceptedAuthentication> accepted_authentication;
   std::optional<AcceptedStartSession> accepted_start_session;
+  std::optional<AcceptedStartBenchmark> accepted_start_benchmark;
+  std::optional<AcceptedCancelBenchmark> accepted_cancel_benchmark;
   std::vector<ParsedInput> inputs;
   std::vector<ParsedFeedback> feedback;
 };
@@ -95,6 +109,7 @@ private:
   std::uint64_t current_generation_{};
   std::uint64_t next_generation_{};
   std::uint64_t active_connection_generation_{};
+  std::string benchmark_run_id_;
   SecureClearObserver session_wipe_observer_{};
   void *session_wipe_context_{};
   bool authenticated_{};

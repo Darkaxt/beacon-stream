@@ -119,6 +119,8 @@ message SessionStreamEnvelope {
     StopSession stop_session = 13;
     SessionStateChanged session_state_changed = 14;
     RequestIdr request_idr = 15;
+    StartBenchmark start_benchmark = 16;
+    CancelBenchmark cancel_benchmark = 17;
   }
 }
 
@@ -136,6 +138,23 @@ message SessionAuthenticated {
 
 message StartSession {
   SelectedVideoMode selected_video = 1;
+}
+
+message BenchmarkRoundPlan {
+  uint32 packet_count = 1;
+  uint32 payload_bytes = 2;
+  uint64 measurement_interval_us = 3;
+}
+
+message StartBenchmark {
+  string run_id = 1;
+  uint32 schema_version = 2;
+  BenchmarkRoundPlan reliable_round = 3;
+  BenchmarkRoundPlan datagram_round = 4;
+}
+
+message CancelBenchmark {
+  string run_id = 1;
 }
 
 message StopSession {

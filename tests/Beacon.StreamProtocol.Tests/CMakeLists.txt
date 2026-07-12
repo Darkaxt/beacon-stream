@@ -7,6 +7,10 @@ add_executable(BeaconMediaDatagramTests media_datagram_tests.cpp)
 target_link_libraries(BeaconMediaDatagramTests PRIVATE Beacon::StreamProtocol)
 add_test(NAME BeaconStreamProtocol.MediaDatagram COMMAND BeaconMediaDatagramTests)
 
+add_executable(BeaconBenchmarkDatagramTests benchmark_datagram_tests.cpp)
+target_link_libraries(BeaconBenchmarkDatagramTests PRIVATE Beacon::StreamProtocol)
+add_test(NAME BeaconStreamProtocol.BenchmarkDatagram COMMAND BeaconBenchmarkDatagramTests)
+
 add_executable(
   BeaconFakeTransportTests
   fake_transport.cpp
@@ -44,6 +48,22 @@ if(ANDROID)
       ${CMAKE_CURRENT_SOURCE_DIR}
   )
   add_test(NAME BeaconAndroid.StreamCore COMMAND BeaconAndroidStreamCoreTests)
+
+  add_executable(
+    BeaconAndroidBenchmarkCollectorTests
+    ../../src/Beacon.Android/app/src/main/cpp/streamcore/tests/benchmark_collector_tests.cpp
+  )
+  target_link_libraries(
+    BeaconAndroidBenchmarkCollectorTests
+    PRIVATE
+      BeaconAndroidStreamCore
+  )
+  target_include_directories(
+    BeaconAndroidBenchmarkCollectorTests
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+  add_test(NAME BeaconAndroid.BenchmarkCollector COMMAND BeaconAndroidBenchmarkCollectorTests)
 
   add_executable(
     BeaconAndroidCertificatePinTests

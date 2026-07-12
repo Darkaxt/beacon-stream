@@ -1,6 +1,7 @@
 add_library(
   BeaconStreamWorkerCore
   STATIC
+    src/benchmark_source.cpp
     src/named_pipe_channel.cpp
     src/outbound_queue.cpp
     src/quic_listener.cpp
