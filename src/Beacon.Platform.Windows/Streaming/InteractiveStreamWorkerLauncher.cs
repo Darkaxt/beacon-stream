@@ -9,6 +9,18 @@ namespace Beacon.Platform.Windows.Streaming;
 
 internal sealed class InteractiveStreamWorkerLauncher
 {
+    private readonly IInteractiveStreamWorkerProcessApi processApi;
+
+    public InteractiveStreamWorkerLauncher()
+        : this(WindowsInteractiveStreamWorkerProcessApi.Instance)
+    {
+    }
+
+    internal InteractiveStreamWorkerLauncher(IInteractiveStreamWorkerProcessApi processApi)
+    {
+        this.processApi = processApi;
+    }
+
     public SecurityIdentifier GetInteractiveUserSid()
     {
         if (Process.GetCurrentProcess().SessionId != 0)
@@ -88,7 +100,7 @@ internal sealed class InteractiveStreamWorkerLauncher
         return result.ToString();
     }
 
-    private static Process LaunchInActiveSession(
+    private Process LaunchInActiveSession(
         string executablePath,
         IReadOnlyList<string> arguments,
         WorkerJobObject job)
@@ -139,17 +151,35 @@ internal sealed class InteractiveStreamWorkerLauncher
 
                 using var processHandle = new SafeFileHandle(processInfo.Process, ownsHandle: true);
                 using var threadHandle = new SafeFileHandle(processInfo.Thread, ownsHandle: true);
-                job.Assign(processHandle);
-                if (StreamWorkerNativeMethods.ResumeThread(threadHandle) == uint.MaxValue)
-                {
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not resume StreamWorker.");
-                }
+                AssignAndResumeSuspendedProcess(processHandle, threadHandle, job.Assign);
                 return Process.GetProcessById(checked((int)processInfo.ProcessId));
             }
             finally
             {
                 _ = StreamWorkerNativeMethods.DestroyEnvironmentBlock(environment);
             }
+        }
+    }
+
+    internal void AssignAndResumeSuspendedProcess(
+        SafeFileHandle processHandle,
+        SafeFileHandle threadHandle,
+        Action<SafeHandle> assignToJob)
+    {
+        try
+        {
+            assignToJob(processHandle);
+        }
+        catch
+        {
+            processApi.TerminateProcess(processHandle);
+            processApi.WaitForExit(processHandle);
+            throw;
+        }
+
+        if (processApi.ResumeThread(threadHandle) == uint.MaxValue)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not resume StreamWorker.");
         }
     }
 
