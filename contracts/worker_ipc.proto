@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+import "stream_control.proto";
+
 package beacon.worker.v1;
 
 option csharp_namespace = "Beacon.StreamWorker.Contracts.Worker.V1";
@@ -70,6 +72,10 @@ enum DiagnosticCode {
   DIAGNOSTIC_CODE_INVALID_COMMAND = 3;
   DIAGNOSTIC_CODE_OPERATION_FAILED = 4;
   DIAGNOSTIC_CODE_RESOURCE_RELEASED = 5;
+  DIAGNOSTIC_CODE_CONNECTION_OBSERVED = 6;
+  DIAGNOSTIC_CODE_CONNECTION_CONFIGURED = 7;
+  DIAGNOSTIC_CODE_TRANSPORT_CONNECTED = 8;
+  DIAGNOSTIC_CODE_TRANSPORT_FAILED = 9;
 }
 
 enum WorkerErrorCode {
@@ -102,6 +108,11 @@ message WorkerIpcEnvelope {
     MediaMetrics media_metrics = 31;
     WorkerDiagnostic worker_diagnostic = 32;
     WorkerTransportReady worker_transport_ready = 33;
+    TransportAuthenticated transport_authenticated = 34;
+    TransportDisconnected transport_disconnected = 35;
+    InputReceived input_received = 36;
+    FeedbackReceived feedback_received = 37;
+    MediaEvidence media_evidence = 38;
     WorkerCompletion worker_completion = 40;
     ShutdownWorker shutdown_worker = 41;
   }
@@ -189,6 +200,32 @@ message WorkerDiagnostic {
 
 message WorkerTransportReady {
   uint32 listener_port = 1;
+}
+
+message TransportAuthenticated {
+  uint64 session_generation = 1;
+  uint32 maximum_datagram_bytes = 2;
+}
+
+message TransportDisconnected {
+  uint64 session_generation = 1;
+}
+
+message InputReceived {
+  uint64 session_generation = 1;
+  beacon.stream.v1.InputStreamEnvelope input = 2;
+}
+
+message FeedbackReceived {
+  uint64 session_generation = 1;
+  beacon.stream.v1.FeedbackStreamEnvelope feedback = 2;
+}
+
+message MediaEvidence {
+  uint64 session_generation = 1;
+  uint64 sequence = 2;
+  uint64 presentation_time_us = 3;
+  uint32 datagram_bytes = 4;
 }
 
 message WorkerCompletion {

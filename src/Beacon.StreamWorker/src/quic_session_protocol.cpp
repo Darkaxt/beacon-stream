@@ -3,6 +3,7 @@
 #include "stream_control.pb.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <utility>
 
@@ -75,12 +76,35 @@ QuicPeerStreamRole classify_peer_stream(std::uint64_t stream_id) noexcept {
 }
 
 QuicSessionProtocol::QuicSessionProtocol(
-    AuthorizedQuicTicketStore &authorized_tickets)
-    : authorized_tickets_(authorized_tickets) {}
+    AuthorizedQuicTicketStore &authorized_tickets,
+    SecureClearObserver session_wipe_observer, void *session_wipe_context)
+    : authorized_tickets_(authorized_tickets),
+      session_wipe_observer_(session_wipe_observer),
+      session_wipe_context_(session_wipe_context) {}
+
+QuicSessionProtocol::~QuicSessionProtocol() { reset(); }
 
 void QuicSessionProtocol::set_maximum_datagram_bytes(
     std::uint16_t value) noexcept {
   maximum_datagram_bytes_ = value;
+}
+
+void QuicSessionProtocol::begin_connection(
+    std::uint64_t connection_generation) {
+  reset();
+  active_connection_generation_ = connection_generation;
+}
+
+QuicSessionProtocolOutput QuicSessionProtocol::receive(
+    std::uint64_t connection_generation, QuicPeerStreamRole role,
+    std::span<const std::byte> bytes, std::uint64_t now_unix_ms) {
+  if (connection_generation == 0 ||
+      connection_generation != active_connection_generation_) {
+    QuicSessionProtocolOutput output;
+    output.stale_callback = true;
+    return output;
+  }
+  return receive(role, bytes, now_unix_ms);
 }
 
 QuicSessionProtocolOutput
@@ -101,6 +125,7 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
     break;
   case QuicPeerStreamRole::invalid:
     output.close_connection = true;
+    clear_stream_bytes();
     return output;
   }
   constexpr std::size_t maximum_buffered_bytes =
@@ -108,7 +133,7 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
   if (bytes.size() > maximum_buffered_bytes ||
       buffered->size() > maximum_buffered_bytes - bytes.size()) {
     output.close_connection = true;
-    buffered->clear();
+    clear_stream_bytes();
     return output;
   }
   buffered->insert(buffered->end(), bytes.begin(), bytes.end());
@@ -118,7 +143,7 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
         read_u32(std::span<const std::byte, 4>{buffered->data(), 4});
     if (message_bytes == 0 || message_bytes > maximum_stream_message_bytes) {
       output.close_connection = true;
-      buffered->clear();
+      clear_stream_bytes();
       return output;
     }
     const auto frame_bytes = 4U + static_cast<std::size_t>(message_bytes);
@@ -174,13 +199,17 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
             if (authenticated_) {
               session_id_ = message.session_id();
               last_session_sequence_ = message.sequence();
+              current_generation_ = ++next_generation_;
+              output.accepted_authentication =
+                  QuicSessionProtocolOutput::AcceptedAuthentication{
+                      .session_id = session_id_,
+                      .session_generation = current_generation_,
+                      .maximum_datagram_bytes = maximum_datagram_bytes_};
             } else {
               output.close_connection = true;
             }
           }
         }
-        std::fill(buffered->begin(), buffered->begin() + frame_bytes,
-                  std::byte{});
       } else if (valid) {
         const auto body = message.body_case();
         valid = message.protocol_version() == 1 &&
@@ -191,6 +220,16 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
                  body == stream_v1::SessionStreamEnvelope::kRequestIdr);
         if (valid) {
           last_session_sequence_ = message.sequence();
+          if (body == stream_v1::SessionStreamEnvelope::kStartSession &&
+              !started_) {
+            started_ = true;
+            output.accepted_start_session =
+                QuicSessionProtocolOutput::AcceptedStartSession{
+                    .session_id = session_id_,
+                    .session_generation = current_generation_,
+                    .maximum_datagram_bytes = maximum_datagram_bytes_,
+                    .start_session = message.start_session()};
+          }
           output.packets.push_back({.channel = stream::StreamChannel::session,
                                     .sequence = message.sequence(),
                                     .payload = std::vector<std::byte>(
@@ -208,6 +247,8 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
               message.has_input_batch();
       if (valid) {
         last_input_sequence_ = message.sequence();
+        output.inputs.push_back(
+            {.session_generation = current_generation_, .input = message});
         output.packets.push_back({.channel = stream::StreamChannel::input,
                                   .sequence = message.sequence(),
                                   .payload = std::vector<std::byte>(
@@ -225,21 +266,27 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
                   stream_v1::FeedbackStreamEnvelope::BODY_NOT_SET;
       if (valid) {
         last_feedback_sequence_ = message.sequence();
+        output.feedback.push_back({.session_generation = current_generation_,
+                                   .feedback = message});
         output.packets.push_back({.channel = stream::StreamChannel::feedback,
                                   .sequence = message.sequence(),
                                   .payload = std::vector<std::byte>(
                                       payload.begin(), payload.end())});
       }
     }
-    buffered->erase(buffered->begin(), buffered->begin() + frame_bytes);
     if (!valid) {
       output.close_connection = true;
-      buffered->clear();
+      clear_stream_bytes();
       return output;
     }
     if (output.close_connection) {
-      buffered->clear();
+      clear_stream_bytes();
       return output;
+    }
+    if (role == QuicPeerStreamRole::session) {
+      consume_session_prefix(frame_bytes);
+    } else {
+      buffered->erase(buffered->begin(), buffered->begin() + frame_bytes);
     }
   }
   return output;
@@ -249,17 +296,36 @@ bool QuicSessionProtocol::authenticated() const noexcept {
   return authenticated_;
 }
 
-void QuicSessionProtocol::reset() {
-  std::fill(session_bytes_.begin(), session_bytes_.end(), std::byte{});
-  session_bytes_.clear();
-  input_bytes_.clear();
-  feedback_bytes_.clear();
+void QuicSessionProtocol::clear_stream_bytes() noexcept {
+  secure_clear_bytes(session_bytes_, session_wipe_observer_,
+                     session_wipe_context_);
+  secure_clear_bytes(input_bytes_);
+  secure_clear_bytes(feedback_bytes_);
+}
+
+void QuicSessionProtocol::consume_session_prefix(std::size_t bytes) noexcept {
+  const auto remaining = session_bytes_.size() - bytes;
+  if (remaining != 0) {
+    std::memmove(session_bytes_.data(), session_bytes_.data() + bytes,
+                 remaining);
+  }
+  secure_wipe_bytes(
+      std::span<std::byte>{session_bytes_}.subspan(remaining, bytes),
+      session_wipe_observer_, session_wipe_context_);
+  session_bytes_.resize(remaining);
+}
+
+void QuicSessionProtocol::reset() noexcept {
+  clear_stream_bytes();
   session_id_.clear();
   maximum_datagram_bytes_ = 0;
   last_session_sequence_ = 0;
   last_input_sequence_ = 0;
   last_feedback_sequence_ = 0;
+  current_generation_ = 0;
+  active_connection_generation_ = 0;
   authenticated_ = false;
+  started_ = false;
 }
 
 } // namespace beacon::worker

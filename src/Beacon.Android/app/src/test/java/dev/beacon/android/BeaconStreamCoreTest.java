@@ -32,13 +32,13 @@ public final class BeaconStreamCoreTest {
         }, executor);
         core.start(session("frame-callback"));
 
-        bindings.callbacks.onFrame(new byte[] { 1, 2, 3 }, 4, 1);
+        bindings.callbacks.onFrame(new byte[] { 1, 2, 3 }, 4, 1, 1);
         delivered.await();
         assertEquals("beacon-frame", callbackThread.get());
         assertNotEquals(Thread.currentThread().getName(), callbackThread.get());
 
         core.close();
-        bindings.callbacks.onFrame(new byte[] { 4 }, 5, 1);
+        bindings.callbacks.onFrame(new byte[] { 4 }, 5, 2, 1);
         assertEquals(1, frames.get());
         assertEquals(1, bindings.stopCount);
         assertEquals(1, bindings.releaseCount);
@@ -179,6 +179,42 @@ public final class BeaconStreamCoreTest {
     }
 
     @Test
+    public void acceptedConnectionLossReportsFixedFailureStageExactlyOnce() {
+        RecordingBindings bindings = new RecordingBindings();
+        AtomicReference<String> failureStage = new AtomicReference<>();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings,
+            frame -> { },
+            Executors.newSingleThreadExecutor(),
+            () -> { },
+            failureStage::set);
+        core.start(session("observed-loss"));
+
+        bindings.callbacks.onConnectionLost(2);
+        assertNull(failureStage.get());
+        bindings.callbacks.onConnectionLost(1);
+        bindings.callbacks.onConnectionLost(1);
+
+        assertEquals("transport", failureStage.get());
+        core.close();
+    }
+
+    @Test
+    public void acceptedConnectionLossReleasesEventDrivenWaiter() throws InterruptedException {
+        RecordingBindings bindings = new RecordingBindings();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings, frame -> { }, Executors.newSingleThreadExecutor());
+        core.start(session("await-loss"));
+
+        bindings.callbacks.onConnectionLost(1);
+        core.awaitConnectionLossForTest(1);
+
+        assertEquals(1, core.connectionLossCountForTest());
+        assertTrue(core.stoppedForTest());
+        core.close();
+    }
+
+    @Test
     public void lossDeliveredInsideAcceptedStartCommitsStoppedState() {
         RecordingBindings bindings = new RecordingBindings();
         bindings.reportLossInsideStart = true;
@@ -246,6 +282,7 @@ public final class BeaconStreamCoreTest {
         CountDownLatch closeStarted = new CountDownLatch(1);
         CountDownLatch closeFinished = new CountDownLatch(1);
         AtomicInteger frames = new AtomicInteger();
+        bindings.stopCalled = new CountDownLatch(1);
         BeaconStreamCore core = new BeaconStreamCore(
             bindings,
             frame -> {
@@ -260,9 +297,9 @@ public final class BeaconStreamCoreTest {
             },
             Executors.newSingleThreadExecutor());
         core.start(session("close-drain"));
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1);
+        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
         sinkEntered.await();
-        bindings.callbacks.onFrame(new byte[] { 2 }, 2, 1);
+        bindings.callbacks.onFrame(new byte[] { 2 }, 2, 2, 1);
         Thread closer = new Thread(() -> {
             closeStarted.countDown();
             core.close();
@@ -270,6 +307,7 @@ public final class BeaconStreamCoreTest {
         });
         closer.start();
         closeStarted.await();
+        bindings.stopCalled.await();
         assertEquals(0, bindings.releaseCount);
         releaseSink.countDown();
         closeFinished.await();
@@ -290,11 +328,58 @@ public final class BeaconStreamCoreTest {
             Executors.newSingleThreadExecutor());
         core.start(session("feedback"));
         bindings.feedbackOrder = order;
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1);
+        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
         feedbackSent.await();
         assertEquals(0, bindings.lastQueuedAccessUnits);
         assertEquals(0, bindings.lastDroppedAccessUnits);
         assertEquals(2, order.get());
+        core.close();
+    }
+
+    @Test
+    public void feedbackObserverRunsAfterSuccessfulNativeFeedbackHandoff() throws Exception {
+        RecordingBindings bindings = new RecordingBindings();
+        CountDownLatch observerCalled = new CountDownLatch(1);
+        AtomicInteger order = new AtomicInteger();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings,
+            frame -> assertEquals(1, order.incrementAndGet()),
+            Executors.newSingleThreadExecutor(),
+            () -> {
+                assertEquals(3, order.incrementAndGet());
+                observerCalled.countDown();
+            });
+        bindings.feedbackOrder = order;
+        core.start(session("feedback-observer"));
+
+        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
+        observerCalled.await();
+
+        assertEquals(3, order.get());
+        core.close();
+    }
+
+    @Test
+    public void failedNativeFeedbackReportsFailureBeforeExecutorTerminates() throws Exception {
+        RecordingBindings bindings = new RecordingBindings();
+        bindings.failFeedback = true;
+        CountDownLatch failureObserved = new CountDownLatch(1);
+        AtomicReference<String> failureStage = new AtomicReference<>();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings,
+            frame -> { },
+            Executors.newSingleThreadExecutor(),
+            () -> { },
+            stage -> {
+                failureStage.set(stage);
+                failureObserved.countDown();
+            });
+        core.start(session("feedback-failure"));
+
+        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
+        failureObserved.await();
+
+        assertEquals("feedback", failureStage.get());
         core.close();
     }
 
@@ -321,11 +406,11 @@ public final class BeaconStreamCoreTest {
             Executors.newSingleThreadExecutor());
 
         core.start(session("feedback-race", "AQID"));
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1);
+        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
         oldSinkEntered.await();
         core.start(session("feedback-race", "BAUG"));
         releaseOldSink.countDown();
-        bindings.callbacks.onFrame(new byte[] { 2 }, 2, 2);
+        bindings.callbacks.onFrame(new byte[] { 2 }, 2, 2, 2);
         replacementFeedback.await();
 
         assertEquals(Arrays.asList(2L), bindings.feedbackGenerations);
@@ -359,7 +444,7 @@ public final class BeaconStreamCoreTest {
             },
             executor);
         core.start(session("stop-blocked-sink"));
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1);
+        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
         sinkEntered.await();
 
         Thread stopper = new Thread(() -> {
@@ -404,7 +489,7 @@ public final class BeaconStreamCoreTest {
             },
             executor);
         core.start(session("loss-blocked-sink"));
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1);
+        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
         sinkEntered.await();
 
         bindings.callbacks.onConnectionLost(1);
@@ -430,7 +515,7 @@ public final class BeaconStreamCoreTest {
         core.start(session("monitor"));
         core.sendInput(BeaconApiClient.InputBatch.pointerTap(1, 0.5, 0.5));
         core.replaceSurface(new Object());
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1);
+        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
         feedbackSent.await();
         Thread stopper = new Thread(core::stop);
         stopper.start();
@@ -473,8 +558,10 @@ public final class BeaconStreamCoreTest {
         boolean failStart;
         boolean acceptStart = true;
         boolean reportLossInsideStart;
+        boolean failFeedback;
         CountDownLatch feedbackSent;
         CountDownLatch feedbackSentForGeneration2;
+        CountDownLatch stopCalled;
         AtomicInteger feedbackOrder;
         final List<Long> feedbackGenerations = new ArrayList<>();
         int lastQueuedAccessUnits = -1;
@@ -498,6 +585,7 @@ public final class BeaconStreamCoreTest {
         @Override public void sendQueueDepthFeedback(
             long handle, long generation, int queuedAccessUnits,
             long droppedAccessUnits) {
+            if (failFeedback) throw new IllegalStateException("native feedback failed");
             feedbackGenerations.add(generation);
             lastQueuedAccessUnits = queuedAccessUnits;
             lastDroppedAccessUnits = droppedAccessUnits;
@@ -508,7 +596,10 @@ public final class BeaconStreamCoreTest {
             }
         }
         @Override public void replaceSurface(long handle, Object surface) { }
-        @Override public void stop(long handle) { stopCount++; }
+        @Override public void stop(long handle) {
+            stopCount++;
+            if (stopCalled != null) stopCalled.countDown();
+        }
         @Override public void release(long handle) { releaseCount++; }
     }
 

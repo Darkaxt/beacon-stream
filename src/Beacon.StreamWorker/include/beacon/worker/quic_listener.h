@@ -2,10 +2,12 @@
 
 #include "beacon/stream/msquic_transport.h"
 #include "beacon/stream/transport.h"
+#include "worker_ipc.pb.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -75,7 +77,19 @@ enum class QuicListenerFailure {
   credential_load,
   listener_open,
   listener_start,
+  callback_exception,
 };
+
+enum class QuicListenerFaultPoint {
+  connection_context_allocation,
+  event_serialization,
+  datagram_context_allocation,
+  disconnect_event_construction,
+  disconnect_event_publication,
+};
+
+using QuicListenerFaultInjector =
+    std::function<void(QuicListenerFaultPoint point)>;
 
 struct QuicListenerMetrics {
   std::uint64_t sent_datagrams{};
@@ -87,12 +101,16 @@ struct QuicListenerMetrics {
   std::uint64_t feedback_messages{};
   std::uint32_t smoothed_rtt_us{};
   std::uint32_t path_mtu{};
+  std::uint64_t closed_connection_handles{};
 };
 
 class QuicListener final : public IWorkerMediaTransport {
 public:
+  using EventSink = std::function<void(v1::WorkerIpcEnvelope)>;
+
   QuicListener(std::wstring identity_path,
-               AuthorizedQuicTicketStore &authorized_tickets);
+               AuthorizedQuicTicketStore &authorized_tickets,
+               QuicListenerFaultInjector fault_injector = {});
   ~QuicListener() override;
 
   QuicListener(const QuicListener &) = delete;
@@ -112,6 +130,7 @@ public:
   [[nodiscard]] QuicListenerMetrics metrics() const noexcept;
   [[nodiscard]] std::vector<stream::MsQuicTransportEvent>
   take_transport_events();
+  void set_event_sink(EventSink sink);
   [[nodiscard]] bool open_connection() override;
   void close_connection() noexcept override;
   [[nodiscard]] stream::TransportSendResult

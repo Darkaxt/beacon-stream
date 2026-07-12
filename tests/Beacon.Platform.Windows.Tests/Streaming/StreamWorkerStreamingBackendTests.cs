@@ -1,15 +1,278 @@
 using Beacon.Core.Clients;
 using Beacon.Core.Displays;
+using Beacon.Core.Input;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.StreamWorker.Contracts.Framing;
 using Beacon.StreamWorker.Contracts.Worker.V1;
+using System.Threading.Channels;
 
 namespace Beacon.Platform.Windows.Tests.Streaming;
 
 public sealed class StreamWorkerStreamingBackendTests
 {
+    [Fact]
+    public async Task LegacyHostSupportsStableStartAndStopWithoutGenerationInterface()
+    {
+        var host = new LegacyRecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan();
+
+        StreamingStartResult start = await backend.StartAsync(plan, CancellationToken.None);
+        StreamingStopResult stop = await backend.StopAsync(plan.SessionId, CancellationToken.None);
+
+        Assert.True(start.Success, start.Error);
+        Assert.True(stop.Success, stop.Error);
+        Assert.Equal(
+            [
+                WorkerIpcEnvelope.BodyOneofCase.PrepareSession,
+                WorkerIpcEnvelope.BodyOneofCase.StartMedia,
+                WorkerIpcEnvelope.BodyOneofCase.StopMedia
+            ],
+            host.Commands.Select(command => command.BodyCase));
+    }
+
+    [Fact]
+    public async Task LegacyHostIdentityChangeFailsStartTruthfully()
+    {
+        var host = new LegacyRecordingStreamWorkerHost
+        {
+            ReplaceAfter = WorkerIpcEnvelope.BodyOneofCase.PrepareSession
+        };
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        StreamingStartResult result = await backend.StartAsync(CreatePlan(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("Beacon StreamWorker generation changed during stream start.", result.Error);
+        Assert.Empty(backend.GetSessions());
+        Assert.False(host.MediaStarted);
+    }
+
+    [Fact]
+    public async Task LegacyStartMediaReplacementIsShutDownBeforeGenerationFailure()
+    {
+        var host = new LegacyRecordingStreamWorkerHost
+        {
+            ReplaceAfter = WorkerIpcEnvelope.BodyOneofCase.StartMedia
+        };
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        StreamingStartResult result = await backend.StartAsync(CreatePlan(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("Beacon StreamWorker generation changed during stream start.", result.Error);
+        Assert.Equal(1, host.ShutdownCalls);
+        Assert.False(host.IsReady);
+        Assert.False(host.MediaStarted);
+        Assert.Empty(backend.GetSessions());
+    }
+
+    [Fact]
+    public async Task WorkerExitBetweenPrepareAndStartDoesNotCreateOrUseReplacement()
+    {
+        var host = new RecordingStreamWorkerHost { ExitAfterPrepare = true };
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        StreamingStartResult result = await backend.StartAsync(CreatePlan(), CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("Beacon StreamWorker generation changed during stream start.", result.Error);
+        Assert.Equal(1, host.EnsureReadyCalls);
+        Assert.Equal(
+            [WorkerIpcEnvelope.BodyOneofCase.PrepareSession],
+            host.GenerationBoundCommands.Select(command => command.BodyCase));
+        Assert.Empty(backend.GetSessions());
+        Assert.False(host.MediaStarted);
+        Assert.False(host.IsReady);
+    }
+
+    [Fact]
+    public async Task AuthenticationBindsExactGenerationsAndResolvesInputRuntime()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan();
+        StreamingSessionState started = Assert.IsType<StreamingSessionState>(
+            (await backend.StartAsync(plan, CancellationToken.None)).Session);
+        IStreamWorkerRuntimeEvents runtimeEvents = backend;
+        var authenticated = new StreamWorkerTransportAuthenticated(1, plan.SessionId, 7, 1200);
+
+        bool bound = runtimeEvents.TryBind(authenticated);
+        bool resolved = runtimeEvents.TryResolveInput(
+            new StreamWorkerInputReceived(
+                1,
+                plan.SessionId,
+                7,
+                81,
+                [ClientInputEvent.StreamKeyboard(0x1E, true)]),
+            out ClientInputBatch? batch);
+
+        Assert.True(bound);
+        Assert.True(resolved);
+        Assert.NotNull(batch);
+        Assert.Equal(plan.ClientId.Value, batch.ClientId);
+        Assert.Equal(plan.SessionId, batch.SessionId);
+        Assert.Equal(plan.Display.DisplayId, batch.DisplayId);
+        Assert.Equal(81, batch.Sequence);
+        Assert.Equal(0x1Eu, Assert.Single(batch.Events).Keyboard?.ScanCode);
+        Assert.Equal(started.RuntimeGeneration, runtimeEvents.GetBoundRuntimeGeneration(plan.SessionId));
+    }
+
+    [Fact]
+    public async Task StaleProcessSessionAndServiceRuntimeEventsAreRejected()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan();
+        _ = await backend.StartAsync(plan, CancellationToken.None);
+        IStreamWorkerRuntimeEvents runtimeEvents = backend;
+        Assert.True(runtimeEvents.TryBind(
+            new StreamWorkerTransportAuthenticated(1, plan.SessionId, 7, 1200)));
+
+        Assert.False(runtimeEvents.TryResolveInput(
+            new StreamWorkerInputReceived(2, plan.SessionId, 7, 1, [ClientInputEvent.StreamKeyboard(1, true)]),
+            out _));
+        Assert.False(runtimeEvents.TryResolveInput(
+            new StreamWorkerInputReceived(1, plan.SessionId, 8, 1, [ClientInputEvent.StreamKeyboard(1, true)]),
+            out _));
+        Assert.False(runtimeEvents.IsCurrent(
+            new StreamWorkerFeedbackReceived(1, "another", 7, 1, StreamWorkerFeedbackKind.Decoder, 1, 0, 0)));
+
+        _ = await backend.StopAsync(plan.SessionId, CancellationToken.None);
+        StreamingSessionState replacement = Assert.IsType<StreamingSessionState>(
+            (await backend.StartAsync(plan, CancellationToken.None)).Session);
+
+        Assert.False(runtimeEvents.TryResolveInput(
+            new StreamWorkerInputReceived(1, plan.SessionId, 7, 2, [ClientInputEvent.StreamKeyboard(1, true)]),
+            out _));
+        Assert.NotEqual(Guid.Empty, replacement.RuntimeGeneration);
+        Assert.Null(runtimeEvents.GetBoundRuntimeGeneration(plan.SessionId));
+    }
+
+    [Fact]
+    public async Task FeedbackMediaAndDisconnectRequireExactBinding()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan();
+        _ = await backend.StartAsync(plan, CancellationToken.None);
+        IStreamWorkerRuntimeEvents runtimeEvents = backend;
+        Assert.True(runtimeEvents.TryBind(
+            new StreamWorkerTransportAuthenticated(1, plan.SessionId, 7, 1200)));
+
+        Assert.True(runtimeEvents.IsCurrent(
+            new StreamWorkerFeedbackReceived(1, plan.SessionId, 7, 1, StreamWorkerFeedbackKind.QueueDepth, 2, 3, 0)));
+        Assert.True(runtimeEvents.IsCurrent(
+            new StreamWorkerMediaEvidence(1, plan.SessionId, 7, 9, 10, 11)));
+        Assert.False(runtimeEvents.TryDisconnect(
+            new StreamWorkerTransportDisconnected(1, plan.SessionId, 8)));
+        Assert.True(runtimeEvents.TryDisconnect(
+            new StreamWorkerTransportDisconnected(1, plan.SessionId, 7)));
+        Assert.False(runtimeEvents.IsCurrent(
+            new StreamWorkerMediaEvidence(1, plan.SessionId, 7, 9, 10, 11)));
+    }
+
+    [Fact]
+    public async Task ProcessExitImmediatelyInvalidatesOnlyOwnedRuntimes()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan();
+        _ = await backend.StartAsync(plan, CancellationToken.None);
+        IStreamWorkerRuntimeEvents runtimeEvents = backend;
+        Assert.True(runtimeEvents.TryBind(
+            new StreamWorkerTransportAuthenticated(1, plan.SessionId, 7, 1200)));
+
+        runtimeEvents.ProcessExited(new StreamWorkerProcessExited(1, 23));
+
+        Assert.Null(await backend.GetSessionAsync(plan.SessionId, CancellationToken.None));
+        Assert.False(runtimeEvents.TryResolveInput(
+            new StreamWorkerInputReceived(1, plan.SessionId, 7, 1, [ClientInputEvent.StreamKeyboard(1, true)]),
+            out _));
+
+        host.ReplaceWorker([9, 8, 7]);
+        _ = await backend.StartAsync(plan, CancellationToken.None);
+        runtimeEvents.ProcessExited(new StreamWorkerProcessExited(1, 23));
+        Assert.NotNull(await backend.GetSessionAsync(plan.SessionId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ReplacementPrunesReplayHistoryWithoutAcceptingOldProcessEvents()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan();
+        IStreamWorkerRuntimeEvents runtimeEvents = backend;
+        _ = await backend.StartAsync(plan, CancellationToken.None);
+        Assert.True(runtimeEvents.TryBind(
+            new StreamWorkerTransportAuthenticated(1, plan.SessionId, 7, 1200)));
+        Assert.Equal(1, backend.RetainedWorkerGenerationHistoryCount);
+
+        host.ReplaceWorker([9, 8, 7]);
+        _ = await backend.StartAsync(plan, CancellationToken.None);
+
+        Assert.Equal(0, backend.RetainedWorkerGenerationHistoryCount);
+        Assert.False(runtimeEvents.TryBind(
+            new StreamWorkerTransportAuthenticated(1, plan.SessionId, 8, 1200)));
+        Assert.True(runtimeEvents.TryBind(
+            new StreamWorkerTransportAuthenticated(2, plan.SessionId, 1, 1200)));
+        Assert.Equal(1, backend.RetainedWorkerGenerationHistoryCount);
+        Assert.True(runtimeEvents.TryDisconnect(
+            new StreamWorkerTransportDisconnected(2, plan.SessionId, 1)));
+        Assert.False(runtimeEvents.TryBind(
+            new StreamWorkerTransportAuthenticated(2, plan.SessionId, 1, 1200)));
+        Assert.Equal(1, backend.RetainedWorkerGenerationHistoryCount);
+    }
+
+    [Fact]
+    public async Task FailedReplacementStartStillPrunesRetiredReplayHistory()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan();
+        IStreamWorkerRuntimeEvents runtimeEvents = backend;
+        _ = await backend.StartAsync(plan, CancellationToken.None);
+        Assert.True(runtimeEvents.TryBind(
+            new StreamWorkerTransportAuthenticated(1, plan.SessionId, 7, 1200)));
+        Assert.Equal(1, backend.RetainedWorkerGenerationHistoryCount);
+        host.ReplaceWorker([9, 8, 7]);
+        host.NextError = WorkerErrorCode.OperationFailed;
+
+        StreamingStartResult replacement = await backend.StartAsync(plan, CancellationToken.None);
+
+        Assert.False(replacement.Success);
+        Assert.Equal(0, backend.RetainedWorkerGenerationHistoryCount);
+    }
+
+    [Fact]
+    public async Task ProcessExitChurnLeavesNoReplayHistory()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan();
+        IStreamWorkerRuntimeEvents runtimeEvents = backend;
+
+        for (int generation = 1; generation <= 32; generation++)
+        {
+            _ = await backend.StartAsync(plan, CancellationToken.None);
+            Assert.True(runtimeEvents.TryBind(new StreamWorkerTransportAuthenticated(
+                generation,
+                plan.SessionId,
+                checked((ulong)generation),
+                1200)));
+            Assert.Equal(1, backend.RetainedWorkerGenerationHistoryCount);
+
+            runtimeEvents.ProcessExited(new StreamWorkerProcessExited(generation, 23));
+
+            Assert.Equal(0, backend.RetainedWorkerGenerationHistoryCount);
+            if (generation < 32)
+            {
+                host.ReplaceWorker([9, 8, checked((byte)generation)]);
+            }
+        }
+    }
     [Fact]
     public async Task StartMapsPlanAndStopKeepsWorkerReady()
     {
@@ -290,8 +553,9 @@ public sealed class StreamWorkerStreamingBackendTests
         WorkerTransportReady = new WorkerTransportReady { ListenerPort = port },
     };
 
-    private sealed class RecordingStreamWorkerHost : IStreamWorkerHost
+    private sealed class RecordingStreamWorkerHost : IStreamWorkerHost, IGenerationBoundStreamWorkerHost
     {
+        private readonly Channel<StreamWorkerEvent> events = Channel.CreateUnbounded<StreamWorkerEvent>();
         private byte[] workerInstanceId = [1, 2, 3];
         private TaskCompletionSource<StreamWorkerCommandResponse>? blockedStopCompletion;
         private TaskCompletionSource? stopMediaBlocked;
@@ -306,6 +570,13 @@ public sealed class StreamWorkerStreamingBackendTests
 
         public ReadOnlyMemory<byte> WorkerInstanceId => workerInstanceId;
 
+        public ChannelReader<StreamWorkerEvent> Events => events.Reader;
+
+        public long CurrentProcessGeneration { get; private set; } = 1;
+
+        public bool IsCurrentProcessGeneration(long processGeneration) =>
+            processGeneration == CurrentProcessGeneration;
+
         public WorkerErrorCode NextError { get; set; } = WorkerErrorCode.None;
 
         public WorkerErrorCode StopMediaError { get; set; } = WorkerErrorCode.None;
@@ -314,7 +585,15 @@ public sealed class StreamWorkerStreamingBackendTests
 
         public Exception? ReadinessError { get; set; }
 
+        public bool ExitAfterPrepare { get; set; }
+
+        public bool MediaStarted { get; private set; }
+
+        public int EnsureReadyCalls { get; private set; }
+
         public List<WorkerIpcEnvelope> Commands { get; } = [];
+
+        public List<WorkerIpcEnvelope> GenerationBoundCommands { get; } = [];
 
         public List<WorkerIpcEnvelope> StartMediaEvents { get; } = [];
 
@@ -343,11 +622,13 @@ public sealed class StreamWorkerStreamingBackendTests
         public void ReplaceWorker(byte[] replacementWorkerInstanceId)
         {
             workerInstanceId = replacementWorkerInstanceId;
+            CurrentProcessGeneration++;
             IsReady = true;
         }
 
         public Task EnsureReadyAsync(CancellationToken cancellationToken)
         {
+            EnsureReadyCalls++;
             if (ReadinessError is not null)
             {
                 return Task.FromException(ReadinessError);
@@ -387,6 +668,11 @@ public sealed class StreamWorkerStreamingBackendTests
                 ? StartMediaEvents.Select(value => value.Clone()).ToArray()
                 : [];
             var response = new StreamWorkerCommandResponse(completion, events);
+            if (command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.ShutdownWorker)
+            {
+                ShutdownCalls++;
+                IsReady = false;
+            }
             if (command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.StopMedia
                 && blockedStopCompletion is not null)
             {
@@ -397,10 +683,94 @@ public sealed class StreamWorkerStreamingBackendTests
             return Task.FromResult(response);
         }
 
+        public async Task<StreamWorkerCommandResponse> SendAsync(
+            long expectedProcessGeneration,
+            WorkerIpcEnvelope command,
+            CancellationToken cancellationToken)
+        {
+            if (!IsReady || expectedProcessGeneration != CurrentProcessGeneration)
+            {
+                throw new StreamWorkerGenerationChangedException(expectedProcessGeneration);
+            }
+            GenerationBoundCommands.Add(command.Clone());
+            StreamWorkerCommandResponse response = await SendAsync(command, cancellationToken);
+            if (command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.StartMedia)
+            {
+                MediaStarted = true;
+            }
+            if (ExitAfterPrepare
+                && command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.PrepareSession)
+            {
+                IsReady = false;
+            }
+            return response;
+        }
+
         public Task ShutdownAsync(CancellationToken cancellationToken)
         {
             ShutdownCalls++;
             IsReady = false;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class LegacyRecordingStreamWorkerHost : IStreamWorkerHost
+    {
+        private byte[] workerInstanceId = [1, 2, 3];
+        private ulong requestId;
+
+        public bool IsReady { get; private set; } = true;
+
+        public ReadOnlyMemory<byte> WorkerInstanceId => workerInstanceId;
+
+        public WorkerIpcEnvelope.BodyOneofCase ReplaceAfter { get; init; }
+
+        public bool MediaStarted { get; private set; }
+
+        public int ShutdownCalls { get; private set; }
+
+        public List<WorkerIpcEnvelope> Commands { get; } = [];
+
+        public Task EnsureReadyAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task<StreamWorkerCommandResponse> SendAsync(
+            WorkerIpcEnvelope command,
+            CancellationToken cancellationToken)
+        {
+            Commands.Add(command.Clone());
+            ulong currentRequestId = ++requestId;
+            IReadOnlyList<WorkerIpcEnvelope> events = [];
+            if (command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.StartMedia)
+            {
+                MediaStarted = true;
+                WorkerIpcEnvelope transportReady = TransportReady(51234);
+                transportReady.RequestId = currentRequestId;
+                events = [transportReady];
+            }
+            if (command.BodyCase == ReplaceAfter)
+            {
+                workerInstanceId = [9, 8, 7];
+            }
+            return Task.FromResult(new StreamWorkerCommandResponse(
+                new WorkerIpcEnvelope
+                {
+                    ProtocolVersion = ProtocolVersion.Current,
+                    RequestId = currentRequestId,
+                    SessionId = command.SessionId,
+                    WorkerCompletion = new WorkerCompletion
+                    {
+                        Succeeded = true,
+                        ErrorCode = WorkerErrorCode.None
+                    }
+                },
+                events));
+        }
+
+        public Task ShutdownAsync(CancellationToken cancellationToken)
+        {
+            ShutdownCalls++;
+            IsReady = false;
+            MediaStarted = false;
             return Task.CompletedTask;
         }
     }

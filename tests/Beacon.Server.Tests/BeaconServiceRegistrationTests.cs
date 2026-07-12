@@ -16,13 +16,15 @@ using Beacon.Server.State;
 using Beacon.Server.Security;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Beacon.Server.Streaming;
 
 namespace Beacon.Server.Tests;
 
 public sealed class BeaconServiceRegistrationTests
 {
     [Fact]
-    public void DefaultRegistrationUsesFakeHostMode()
+    public void DefaultRegistrationUsesFakeHostAndFakeStreaming()
     {
         using ServiceProvider provider = BuildProvider();
 
@@ -35,6 +37,8 @@ public sealed class BeaconServiceRegistrationTests
         Assert.IsType<FakeGameLauncher>(provider.GetRequiredService<IGameLauncher>());
         Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
         Assert.Single(provider.GetServices<IStreamingBackend>());
+        Assert.DoesNotContain(provider.GetServices<IHostedService>(), service => service is StreamWorkerEventRelay);
+        Assert.Empty(provider.GetServices<IStreamWorkerRuntimeEvents>());
         Assert.IsType<FakeSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
         Assert.IsType<NoOpClientInputSink>(provider.GetRequiredService<IClientInputSink>());
         ClientInputHealth inputHealth = provider.GetRequiredService<IClientInputHealthProvider>().GetHealth();
@@ -47,7 +51,7 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
-    public async Task WindowsRegistrationUsesWindowsHostAndStreamWorker()
+    public async Task WindowsRegistrationUsesWindowsHostAndWorkerStreaming()
     {
         await using ServiceProvider provider = BuildProvider(new KeyValuePair<string, string?>(
             BeaconServiceRegistration.HostModeConfigurationKey,
@@ -76,25 +80,146 @@ public sealed class BeaconServiceRegistrationTests
         Assert.Same(
             provider.GetRequiredService<StreamWorkerProcessHost>(),
             provider.GetRequiredService<IStreamWorkerHost>());
+        Assert.Same(
+            provider.GetRequiredService<StreamWorkerProcessHost>(),
+            provider.GetRequiredService<IGenerationBoundStreamWorkerHost>());
         Assert.Single(provider.GetServices<IStreamingBackend>());
+        Assert.Contains(provider.GetServices<IHostedService>(), service => service is StreamWorkerEventRelay);
+        Assert.Same(
+            provider.GetRequiredService<StreamWorkerStreamingBackend>(),
+            provider.GetRequiredService<IStreamWorkerRuntimeEvents>());
     }
 
     [Fact]
-    public void RegistrationExposesNoCompatibilityConfigurationConstants()
+    public void WindowsHostCanUseFakeStreamingWithoutWorkerServices()
+    {
+        using ServiceProvider provider = BuildProvider(
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.HostModeConfigurationKey,
+                "windows"),
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.StreamingModeConfigurationKey,
+                "fake"));
+
+        BeaconHostOptions options = provider.GetRequiredService<BeaconHostOptions>();
+
+        Assert.Equal(BeaconHostMode.Windows, options.Mode);
+        Assert.Equal(nameof(FakeStreamingBackend), options.StreamingBackendName);
+        Assert.IsType<WindowsDisplayBackend>(provider.GetRequiredService<IDisplayBackend>());
+        Assert.IsType<WindowsRecoveryBackend>(provider.GetRequiredService<IRecoveryBackend>());
+        Assert.IsType<WindowsGameLauncher>(provider.GetRequiredService<IGameLauncher>());
+        Assert.IsType<WindowsSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
+        Assert.IsType<WindowsClientInputSink>(provider.GetRequiredService<IClientInputSink>());
+        Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+        Assert.Single(provider.GetServices<IStreamingBackend>());
+        Assert.Empty(provider.GetServices<IStreamWorkerHost>());
+        Assert.Empty(provider.GetServices<IGenerationBoundStreamWorkerHost>());
+        Assert.DoesNotContain(provider.GetServices<IHostedService>(), service => service is StreamWorkerEventRelay);
+        Assert.Empty(provider.GetServices<StreamWorkerProcessHostOptions>());
+    }
+
+    [Fact]
+    public async Task FakeHostCanUseWorkerStreamingWithoutWindowsSideEffects()
+    {
+        string workerPath = Path.Combine(Path.GetTempPath(), "acceptance", "Beacon.StreamWorker.exe");
+        await using ServiceProvider provider = BuildProvider(
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.HostModeConfigurationKey,
+                "fake"),
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.StreamingModeConfigurationKey,
+                "worker"),
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.StreamWorkerPathConfigurationKey,
+                workerPath));
+
+        BeaconHostOptions options = provider.GetRequiredService<BeaconHostOptions>();
+
+        Assert.Equal(BeaconHostMode.Fake, options.Mode);
+        Assert.Equal(nameof(StreamWorkerStreamingBackend), options.StreamingBackendName);
+        Assert.IsType<FakeDisplayBackend>(provider.GetRequiredService<IDisplayBackend>());
+        Assert.IsType<FakeRecoveryBackend>(provider.GetRequiredService<IRecoveryBackend>());
+        Assert.IsType<FakeGameLauncher>(provider.GetRequiredService<IGameLauncher>());
+        Assert.IsType<FakeSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
+        Assert.IsType<NoOpClientInputSink>(provider.GetRequiredService<IClientInputSink>());
+        Assert.IsType<StreamWorkerStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+        Assert.Equal(
+            workerPath,
+            provider.GetRequiredService<StreamWorkerProcessHostOptions>().ExecutablePath);
+        Assert.Single(provider.GetServices<IStreamingBackend>());
+        Assert.Contains(provider.GetServices<IHostedService>(), service => service is StreamWorkerEventRelay);
+    }
+
+    [Fact]
+    public void RegistrationExposesOnlyApprovedStreamingConfigurationConstants()
     {
         string[] values = typeof(BeaconServiceRegistration)
             .GetFields(BindingFlags.Public | BindingFlags.Static)
             .Where(field => field.IsLiteral && field.FieldType == typeof(string))
             .Select(field => Assert.IsType<string>(field.GetRawConstantValue()))
             .ToArray();
+        string[] approvedStreamingValues =
+        [
+            BeaconServiceRegistration.StreamingModeConfigurationKey,
+            BeaconServiceRegistration.StreamWorkerPathConfigurationKey,
+            BeaconServiceRegistration.StreamingModeEnvironmentVariable,
+            BeaconServiceRegistration.StreamWorkerPathEnvironmentVariable
+        ];
+        string[] streamingValues = values
+            .Where(value =>
+                value.StartsWith("Beacon:Streaming", StringComparison.OrdinalIgnoreCase)
+                || value.StartsWith("BEACON_STREAMING", StringComparison.OrdinalIgnoreCase)
+                || value.StartsWith("BEACON_STREAM_WORKER", StringComparison.OrdinalIgnoreCase)
+                || value.StartsWith("BEACON_EXTERNAL_STREAMING", StringComparison.OrdinalIgnoreCase))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
 
-        Assert.DoesNotContain(values, value =>
-            value.StartsWith("Beacon:Streaming", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(values, value =>
-            value.StartsWith("BEACON_STREAMING", StringComparison.OrdinalIgnoreCase)
-            || value.StartsWith("BEACON_EXTERNAL_STREAMING", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(approvedStreamingValues.Order(StringComparer.Ordinal), streamingValues);
         Assert.DoesNotContain(values, value =>
             value.Contains("Pairing", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(values, value =>
+            value.StartsWith("Beacon:Streaming:ExternalProcess", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("ExternalWrapper", StringComparison.OrdinalIgnoreCase)
+            || value.StartsWith("BEACON_EXTERNAL_STREAMING_", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void RegistrationPreservesLegacyOverloadAndRequiresAllCompositionArguments()
+    {
+        MethodInfo? legacyOverload = typeof(BeaconServiceRegistration).GetMethod(
+            nameof(BeaconServiceRegistration.AddBeaconServices),
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            [
+                typeof(IServiceCollection),
+                typeof(IConfiguration),
+                typeof(string),
+                typeof(string)
+            ],
+            modifiers: null);
+        MethodInfo? compositionOverload = typeof(BeaconServiceRegistration).GetMethod(
+            nameof(BeaconServiceRegistration.AddBeaconServices),
+            BindingFlags.Public | BindingFlags.Static,
+            binder: null,
+            [
+                typeof(IServiceCollection),
+                typeof(IConfiguration),
+                typeof(string),
+                typeof(string),
+                typeof(string),
+                typeof(string)
+            ],
+            modifiers: null);
+
+        Assert.NotNull(legacyOverload);
+        MethodInfo legacy = legacyOverload;
+        ParameterInfo legacyProfilesPath = legacy.GetParameters()[3];
+        Assert.True(legacyProfilesPath.HasDefaultValue);
+        Assert.Null(legacyProfilesPath.DefaultValue);
+
+        Assert.NotNull(compositionOverload);
+        MethodInfo composition = compositionOverload;
+        Assert.All(composition.GetParameters(), parameter => Assert.False(parameter.HasDefaultValue));
     }
 
     [Fact]
@@ -123,6 +248,29 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public void EnvironmentStreamingModeOverridesConfiguration()
+    {
+        var services = new ServiceCollection();
+        services.AddBeaconServices(
+            CreateConfiguration(new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.StreamingModeConfigurationKey,
+                "worker")),
+            environmentHostMode: null,
+            environmentClientProfilesPath: null,
+            environmentStreamingMode: "fake",
+            environmentStreamWorkerPath: null);
+        using ServiceProvider provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true
+        });
+
+        Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+        Assert.Empty(provider.GetServices<IStreamWorkerHost>());
+        Assert.Single(provider.GetServices<IStreamingBackend>());
+    }
+
+    [Fact]
     public void EnvironmentProfilePathOverridesConfiguration()
     {
         IConfiguration configuration = CreateConfiguration(
@@ -144,6 +292,67 @@ public sealed class BeaconServiceRegistrationTests
 
         Assert.Contains("Unsupported Beacon host mode 'broken'", exception.Message, StringComparison.Ordinal);
         Assert.Contains("fake, windows", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnknownStreamingModeFailsWithClearConfigurationError()
+    {
+        IConfiguration configuration = CreateConfiguration(new KeyValuePair<string, string?>(
+            BeaconServiceRegistration.StreamingModeConfigurationKey,
+            "broken"));
+        var services = new ServiceCollection();
+
+        InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
+            services.AddBeaconServices(configuration, environmentHostMode: null));
+
+        Assert.Contains("Unsupported Beacon streaming mode 'broken'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("fake, worker", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ConfiguredWorkerPathIsUsed()
+    {
+        string workerPath = Path.Combine(Path.GetTempPath(), "configured", "Beacon.StreamWorker.exe");
+        await using ServiceProvider provider = BuildProvider(
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.StreamingModeConfigurationKey,
+                "worker"),
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.StreamWorkerPathConfigurationKey,
+                workerPath));
+
+        Assert.Equal(
+            workerPath,
+            provider.GetRequiredService<StreamWorkerProcessHostOptions>().ExecutablePath);
+    }
+
+    [Fact]
+    public async Task EnvironmentWorkerPathOverridesConfiguration()
+    {
+        string configuredPath = Path.Combine(Path.GetTempPath(), "configured", "Beacon.StreamWorker.exe");
+        string environmentPath = Path.Combine(Path.GetTempPath(), "environment", "Beacon.StreamWorker.exe");
+        var services = new ServiceCollection();
+        services.AddBeaconServices(
+            CreateConfiguration(
+                new KeyValuePair<string, string?>(
+                    BeaconServiceRegistration.StreamingModeConfigurationKey,
+                    "worker"),
+                new KeyValuePair<string, string?>(
+                    BeaconServiceRegistration.StreamWorkerPathConfigurationKey,
+                    configuredPath)),
+            environmentHostMode: null,
+            environmentClientProfilesPath: null,
+            environmentStreamingMode: null,
+            environmentStreamWorkerPath: environmentPath);
+        await using ServiceProvider provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true
+        });
+
+        Assert.Equal(
+            environmentPath,
+            provider.GetRequiredService<StreamWorkerProcessHostOptions>().ExecutablePath);
     }
 
     private static ServiceProvider BuildProvider(params KeyValuePair<string, string?>[] values)

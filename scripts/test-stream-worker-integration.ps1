@@ -18,6 +18,11 @@ $env:BEACON_STREAM_WORKER_PATH = $WorkerPath
 $identityPath = Join-Path ([IO.Path]::GetTempPath()) "beacon-worker-identity-$([Guid]::NewGuid().ToString('N')).pfx"
 $testProject = Join-Path $repositoryRoot `
     'tests\Beacon.Platform.Windows.Tests\Beacon.Platform.Windows.Tests.csproj'
+$nativeProbe = Join-Path $repositoryRoot `
+    'native\out\build\windows-x64\Beacon.StreamWorker.Tests\Debug\BeaconStreamWorkerQuicListenerProbe.exe'
+if (-not (Test-Path -LiteralPath $nativeProbe -PathType Leaf)) {
+    throw "Beacon native Worker process probe was not found at '$nativeProbe'."
+}
 try {
     $key = [Security.Cryptography.RSA]::Create(3072)
     try {
@@ -30,6 +35,18 @@ try {
             [DateTimeOffset]::UtcNow.AddDays(-1),
             [DateTimeOffset]::UtcNow.AddDays(1))
         try {
+            $publicKey = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey(
+                $certificate)
+            try {
+                $spki = $publicKey.ExportSubjectPublicKeyInfo()
+                try {
+                    $fingerprintBytes = [Security.Cryptography.SHA256]::HashData($spki)
+                    try { $fingerprint = [Convert]::ToHexString($fingerprintBytes) }
+                    finally { [Security.Cryptography.CryptographicOperations]::ZeroMemory($fingerprintBytes) }
+                }
+                finally { [Security.Cryptography.CryptographicOperations]::ZeroMemory($spki) }
+            }
+            finally { $publicKey.Dispose() }
             $pfx = $certificate.Export([Security.Cryptography.X509Certificates.X509ContentType]::Pfx)
             try { [IO.File]::WriteAllBytes($identityPath, $pfx) }
             finally { [Security.Cryptography.CryptographicOperations]::ZeroMemory($pfx) }
@@ -45,8 +62,32 @@ try {
         --no-restore `
         --filter 'FullyQualifiedName~RealWorkerCompletesExplicitLifecycleWhenBinaryIsAvailable'
     if ($LASTEXITCODE -ne 0) { throw 'StreamWorker process integration failed.' }
+
+    $nativeOutput = & $nativeProbe `
+        --worker $WorkerPath `
+        --identity $identityPath `
+        --fingerprint $fingerprint
+    $nativeExitCode = $LASTEXITCODE
+    if ($nativeExitCode -ne 0 -or
+        $nativeOutput -notmatch '^BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK ACCESS_UNIT_MARKER DISCONNECT SHUTDOWN$') {
+        throw "Native Worker IPC/QUIC integration failed with exit code ${nativeExitCode}: $nativeOutput"
+    }
+    Write-Host $nativeOutput
+
+    $startupExitOutput = & $nativeProbe `
+        --worker $nativeProbe `
+        --identity $identityPath `
+        --fingerprint $fingerprint
+    $startupExitCode = $LASTEXITCODE
+    if ($startupExitCode -ne 97 -or
+        $startupExitOutput -notmatch '^BEACON_WORKER_STARTUP_EXIT 64$') {
+        throw "Native Worker startup-exit proof failed with exit code ${startupExitCode}: $startupExitOutput"
+    }
+    Write-Host $startupExitOutput
 }
 finally {
     Remove-Item Env:BEACON_SERVER_IDENTITY_PATH -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $identityPath -Force -ErrorAction SilentlyContinue
 }
+
+exit 0

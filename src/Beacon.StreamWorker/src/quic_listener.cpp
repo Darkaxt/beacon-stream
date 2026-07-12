@@ -2,6 +2,9 @@
 
 #include "beacon/stream/msquic_transport.h"
 #include "beacon/worker/quic_session_protocol.h"
+#include "beacon/worker/secure_bytes.h"
+#include "beacon/worker/synthetic_media_source.h"
+#include "beacon/worker/worker_events.h"
 
 #include <Windows.h>
 #include <bcrypt.h>
@@ -13,6 +16,7 @@
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <fstream>
 #include <limits>
 #include <stdexcept>
@@ -23,6 +27,7 @@ namespace {
 
 constexpr std::string_view kBeaconAlpn{"beacon-stream/1"};
 constexpr std::size_t kMaximumIdentityBytes{1024U * 1024U};
+constexpr std::uint64_t kSyntheticPresentationTimeUs{1'000'000};
 
 bool hashes_equal(const TicketHash &left,
                   std::span<const std::byte> right) noexcept {
@@ -130,9 +135,11 @@ std::size_t AuthorizedQuicTicketStore::size() const {
 class QuicListener::Impl {
 public:
   Impl(std::wstring identity_path,
-       AuthorizedQuicTicketStore &authorized_tickets)
+       AuthorizedQuicTicketStore &authorized_tickets,
+       QuicListenerFaultInjector fault_injector)
       : identity_path_(std::move(identity_path)),
-        protocol_(authorized_tickets) {
+        protocol_(authorized_tickets),
+        fault_injector_(std::move(fault_injector)) {
     if (identity_path_.empty()) {
       throw std::invalid_argument("A QUIC server identity path is required.");
     }
@@ -234,6 +241,11 @@ public:
     return transport_state_.take_events();
   }
 
+  void set_event_sink(QuicListener::EventSink sink) {
+    std::lock_guard lock{event_mutex_};
+    event_sink_ = std::move(sink);
+  }
+
   bool open_connection() {
     try {
       std::lock_guard lock{mutex_};
@@ -304,36 +316,70 @@ public:
   }
 
   stream::TransportSendResult send(stream::TransportPacket packet) {
+    try {
+      std::uint64_t session_generation = 0;
+      {
+        std::lock_guard lock{mutex_};
+        session_generation = current_generation_;
+      }
+      return send_for_generation(std::move(packet), session_generation);
+    } catch (...) {
+      record_callback_exception(nullptr, false);
+      return stream::TransportSendResult::connection_closed;
+    }
+  }
+
+  stream::TransportSendResult
+  send_for_generation(stream::TransportPacket packet,
+                      std::uint64_t session_generation) {
     if (packet.channel != stream::StreamChannel::media ||
         packet.payload.empty()) {
       return stream::TransportSendResult::connection_closed;
     }
 
     HQUIC connection = nullptr;
+    std::uint64_t connection_generation = 0;
     {
       std::lock_guard lock{mutex_};
       if (connection_ == nullptr || closing_ || !protocol_.authenticated() ||
           !transport_state_.datagram_send_enabled() ||
+          session_generation == 0 ||
+          session_generation != current_generation_ ||
           packet.payload.size() > transport_state_.maximum_datagram_bytes()) {
         return stream::TransportSendResult::connection_closed;
       }
       connection = connection_;
+      connection_generation = current_connection_generation_;
       ++active_api_calls_;
     }
+    ActiveApiCallGuard active_call{this};
 
-    auto *context =
-        new DatagramSendContext(std::move(packet.payload), packet.sequence);
+    const auto datagram_bytes =
+        static_cast<std::uint32_t>(packet.payload.size());
+    const auto sequence = packet.sequence;
+    inject_fault(QuicListenerFaultPoint::datagram_context_allocation);
+    auto *context = new DatagramSendContext(std::move(packet.payload), sequence,
+                                            session_generation,
+                                            connection_generation);
     const auto status = api_->DatagramSend(connection, &context->buffer, 1,
                                            QUIC_SEND_FLAG_NONE, context);
     {
       std::lock_guard lock{mutex_};
-      --active_api_calls_;
+      if (QUIC_SUCCEEDED(status) &&
+          connection_ == connection &&
+          current_connection_generation_ == connection_generation &&
+          session_generation == current_generation_) {
+        append_pending_event(make_media_evidence_event(
+            current_session_id_, session_generation, sequence,
+            kSyntheticPresentationTimeUs, datagram_bytes));
+      }
     }
-    changed_.notify_all();
+    active_call.release();
     if (QUIC_FAILED(status)) {
       delete context;
       return stream::TransportSendResult::connection_closed;
     }
+    drain_pending_events();
     return stream::TransportSendResult::accepted;
   }
 
@@ -345,8 +391,11 @@ public:
       }
     }
     close_connection();
-    std::lock_guard lock{mutex_};
-    shutdown_ = true;
+    {
+      std::lock_guard lock{mutex_};
+      clear_pending_session_bytes();
+      shutdown_ = true;
+    }
     release_msquic_state();
   }
 
@@ -377,21 +426,72 @@ private:
 
   struct DatagramSendContext {
     explicit DatagramSendContext(std::vector<std::byte> payload,
-                                 std::uint64_t value)
-        : bytes(std::move(payload)), sequence(value) {
+                                 std::uint64_t value,
+                                 std::uint64_t session_value,
+                                 std::uint64_t connection_value)
+        : bytes(std::move(payload)), sequence(value),
+          session_generation(session_value),
+          connection_generation(connection_value) {
       buffer.Length = static_cast<std::uint32_t>(bytes.size());
       buffer.Buffer = reinterpret_cast<std::uint8_t *>(bytes.data());
     }
 
     std::vector<std::byte> bytes;
     std::uint64_t sequence{};
+    std::uint64_t session_generation{};
+    std::uint64_t connection_generation{};
     QUIC_BUFFER buffer{};
+  };
+
+  struct ActiveApiCallGuard {
+    explicit ActiveApiCallGuard(Impl *value) noexcept : owner(value) {}
+    ~ActiveApiCallGuard() { release(); }
+
+    ActiveApiCallGuard(const ActiveApiCallGuard &) = delete;
+    ActiveApiCallGuard &operator=(const ActiveApiCallGuard &) = delete;
+
+    void release() noexcept {
+      if (owner != nullptr) {
+        owner->complete_active_api_call();
+        owner = nullptr;
+      }
+    }
+
+    Impl *owner{};
+  };
+
+  struct ConnectionContext {
+    Impl *owner{};
+    std::uint64_t connection_generation{};
+  };
+
+  struct ConnectionShutdownCompleteGuard {
+    ConnectionShutdownCompleteGuard(Impl *owner_value,
+                                    HQUIC connection_value,
+                                    ConnectionContext *context_value) noexcept
+        : owner(owner_value), connection(connection_value),
+          context(context_value) {}
+
+    ~ConnectionShutdownCompleteGuard() noexcept {
+      owner->complete_connection_shutdown(connection, context);
+    }
+
+    ConnectionShutdownCompleteGuard(
+        const ConnectionShutdownCompleteGuard &) = delete;
+    ConnectionShutdownCompleteGuard &operator=(
+        const ConnectionShutdownCompleteGuard &) = delete;
+
+    Impl *owner{};
+    HQUIC connection{};
+    ConnectionContext *context{};
   };
 
   struct PeerStreamContext {
     Impl *owner{};
+    HQUIC connection{};
     HQUIC stream{};
     QuicPeerStreamRole role{QuicPeerStreamRole::invalid};
+    std::uint64_t connection_generation{};
   };
 
   struct StreamSendContext {
@@ -410,6 +510,103 @@ private:
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch())
             .count());
+  }
+
+  void inject_fault(QuicListenerFaultPoint point) {
+    if (fault_injector_) {
+      fault_injector_(point);
+    }
+  }
+
+  void complete_active_api_call() noexcept {
+    try {
+      std::lock_guard lock{mutex_};
+      if (active_api_calls_ != 0) {
+        --active_api_calls_;
+      }
+    } catch (...) {
+    }
+    changed_.notify_all();
+  }
+
+  void clear_pending_session_bytes() noexcept {
+    secure_clear_bytes(pending_session_bytes_);
+  }
+
+  void record_listener_callback_exception(HQUIC connection) noexcept {
+    try {
+      std::lock_guard lock{mutex_};
+      set_failure(QuicListenerFailure::callback_exception, 0);
+      if (connection_ == connection) {
+        clear_pending_session_bytes();
+        connection_ = nullptr;
+        current_connection_generation_ = 0;
+        protocol_.reset();
+      }
+    } catch (...) {
+    }
+    changed_.notify_all();
+  }
+
+  void record_callback_exception(HQUIC connection,
+                                 bool shutdown_connection) noexcept {
+    bool current = false;
+    try {
+      std::lock_guard lock{mutex_};
+      set_failure(QuicListenerFailure::callback_exception, 0);
+      current = connection != nullptr && connection_ == connection;
+    } catch (...) {
+    }
+    changed_.notify_all();
+    if (shutdown_connection && current && api_ != nullptr) {
+      api_->ConnectionShutdown(connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE,
+                               5);
+    }
+  }
+
+  void complete_connection_shutdown(HQUIC connection,
+                                    ConnectionContext *context) noexcept {
+    if (api_ != nullptr) {
+      api_->ConnectionClose(connection);
+    }
+    try {
+      std::lock_guard lock{mutex_};
+      ++metrics_.closed_connection_handles;
+      if (connection_ == connection) {
+        connection_ = nullptr;
+      }
+    } catch (...) {
+    }
+    changed_.notify_all();
+    delete context;
+  }
+
+  void append_pending_event(v1::WorkerIpcEnvelope event) {
+    std::lock_guard lock{event_mutex_};
+    pending_events_.push_back(std::move(event));
+  }
+
+  void drain_pending_events() {
+    std::unique_lock lock{event_mutex_};
+    if (draining_events_) {
+      return;
+    }
+    draining_events_ = true;
+    while (!pending_events_.empty()) {
+      auto event = std::move(pending_events_.front());
+      pending_events_.pop_front();
+      auto sink = event_sink_;
+      lock.unlock();
+      if (sink) {
+        try {
+          sink(std::move(event));
+        } catch (...) {
+          record_callback_exception(nullptr, false);
+        }
+      }
+      lock.lock();
+    }
+    draining_events_ = false;
   }
 
   bool send_session_reply(HQUIC stream, std::vector<std::byte> reply,
@@ -434,11 +631,20 @@ private:
     return true;
   }
 
-  void process_stream_bytes(HQUIC stream, QuicPeerStreamRole role,
+  void process_stream_bytes(HQUIC connection, HQUIC stream,
+                            QuicPeerStreamRole role,
+                            std::uint64_t connection_generation,
                             std::vector<std::byte> bytes) {
     bool pending_invalid = false;
     {
       std::lock_guard lock{mutex_};
+      if (connection_ != connection || connection_generation == 0 ||
+          connection_generation != current_connection_generation_) {
+        if (role == QuicPeerStreamRole::session) {
+          secure_clear_bytes(bytes);
+        }
+        return;
+      }
       if (role == QuicPeerStreamRole::session && !protocol_.authenticated() &&
           !transport_state_.datagram_send_enabled()) {
         constexpr std::size_t maximum_pending =
@@ -446,10 +652,12 @@ private:
         if (bytes.size() > maximum_pending ||
             pending_session_bytes_.size() > maximum_pending - bytes.size()) {
           pending_session_invalid_ = true;
+          clear_pending_session_bytes();
         } else {
           pending_session_bytes_.insert(pending_session_bytes_.end(),
                                         bytes.begin(), bytes.end());
         }
+        secure_clear_bytes(bytes);
         if (!pending_session_invalid_) {
           return;
         }
@@ -457,14 +665,46 @@ private:
       }
     }
     if (pending_invalid) {
-      api_->ConnectionShutdown(stream, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 3);
+      api_->ConnectionShutdown(connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE,
+                               3);
       return;
     }
 
     QuicSessionProtocolOutput output;
+    std::optional<QuicSessionProtocolOutput::AcceptedStartSession>
+        accepted_start;
     {
       std::lock_guard lock{mutex_};
-      output = protocol_.receive(role, bytes, now_unix_ms());
+      if (connection_ != connection ||
+          connection_generation != current_connection_generation_) {
+        if (role == QuicPeerStreamRole::session) {
+          secure_clear_bytes(bytes);
+        }
+        return;
+      }
+      output = protocol_.receive(connection_generation, role, bytes,
+                                 now_unix_ms());
+      if (output.accepted_authentication || !output.inputs.empty() ||
+          !output.feedback.empty()) {
+        inject_fault(QuicListenerFaultPoint::event_serialization);
+      }
+      if (output.accepted_authentication) {
+        current_session_id_ = output.accepted_authentication->session_id;
+        current_generation_ =
+            output.accepted_authentication->session_generation;
+        append_pending_event(make_transport_authenticated_event(
+            current_session_id_, current_generation_,
+            output.accepted_authentication->maximum_datagram_bytes));
+      }
+      for (const auto &input : output.inputs) {
+        append_pending_event(
+            make_input_received_event(input.session_generation, input.input));
+      }
+      for (const auto &feedback : output.feedback) {
+        append_pending_event(make_feedback_received_event(
+            feedback.session_generation, feedback.feedback));
+      }
+      accepted_start = output.accepted_start_session;
       for (auto &packet : output.packets) {
         switch (packet.channel) {
         case stream::StreamChannel::session:
@@ -486,6 +726,7 @@ private:
       }
     }
     changed_.notify_all();
+    drain_pending_events();
     bool reply_failed = false;
     for (std::size_t index = 0; index < output.session_replies.size();
          ++index) {
@@ -499,7 +740,26 @@ private:
     }
     if (reply_failed ||
         (output.close_connection && output.session_replies.empty())) {
-      api_->ConnectionShutdown(stream, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 3);
+      api_->ConnectionShutdown(connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE,
+                               3);
+    }
+    if (accepted_start) {
+      std::uint64_t marker_sequence = 0;
+      {
+        std::lock_guard lock{mutex_};
+        marker_sequence = next_marker_sequence_;
+        if (marker_sequence == 0) {
+          return;
+        }
+        ++next_marker_sequence_;
+      }
+      auto packets = synthetic_media_source_.emit_access_unit_marker(
+          marker_sequence, kSyntheticPresentationTimeUs,
+          accepted_start->maximum_datagram_bytes);
+      if (!packets.empty()) {
+        static_cast<void>(send_for_generation(
+            std::move(packets.front()), accepted_start->session_generation));
+      }
     }
   }
 
@@ -665,41 +925,89 @@ private:
   }
 
   static QUIC_STATUS QUIC_API listener_callback(HQUIC, void *context,
-                                                QUIC_LISTENER_EVENT *event) {
+                                                QUIC_LISTENER_EVENT *event) noexcept {
     auto &self = *static_cast<Impl *>(context);
-    if (event->Type != QUIC_LISTENER_EVENT_NEW_CONNECTION) {
-      return QUIC_STATUS_NOT_SUPPORTED;
-    }
-    {
-      std::lock_guard lock{self.mutex_};
-      if (self.connection_ != nullptr || self.closing_ || self.shutdown_) {
-        return QUIC_STATUS_CONNECTION_REFUSED;
+    try {
+      if (event->Type != QUIC_LISTENER_EVENT_NEW_CONNECTION) {
+        return QUIC_STATUS_NOT_SUPPORTED;
       }
-      self.connection_ = event->NEW_CONNECTION.Connection;
-      self.transport_state_ = {};
-      self.protocol_.reset();
-      self.received_packets_.clear();
-      self.pending_session_bytes_.clear();
-      self.pending_session_invalid_ = false;
-      self.close_after_session_fin_ = false;
+      self.inject_fault(
+          QuicListenerFaultPoint::connection_context_allocation);
+      std::uint64_t connection_generation = 0;
+      {
+        std::lock_guard lock{self.mutex_};
+        if (self.connection_ != nullptr || self.closing_ || self.shutdown_) {
+          return QUIC_STATUS_CONNECTION_REFUSED;
+        }
+        self.connection_ = event->NEW_CONNECTION.Connection;
+        connection_generation = ++self.next_connection_generation_;
+        self.current_connection_generation_ = connection_generation;
+        self.transport_state_ = {};
+        self.clear_pending_session_bytes();
+        self.protocol_.begin_connection(connection_generation);
+        self.received_packets_.clear();
+        self.pending_session_invalid_ = false;
+        self.close_after_session_fin_ = false;
+      }
+      self.append_pending_event(
+          make_connection_observed_event(connection_generation));
+      self.drain_pending_events();
+      auto *connection_context = new ConnectionContext{
+          .owner = &self, .connection_generation = connection_generation};
+      self.api_->SetCallbackHandler(
+          event->NEW_CONNECTION.Connection,
+          reinterpret_cast<void *>(connection_callback), connection_context);
+      const auto status = self.api_->ConnectionSetConfiguration(
+          event->NEW_CONNECTION.Connection, self.configuration_);
+      if (QUIC_FAILED(status)) {
+        {
+          std::lock_guard lock{self.mutex_};
+          if (self.connection_ == event->NEW_CONNECTION.Connection &&
+              self.current_connection_generation_ == connection_generation) {
+            self.connection_ = nullptr;
+            self.current_connection_generation_ = 0;
+            self.clear_pending_session_bytes();
+            self.protocol_.reset();
+          }
+        }
+        self.changed_.notify_all();
+        self.append_pending_event(make_transport_failed_event(
+            connection_generation,
+            static_cast<std::uint32_t>(status_code(status))));
+      } else {
+        self.append_pending_event(
+            make_connection_configured_event(connection_generation));
+      }
+      self.drain_pending_events();
+      return status;
+    } catch (...) {
+      self.record_listener_callback_exception(
+          event->Type == QUIC_LISTENER_EVENT_NEW_CONNECTION
+              ? event->NEW_CONNECTION.Connection
+              : nullptr);
+      return QUIC_STATUS_OUT_OF_MEMORY;
     }
-    self.api_->SetCallbackHandler(event->NEW_CONNECTION.Connection,
-                                  reinterpret_cast<void *>(connection_callback),
-                                  &self);
-    const auto status = self.api_->ConnectionSetConfiguration(
-        event->NEW_CONNECTION.Connection, self.configuration_);
-    if (QUIC_FAILED(status)) {
-      std::lock_guard lock{self.mutex_};
-      self.connection_ = nullptr;
-      self.changed_.notify_all();
-    }
-    return status;
   }
 
   static QUIC_STATUS QUIC_API connection_callback(
-      HQUIC connection, void *context, QUIC_CONNECTION_EVENT *event) {
-    auto &self = *static_cast<Impl *>(context);
-    switch (event->Type) {
+      HQUIC connection, void *context,
+      QUIC_CONNECTION_EVENT *event) noexcept {
+    auto *connection_context = static_cast<ConnectionContext *>(context);
+    auto &self = *connection_context->owner;
+    const auto connection_generation =
+        connection_context->connection_generation;
+    try {
+      const auto is_current = [&self, connection, connection_generation]() {
+        std::lock_guard lock{self.mutex_};
+        return self.connection_ == connection &&
+               self.current_connection_generation_ == connection_generation;
+      };
+      if (event->Type != QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE &&
+          event->Type != QUIC_CONNECTION_EVENT_DATAGRAM_SEND_STATE_CHANGED &&
+          !is_current()) {
+        return QUIC_STATUS_SUCCESS;
+      }
+      switch (event->Type) {
     case QUIC_CONNECTION_EVENT_CONNECTED: {
       const std::string_view alpn{
           reinterpret_cast<const char *>(event->CONNECTED.NegotiatedAlpn),
@@ -709,7 +1017,11 @@ private:
         std::lock_guard lock{self.mutex_};
         accepted = self.transport_state_.connected(alpn);
       }
-      if (!accepted) {
+      if (accepted) {
+        self.append_pending_event(
+            make_transport_connected_event(connection_generation));
+        self.drain_pending_events();
+      } else {
         self.api_->ConnectionShutdown(connection,
                                       QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 1);
       }
@@ -729,15 +1041,16 @@ private:
                 : 0);
         if (event->DATAGRAM_STATE_CHANGED.SendEnabled != FALSE &&
             !self.pending_session_bytes_.empty()) {
-          pending = std::move(self.pending_session_bytes_);
-          self.pending_session_bytes_.clear();
+          pending = self.pending_session_bytes_;
+          self.clear_pending_session_bytes();
           session_stream = self.session_stream_;
         }
       }
       self.changed_.notify_all();
       if (!pending.empty() && session_stream != nullptr) {
-        self.process_stream_bytes(session_stream, QuicPeerStreamRole::session,
-                                  std::move(pending));
+        self.process_stream_bytes(connection, session_stream,
+                                  QuicPeerStreamRole::session,
+                                  connection_generation, std::move(pending));
       }
       break;
     }
@@ -761,8 +1074,11 @@ private:
       }
       auto *stream_context =
           new PeerStreamContext{.owner = &self,
+                                .connection = connection,
                                 .stream = event->PEER_STREAM_STARTED.Stream,
-                                .role = role};
+                                .role = role,
+                                .connection_generation =
+                                    connection_generation};
       self.api_->SetCallbackHandler(event->PEER_STREAM_STARTED.Stream,
                                     reinterpret_cast<void *>(stream_callback),
                                     stream_context);
@@ -777,10 +1093,18 @@ private:
           event->DATAGRAM_SEND_STATE_CHANGED.ClientContext);
       {
         std::lock_guard lock{self.mutex_};
-        self.transport_state_.datagram_send_state_changed(
-            send == nullptr ? 0 : send->sequence,
-            event->DATAGRAM_SEND_STATE_CHANGED.State);
-        switch (event->DATAGRAM_SEND_STATE_CHANGED.State) {
+        const bool current =
+            send != nullptr &&
+            send->connection_generation == connection_generation &&
+            connection_generation == self.current_connection_generation_ &&
+            self.connection_ == connection &&
+            send->session_generation == self.current_generation_;
+        if (current) {
+          self.transport_state_.datagram_send_state_changed(
+              send->sequence, event->DATAGRAM_SEND_STATE_CHANGED.State);
+        }
+        switch (current ? event->DATAGRAM_SEND_STATE_CHANGED.State
+                        : QUIC_DATAGRAM_SEND_UNKNOWN) {
         case QUIC_DATAGRAM_SEND_SENT:
           ++self.metrics_.sent_datagrams;
           break;
@@ -801,12 +1125,16 @@ private:
       }
       QUIC_STATISTICS_V2 statistics{};
       std::uint32_t statistics_size = sizeof(statistics);
-      if (QUIC_SUCCEEDED(self.api_->GetParam(connection,
+      if (is_current() &&
+          QUIC_SUCCEEDED(self.api_->GetParam(connection,
                                              QUIC_PARAM_CONN_STATISTICS_V2,
                                              &statistics_size, &statistics))) {
         std::lock_guard lock{self.mutex_};
-        self.metrics_.smoothed_rtt_us = statistics.Rtt;
-        self.metrics_.path_mtu = statistics.SendPathMtu;
+        if (self.connection_ == connection &&
+            self.current_connection_generation_ == connection_generation) {
+          self.metrics_.smoothed_rtt_us = statistics.Rtt;
+          self.metrics_.path_mtu = statistics.SendPathMtu;
+        }
       }
       if (send != nullptr && QUIC_DATAGRAM_SEND_STATE_IS_FINAL(
                                  event->DATAGRAM_SEND_STATE_CHANGED.State)) {
@@ -815,10 +1143,17 @@ private:
       break;
     }
     case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT: {
-      std::lock_guard lock{self.mutex_};
-      self.transport_state_.transport_failed(
-          event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status,
-          event->SHUTDOWN_INITIATED_BY_TRANSPORT.ErrorCode);
+      {
+        std::lock_guard lock{self.mutex_};
+        self.transport_state_.transport_failed(
+            event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status,
+            event->SHUTDOWN_INITIATED_BY_TRANSPORT.ErrorCode);
+      }
+      self.append_pending_event(make_transport_failed_event(
+          connection_generation,
+          static_cast<std::uint32_t>(status_code(
+              event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status))));
+      self.drain_pending_events();
       break;
     }
     case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER: {
@@ -828,30 +1163,63 @@ private:
       break;
     }
     case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE: {
-      {
-        std::lock_guard lock{self.mutex_};
-        self.transport_state_.closed();
-        if (self.connection_ == connection) {
-          self.connection_ = nullptr;
+      ConnectionShutdownCompleteGuard completion_guard{
+          &self, connection, connection_context};
+      try {
+        bool current = false;
+        std::string disconnected_session_id;
+        std::uint64_t disconnected_generation = 0;
+        {
+          std::lock_guard lock{self.mutex_};
+          current = self.connection_ == connection &&
+                    self.current_connection_generation_ ==
+                        connection_generation;
+          if (current) {
+            self.session_stream_ = nullptr;
+            disconnected_session_id = std::move(self.current_session_id_);
+            disconnected_generation = self.current_generation_;
+            self.current_generation_ = 0;
+            self.clear_pending_session_bytes();
+            self.protocol_.reset();
+            self.current_connection_generation_ = 0;
+            self.transport_state_.closed();
+          }
         }
-        self.session_stream_ = nullptr;
-        self.protocol_.reset();
+        if (current && disconnected_generation != 0) {
+          self.inject_fault(
+              QuicListenerFaultPoint::disconnect_event_construction);
+          auto disconnected = make_transport_disconnected_event(
+              disconnected_session_id, disconnected_generation);
+          self.inject_fault(
+              QuicListenerFaultPoint::disconnect_event_publication);
+          self.append_pending_event(std::move(disconnected));
+        }
+        if (current) {
+          self.drain_pending_events();
+        }
+      } catch (...) {
+        self.record_callback_exception(connection, false);
       }
-      self.changed_.notify_all();
-      self.api_->ConnectionClose(connection);
       break;
     }
-    default:
-      break;
+      default:
+        break;
+      }
+      return QUIC_STATUS_SUCCESS;
+    } catch (...) {
+      self.record_callback_exception(
+          connection,
+          event->Type != QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE);
+      return QUIC_STATUS_SUCCESS;
     }
-    return QUIC_STATUS_SUCCESS;
   }
 
   static QUIC_STATUS QUIC_API stream_callback(HQUIC stream, void *context,
-                                              QUIC_STREAM_EVENT *event) {
+                                              QUIC_STREAM_EVENT *event) noexcept {
     auto *stream_context = static_cast<PeerStreamContext *>(context);
     auto &self = *stream_context->owner;
-    switch (event->Type) {
+    try {
+      switch (event->Type) {
     case QUIC_STREAM_EVENT_RECEIVE: {
       std::vector<std::byte> bytes;
       bytes.reserve(static_cast<std::size_t>(event->RECEIVE.TotalBufferLength));
@@ -861,7 +1229,9 @@ private:
         const auto *begin = reinterpret_cast<const std::byte *>(buffer.Buffer);
         bytes.insert(bytes.end(), begin, begin + buffer.Length);
       }
-      self.process_stream_bytes(stream, stream_context->role, std::move(bytes));
+      self.process_stream_bytes(
+          stream_context->connection, stream, stream_context->role,
+          stream_context->connection_generation, std::move(bytes));
       break;
     }
     case QUIC_STREAM_EVENT_SEND_COMPLETE: {
@@ -875,13 +1245,16 @@ private:
       {
         std::lock_guard lock{self.mutex_};
         shutdown =
+            self.connection_ == stream_context->connection &&
+            self.current_connection_generation_ ==
+                stream_context->connection_generation &&
             self.close_after_session_fin_ && self.session_stream_ == stream;
         if (shutdown) {
           self.close_after_session_fin_ = false;
         }
       }
       if (shutdown && event->SEND_SHUTDOWN_COMPLETE.Graceful != FALSE) {
-        self.api_->ConnectionShutdown(stream,
+        self.api_->ConnectionShutdown(stream_context->connection,
                                       QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 4);
       }
       break;
@@ -889,7 +1262,10 @@ private:
     case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE: {
       {
         std::lock_guard lock{self.mutex_};
-        if (self.session_stream_ == stream) {
+        if (self.connection_ == stream_context->connection &&
+            self.current_connection_generation_ ==
+                stream_context->connection_generation &&
+            self.session_stream_ == stream) {
           self.session_stream_ = nullptr;
         }
       }
@@ -897,16 +1273,27 @@ private:
       delete stream_context;
       break;
     }
-    default:
-      break;
+      default:
+        break;
+      }
+      return QUIC_STATUS_SUCCESS;
+    } catch (...) {
+      self.record_callback_exception(
+          stream_context->connection,
+          event->Type != QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE);
+      return QUIC_STATUS_SUCCESS;
     }
-    return QUIC_STATUS_SUCCESS;
   }
 
   std::wstring identity_path_;
   QuicSessionProtocol protocol_;
+  QuicListenerFaultInjector fault_injector_;
+  SyntheticMediaSource synthetic_media_source_;
   mutable std::mutex mutex_;
   std::condition_variable changed_;
+  std::mutex event_mutex_;
+  std::deque<v1::WorkerIpcEnvelope> pending_events_;
+  QuicListener::EventSink event_sink_;
   const QUIC_API_TABLE *api_{};
   HQUIC registration_{};
   HQUIC configuration_{};
@@ -922,6 +1309,11 @@ private:
   QuicListenerMetrics metrics_;
   std::vector<stream::TransportPacket> received_packets_;
   std::vector<std::byte> pending_session_bytes_;
+  std::string current_session_id_;
+  std::uint64_t current_generation_{};
+  std::uint64_t next_marker_sequence_{1};
+  std::uint64_t current_connection_generation_{};
+  std::uint64_t next_connection_generation_{};
   std::uint16_t local_port_{};
   std::size_t active_api_calls_{};
   bool configured_{};
@@ -929,14 +1321,17 @@ private:
   bool shutdown_{};
   bool pending_session_invalid_{};
   bool close_after_session_fin_{};
+  bool draining_events_{};
   QuicListenerFailure failure_{QuicListenerFailure::none};
   std::uint64_t platform_error_{};
 };
 
 QuicListener::QuicListener(std::wstring identity_path,
-                           AuthorizedQuicTicketStore &authorized_tickets)
+                            AuthorizedQuicTicketStore &authorized_tickets,
+                            QuicListenerFaultInjector fault_injector)
     : impl_(std::make_unique<Impl>(std::move(identity_path),
-                                   authorized_tickets)) {}
+                                    authorized_tickets,
+                                    std::move(fault_injector))) {}
 
 QuicListener::~QuicListener() = default;
 
@@ -988,6 +1383,10 @@ QuicListenerMetrics QuicListener::metrics() const noexcept {
 std::vector<stream::MsQuicTransportEvent>
 QuicListener::take_transport_events() {
   return impl_->take_transport_events();
+}
+
+void QuicListener::set_event_sink(EventSink sink) {
+  impl_->set_event_sink(std::move(sink));
 }
 
 bool QuicListener::open_connection() { return impl_->open_connection(); }

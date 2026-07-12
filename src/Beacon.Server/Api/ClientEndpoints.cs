@@ -419,7 +419,7 @@ public static class ClientEndpoints
 
         clients.MapPost("/{clientId}/input", async (
             string clientId,
-            ClientInputRequest request,
+            HttpClientInputTransportRequest request,
             InMemorySessionStore sessions,
             IStreamingBackend streaming,
             IClientInputSink input,
@@ -473,12 +473,16 @@ public static class ClientEndpoints
                 return Results.BadRequest(new { error = "Input request must include at least one event." });
             }
 
+            ClientInputEvent[] events = request.Events
+                .Select(inputEvent => inputEvent.ToCoreEvent())
+                .ToArray();
+
             var batch = new ClientInputBatch(
                 clientId,
                 plan.SessionId,
                 plan.Display.DisplayId,
                 request.Sequence,
-                request.Events);
+                events);
             ClientInputResult result = await input.ForwardAsync(batch, cancellationToken);
             if (!result.Success)
             {
@@ -486,7 +490,7 @@ public static class ClientEndpoints
                     diagnostics,
                     DiagnosticSeverity.Error,
                     "input.forward",
-                    $"Input forwarding failed: {result.Error}",
+                    "Input forwarding failed.",
                     clientId,
                     plan.SessionId,
                     plan.Display.DisplayId,
@@ -982,3 +986,22 @@ public sealed record DisconnectRequest(bool ClientActive = true);
 public sealed record BeaconRequest(bool Active = true);
 
 public sealed record ClientInputRequest(long Sequence, IReadOnlyList<ClientInputEvent> Events);
+
+internal sealed record HttpClientInputTransportRequest(
+    long Sequence,
+    IReadOnlyList<HttpClientInputTransportEvent> Events);
+
+internal sealed record HttpClientInputTransportEvent(
+    string Type,
+    string Action,
+    int? PointerId = null,
+    double? X = null,
+    double? Y = null,
+    int? Buttons = null,
+    string? Key = null,
+    string? Code = null,
+    double? Value = null)
+{
+    public ClientInputEvent ToCoreEvent() =>
+        new(Type, Action, PointerId, X, Y, Buttons, Key, Code, Value);
+}

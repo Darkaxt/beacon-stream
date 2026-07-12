@@ -16,6 +16,8 @@ jobs:
       - run: dotnet format Beacon.slnx --verify-no-changes --no-restore
       - run: dotnet build Beacon.slnx -warnaserror --no-restore
       - run: dotnet test Beacon.slnx --no-build
+      - shell: pwsh
+        run: ./scripts/test-gate3.ps1 -ValidateFixtures
 
   client-lab:
     runs-on: ubuntu-latest

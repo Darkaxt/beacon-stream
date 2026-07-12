@@ -186,7 +186,7 @@ class JniStreamSession final : public MsQuicClientCallbacks,
           environment, environment->GetObjectClass(callbacks),
           "Native callback class is unavailable.");
       frame_method_ = require_jni_ref(
-          environment, environment->GetMethodID(type, "onFrame", "([BJJ)V"),
+          environment, environment->GetMethodID(type, "onFrame", "([BJJJ)V"),
           "Native frame callback is unavailable.");
       loss_method_ = require_jni_ref(
           environment,
@@ -290,8 +290,14 @@ class JniStreamSession final : public MsQuicClientCallbacks,
   void transport_connected(std::uint64_t generation) override {
     auto retained = sessions().retain(handle_);
     if (!retained) return;
-    std::lock_guard lock(mutex_);
-    if (!closed_ && lifecycle_.is_current(generation)) core_.on_connected();
+    bool local_failure = false;
+    {
+      std::lock_guard lock(mutex_);
+      if (!closed_ && lifecycle_.is_current(generation)) {
+        local_failure = !core_.on_connected();
+      }
+    }
+    if (local_failure) transport_.report_local_failure(generation);
   }
 
   void session_bytes(std::uint64_t generation,
@@ -396,6 +402,7 @@ class JniStreamSession final : public MsQuicClientCallbacks,
     if (!environment->ExceptionCheck()) {
       environment->CallVoidMethod(callbacks_, frame_method_, bytes,
                                   static_cast<jlong>(frame.presentation_time_us),
+                                  static_cast<jlong>(frame.sequence),
                                   static_cast<jlong>(generation));
     }
     clear_callback_exception(environment);
@@ -797,7 +804,8 @@ Java_dev_beacon_android_BeaconStreamCore_nativeTestEmitFrame(
     }
     session->frame({.bytes = std::move(copied),
                     .presentation_time_us =
-                        static_cast<std::uint64_t>(presentation_time_us)});
+                        static_cast<std::uint64_t>(presentation_time_us),
+                    .sequence = 1});
   } catch (const beacon::android::streamcore::PendingJniException &) {
     return;
   } catch (const std::bad_alloc &) {

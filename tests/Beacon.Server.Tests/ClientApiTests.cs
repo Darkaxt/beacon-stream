@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Security.Cryptography;
 using Beacon.Core.Displays;
+using Beacon.Core.Diagnostics;
 using Beacon.Core.Games;
 using Beacon.Core.Input;
 using Beacon.Core.Sessions;
@@ -21,6 +22,75 @@ namespace Beacon.Server.Tests;
 
 public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
 {
+    [Fact]
+    public async Task AdminSnapshotRendersWorkerEvidenceAsSanitizedMetadata()
+    {
+        var journal = new InMemoryDiagnosticEventJournal();
+        journal.Publish(DiagnosticEvent.Create(
+            DiagnosticSeverity.Information,
+            "stream-worker",
+            "worker.media",
+            "Worker media evidence accepted.",
+            sessionId: "session-a",
+            metadata: new Dictionary<string, string>
+            {
+                ["sequence"] = "2",
+                ["presentationTimeUs"] = "1000000",
+                ["datagramBytes"] = "56"
+            }));
+        WebApplicationFactory<Program> snapshotFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<InMemoryDiagnosticEventJournal>();
+                services.RemoveAll<IDiagnosticEventSink>();
+                services.RemoveAll<IDiagnosticEventSource>();
+                services.AddSingleton(journal);
+                services.AddSingleton<IDiagnosticEventSink>(journal);
+                services.AddSingleton<IDiagnosticEventSource>(journal);
+            }));
+        HttpClient client = snapshotFactory.CreateClient();
+
+        HttpResponseMessage response = await client.GetAsync("/admin/snapshot");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement evidence = Assert.Single(
+            document.RootElement.GetProperty("diagnostics").EnumerateArray(),
+            value => value.GetProperty("operation").GetString() == "worker.media");
+        Assert.Equal("2", evidence.GetProperty("metadata").GetProperty("sequence").GetString());
+        Assert.Equal("56", evidence.GetProperty("metadata").GetProperty("datagramBytes").GetString());
+        Assert.False(evidence.TryGetProperty("ticket", out _));
+        Assert.False(evidence.TryGetProperty("input", out _));
+    }
+
+    [Fact]
+    public async Task ClientInputDiagnosticsRedactPayloadAndSinkErrorCanaries()
+    {
+        const string canary = "HTTP-INPUT-CANARY-b7e4";
+        var journal = new InMemoryDiagnosticEventJournal();
+        WebApplicationFactory<Program> inputFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IClientInputSink>();
+                services.RemoveAll<IDiagnosticEventSink>();
+                services.AddSingleton<IClientInputSink>(new FailingInputSink(canary));
+                services.AddSingleton<IDiagnosticEventSink>(journal);
+            }));
+        HttpClient client = inputFactory.CreateClient();
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/input", new
+        {
+            sequence = 1,
+            events = new[] { new { type = "keyboard", action = "press", key = canary, code = canary } }
+        });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        string rendered = string.Join('|', journal.GetRecent(20).Select(value =>
+            $"{value.Operation}:{value.Message}:{string.Join(',', value.Metadata.Select(pair => $"{pair.Key}={pair.Value}"))}"));
+        Assert.DoesNotContain(canary, rendered, StringComparison.Ordinal);
+        Assert.Contains("Input forwarding failed.", rendered, StringComparison.Ordinal);
+    }
     [Fact]
     public async Task HelloReturnsZFoldProfileAndEditableFields()
     {
@@ -1375,6 +1445,58 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task ClientInputHttpBindingIgnoresWorkerOnlyStructuredPayloads()
+    {
+        var input = new RecordingClientInputSink();
+        WebApplicationFactory<Program> inputFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IClientInputSink>();
+                services.AddSingleton<IClientInputSink>(input);
+            }));
+        HttpClient client = inputFactory.CreateClient();
+        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/input", new
+        {
+            sequence = 44,
+            events = new[]
+            {
+                new
+                {
+                    type = "pointer",
+                    action = "move",
+                    pointerId = 1,
+                    x = 0.5,
+                    y = 0.25,
+                    pointer = new { action = 0, x = 32768, y = 32768, wheelDelta = 0, button = 0 },
+                    keyboard = new { scanCode = 30, pressed = true },
+                    controller = new { controllerIndex = 1, controlId = 2, value = 3 },
+                    touch = new
+                    {
+                        contactId = 1,
+                        action = 0,
+                        xNumerator = 1,
+                        yNumerator = 2,
+                        coordinateDenominator = 3,
+                        pressureNumerator = 4,
+                        pressureDenominator = 5
+                    }
+                }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        ClientInputEvent inputEvent = Assert.Single(Assert.Single(input.Batches).Events);
+        Assert.Null(inputEvent.Pointer);
+        Assert.Null(inputEvent.Keyboard);
+        Assert.Null(inputEvent.Controller);
+        Assert.Null(inputEvent.Touch);
+        Assert.Equal(0.5, inputEvent.X);
+        Assert.Equal(0.25, inputEvent.Y);
+    }
+
+    [Fact]
     public async Task ClientInputForwardsKeyboardEventToActiveStreamSession()
     {
         var input = new RecordingClientInputSink();
@@ -1462,6 +1584,14 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             Batches.Add(batch);
             return Task.FromResult(ClientInputResult.Ok(batch.Events.Count));
         }
+    }
+
+    private sealed class FailingInputSink(string error) : IClientInputSink
+    {
+        public Task<ClientInputResult> ForwardAsync(
+            ClientInputBatch batch,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(ClientInputResult.Fail(error));
     }
 
     private sealed class ReplacingOnSecondAuthorizationAuthorizer : IStreamSessionAuthorizer

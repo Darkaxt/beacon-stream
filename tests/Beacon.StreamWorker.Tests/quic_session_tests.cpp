@@ -1,5 +1,6 @@
 #include "beacon/worker/quic_listener.h"
 #include "beacon/worker/quic_session_protocol.h"
+#include "beacon/worker/secure_bytes.h"
 
 #include "../Beacon.StreamProtocol.Tests/test_failure.h"
 #include "stream_control.pb.h"
@@ -9,6 +10,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace {
 
@@ -55,6 +57,21 @@ stream_v1::SessionStreamEnvelope authenticate(std::string_view ticket) {
   auth->set_stream_ticket(ticket);
   auth->set_client_id("z-fold-7");
   auth->set_plan_revision(8);
+  return message;
+}
+
+stream_v1::SessionStreamEnvelope start_session(std::uint64_t sequence) {
+  stream_v1::SessionStreamEnvelope message;
+  message.set_protocol_version(1);
+  message.set_session_id("session-a");
+  message.set_sequence(sequence);
+  auto *video = message.mutable_start_session()->mutable_selected_video();
+  video->set_codec(stream_v1::VIDEO_CODEC_H264);
+  video->set_width(2560);
+  video->set_height(1600);
+  video->set_frames_per_second_numerator(120);
+  video->set_frames_per_second_denominator(1);
+  video->set_dynamic_range(stream_v1::DYNAMIC_RANGE_SDR);
   return message;
 }
 
@@ -150,6 +167,12 @@ void fragmented_authentication_consumes_ticket_and_returns_negotiated_limit() {
   BEACON_TEST_REQUIRE(reply.session_authenticated().accepted());
   BEACON_TEST_REQUIRE(reply.session_authenticated().maximum_datagram_bytes() ==
                       1232);
+  BEACON_TEST_REQUIRE(second.accepted_authentication.has_value());
+  BEACON_TEST_REQUIRE(second.accepted_authentication->session_id ==
+                      "session-a");
+  BEACON_TEST_REQUIRE(second.accepted_authentication->session_generation == 1);
+  BEACON_TEST_REQUIRE(
+      second.accepted_authentication->maximum_datagram_bytes == 1232);
 }
 
 void replay_and_version_mismatch_return_typed_rejections() {
@@ -223,6 +246,182 @@ void authenticated_streams_are_routed_independently() {
   BEACON_TEST_REQUIRE(feedback_output.packets.size() == 1);
   BEACON_TEST_REQUIRE(feedback_output.packets[0].channel ==
                       beacon::stream::StreamChannel::feedback);
+  BEACON_TEST_REQUIRE(input_output.inputs.size() == 1);
+  BEACON_TEST_REQUIRE(input_output.inputs[0].session_generation == 1);
+  BEACON_TEST_REQUIRE(
+      input_output.inputs[0].input.SerializeAsString() ==
+      input.SerializeAsString());
+  BEACON_TEST_REQUIRE(feedback_output.feedback.size() == 1);
+  BEACON_TEST_REQUIRE(feedback_output.feedback[0].session_generation == 1);
+  BEACON_TEST_REQUIRE(
+      feedback_output.feedback[0].feedback.SerializeAsString() ==
+      feedback.SerializeAsString());
+}
+
+void start_session_is_typed_once_per_authenticated_generation() {
+  AuthorizedQuicTicketStore store;
+  BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-start")));
+  QuicSessionProtocol protocol(store);
+  protocol.set_maximum_datagram_bytes(1232);
+
+  const auto auth = protocol.receive(
+      QuicPeerStreamRole::session, frame(authenticate("raw-ticket-start")),
+      1'000);
+  const auto first = protocol.receive(QuicPeerStreamRole::session,
+                                      frame(start_session(2)), 1'000);
+  const auto duplicate = protocol.receive(QuicPeerStreamRole::session,
+                                          frame(start_session(3)), 1'000);
+
+  BEACON_TEST_REQUIRE(auth.accepted_authentication.has_value());
+  BEACON_TEST_REQUIRE(first.accepted_start_session.has_value());
+  BEACON_TEST_REQUIRE(
+      first.accepted_start_session->session_generation == 1);
+  BEACON_TEST_REQUIRE(
+      first.accepted_start_session->maximum_datagram_bytes == 1232);
+  BEACON_TEST_REQUIRE(
+      first.accepted_start_session->start_session.SerializeAsString() ==
+      start_session(2).start_session().SerializeAsString());
+  BEACON_TEST_REQUIRE(!duplicate.accepted_start_session.has_value());
+}
+
+void reset_and_fresh_authentication_allocate_a_new_generation() {
+  AuthorizedQuicTicketStore store;
+  BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-generation-a")));
+  BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-generation-b")));
+  QuicSessionProtocol protocol(store);
+  protocol.set_maximum_datagram_bytes(1232);
+
+  const auto first = protocol.receive(
+      QuicPeerStreamRole::session,
+      frame(authenticate("raw-ticket-generation-a")), 1'000);
+  protocol.reset();
+  protocol.set_maximum_datagram_bytes(1232);
+  const auto second = protocol.receive(
+      QuicPeerStreamRole::session,
+      frame(authenticate("raw-ticket-generation-b")), 1'000);
+
+  BEACON_TEST_REQUIRE(first.accepted_authentication->session_generation == 1);
+  BEACON_TEST_REQUIRE(second.accepted_authentication->session_generation == 2);
+}
+
+void stale_old_connection_receive_does_not_touch_current_protocol_state() {
+  AuthorizedQuicTicketStore store;
+  BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-connection-a")));
+  BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-connection-b")));
+  QuicSessionProtocol protocol(store);
+  protocol.set_maximum_datagram_bytes(1232);
+  protocol.begin_connection(10);
+  BEACON_TEST_REQUIRE(
+      protocol
+          .receive(10, QuicPeerStreamRole::session,
+                   frame(authenticate("raw-ticket-connection-a")), 1'000)
+          .accepted_authentication.has_value());
+
+  protocol.begin_connection(11);
+  protocol.set_maximum_datagram_bytes(1232);
+  BEACON_TEST_REQUIRE(
+      protocol
+          .receive(11, QuicPeerStreamRole::session,
+                   frame(authenticate("raw-ticket-connection-b")), 1'000)
+          .accepted_authentication.has_value());
+
+  stream_v1::InputStreamEnvelope stale_input;
+  stale_input.set_protocol_version(1);
+  stale_input.set_session_id("session-a");
+  stale_input.set_sequence(99);
+  stale_input.mutable_input_batch()->add_events()->mutable_keyboard()->set_scan_code(
+      31);
+  const auto stale = protocol.receive(10, QuicPeerStreamRole::input,
+                                      frame(stale_input), 1'000);
+
+  stream_v1::InputStreamEnvelope current_input = stale_input;
+  current_input.set_sequence(1);
+  const auto current = protocol.receive(11, QuicPeerStreamRole::input,
+                                        frame(current_input), 1'000);
+  BEACON_TEST_REQUIRE(stale.stale_callback);
+  BEACON_TEST_REQUIRE(stale.inputs.empty());
+  BEACON_TEST_REQUIRE(protocol.authenticated());
+  BEACON_TEST_REQUIRE(current.inputs.size() == 1);
+  BEACON_TEST_REQUIRE(current.inputs[0].input.sequence() == 1);
+}
+
+void secure_clear_observes_zeroes_before_pending_bytes_are_released() {
+  std::vector<std::byte> pending{std::byte{0x01}, std::byte{0x7f},
+                                 std::byte{0xff}};
+  bool observed = false;
+  const auto observer = [](std::span<const std::byte> bytes,
+                           void *context) noexcept {
+    auto &was_observed = *static_cast<bool *>(context);
+    was_observed = !bytes.empty() &&
+                   std::ranges::all_of(bytes, [](std::byte value) {
+                     return value == std::byte{};
+                   });
+  };
+
+  beacon::worker::secure_clear_bytes(pending, observer, &observed);
+
+  BEACON_TEST_REQUIRE(observed);
+  BEACON_TEST_REQUIRE(pending.empty());
+}
+
+struct ProtocolWipeObservation {
+  std::size_t nonempty_wipes{};
+  bool all_zero{true};
+};
+
+void observe_protocol_wipe(std::span<const std::byte> bytes,
+                           void *context) noexcept {
+  auto &observation = *static_cast<ProtocolWipeObservation *>(context);
+  if (bytes.empty()) {
+    return;
+  }
+  ++observation.nonempty_wipes;
+  observation.all_zero =
+      observation.all_zero &&
+      std::ranges::all_of(bytes,
+                          [](std::byte value) { return value == std::byte{}; });
+}
+
+void oversized_partial_authentication_is_wiped_before_buffer_reuse() {
+  AuthorizedQuicTicketStore store;
+  ProtocolWipeObservation observation;
+  QuicSessionProtocol protocol(store, observe_protocol_wipe, &observation);
+  const std::array partial_auth{std::byte{0x01}, std::byte{0x7f},
+                                std::byte{0x55}};
+  BEACON_TEST_REQUIRE(
+      !protocol.receive(QuicPeerStreamRole::session, partial_auth, 1'000)
+           .close_connection);
+
+  const std::vector oversized(
+      static_cast<std::size_t>(
+          beacon::worker::maximum_stream_message_bytes) +
+          5U,
+      std::byte{0x33});
+  BEACON_TEST_REQUIRE(
+      protocol.receive(QuicPeerStreamRole::session, oversized, 1'000)
+          .close_connection);
+  BEACON_TEST_REQUIRE(observation.nonempty_wipes == 1);
+  BEACON_TEST_REQUIRE(observation.all_zero);
+}
+
+void malformed_authentication_is_wiped_before_logical_clear() {
+  AuthorizedQuicTicketStore store;
+  ProtocolWipeObservation observation;
+  QuicSessionProtocol protocol(store, observe_protocol_wipe, &observation);
+  const std::array malformed_length{std::byte{0x00}, std::byte{0x00},
+                                    std::byte{0x00}, std::byte{0x00}};
+  BEACON_TEST_REQUIRE(
+      protocol.receive(QuicPeerStreamRole::session, malformed_length, 1'000)
+          .close_connection);
+
+  const std::array malformed_frame{std::byte{0x00}, std::byte{0x00},
+                                   std::byte{0x00}, std::byte{0x01},
+                                   std::byte{0xff}};
+  BEACON_TEST_REQUIRE(
+      protocol.receive(QuicPeerStreamRole::session, malformed_frame, 1'000)
+          .close_connection);
+  BEACON_TEST_REQUIRE(observation.nonempty_wipes == 2);
+  BEACON_TEST_REQUIRE(observation.all_zero);
 }
 
 void unauthenticated_data_and_oversized_frames_fail_closed() {
@@ -255,6 +454,12 @@ int main() {
   fragmented_authentication_consumes_ticket_and_returns_negotiated_limit();
   replay_and_version_mismatch_return_typed_rejections();
   authenticated_streams_are_routed_independently();
+  start_session_is_typed_once_per_authenticated_generation();
+  reset_and_fresh_authentication_allocate_a_new_generation();
+  stale_old_connection_receive_does_not_touch_current_protocol_state();
+  secure_clear_observes_zeroes_before_pending_bytes_are_released();
+  oversized_partial_authentication_is_wiped_before_buffer_reuse();
+  malformed_authentication_is_wiped_before_logical_clear();
   unauthenticated_data_and_oversized_frames_fail_closed();
   return 0;
 }

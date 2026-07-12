@@ -120,7 +120,7 @@ void unsupported_versions_receive_one_correlated_failure() {
                       }) == 1);
 }
 
-void prepared_session_reports_selected_listener_port_without_pre_auth_media() {
+void marker_ready_state_does_not_claim_encoded_or_sent_media() {
   RecordingTransport transport;
   transport.selected_port = 45999;
   AuthorizedQuicTicketStore tickets;
@@ -155,10 +155,14 @@ void prepared_session_reports_selected_listener_port_without_pre_auth_media() {
     return value.body_case() == WorkerIpcEnvelope::kWorkerTransportReady &&
            value.worker_transport_ready().listener_port() == 45999;
   }));
-  BEACON_TEST_REQUIRE(std::ranges::any_of(responses, [](const WorkerIpcEnvelope& value) {
-    return value.body_case() == WorkerIpcEnvelope::kMediaMetrics &&
-           value.media_metrics().encoded_frames() == 0;
-  }));
+  BEACON_TEST_REQUIRE(
+      std::ranges::any_of(responses, [](const WorkerIpcEnvelope& value) {
+        return value.body_case() == WorkerIpcEnvelope::kMediaMetrics &&
+               value.media_metrics().encoded_frames() == 0 &&
+               value.media_metrics().sent_datagrams() == 0 &&
+               value.media_metrics().dropped_frames() == 0 &&
+               value.media_metrics().bytes_sent() == 0;
+      }));
 }
 
 void failed_listener_open_emits_no_transport_ready_event() {
@@ -236,7 +240,7 @@ void explicit_shutdown_is_acknowledged_and_releases_once() {
 int main() {
   hello_and_ready_are_typed_and_instance_bound();
   unsupported_versions_receive_one_correlated_failure();
-  prepared_session_reports_selected_listener_port_without_pre_auth_media();
+  marker_ready_state_does_not_claim_encoded_or_sent_media();
   failed_listener_open_emits_no_transport_ready_event();
   ticket_authorization_is_hash_only_and_worker_bound();
   explicit_shutdown_is_acknowledged_and_releases_once();

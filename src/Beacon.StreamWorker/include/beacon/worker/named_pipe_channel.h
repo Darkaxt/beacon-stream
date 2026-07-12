@@ -1,16 +1,17 @@
 #pragma once
 
+#include "beacon/worker/worker_ipc_limits.h"
 #include "worker_ipc.pb.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
 
 namespace beacon::worker {
-
-inline constexpr std::uint32_t maximum_worker_message_bytes = 1024U * 1024U;
 
 enum class FrameDecodeStatus {
   success,
@@ -27,6 +28,11 @@ struct FrameLengthResult {
   std::uint32_t message_bytes{};
 };
 
+struct NamedPipeChannelOperationHooks {
+  void (*after_state_acquired)(void *context) noexcept{};
+  void *context{};
+};
+
 [[nodiscard]] FrameLengthResult decode_worker_frame_length(
     std::span<const std::byte> prefix) noexcept;
 [[nodiscard]] std::vector<std::byte> encode_worker_frame(
@@ -37,8 +43,9 @@ struct FrameLengthResult {
 
 class NamedPipeChannel {
  public:
-  NamedPipeChannel() = default;
-  explicit NamedPipeChannel(void* handle) noexcept;
+  NamedPipeChannel() noexcept;
+  explicit NamedPipeChannel(
+      void *handle, NamedPipeChannelOperationHooks hooks = {});
   ~NamedPipeChannel();
 
   NamedPipeChannel(const NamedPipeChannel&) = delete;
@@ -50,14 +57,20 @@ class NamedPipeChannel {
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] FrameDecodeStatus read(v1::WorkerIpcEnvelope& envelope) noexcept;
   [[nodiscard]] bool write(const v1::WorkerIpcEnvelope& envelope) noexcept;
+  void cancel_pending_io() noexcept;
+  void release_owner() noexcept;
 
  private:
-  [[nodiscard]] bool read_exact(std::span<std::byte> output) noexcept;
-  [[nodiscard]] bool write_exact(std::span<const std::byte> input) noexcept;
-  void close() noexcept;
+  struct State;
 
-  void* handle_{};
-  std::uint32_t last_error_{};
+  [[nodiscard]] std::uint32_t
+  read_exact(const std::shared_ptr<State> &state,
+             std::span<std::byte> output) noexcept;
+  [[nodiscard]] std::uint32_t
+  write_exact(const std::shared_ptr<State> &state,
+              std::span<const std::byte> input) noexcept;
+
+  std::atomic<std::shared_ptr<State>> state_;
 };
 
 }  // namespace beacon::worker

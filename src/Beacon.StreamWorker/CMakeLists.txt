@@ -2,8 +2,12 @@ add_library(
   BeaconStreamWorkerCore
   STATIC
     src/named_pipe_channel.cpp
+    src/outbound_queue.cpp
     src/quic_listener.cpp
     src/quic_session_protocol.cpp
+    src/secure_bytes.cpp
+    src/synthetic_media_source.cpp
+    src/worker_events.cpp
     src/worker_host.cpp
 )
 

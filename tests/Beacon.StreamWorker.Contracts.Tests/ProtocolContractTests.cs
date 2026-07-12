@@ -2,12 +2,57 @@ using System.Text;
 using Beacon.StreamWorker.Contracts.Diagnostics;
 using Beacon.StreamWorker.Contracts.Framing;
 using Beacon.StreamWorker.Contracts.Stream.V1;
+using Beacon.StreamWorker.Contracts.Worker.V1;
 using Google.Protobuf;
 
 namespace Beacon.StreamWorker.Contracts.Tests;
 
 public sealed class ProtocolContractTests
 {
+    [Fact]
+    public void WorkerEvents_ReuseTypedStreamEnvelopesAndCarryGeneration()
+    {
+        var input = new InputStreamEnvelope
+        {
+            ProtocolVersion = 1,
+            SessionId = "session-a",
+            Sequence = 7,
+            InputBatch = new InputBatch(),
+        };
+        var feedback = new FeedbackStreamEnvelope
+        {
+            ProtocolVersion = 1,
+            SessionId = "session-a",
+            Sequence = 9,
+            QueueDepth = new QueueDepthFeedback { QueuedAccessUnits = 2 },
+        };
+        var envelope = new WorkerIpcEnvelope
+        {
+            ProtocolVersion = 1,
+            RequestId = 0,
+            SessionId = "session-a",
+            InputReceived = new InputReceived
+            {
+                SessionGeneration = 4,
+                Input = input,
+            },
+        };
+
+        Assert.Equal(0UL, envelope.RequestId);
+        Assert.Equal(4UL, envelope.InputReceived.SessionGeneration);
+        Assert.Equal(input, envelope.InputReceived.Input);
+
+        envelope.FeedbackReceived = new FeedbackReceived
+        {
+            SessionGeneration = 4,
+            Feedback = feedback,
+        };
+        Assert.Equal(feedback, envelope.FeedbackReceived.Feedback);
+        Assert.Contains(
+            WorkerIpcReflection.Descriptor.MessageTypes,
+            message => message.Name == nameof(MediaEvidence));
+    }
+
     [Fact]
     public void SelectedVideoEnums_RepresentEveryServerGrantMode()
     {

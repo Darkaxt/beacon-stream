@@ -86,8 +86,8 @@ public sealed class FakeEndpointRunnerTests
                 "POST /clients/z-fold-7/plan",
                 "POST /clients/z-fold-7/launch",
                 "POST /clients/z-fold-7/input",
-                "POST /clients/z-fold-7/disconnect",
                 "POST /clients/z-fold-7/reconnect",
+                "POST /clients/z-fold-7/disconnect",
                 "POST /clients/z-fold-7/plan",
                 "POST /clients/z-fold-7/quit",
                 "POST /clients/z-fold-7/emergency-restore"
@@ -177,6 +177,8 @@ public sealed class FakeEndpointRunnerTests
 
     private sealed class RecordingHandler(Func<HttpRequestMessage, HttpResponseMessage?>? responseFactory = null) : HttpMessageHandler
     {
+        private bool runtimeActive;
+
         public List<string> Requests { get; } = [];
         public List<string> Bodies { get; } = [];
 
@@ -188,6 +190,24 @@ public sealed class FakeEndpointRunnerTests
             if (response is not null)
             {
                 return response;
+            }
+
+            string path = request.RequestUri?.AbsolutePath ?? string.Empty;
+            if (path.EndsWith("/reconnect", StringComparison.Ordinal) && !runtimeActive)
+            {
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    Content = new StringContent("{\"status\":503}")
+                };
+            }
+            if (path.EndsWith("/launch", StringComparison.Ordinal))
+            {
+                runtimeActive = true;
+            }
+            else if (path.EndsWith("/disconnect", StringComparison.Ordinal)
+                || path.EndsWith("/quit", StringComparison.Ordinal))
+            {
+                runtimeActive = false;
             }
 
             return new HttpResponseMessage(HttpStatusCode.OK)
