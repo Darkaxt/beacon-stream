@@ -123,6 +123,15 @@ QuicTicketConsumeResult AuthorizedQuicTicketStore::consume(
     std::span<const std::byte> raw_ticket, std::string_view client_id,
     std::string_view session_id, std::uint64_t plan_revision,
     std::uint64_t now_unix_ms) {
+  return consume_authorized(raw_ticket, client_id, session_id, plan_revision,
+                            now_unix_ms)
+      .result;
+}
+
+QuicTicketConsumeOutcome AuthorizedQuicTicketStore::consume_authorized(
+    std::span<const std::byte> raw_ticket, std::string_view client_id,
+    std::string_view session_id, std::uint64_t plan_revision,
+    std::uint64_t now_unix_ms) {
   const auto hash = hash_stream_ticket(raw_ticket);
   std::lock_guard lock{mutex_};
   const auto found =
@@ -130,26 +139,27 @@ QuicTicketConsumeResult AuthorizedQuicTicketStore::consume(
         return hashes_equal(record.ticket.hash, hash);
       });
   if (found == records_.end()) {
-    return QuicTicketConsumeResult::unknown;
+    return {.result = QuicTicketConsumeResult::unknown};
   }
   if (found->consumed) {
-    return QuicTicketConsumeResult::replayed;
+    return {.result = QuicTicketConsumeResult::replayed};
   }
   if (found->ticket.client_id != client_id) {
-    return QuicTicketConsumeResult::client_mismatch;
+    return {.result = QuicTicketConsumeResult::client_mismatch};
   }
   if (found->ticket.session_id != session_id) {
-    return QuicTicketConsumeResult::session_mismatch;
+    return {.result = QuicTicketConsumeResult::session_mismatch};
   }
   if (found->ticket.plan_revision != plan_revision) {
-    return QuicTicketConsumeResult::plan_mismatch;
+    return {.result = QuicTicketConsumeResult::plan_mismatch};
   }
   if (now_unix_ms > found->ticket.expires_at_unix_ms) {
-    return QuicTicketConsumeResult::expired;
+    return {.result = QuicTicketConsumeResult::expired};
   }
 
   found->consumed = true;
-  return QuicTicketConsumeResult::accepted;
+  return {.result = QuicTicketConsumeResult::accepted,
+          .benchmark_plan = found->ticket.benchmark_plan};
 }
 
 std::size_t AuthorizedQuicTicketStore::size() const {

@@ -104,6 +104,7 @@ message WorkerIpcEnvelope {
     StartMedia start_media = 23;
     StopMedia stop_media = 24;
     RequestIdr request_idr = 25;
+    PrepareBenchmark prepare_benchmark = 26;
     SessionStateChanged session_state_changed = 30;
     MediaMetrics media_metrics = 31;
     WorkerDiagnostic worker_diagnostic = 32;
@@ -161,6 +162,10 @@ message PrepareSession {
   uint32 minimum_bitrate_kbps = 8;
   uint32 initial_bitrate_kbps = 9;
   uint32 maximum_bitrate_kbps = 10;
+}
+
+message PrepareBenchmark {
+  beacon.stream.v1.StartBenchmark plan = 1;
 }
 
 message StartMedia {

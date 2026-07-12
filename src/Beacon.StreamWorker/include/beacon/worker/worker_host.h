@@ -39,6 +39,8 @@ class WorkerHost {
       v1::WorkerErrorCode error_code) const;
   [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> prepare(
       const v1::WorkerIpcEnvelope& request);
+  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> prepare_benchmark(
+      const v1::WorkerIpcEnvelope& request);
   [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> authorize_ticket(
       const v1::WorkerIpcEnvelope& request);
   [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> revoke_ticket(
@@ -55,9 +57,11 @@ class WorkerHost {
   IWorkerMediaTransport& transport_;
   AuthorizedQuicTicketStore& authorized_tickets_;
   bool prepared_{};
+  bool benchmark_prepared_{};
   bool streaming_{};
   bool shutdown_requested_{};
   std::string session_id_;
+  stream::v1::StartBenchmark benchmark_plan_;
 };
 
 }  // namespace beacon::worker

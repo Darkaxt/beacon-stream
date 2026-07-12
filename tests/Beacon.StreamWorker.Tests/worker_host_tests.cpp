@@ -193,6 +193,34 @@ void failed_listener_open_emits_no_transport_ready_event() {
   }));
 }
 
+void benchmark_plan_is_prepared_without_a_display_or_video_mode() {
+  RecordingTransport transport;
+  transport.selected_port = 46001;
+  AuthorizedQuicTicketStore tickets;
+  WorkerHost host({std::byte{1}}, 42, transport, tickets);
+
+  auto prepare = command(24, "benchmark-session");
+  auto *plan = prepare.mutable_prepare_benchmark()->mutable_plan();
+  plan->set_run_id("11111111-1111-1111-1111-111111111111");
+  plan->set_schema_version(3);
+  plan->set_run_token(std::string(16, '\x2a'));
+  plan->mutable_reliable_round()->set_packet_count(4);
+  plan->mutable_reliable_round()->set_payload_bytes(1024);
+  plan->mutable_reliable_round()->set_measurement_interval_us(500'000);
+  plan->mutable_datagram_round()->set_packet_count(8);
+  plan->mutable_datagram_round()->set_payload_bytes(1000);
+  plan->mutable_datagram_round()->set_measurement_interval_us(500'000);
+
+  const auto prepared = host.dispatch(prepare);
+  BEACON_TEST_REQUIRE(completion(prepared).worker_completion().succeeded());
+
+  auto start = command(25, "benchmark-session");
+  start.mutable_start_media()->set_listen_port(0);
+  const auto started = host.dispatch(start);
+  BEACON_TEST_REQUIRE(completion(started).worker_completion().succeeded());
+  BEACON_TEST_REQUIRE(transport.open_count == 1);
+}
+
 void ticket_authorization_is_hash_only_and_worker_bound() {
   RecordingTransport transport;
   AuthorizedQuicTicketStore tickets;
@@ -238,11 +266,13 @@ void explicit_shutdown_is_acknowledged_and_releases_once() {
 }  // namespace
 
 int main() {
-  hello_and_ready_are_typed_and_instance_bound();
-  unsupported_versions_receive_one_correlated_failure();
-  marker_ready_state_does_not_claim_encoded_or_sent_media();
-  failed_listener_open_emits_no_transport_ready_event();
-  ticket_authorization_is_hash_only_and_worker_bound();
-  explicit_shutdown_is_acknowledged_and_releases_once();
-  return 0;
+  return beacon::stream::testing::run_tests([] {
+    hello_and_ready_are_typed_and_instance_bound();
+    unsupported_versions_receive_one_correlated_failure();
+    marker_ready_state_does_not_claim_encoded_or_sent_media();
+    failed_listener_open_emits_no_transport_ready_event();
+    benchmark_plan_is_prepared_without_a_display_or_video_mode();
+    ticket_authorization_is_hash_only_and_worker_bound();
+    explicit_shutdown_is_acknowledged_and_releases_once();
+  });
 }

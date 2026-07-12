@@ -78,6 +78,22 @@ bool valid_benchmark_start(const stream_v1::StartBenchmark &benchmark,
                                maximum_datagram_bytes);
 }
 
+bool benchmark_plans_equal(const stream_v1::StartBenchmark &left,
+                           const stream_v1::StartBenchmark &right) noexcept {
+  const auto rounds_equal = [](const stream_v1::BenchmarkRoundPlan &first,
+                               const stream_v1::BenchmarkRoundPlan &second) {
+    return first.packet_count() == second.packet_count() &&
+           first.payload_bytes() == second.payload_bytes() &&
+           first.measurement_interval_us() ==
+               second.measurement_interval_us();
+  };
+  return left.run_id() == right.run_id() &&
+         left.schema_version() == right.schema_version() &&
+         left.run_token() == right.run_token() &&
+         rounds_equal(left.reliable_round(), right.reliable_round()) &&
+         rounds_equal(left.datagram_round(), right.datagram_round());
+}
+
 } // namespace
 
 QuicPeerStreamRole classify_peer_stream(std::uint64_t stream_id) noexcept {
@@ -189,10 +205,10 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
           reply.set_session_id(message.session_id());
           reply.set_sequence(message.sequence());
           auto *result = reply.mutable_session_authenticated();
-          QuicTicketConsumeResult consumed = QuicTicketConsumeResult::unknown;
+          QuicTicketConsumeOutcome consumed;
           auto *auth = message.mutable_authenticate_session();
           if (message.protocol_version() == 1) {
-            consumed = authorized_tickets_.consume(
+            consumed = authorized_tickets_.consume_authorized(
                 {reinterpret_cast<const std::byte *>(
                      auth->stream_ticket().data()),
                  auth->stream_ticket().size()},
@@ -203,7 +219,7 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
                     auth->mutable_stream_ticket()->end(), '\0');
           const auto error =
               message.protocol_version() == 1
-                  ? error_for(consumed)
+                  ? error_for(consumed.result)
                   : stream_v1::SESSION_ERROR_CODE_UNSUPPORTED_VERSION;
           result->set_accepted(error == stream_v1::SESSION_ERROR_CODE_NONE);
           result->set_error_code(error);
@@ -215,6 +231,8 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
             output.session_replies.push_back(std::move(reply_frame));
             authenticated_ = result->accepted();
             if (authenticated_) {
+              authorized_benchmark_plan_ =
+                  std::move(consumed.benchmark_plan);
               session_id_ = message.session_id();
               last_session_sequence_ = message.sequence();
               current_generation_ = ++next_generation_;
@@ -239,12 +257,14 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
                  body == stream_v1::SessionStreamEnvelope::kStopSession ||
                  body == stream_v1::SessionStreamEnvelope::kRequestIdr);
         if (valid && body == stream_v1::SessionStreamEnvelope::kStartSession) {
-          valid = !started_;
+          valid = !started_ && !authorized_benchmark_plan_.has_value();
         } else if (valid &&
                    body == stream_v1::SessionStreamEnvelope::kStartBenchmark) {
-          valid = !started_ && valid_benchmark_start(
-                                   message.start_benchmark(),
-                                   maximum_datagram_bytes_);
+          valid = !started_ && authorized_benchmark_plan_.has_value() &&
+                  valid_benchmark_start(message.start_benchmark(),
+                                        maximum_datagram_bytes_) &&
+                  benchmark_plans_equal(message.start_benchmark(),
+                                        *authorized_benchmark_plan_);
         } else if (valid &&
                    body == stream_v1::SessionStreamEnvelope::kCancelBenchmark) {
           valid = started_ && !benchmark_run_id_.empty() &&
@@ -368,6 +388,7 @@ void QuicSessionProtocol::reset() noexcept {
   clear_stream_bytes();
   session_id_.clear();
   benchmark_run_id_.clear();
+  authorized_benchmark_plan_.reset();
   maximum_datagram_bytes_ = 0;
   last_session_sequence_ = 0;
   last_input_sequence_ = 0;

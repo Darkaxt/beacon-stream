@@ -318,7 +318,9 @@ void start_session_is_typed_once_per_authenticated_generation() {
 
 void benchmark_start_and_cancel_are_typed_for_the_authenticated_generation() {
   AuthorizedQuicTicketStore store;
-  BEACON_TEST_REQUIRE(store.authorize(grant("benchmark-ticket")));
+  auto authorization = grant("benchmark-ticket");
+  authorization.benchmark_plan = start_benchmark(2).start_benchmark();
+  BEACON_TEST_REQUIRE(store.authorize(std::move(authorization)));
   QuicSessionProtocol protocol(store);
   protocol.set_maximum_datagram_bytes(1200);
 
@@ -350,6 +352,29 @@ void benchmark_start_and_cancel_are_typed_for_the_authenticated_generation() {
                       authenticated.accepted_authentication->session_generation);
   BEACON_TEST_REQUIRE(canceled.accepted_cancel_benchmark->cancel_benchmark.run_id() ==
                       "11111111-1111-1111-1111-111111111111");
+}
+
+void benchmark_start_must_match_the_worker_authorized_plan() {
+  AuthorizedQuicTicketStore store;
+  auto authorization = grant("modified-benchmark-ticket");
+  authorization.benchmark_plan = start_benchmark(2).start_benchmark();
+  BEACON_TEST_REQUIRE(store.authorize(std::move(authorization)));
+  QuicSessionProtocol protocol(store);
+  protocol.set_maximum_datagram_bytes(1200);
+  BEACON_TEST_REQUIRE(protocol
+                          .receive(QuicPeerStreamRole::session,
+                                   frame(authenticate("modified-benchmark-ticket")),
+                                   1'000)
+                          .accepted_authentication.has_value());
+
+  auto modified = start_benchmark(2);
+  modified.mutable_start_benchmark()
+      ->mutable_datagram_round()
+      ->set_packet_count(9);
+  auto rejected = protocol.receive(QuicPeerStreamRole::session,
+                                   frame(modified), 1'001);
+  BEACON_TEST_REQUIRE(rejected.close_connection);
+  BEACON_TEST_REQUIRE(!rejected.accepted_start_benchmark.has_value());
 }
 
 void reset_and_fresh_authentication_allocate_a_new_generation() {
@@ -525,6 +550,7 @@ int main() {
     authenticated_streams_are_routed_independently();
     start_session_is_typed_once_per_authenticated_generation();
     benchmark_start_and_cancel_are_typed_for_the_authenticated_generation();
+    benchmark_start_must_match_the_worker_authorized_plan();
     reset_and_fresh_authentication_allocate_a_new_generation();
     stale_old_connection_receive_does_not_touch_current_protocol_state();
     secure_clear_observes_zeroes_before_pending_bytes_are_released();

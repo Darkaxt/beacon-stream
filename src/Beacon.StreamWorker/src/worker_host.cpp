@@ -59,6 +59,8 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::dispatch(
   switch (request.body_case()) {
     case v1::WorkerIpcEnvelope::kPrepareSession:
       return prepare(request);
+    case v1::WorkerIpcEnvelope::kPrepareBenchmark:
+      return prepare_benchmark(request);
     case v1::WorkerIpcEnvelope::kAuthorizeTicket:
       return authorize_ticket(request);
     case v1::WorkerIpcEnvelope::kRevokeTicket:
@@ -122,11 +124,40 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare(
   }
 
   prepared_ = true;
+  benchmark_prepared_ = false;
+  benchmark_plan_.Clear();
   session_id_ = request.session_id();
   auto state = response_envelope(request);
   state.mutable_session_state_changed()->set_state(v1::WORKER_SESSION_STATE_PREPARED);
   state.mutable_session_state_changed()->set_error_code(v1::WORKER_ERROR_CODE_NONE);
   return {std::move(state), completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
+}
+
+std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare_benchmark(
+    const v1::WorkerIpcEnvelope& request) {
+  const auto& plan = request.prepare_benchmark().plan();
+  const auto valid_round = [](const stream::v1::BenchmarkRoundPlan& round) {
+    return round.packet_count() != 0 && round.payload_bytes() != 0 &&
+           round.measurement_interval_us() != 0;
+  };
+  if (request.session_id().empty() || plan.run_id().empty() ||
+      plan.schema_version() == 0 || plan.run_token().size() != 16 ||
+      !valid_round(plan.reliable_round()) ||
+      !valid_round(plan.datagram_round()) || streaming_) {
+    return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);
+  }
+
+  prepared_ = true;
+  benchmark_prepared_ = true;
+  benchmark_plan_ = plan;
+  session_id_ = request.session_id();
+  auto state = response_envelope(request);
+  state.mutable_session_state_changed()->set_state(
+      v1::WORKER_SESSION_STATE_PREPARED);
+  state.mutable_session_state_changed()->set_error_code(
+      v1::WORKER_ERROR_CODE_NONE);
+  return {std::move(state),
+          completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }
 
 std::vector<v1::WorkerIpcEnvelope> WorkerHost::authorize_ticket(
@@ -149,6 +180,10 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::authorize_ticket(
           .session_id = request.session_id(),
           .plan_revision = ticket.plan_revision(),
           .expires_at_unix_ms = ticket.expires_at_unix_ms(),
+          .benchmark_plan = benchmark_prepared_ &&
+                                    request.session_id() == session_id_
+                                ? std::optional{benchmark_plan_}
+                                : std::nullopt,
       })) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_STATE);
   }
@@ -206,6 +241,8 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::stop_media(
   transport_.close_connection();
   streaming_ = false;
   prepared_ = false;
+  benchmark_prepared_ = false;
+  benchmark_plan_.Clear();
   auto state = response_envelope(request);
   state.mutable_session_state_changed()->set_state(v1::WORKER_SESSION_STATE_STOPPED);
   state.mutable_session_state_changed()->set_error_code(v1::WORKER_ERROR_CODE_NONE);
@@ -220,6 +257,8 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::shutdown(
   transport_.shutdown();
   streaming_ = false;
   prepared_ = false;
+  benchmark_prepared_ = false;
+  benchmark_plan_.Clear();
   shutdown_requested_ = true;
   return {completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }
