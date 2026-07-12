@@ -47,10 +47,6 @@ final class DecoderBenchmarkMeasurements {
         outputErrors++;
     }
 
-    boolean presentationDrained() {
-        return presentedFrames >= renderedFrames;
-    }
-
     BeaconBenchmarkCompletionRequest.DecoderSample toSample(
         boolean configured,
         int additionalOutputErrors) {
@@ -73,7 +69,7 @@ final class DecoderBenchmarkMeasurements {
             presentationLatenciesMs.isEmpty()
                 ? null
                 : percentile95(presentationLatenciesMs),
-            Math.max(0, expectedFrames - outputFrames),
+            Math.max(0, expectedFrames - presentedFrames),
             outputErrors + additionalOutputErrors,
             false,
             false);

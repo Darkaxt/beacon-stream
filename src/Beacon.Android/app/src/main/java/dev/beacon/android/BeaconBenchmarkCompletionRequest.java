@@ -152,6 +152,73 @@ public final class BeaconBenchmarkCompletionRequest {
             this.hdrPresentationVerified = hdrPresentationVerified;
         }
 
+        static DecoderSample conservativeAggregate(List<DecoderSample> repetitions) {
+            if (repetitions == null || repetitions.isEmpty()) {
+                throw new IllegalArgumentException(
+                    "Decoder benchmark repetitions are required.");
+            }
+            DecoderSample first = repetitions.get(0);
+            boolean configured = true;
+            double sustainedFps = Double.POSITIVE_INFINITY;
+            double p95DecodeLatencyMs = 0.0;
+            Double p95PresentationLatencyMs = 0.0;
+            int droppedFrames = 0;
+            int outputErrors = 0;
+            boolean tenBitPresentationVerified = true;
+            boolean hdrPresentationVerified = true;
+            for (DecoderSample repetition : repetitions) {
+                if (!first.sameMode(repetition)) {
+                    throw new IllegalArgumentException(
+                        "Decoder benchmark repetitions must use the same mode.");
+                }
+                configured &= repetition.configured;
+                sustainedFps = Math.min(sustainedFps, repetition.sustainedFps);
+                p95DecodeLatencyMs = Math.max(
+                    p95DecodeLatencyMs,
+                    repetition.p95DecodeLatencyMs);
+                if (p95PresentationLatencyMs != null) {
+                    p95PresentationLatencyMs = repetition.p95PresentationLatencyMs == null
+                        ? null
+                        : Math.max(
+                            p95PresentationLatencyMs,
+                            repetition.p95PresentationLatencyMs);
+                }
+                droppedFrames = Math.addExact(
+                    droppedFrames,
+                    repetition.droppedFrames);
+                outputErrors = Math.addExact(
+                    outputErrors,
+                    repetition.outputErrors);
+                tenBitPresentationVerified &= repetition.tenBitPresentationVerified;
+                hdrPresentationVerified &= repetition.hdrPresentationVerified;
+            }
+            return new DecoderSample(
+                first.codec,
+                first.profile,
+                first.bitDepth,
+                first.width,
+                first.height,
+                first.targetFps,
+                configured,
+                sustainedFps,
+                p95DecodeLatencyMs,
+                p95PresentationLatencyMs,
+                droppedFrames,
+                outputErrors,
+                tenBitPresentationVerified,
+                hdrPresentationVerified);
+        }
+
+        private boolean sameMode(DecoderSample other) {
+            return other != null &&
+                codec.equals(other.codec) &&
+                profile.equals(other.profile) &&
+                bitDepth == other.bitDepth &&
+                width == other.width &&
+                height == other.height &&
+                targetFps == other.targetFps;
+        }
+
         JsonObject toJson() {
             JsonObject json = new JsonObject();
             json.addProperty("codec", codec);

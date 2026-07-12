@@ -272,11 +272,16 @@ public static class ClientEndpoints
                 clientId,
                 runId,
                 cancellationToken);
-            return cleanupError is null
-                ? Results.Ok(new { runId, state = "cancelled" })
-                : Results.Problem(
+            if (cleanupError is not null)
+            {
+                return Results.Problem(
                     cleanupError,
                     statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            return store.TryCancelBenchmarkEvidence(runId, clientId)
+                ? Results.Ok(new { runId, state = "cancelled" })
+                : Results.Conflict(new { error = "Benchmark run was completed or replaced concurrently." });
         });
 
         clients.MapPost("/{clientId}/benchmarks/{runId:guid}/complete", async (

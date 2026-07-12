@@ -20,9 +20,11 @@ final class AndroidImageReaderPresentationSurfaceFactory
     private static final class ImageReaderSurface implements BenchmarkPresentationSurface {
         private final ImageReader reader;
         private final HandlerThread callbackThread;
+        private final Observer observer;
         private boolean closed;
 
         ImageReaderSurface(int width, int height, Observer observer) {
+            this.observer = observer;
             callbackThread = new HandlerThread("beacon-benchmark-presentation");
             callbackThread.start();
             reader = ImageReader.newInstance(width, height, ImageFormat.PRIVATE, 8);
@@ -41,27 +43,39 @@ final class AndroidImageReaderPresentationSurfaceFactory
             if (closed) return;
             closed = true;
             reader.setOnImageAvailableListener(null, null);
-            reader.close();
-            callbackThread.quitSafely();
+            try {
+                drainAvailable(reader);
+            } finally {
+                try {
+                    reader.close();
+                } finally {
+                    callbackThread.quitSafely();
+                }
+            }
         }
 
-        private void drain(ImageReader value, Observer observer) {
+        private synchronized void drain(ImageReader value, Observer observer) {
+            if (closed) return;
             try {
-                while (true) {
-                    Image image = value.acquireNextImage();
-                    if (image == null) {
-                        return;
-                    }
-                    try {
-                        observer.onFramePresented(
-                            image.getTimestamp() / 1_000L,
-                            System.nanoTime());
-                    } finally {
-                        image.close();
-                    }
-                }
+                drainAvailable(value);
             } catch (RuntimeException failure) {
                 observer.onFailure(failure);
+            }
+        }
+
+        private void drainAvailable(ImageReader value) {
+            while (true) {
+                Image image = value.acquireNextImage();
+                if (image == null) {
+                    return;
+                }
+                try {
+                    observer.onFramePresented(
+                        image.getTimestamp() / 1_000L,
+                        System.nanoTime());
+                } finally {
+                    image.close();
+                }
             }
         }
     }

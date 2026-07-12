@@ -1,6 +1,8 @@
 #include "beacon/worker/benchmark_source.h"
 
 #include <algorithm>
+#include <array>
+#include <cstring>
 
 namespace beacon::worker {
 namespace {
@@ -10,10 +12,35 @@ constexpr std::uint32_t maximum_reliable_payload_bytes = 1024U * 1024U;
 constexpr std::uint32_t maximum_datagram_payload_bytes =
     65'507U - static_cast<std::uint32_t>(
                   stream::benchmark_datagram_header_bytes);
+constexpr auto payload_pattern = [] {
+  std::array<std::byte, 256> value{};
+  for (std::size_t index = 0; index < value.size(); ++index) {
+    value[index] = static_cast<std::byte>(index);
+  }
+  return value;
+}();
 
 void fill_payload(std::span<std::byte> payload, std::uint64_t sequence) {
-  for (std::size_t index = 0; index < payload.size(); ++index) {
-    payload[index] = static_cast<std::byte>((sequence + index) & 0xffU);
+  if (payload.empty()) {
+    return;
+  }
+
+  const std::size_t offset = sequence & 0xffU;
+  const std::size_t first_size =
+      std::min(payload.size(), payload_pattern.size() - offset);
+  std::memcpy(payload.data(), payload_pattern.data() + offset, first_size);
+  std::size_t written = first_size;
+  if (written < payload.size() && written < payload_pattern.size()) {
+    const std::size_t wrapped_size = std::min(
+        payload.size() - written, payload_pattern.size() - written);
+    std::memcpy(payload.data() + written, payload_pattern.data(), wrapped_size);
+    written += wrapped_size;
+  }
+
+  while (written < payload.size()) {
+    const std::size_t copy_size = std::min(written, payload.size() - written);
+    std::memcpy(payload.data() + written, payload.data(), copy_size);
+    written += copy_size;
   }
 }
 

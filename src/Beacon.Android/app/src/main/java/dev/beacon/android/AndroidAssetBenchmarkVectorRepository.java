@@ -7,8 +7,10 @@ import java.io.IOException;
 import java.io.InputStream;
 
 final class AndroidAssetBenchmarkVectorRepository implements BenchmarkVectorRepository {
-    private static final String H264_BASELINE_VECTOR =
+    private static final String H264_720P60_VECTOR =
         "beacon-h264-high-8-1280x720-60-v1";
+    private static final String H264_360P30_VECTOR =
+        "beacon-h264-high-8-640x360-30-v1";
     private final Context context;
 
     AndroidAssetBenchmarkVectorRepository(Context context) {
@@ -22,8 +24,8 @@ final class AndroidAssetBenchmarkVectorRepository implements BenchmarkVectorRepo
     @Override
     public byte[] load(String vectorId) {
         String fileName;
-        if (H264_BASELINE_VECTOR.equals(vectorId)) {
-            fileName = H264_BASELINE_VECTOR + ".h264";
+        if (H264_720P60_VECTOR.equals(vectorId) || H264_360P30_VECTOR.equals(vectorId)) {
+            fileName = vectorId + ".h264";
         } else {
             throw new IllegalArgumentException(
                 "Benchmark vector '" + vectorId + "' is not packaged by this APK.");

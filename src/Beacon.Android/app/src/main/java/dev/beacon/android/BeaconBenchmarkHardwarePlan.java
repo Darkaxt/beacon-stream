@@ -107,6 +107,20 @@ public final class BeaconBenchmarkHardwarePlan {
         public int height() { return height; }
         public int targetFps() { return targetFps; }
         public int repetitionCount() { return repetitionCount; }
+
+        DecoderRound singleRepetition() {
+            return repetitionCount == 1
+                ? this
+                : new DecoderRound(
+                    vectorId,
+                    codec,
+                    profile,
+                    bitDepth,
+                    width,
+                    height,
+                    targetFps,
+                    1);
+        }
     }
 
     private static String requireText(String value, String name) {

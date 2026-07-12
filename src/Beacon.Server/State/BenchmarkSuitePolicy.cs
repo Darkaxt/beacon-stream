@@ -21,15 +21,31 @@ public static class BenchmarkSuitePolicy
         var rounds = new List<DecoderBenchmarkRoundPlan>();
         if (trigger != BenchmarkTrigger.SessionPreflight && capabilities.H264)
         {
-            rounds.Add(new DecoderBenchmarkRoundPlan(
-                VectorId: "beacon-h264-high-8-1280x720-60-v1",
-                Codec: "h264",
-                Profile: "high",
-                BitDepth: 8,
-                Width: 1280,
-                Height: 720,
-                TargetFps: 60,
-                RepetitionCount: 3));
+            if (capabilities.MaxFps >= 60)
+            {
+                rounds.Add(new DecoderBenchmarkRoundPlan(
+                    VectorId: "beacon-h264-high-8-1280x720-60-v1",
+                    Codec: "h264",
+                    Profile: "high",
+                    BitDepth: 8,
+                    Width: 1280,
+                    Height: 720,
+                    TargetFps: 60,
+                    RepetitionCount: 3));
+            }
+
+            if (capabilities.MaxFps >= 30)
+            {
+                rounds.Add(new DecoderBenchmarkRoundPlan(
+                    VectorId: "beacon-h264-high-8-640x360-30-v1",
+                    Codec: "h264",
+                    Profile: "high",
+                    BitDepth: 8,
+                    Width: 640,
+                    Height: 360,
+                    TargetFps: 30,
+                    RepetitionCount: 3));
+            }
         }
 
         return new BenchmarkHardwarePlan(

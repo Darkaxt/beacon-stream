@@ -19,7 +19,8 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
             new MediaCodecDeviceBenchmarkRoundExecutor(
                 ignored -> codec,
                 ignored -> twoFrameVector(),
-                surfaces);
+                surfaces,
+                Runnable::run);
         RecordingRoundObserver observer = new RecordingRoundObserver();
 
         executor.start(round(), observer);
@@ -30,9 +31,8 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
         codec.observer.onOutputReleased(first.presentationTimeUs(), 6_000_000, true);
         surfaces.observer.onFramePresented(first.presentationTimeUs(), 10_000_000);
         codec.observer.onOutputReleased(second.presentationTimeUs(), 16_000_000, true);
+        surfaces.presentOnClose(second.presentationTimeUs(), 20_000_000);
         codec.observer.onEndOfStream();
-        assertEquals(null, observer.sample);
-        surfaces.observer.onFramePresented(second.presentationTimeUs(), 20_000_000);
 
         String json = observer.sample.toJson().toString();
         assertTrue(json.contains("\"configured\":true"));
@@ -46,6 +46,34 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
     }
 
     @Test
+    public void endOfStreamCompletesAndCountsUndeliveredPresentationFramesAsDrops() {
+        RecordingCodec codec = new RecordingCodec();
+        RecordingSurfaceFactory surfaces = new RecordingSurfaceFactory();
+        MediaCodecDeviceBenchmarkRoundExecutor executor =
+            new MediaCodecDeviceBenchmarkRoundExecutor(
+                ignored -> codec,
+                ignored -> twoFrameVector(),
+                surfaces,
+                Runnable::run);
+        RecordingRoundObserver observer = new RecordingRoundObserver();
+
+        executor.start(round(), observer);
+        EncodedVideoSample first = codec.sampleProvider.nextSample();
+        EncodedVideoSample second = codec.sampleProvider.nextSample();
+        codec.observer.onInputQueued(first.presentationTimeUs(), 1_000_000);
+        codec.observer.onInputQueued(second.presentationTimeUs(), 11_000_000);
+        codec.observer.onOutputReleased(first.presentationTimeUs(), 6_000_000, true);
+        surfaces.observer.onFramePresented(first.presentationTimeUs(), 10_000_000);
+        codec.observer.onOutputReleased(second.presentationTimeUs(), 16_000_000, true);
+        codec.observer.onEndOfStream();
+
+        assertTrue(observer.sample.toJson().toString().contains("\"droppedFrames\":1"));
+        assertTrue(codec.stopped);
+        assertTrue(codec.released);
+        assertTrue(surfaces.closed);
+    }
+
+    @Test
     public void codecConfigurationFailureIsReportedAsDecoderEvidenceNotRunnerFailure() {
         RecordingCodec codec = new RecordingCodec();
         codec.configurationFailure = new IllegalStateException("unsupported mode");
@@ -53,7 +81,8 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
             new MediaCodecDeviceBenchmarkRoundExecutor(
                 ignored -> codec,
                 ignored -> twoFrameVector(),
-                new RecordingSurfaceFactory());
+                new RecordingSurfaceFactory(),
+                Runnable::run);
         RecordingRoundObserver observer = new RecordingRoundObserver();
 
         executor.start(round(), observer);
@@ -70,7 +99,8 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
             new MediaCodecDeviceBenchmarkRoundExecutor(
                 ignored -> { throw new IllegalStateException("codec unavailable"); },
                 ignored -> twoFrameVector(),
-                surfaces);
+                surfaces,
+                Runnable::run);
         RecordingRoundObserver observer = new RecordingRoundObserver();
 
         executor.start(round(), observer);
@@ -88,7 +118,8 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
             new MediaCodecDeviceBenchmarkRoundExecutor(
                 ignored -> codec,
                 ignored -> twoFrameVector(),
-                surfaces);
+                surfaces,
+                Runnable::run);
         RecordingRoundObserver observer = new RecordingRoundObserver();
 
         executor.start(round(), observer);
@@ -157,13 +188,27 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
     private static final class RecordingSurfaceFactory implements BenchmarkPresentationSurfaceFactory {
         private Observer observer;
         private boolean closed;
+        private Long presentationTimeUsOnClose;
+        private long presentedAtNsOnClose;
+
+        void presentOnClose(long presentationTimeUs, long presentedAtNs) {
+            presentationTimeUsOnClose = presentationTimeUs;
+            presentedAtNsOnClose = presentedAtNs;
+        }
 
         @Override
         public BenchmarkPresentationSurface create(int width, int height, Observer observer) {
             this.observer = observer;
             return new BenchmarkPresentationSurface() {
                 @Override public Object surface() { return new Object(); }
-                @Override public void close() { closed = true; }
+                @Override public void close() {
+                    if (presentationTimeUsOnClose != null) {
+                        observer.onFramePresented(
+                            presentationTimeUsOnClose,
+                            presentedAtNsOnClose);
+                    }
+                    closed = true;
+                }
             };
         }
     }

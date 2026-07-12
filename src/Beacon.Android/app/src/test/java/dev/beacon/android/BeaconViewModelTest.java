@@ -197,7 +197,11 @@ public final class BeaconViewModelTest {
             "z-fold-7", "https://server", service, factory);
 
         model.runBenchmark(benchmarkRequest("manual"), deviceRunner);
+        assertEquals(0, deviceRunner.startCount);
         factory.emitCompletedNetworkResult();
+        deviceRunner.awaitStarted();
+        assertEquals(1, factory.bindings.stopCount);
+        assertEquals(1, deviceRunner.startCount);
         assertEquals("benchmark prepare", service.actions());
         deviceRunner.emitCompleted();
         service.awaitBenchmarkCompletion();
@@ -267,7 +271,10 @@ public final class BeaconViewModelTest {
             "z-fold-7", "https://server", service, factory);
 
         model.runBenchmark(benchmarkRequest("manual"), deviceRunner);
+        factory.emitCompletedNetworkResult();
+        deviceRunner.awaitStarted();
         model.cancelBenchmark();
+        deviceRunner.awaitCancelled();
 
         assertEquals("benchmark prepare,benchmark cancel", service.actions());
         assertEquals(1, factory.bindings.stopCount);
@@ -290,7 +297,7 @@ public final class BeaconViewModelTest {
         service.awaitBenchmarkCancellation();
 
         assertEquals("benchmark prepare,benchmark cancel", service.actions());
-        assertEquals(1, deviceRunner.cancelCount);
+        assertEquals(0, deviceRunner.cancelCount);
         assertEquals("benchmark transport: failed", model.status());
         model.close();
     }
@@ -307,6 +314,7 @@ public final class BeaconViewModelTest {
 
         model.runBenchmark(benchmarkRequest("manual"), deviceRunner);
         factory.emitCompletedNetworkResult();
+        deviceRunner.awaitStarted();
         deviceRunner.emitCompleted();
         service.awaitBenchmarkCancellation();
 
@@ -482,13 +490,27 @@ public final class BeaconViewModelTest {
         private Observer observer;
         private int startCount;
         private int cancelCount;
+        private final CountDownLatch started = new CountDownLatch(1);
+        private final CountDownLatch cancelled = new CountDownLatch(1);
 
         @Override
         public Run start(BeaconBenchmarkHardwarePlan plan, Observer observer) {
             this.plan = plan;
             this.observer = observer;
             startCount++;
-            return () -> cancelCount++;
+            started.countDown();
+            return () -> {
+                cancelCount++;
+                cancelled.countDown();
+            };
+        }
+
+        void awaitStarted() throws InterruptedException {
+            started.await();
+        }
+
+        void awaitCancelled() throws InterruptedException {
+            cancelled.await();
         }
 
         void emitCompleted() {

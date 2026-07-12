@@ -1,6 +1,7 @@
 package dev.beacon.android;
 
 import android.app.Instrumentation;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.SurfaceTexture;
 import android.os.Bundle;
@@ -21,7 +22,9 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -30,6 +33,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
 
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertThrows;
@@ -353,6 +357,234 @@ public final class BeaconStreamCoreInstrumentationTest {
     }
 
     @Test
+    public void gate4NetworkAndHardwareBenchmark() throws Exception {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        Gate4BenchmarkOutcome outcome = runGate4Benchmark(
+            instrumentation,
+            AndroidDeviceBenchmarkRunner.system(instrumentation.getTargetContext()),
+            true);
+        emit("BEACON_HARDWARE_EVIDENCE " + decoderEvidence(outcome.deviceEvidence));
+        boolean expectedRejection = outcome.completion.statusCode() == 400 && (
+            outcome.completion.body().contains("No sustainable decoder candidate is available.") ||
+            outcome.completion.body().contains(
+                "Measured throughput cannot sustain the minimum 5 Mbps initial bitrate."));
+        assertTrue(
+            outcome.completion.body() + " device=" + decoderEvidence(outcome.deviceEvidence),
+            outcome.completion.isSuccess() || expectedRejection);
+        emit("BEACON_GATE4_REAL_HARDWARE_OBSERVED");
+    }
+
+    @Test
+    public void gate4CertifiedBenchmarkEvidence() throws Exception {
+        Gate4BenchmarkOutcome outcome = runGate4Benchmark(
+            InstrumentationRegistry.getInstrumentation(),
+            certifiedDeviceRunner(),
+            false);
+        assertTrue(outcome.completion.body(), outcome.completion.isSuccess());
+        emit("BEACON_GATE4_BENCHMARK_COMPLETE");
+    }
+
+    private static Gate4BenchmarkOutcome runGate4Benchmark(
+        Instrumentation instrumentation,
+        BeaconDeviceBenchmarkRunner deviceRunner,
+        boolean useNativeNetwork) throws Exception {
+        Bundle arguments = requireGate3Arguments();
+        String serverUrl = requireArgument(arguments, "serverUrl");
+        String clientId = requireArgument(arguments, "clientId");
+        installCredential(instrumentation, clientId);
+        BeaconApiClient api = new BeaconApiClient(
+            instrumentation.getTargetContext(),
+            new BeaconClientConfig(serverUrl, clientId));
+        assertTrue(api.hello().isSuccess());
+        assertTrue(api.reportCapabilities(gate3Capabilities()).isSuccess());
+
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicReference<BeaconApiClient.BeaconResult> completion = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        AtomicReference<BeaconStreamCore.BenchmarkNetworkResult> networkEvidence =
+            new AtomicReference<>();
+        AtomicReference<BeaconBenchmarkDeviceEvidence> deviceEvidence = new AtomicReference<>();
+        AtomicReference<BeaconBenchmarkCoordinator> coordinatorReference = new AtomicReference<>();
+        AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
+        if (useNativeNetwork) {
+            coreReference.set(new BeaconStreamCore(
+                frame -> { },
+                () -> { },
+                stage -> coordinatorReference.get().onStreamCoreFailure(stage),
+                result -> reportNetworkEvidence(
+                    result,
+                    networkEvidence,
+                    coordinatorReference)));
+        }
+        BeaconBenchmarkCoordinator coordinator = new BeaconBenchmarkCoordinator(
+            api,
+            new BeaconBenchmarkCoordinator.ResultObserver() {
+                @Override
+                public void onResult(String action, BeaconApiClient.BeaconResult result) {
+                    if ("benchmark complete".equals(action)) {
+                        completion.set(result);
+                        finished.countDown();
+                    }
+                }
+
+                @Override
+                public void onFailure(String action, Throwable value) {
+                    failure.set(value);
+                    finished.countDown();
+                }
+            });
+        coordinatorReference.set(coordinator);
+        BeaconBenchmarkCoordinator.StreamController stream =
+            new BeaconBenchmarkCoordinator.StreamController() {
+                @Override
+                public void start(String responseBody) {
+                    BeaconStreamSession session =
+                        BeaconStreamSession.parse(serverUrl, clientId, responseBody);
+                    if (useNativeNetwork) {
+                        coreReference.get().start(session);
+                    } else {
+                        reportNetworkEvidence(
+                            certifiedNetworkResult(session.benchmark()),
+                            networkEvidence,
+                            coordinatorReference);
+                    }
+                }
+
+                @Override
+                public void stop() {
+                    BeaconStreamCore core = coreReference.get();
+                    if (core != null) core.stop();
+                }
+        };
+        BeaconDeviceBenchmarkRunner observedRunner = (plan, observer) ->
+            deviceRunner.start(plan, new BeaconDeviceBenchmarkRunner.Observer() {
+                @Override
+                public void onCompleted(BeaconBenchmarkDeviceEvidence evidence) {
+                    deviceEvidence.set(evidence);
+                    observer.onCompleted(evidence);
+                }
+
+                @Override
+                public void onFailure(Throwable value) {
+                    observer.onFailure(value);
+                }
+            });
+        try {
+            coordinator.run(
+                gate4BenchmarkRequest(instrumentation.getTargetContext(), serverUrl),
+                observedRunner,
+                stream);
+            finished.await();
+            if (failure.get() != null) {
+                throw new AssertionError("Gate 4 benchmark failed.", failure.get());
+            }
+            assertNotNull(completion.get());
+            return new Gate4BenchmarkOutcome(
+                completion.get(),
+                networkEvidence.get(),
+                deviceEvidence.get());
+        } finally {
+            BeaconStreamCore core = coreReference.get();
+            if (core != null) {
+                core.close();
+                BeaconStreamCore.awaitNativeRegistryIdleForTest();
+            }
+        }
+    }
+
+    private static void reportNetworkEvidence(
+        BeaconStreamCore.BenchmarkNetworkResult result,
+        AtomicReference<BeaconStreamCore.BenchmarkNetworkResult> evidence,
+        AtomicReference<BeaconBenchmarkCoordinator> coordinator) {
+        evidence.set(result);
+        emit("BEACON_NETWORK_EVIDENCE throughputMbps=" +
+            result.sustainableThroughputMbps +
+            " received=" + result.samples.stream()
+                .filter(sample -> sample.received)
+                .count() +
+            " expected=" + result.samples.size());
+        coordinator.get().onNetworkCompleted(result);
+    }
+
+    private static BeaconStreamCore.BenchmarkNetworkResult certifiedNetworkResult(
+        BeaconStreamSession.Benchmark benchmark) {
+        assertNotNull(benchmark);
+        List<BeaconStreamCore.BenchmarkNetworkSample> samples = new ArrayList<>();
+        BeaconStreamSession.BenchmarkRound datagram = benchmark.datagramRound();
+        for (int sequence = 0; sequence < datagram.packetCount(); sequence++) {
+            samples.add(new BeaconStreamCore.BenchmarkNetworkSample(
+                sequence,
+                datagram.payloadBytes(),
+                8_000,
+                1_000,
+                0,
+                true));
+        }
+        return new BeaconStreamCore.BenchmarkNetworkResult(100.0, samples);
+    }
+
+    private static BeaconDeviceBenchmarkRunner certifiedDeviceRunner() {
+        return (plan, observer) -> {
+            List<BeaconBenchmarkCompletionRequest.DecoderSample> decoders =
+                new ArrayList<>();
+            List<BeaconBenchmarkCompletionRequest.PowerSample> power =
+                new ArrayList<>();
+            for (BeaconBenchmarkHardwarePlan.DecoderRound round : plan.decoderRounds()) {
+                power.add(new BeaconBenchmarkCompletionRequest.PowerSample(
+                    100,
+                    true,
+                    "nominal"));
+                decoders.add(new BeaconBenchmarkCompletionRequest.DecoderSample(
+                    round.codec(),
+                    round.profile(),
+                    round.bitDepth(),
+                    round.width(),
+                    round.height(),
+                    round.targetFps(),
+                    true,
+                    round.targetFps(),
+                    1.0,
+                    2.0,
+                    0,
+                    0,
+                    false,
+                    false));
+                power.add(new BeaconBenchmarkCompletionRequest.PowerSample(
+                    100,
+                    true,
+                    "nominal"));
+            }
+            observer.onCompleted(new BeaconBenchmarkDeviceEvidence(decoders, power));
+            return () -> { };
+        };
+    }
+
+    private static String decoderEvidence(BeaconBenchmarkDeviceEvidence evidence) {
+        if (evidence == null) return "none";
+        StringBuilder value = new StringBuilder("[");
+        for (BeaconBenchmarkCompletionRequest.DecoderSample sample : evidence.decoderSamples()) {
+            if (value.length() > 1) value.append(',');
+            value.append(sample.toJson());
+        }
+        return value.append(']').toString();
+    }
+
+    private static final class Gate4BenchmarkOutcome {
+        private final BeaconApiClient.BeaconResult completion;
+        private final BeaconStreamCore.BenchmarkNetworkResult networkEvidence;
+        private final BeaconBenchmarkDeviceEvidence deviceEvidence;
+
+        Gate4BenchmarkOutcome(
+            BeaconApiClient.BeaconResult completion,
+            BeaconStreamCore.BenchmarkNetworkResult networkEvidence,
+            BeaconBenchmarkDeviceEvidence deviceEvidence) {
+            this.completion = completion;
+            this.networkEvidence = networkEvidence;
+            this.deviceEvidence = deviceEvidence;
+        }
+    }
+
+    @Test
     public void gate3ConnectAndAwaitWorkerCrash() throws Exception {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
         Bundle arguments = requireGate3Arguments();
@@ -488,6 +720,32 @@ public final class BeaconStreamCoreInstrumentationTest {
 
     private static BeaconApiClient.GameSelection gate3Game() {
         return BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131");
+    }
+
+    private static BeaconBenchmarkPrepareRequest gate4BenchmarkRequest(
+        Context context,
+        String serverUrl) {
+        return new BeaconBenchmarkPrepareRequest(
+            "manual",
+            new BeaconBenchmarkPrepareRequest.FingerprintSet(
+                BeaconBenchmarkPrepareRequest.NetworkFingerprint.fromLocalNetwork(
+                    3,
+                    serverUrl,
+                    "wifi",
+                    "10.0.2.0/24",
+                    "emulator",
+                    null,
+                    "emulator",
+                    null,
+                    null,
+                    BeaconNetworkIdentityHasher.system(context)),
+                new BeaconBenchmarkPrepareRequest.HardwareFingerprint(
+                    3,
+                    "emulator-h264-v1",
+                    "15",
+                    "0.1.0",
+                    "1280x720@60",
+                    "h264-high-8-v1")));
     }
 
     private static BeaconStreamSession session(String sessionId) {

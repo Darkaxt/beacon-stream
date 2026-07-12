@@ -137,6 +137,8 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
         FakeStreamSessionAuthorizer authorizer = Assert.IsType<FakeStreamSessionAuthorizer>(
             factory.Services.GetRequiredService<IStreamSessionAuthorizer>());
         Assert.Contains(authorizer.Revocations, value => value.SessionId == sessionId);
+        InMemoryClientStore store = factory.Services.GetRequiredService<InMemoryClientStore>();
+        Assert.Null(store.GetBenchmarkEvidence(runId));
     }
 
     [Fact]

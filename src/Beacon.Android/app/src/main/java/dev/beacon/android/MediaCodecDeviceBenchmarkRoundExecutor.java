@@ -1,20 +1,35 @@
 package dev.beacon.android;
 
+import java.util.concurrent.Executor;
+
 final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRoundExecutor {
     private final EncodedVideoCodecFactory codecFactory;
     private final BenchmarkVectorRepository vectors;
     private final BenchmarkPresentationSurfaceFactory surfaces;
+    private final Executor finalizer;
 
     MediaCodecDeviceBenchmarkRoundExecutor(
         EncodedVideoCodecFactory codecFactory,
         BenchmarkVectorRepository vectors,
         BenchmarkPresentationSurfaceFactory surfaces) {
-        if (codecFactory == null || vectors == null || surfaces == null) {
+        this(codecFactory, vectors, surfaces, command -> {
+            Thread thread = new Thread(command, "beacon-benchmark-finalize");
+            thread.start();
+        });
+    }
+
+    MediaCodecDeviceBenchmarkRoundExecutor(
+        EncodedVideoCodecFactory codecFactory,
+        BenchmarkVectorRepository vectors,
+        BenchmarkPresentationSurfaceFactory surfaces,
+        Executor finalizer) {
+        if (codecFactory == null || vectors == null || surfaces == null || finalizer == null) {
             throw new IllegalArgumentException("MediaCodec benchmark dependencies are required.");
         }
         this.codecFactory = codecFactory;
         this.vectors = vectors;
         this.surfaces = surfaces;
+        this.finalizer = finalizer;
     }
 
     @Override
@@ -23,9 +38,9 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
             throw new IllegalArgumentException("Decoder benchmark round and observer are required.");
         }
 
-        RepeatingAnnexBVideoSampleProvider samples;
+        RepeatingAnnexBVideoSampleProvider vectorSamples;
         try {
-            samples = new RepeatingAnnexBVideoSampleProvider(
+            vectorSamples = new RepeatingAnnexBVideoSampleProvider(
                 vectors.load(round.vectorId()),
                 round.targetFps(),
                 round.repetitionCount());
@@ -34,7 +49,13 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
             return () -> { };
         }
 
-        RoundState state = new RoundState(round, samples.expectedFrameCount(), observer);
+        EncodedVideoSampleProvider samples =
+            new PacedEncodedVideoSampleProvider(vectorSamples);
+        RoundState state = new RoundState(
+            round,
+            vectorSamples.expectedFrameCount(),
+            observer,
+            finalizer);
         try {
             BenchmarkPresentationSurface surface = surfaces.create(
                 round.width(),
@@ -68,18 +89,21 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
         private final BeaconBenchmarkHardwarePlan.DecoderRound round;
         private final Observer observer;
         private final DecoderBenchmarkMeasurements measurements;
+        private final Executor finalizer;
         private EncodedVideoCodec codec;
         private BenchmarkPresentationSurface surface;
         private boolean started;
+        private boolean finalizing;
         private boolean finished;
-        private boolean eos;
 
         RoundState(
             BeaconBenchmarkHardwarePlan.DecoderRound round,
             int expectedFrames,
-            Observer observer) {
+            Observer observer,
+            Executor finalizer) {
             this.round = round;
             this.observer = observer;
+            this.finalizer = finalizer;
             this.measurements = new DecoderBenchmarkMeasurements(round, expectedFrames);
         }
 
@@ -96,7 +120,7 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
         }
 
         void completeConfigurationFailure() {
-            finish(false);
+            beginFinish(false);
         }
 
         @Override
@@ -114,7 +138,6 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
                 if (finished) return;
                 measurements.recordOutput(presentationTimeUs, releasedAtNs, rendered);
             }
-            finishIfDrained();
         }
 
         @Override
@@ -123,16 +146,14 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
                 if (finished) return;
                 measurements.recordPresentation(presentationTimeUs, presentedAtNs);
             }
-            finishIfDrained();
         }
 
         @Override
         public void onEndOfStream() {
             synchronized (this) {
                 if (finished) return;
-                eos = true;
             }
-            finishIfDrained();
+            beginFinish(true);
         }
 
         @Override
@@ -140,9 +161,8 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
             synchronized (this) {
                 if (finished) return;
                 measurements.recordError();
-                eos = true;
             }
-            finish(true);
+            beginFinish(true);
         }
 
         @Override
@@ -150,22 +170,20 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
             onError(failure);
         }
 
-        private void finishIfDrained() {
-            boolean ready;
+        private void beginFinish(boolean configured) {
             synchronized (this) {
-                ready = eos && measurements.presentationDrained();
+                if (finished || finalizing) return;
+                finalizing = true;
             }
-            if (ready) finish(true);
+            finalizer.execute(() -> finish(configured));
         }
 
         private void finish(boolean configured) {
-            synchronized (this) {
-                if (finished) return;
-                finished = true;
-            }
             int cleanupErrors = cleanup();
             BeaconBenchmarkCompletionRequest.DecoderSample sample;
             synchronized (this) {
+                if (finished) return;
+                finished = true;
                 sample = measurements.toSample(configured, cleanupErrors);
             }
             observer.onCompleted(sample);

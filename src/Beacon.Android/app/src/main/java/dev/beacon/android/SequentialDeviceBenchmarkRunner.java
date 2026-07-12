@@ -37,7 +37,10 @@ final class SequentialDeviceBenchmarkRunner implements BeaconDeviceBenchmarkRunn
             new ArrayList<>();
         private final List<BeaconBenchmarkCompletionRequest.PowerSample> powerSamples =
             new ArrayList<>();
+        private final List<BeaconBenchmarkCompletionRequest.DecoderSample> repetitionSamples =
+            new ArrayList<>();
         private int roundIndex;
+        private int repetitionIndex;
         private DeviceBenchmarkRoundExecutor.Run activeRound;
         private boolean cancelled;
         private boolean finished;
@@ -58,33 +61,39 @@ final class SequentialDeviceBenchmarkRunner implements BeaconDeviceBenchmarkRunn
                     index = roundIndex;
                     round = plan.decoderRounds().get(index);
                 }
-                samplePower();
+                if (repetitionIndex == 0) {
+                    samplePower();
+                }
+                int repetition = repetitionIndex;
                 DeviceBenchmarkRoundExecutor.Run started = roundExecutor.start(
-                    round,
+                    round.singleRepetition(),
                     new DeviceBenchmarkRoundExecutor.Observer() {
                         @Override
                         public void onCompleted(
                             BeaconBenchmarkCompletionRequest.DecoderSample sample) {
-                            completeRound(index, sample);
+                            completeRepetition(index, repetition, sample);
                         }
 
                         @Override
                         public void onFailure(Throwable failure) {
-                            fail(index, failure);
+                            fail(index, repetition, failure);
                         }
                     });
-                attachRound(index, started);
+                attachRound(index, repetition, started);
             } catch (RuntimeException | Error failure) {
                 failCurrent(failure);
             }
         }
 
-        private void completeRound(
+        private void completeRepetition(
             int completedIndex,
+            int completedRepetition,
             BeaconBenchmarkCompletionRequest.DecoderSample sample) {
-            boolean completeRun;
+            BeaconBenchmarkHardwarePlan.DecoderRound round;
+            boolean roundComplete;
             synchronized (this) {
-                if (cancelled || finished || roundIndex != completedIndex) {
+                if (cancelled || finished || roundIndex != completedIndex ||
+                    repetitionIndex != completedRepetition) {
                     return;
                 }
                 if (sample == null) {
@@ -92,19 +101,35 @@ final class SequentialDeviceBenchmarkRunner implements BeaconDeviceBenchmarkRunn
                         "Decoder benchmark sample is required."));
                     return;
                 }
-                decoderSamples.add(sample);
+                repetitionSamples.add(sample);
                 activeRound = null;
+                repetitionIndex++;
+                round = plan.decoderRounds().get(completedIndex);
+                roundComplete = repetitionIndex == round.repetitionCount();
             }
+            if (!roundComplete) {
+                startNextRound();
+                return;
+            }
+
+            BeaconBenchmarkCompletionRequest.DecoderSample aggregate;
             try {
+                aggregate = BeaconBenchmarkCompletionRequest.DecoderSample
+                    .conservativeAggregate(new ArrayList<>(repetitionSamples));
                 samplePower();
             } catch (RuntimeException | Error failure) {
                 failCurrent(failure);
                 return;
             }
+            boolean completeRun;
             synchronized (this) {
-                if (cancelled || finished || roundIndex != completedIndex) {
+                if (cancelled || finished || roundIndex != completedIndex ||
+                    repetitionIndex != round.repetitionCount()) {
                     return;
                 }
+                decoderSamples.add(aggregate);
+                repetitionSamples.clear();
+                repetitionIndex = 0;
                 roundIndex++;
                 completeRun = roundIndex == plan.decoderRounds().size();
                 if (completeRun) {
@@ -132,25 +157,29 @@ final class SequentialDeviceBenchmarkRunner implements BeaconDeviceBenchmarkRunn
             }
         }
 
-        private void attachRound(int index, DeviceBenchmarkRoundExecutor.Run started) {
+        private void attachRound(
+            int index,
+            int repetition,
+            DeviceBenchmarkRoundExecutor.Run started) {
             if (started == null) {
                 throw new IllegalStateException("Decoder benchmark executor returned no active round.");
             }
-            boolean cancel;
+            boolean retained;
             synchronized (this) {
-                cancel = cancelled;
-                if (!cancelled && !finished && roundIndex == index) {
+                retained = !cancelled && !finished && roundIndex == index &&
+                    repetitionIndex == repetition;
+                if (retained) {
                     activeRound = started;
                 }
             }
-            if (cancel) {
+            if (!retained) {
                 started.cancel();
             }
         }
 
-        private void fail(int failedIndex, Throwable failure) {
+        private void fail(int failedIndex, int failedRepetition, Throwable failure) {
             synchronized (this) {
-                if (roundIndex != failedIndex) {
+                if (roundIndex != failedIndex || repetitionIndex != failedRepetition) {
                     return;
                 }
             }

@@ -51,8 +51,10 @@ public final class AndroidDeviceBenchmarkInstrumentationTest {
         assertEquals(1, evidence.get().decoderSamples().size());
         assertEquals(2, evidence.get().powerSamples().size());
         String decoder = evidence.get().decoderSamples().get(0).toJson().toString();
+        System.out.println("BEACON_HARDWARE_EVIDENCE " + decoder);
         assertTrue(decoder.contains("\"configured\":true"));
         assertTrue(decoder.contains("\"p95PresentationLatencyMs\":"));
+        assertTrue(decoder.contains("\"droppedFrames\":"));
         assertTrue(decoder.contains("\"outputErrors\":0"));
     }
 
@@ -61,7 +63,7 @@ public final class AndroidDeviceBenchmarkInstrumentationTest {
             "{\"schemaVersion\":1,\"samplePowerBeforeAndAfterEachRound\":true," +
                 "\"decoderRounds\":[{\"vectorId\":\"beacon-h264-high-8-1280x720-60-v1\"," +
                 "\"codec\":\"h264\",\"profile\":\"high\",\"bitDepth\":8," +
-                "\"width\":1280,\"height\":720,\"targetFps\":60,\"repetitionCount\":1}]}")
+                "\"width\":1280,\"height\":720,\"targetFps\":60,\"repetitionCount\":3}]}")
             .getAsJsonObject());
     }
 }

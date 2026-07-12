@@ -32,6 +32,7 @@ bool BenchmarkCollector::start(BenchmarkCollectorPlan plan) {
   datagrams_.assign(plan.datagram_packet_count, std::nullopt);
   arrival_order_.clear();
   first_reliable_arrival_us_.reset();
+  last_reliable_arrival_us_.reset();
   reliable_bytes_ = 0;
   highest_arrival_sequence_ = 0;
   has_arrival_sequence_ = false;
@@ -51,9 +52,14 @@ bool BenchmarkCollector::observe_reliable(std::uint64_t sequence,
 
   reliable_received_[sequence] = true;
   reliable_bytes_ += payload_bytes;
-  if (!first_reliable_arrival_us_.has_value()) {
-    first_reliable_arrival_us_ = arrived_at_us;
-  }
+  first_reliable_arrival_us_ = first_reliable_arrival_us_.has_value()
+                                   ? std::min(*first_reliable_arrival_us_,
+                                              arrived_at_us)
+                                   : arrived_at_us;
+  last_reliable_arrival_us_ = last_reliable_arrival_us_.has_value()
+                                  ? std::max(*last_reliable_arrival_us_,
+                                             arrived_at_us)
+                                  : arrived_at_us;
   return true;
 }
 
@@ -94,14 +100,16 @@ std::optional<BenchmarkCollectionResult> BenchmarkCollector::complete(
     std::uint64_t completed_at_us,
     std::span<const BenchmarkRttObservation> rtt_observations) {
   if (!active_ || canceled_ || !first_reliable_arrival_us_.has_value() ||
-      completed_at_us <= *first_reliable_arrival_us_ ||
+      !last_reliable_arrival_us_.has_value() ||
+      completed_at_us < *last_reliable_arrival_us_ ||
       !std::ranges::all_of(reliable_received_, [](bool received) {
         return received;
       })) {
     return std::nullopt;
   }
 
-  const std::uint64_t elapsed_us = completed_at_us - *first_reliable_arrival_us_;
+  const std::uint64_t elapsed_us = std::max<std::uint64_t>(
+      1, *last_reliable_arrival_us_ - *first_reliable_arrival_us_);
   const double throughput_mbps =
       static_cast<double>(reliable_bytes_) * 8.0 / elapsed_us;
   std::vector<std::uint64_t> rtt_by_sequence(plan_.datagram_packet_count, 0);

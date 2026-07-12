@@ -53,7 +53,11 @@ final class BeaconBenchmarkCoordinator {
             return;
         }
 
-        ActiveRun run = new ActiveRun(preparation.runId, stream);
+        ActiveRun run = new ActiveRun(
+            preparation.runId,
+            stream,
+            deviceRunner,
+            preparation.hardwarePlan);
         try {
             synchronized (this) {
                 if (activeRun != null) {
@@ -62,25 +66,11 @@ final class BeaconBenchmarkCoordinator {
                 activeRun = run;
             }
             stream.start(result.body());
-            BeaconDeviceBenchmarkRunner.Run deviceRun = deviceRunner.start(
-                preparation.hardwarePlan,
-                new BeaconDeviceBenchmarkRunner.Observer() {
-                    @Override
-                    public void onCompleted(BeaconBenchmarkDeviceEvidence evidence) {
-                        onDeviceCompleted(run, evidence);
-                    }
-
-                    @Override
-                    public void onFailure(Throwable failure) {
-                        onDeviceFailure(run, failure);
-                    }
-                });
-            attachDeviceRun(run, deviceRun);
         } catch (RuntimeException | Error failure) {
             ActiveRun removed = takeActiveRun(run);
             if (removed != null) {
                 cancelDeviceRun(removed);
-                stream.stop();
+                stopStream(removed);
                 cancelPreparedRun(run.runId, failure);
             }
             throw failure;
@@ -96,21 +86,37 @@ final class BeaconBenchmarkCoordinator {
             return;
         }
         cancelDeviceRun(run);
-        stream.stop();
+        stopStream(run);
         resultObserver.onResult("benchmark cancel", service.cancelBenchmark(run.runId));
     }
 
     void onNetworkCompleted(BeaconStreamCore.BenchmarkNetworkResult networkResult) {
-        ActiveRun ready;
+        ActiveRun run;
         synchronized (this) {
-            if (activeRun == null) {
+            if (activeRun == null || activeRun.networkResult != null) {
                 return;
             }
             activeRun.networkResult = networkResult;
-            ready = takeReadyRunLocked(activeRun);
+            run = activeRun;
         }
-        if (ready != null) {
-            complete(ready);
+        stopStream(run);
+        try {
+            BeaconDeviceBenchmarkRunner.Run deviceRun = run.deviceRunner.start(
+                run.hardwarePlan,
+                new BeaconDeviceBenchmarkRunner.Observer() {
+                    @Override
+                    public void onCompleted(BeaconBenchmarkDeviceEvidence evidence) {
+                        onDeviceCompleted(run, evidence);
+                    }
+
+                    @Override
+                    public void onFailure(Throwable failure) {
+                        onDeviceFailure(run, failure);
+                    }
+                });
+            attachDeviceRun(run, deviceRun);
+        } catch (RuntimeException | Error failure) {
+            onDeviceFailure(run, failure);
         }
     }
 
@@ -120,6 +126,7 @@ final class BeaconBenchmarkCoordinator {
             return;
         }
         cancelDeviceRun(run);
+        stopStream(run);
         IllegalStateException failure = new IllegalStateException(
             "Benchmark " + stage + " failed.");
         resultObserver.onFailure("benchmark " + stage, failure);
@@ -150,7 +157,7 @@ final class BeaconBenchmarkCoordinator {
             return;
         }
         cancelDeviceRun(run);
-        run.stream.stop();
+        stopStream(run);
         Throwable reported = failure == null
             ? new IllegalStateException("Device benchmark failed.")
             : failure;
@@ -166,15 +173,15 @@ final class BeaconBenchmarkCoordinator {
                     run.deviceEvidence.decoderSamples(),
                     run.deviceEvidence.powerSamples());
             BeaconApiClient.BeaconResult result = service.completeBenchmark(run.runId, completion);
-            resultObserver.onResult("benchmark complete", result);
             if (!result.isSuccess()) {
                 cancelPreparedRun(run.runId, null);
             }
+            resultObserver.onResult("benchmark complete", result);
         } catch (IOException | RuntimeException failure) {
             resultObserver.onFailure("benchmark complete", failure);
             cancelPreparedRun(run.runId, failure);
         } finally {
-            run.stream.stop();
+            stopStream(run);
         }
     }
 
@@ -218,6 +225,16 @@ final class BeaconBenchmarkCoordinator {
         }
     }
 
+    private static void stopStream(ActiveRun run) {
+        synchronized (run) {
+            if (run.streamStopped) {
+                return;
+            }
+            run.streamStopped = true;
+        }
+        run.stream.stop();
+    }
+
     private void cancelPreparedRun(String runId, Throwable primaryFailure) {
         try {
             service.cancelBenchmark(runId);
@@ -252,13 +269,22 @@ final class BeaconBenchmarkCoordinator {
     private static final class ActiveRun {
         private final String runId;
         private final StreamController stream;
+        private final BeaconDeviceBenchmarkRunner deviceRunner;
+        private final BeaconBenchmarkHardwarePlan hardwarePlan;
         private BeaconDeviceBenchmarkRunner.Run deviceRun;
         private BeaconStreamCore.BenchmarkNetworkResult networkResult;
         private BeaconBenchmarkDeviceEvidence deviceEvidence;
+        private boolean streamStopped;
 
-        ActiveRun(String runId, StreamController stream) {
+        ActiveRun(
+            String runId,
+            StreamController stream,
+            BeaconDeviceBenchmarkRunner deviceRunner,
+            BeaconBenchmarkHardwarePlan hardwarePlan) {
             this.runId = runId;
             this.stream = stream;
+            this.deviceRunner = deviceRunner;
+            this.hardwarePlan = hardwarePlan;
         }
     }
 

@@ -224,6 +224,28 @@ public sealed class InMemoryClientStore
         }
     }
 
+    public bool TryCancelBenchmarkEvidence(Guid runId, string clientId)
+    {
+        lock (gate)
+        {
+            if (!benchmarkEvidence.TryGetValue(runId, out BenchmarkEvidence? pending) ||
+                !pending.ClientId.Value.Equals(clientId, StringComparison.OrdinalIgnoreCase) ||
+                pending.CompletedAt is not null ||
+                pending.SelectedResult is not null)
+            {
+                return false;
+            }
+
+            BenchmarkEvidence[] persisted = benchmarkEvidence.Values
+                .Where(value => value.RunId != runId)
+                .OrderBy(value => value.StartedAt)
+                .ThenBy(value => value.RunId)
+                .ToArray();
+            benchmarkRepository.SaveEvidence(persisted);
+            return benchmarkEvidence.Remove(runId);
+        }
+    }
+
     public BenchmarkEvidence? GetBenchmarkEvidence(Guid runId) =>
         WithLock(() => benchmarkEvidence.GetValueOrDefault(runId));
 

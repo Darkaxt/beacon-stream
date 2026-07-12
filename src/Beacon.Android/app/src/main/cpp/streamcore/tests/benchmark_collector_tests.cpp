@@ -64,10 +64,10 @@ void completion_produces_measured_throughput_loss_reorder_jitter_and_rtt() {
       BenchmarkRttObservation{.sequence = 0, .rtt_us = 2'000},
       BenchmarkRttObservation{.sequence = 1, .rtt_us = 2'500},
       BenchmarkRttObservation{.sequence = 2, .rtt_us = 3'000}};
-  auto result = collector.complete(3'000, rtt);
+  auto result = collector.complete(1'000'000, rtt);
 
   BEACON_TEST_REQUIRE(result.has_value());
-  BEACON_TEST_REQUIRE(result->sustainable_throughput_mbps == 8.0);
+  BEACON_TEST_REQUIRE(result->sustainable_throughput_mbps == 16.0);
   BEACON_TEST_REQUIRE(result->samples.size() == 4);
   BEACON_TEST_REQUIRE(result->samples[0].received);
   BEACON_TEST_REQUIRE(result->samples[0].rtt_us == 2'000);

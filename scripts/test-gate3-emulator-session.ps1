@@ -1014,6 +1014,14 @@ try {
     $httpClient.BaseAddress = [Uri]$hostServerUrl
     $httpClient.Timeout = [Threading.Timeout]::InfiniteTimeSpan
     try {
+        Write-Gate3Stage 'gate4-certified-benchmark-instrumentation'
+        $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
+            'gate4CertifiedBenchmarkEvidence' $emulatorServerUrl $clientId `
+            $inputPayloadCanary))
+        Write-Gate3Stage 'gate4-real-hardware-instrumentation'
+        $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
+            'gate4NetworkAndHardwareBenchmark' $emulatorServerUrl $clientId `
+            $inputPayloadCanary))
         Write-Gate3Stage 'first-instrumentation'
         $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
             'gate3ConnectSendAndDisconnect' $emulatorServerUrl $clientId `
@@ -1026,6 +1034,25 @@ try {
         Write-Gate3Stage 'session-evidence'
         $firstSnapshot = Invoke-ServerJson $httpClient ([System.Net.Http.HttpMethod]::Get) '/admin/snapshot'
         Add-Gate3JournalEvidence $journalEvidence $workerDiagnosticEvidence $firstSnapshot
+        $clientSnapshot = @(
+            $firstSnapshot.clients |
+                Where-Object { $_.clientId -eq $clientId })
+        Require-Condition ($clientSnapshot.Count -eq 1) `
+            'The Gate 4 benchmark client snapshot was not retained.'
+        $completedBenchmarks = @(
+            $clientSnapshot[0].benchmarks |
+                Where-Object {
+                    $null -ne $_.completedAt -and $null -ne $_.selectedResult
+                })
+        $pendingBenchmarks = @(
+            $clientSnapshot[0].benchmarks |
+                Where-Object {
+                    $null -eq $_.completedAt -or $null -eq $_.selectedResult
+                })
+        Require-Condition ($completedBenchmarks.Count -eq 1) `
+            'The deterministic Gate 4 benchmark did not retain exactly one completed certification.'
+        Require-Condition ($pendingBenchmarks.Count -eq 0) `
+            'The real Gate 4 observation left an orphaned benchmark run.'
         $operations = @($firstSnapshot.diagnostics | ForEach-Object { $_.operation })
         foreach ($operation in @(
             'worker.connection_observed',
@@ -1053,7 +1080,9 @@ try {
             'BEACON_GATE3_FRAME 1',
             'BEACON_GATE3_INPUT_ECHO 1',
             'BEACON_GATE3_FEEDBACK 1',
-            'BEACON_GATE3_RECONNECT_FRESH_TICKET')) {
+            'BEACON_GATE3_RECONNECT_FRESH_TICKET',
+            'BEACON_GATE4_BENCHMARK_COMPLETE',
+            'BEACON_GATE4_REAL_HARDWARE_OBSERVED')) {
             Require-Condition ($logcat -match [Regex]::Escape($marker)) 'Required Android Gate 3 evidence was not emitted.'
             Write-Output $marker
         }

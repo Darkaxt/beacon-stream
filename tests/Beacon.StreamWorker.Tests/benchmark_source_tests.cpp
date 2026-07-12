@@ -28,6 +28,10 @@ void source_emits_exact_counts_sequences_and_bytes() {
   BEACON_TEST_REQUIRE(reliable_2->sequence == 1);
   BEACON_TEST_REQUIRE(reliable_1->sent_at_us == 100);
   BEACON_TEST_REQUIRE(reliable_1->payload.size() == 32);
+  BEACON_TEST_REQUIRE(reliable_1->payload[0] == std::byte{0x00});
+  BEACON_TEST_REQUIRE(reliable_1->payload[31] == std::byte{0x1f});
+  BEACON_TEST_REQUIRE(reliable_2->payload[0] == std::byte{0x01});
+  BEACON_TEST_REQUIRE(reliable_2->payload[31] == std::byte{0x20});
   BEACON_TEST_REQUIRE(!source.next_reliable(120).has_value());
 
   auto datagram_1 = source.next_datagram(200);

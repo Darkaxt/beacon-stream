@@ -25,13 +25,29 @@ public final class SequentialDeviceBenchmarkRunnerTest {
 
         BeaconDeviceBenchmarkRunner.Run run = runner.start(twoRoundPlan(), observer);
         assertEquals("vector-a", executor.startedVectorIds.get(0));
-        executor.complete(decoderSample("h264"));
-        assertEquals("vector-b", executor.startedVectorIds.get(1));
-        executor.complete(decoderSample("hevc"));
+        executor.complete(decoderSample("h264", 65.0, 4.0, 8.0, 0, 0));
+        assertEquals("vector-a", executor.startedVectorIds.get(1));
+        executor.complete(decoderSample("h264", 60.0, 5.0, 9.0, 1, 0));
+        assertEquals("vector-a", executor.startedVectorIds.get(2));
+        executor.complete(decoderSample("h264", 62.0, 6.0, 7.0, 0, 1));
+        assertEquals("vector-b", executor.startedVectorIds.get(3));
+        executor.complete(decoderSample("hevc", 64.0, 4.0, 8.0, 0, 0));
+        assertEquals("vector-b", executor.startedVectorIds.get(4));
+        executor.complete(decoderSample("hevc", 63.0, 5.0, 7.0, 0, 0));
+        assertEquals("vector-b", executor.startedVectorIds.get(5));
+        executor.complete(decoderSample("hevc", 61.0, 4.5, 9.0, 0, 0));
 
         assertTrue(observer.completed);
         assertEquals(2, observer.evidence.decoderSamples().size());
         assertEquals(4, observer.evidence.powerSamples().size());
+        assertEquals(6, executor.startedRoundRepetitionCounts.size());
+        assertTrue(executor.startedRoundRepetitionCounts.stream().allMatch(value -> value == 1));
+        String h264 = observer.evidence.decoderSamples().get(0).toJson().toString();
+        assertTrue(h264.contains("\"sustainedFps\":60.0"));
+        assertTrue(h264.contains("\"p95DecodeLatencyMs\":6.0"));
+        assertTrue(h264.contains("\"p95PresentationLatencyMs\":9.0"));
+        assertTrue(h264.contains("\"droppedFrames\":1"));
+        assertTrue(h264.contains("\"outputErrors\":1"));
         assertEquals(0, executor.cancelCount);
         run.cancel();
         assertEquals(0, executor.cancelCount);
@@ -81,31 +97,43 @@ public final class SequentialDeviceBenchmarkRunnerTest {
     }
 
     private static BeaconBenchmarkCompletionRequest.DecoderSample decoderSample(String codec) {
+        return decoderSample(codec, 60.0, 5.0, 9.0, 0, 0);
+    }
+
+    private static BeaconBenchmarkCompletionRequest.DecoderSample decoderSample(
+        String codec,
+        double sustainedFps,
+        double p95DecodeLatencyMs,
+        double p95PresentationLatencyMs,
+        int droppedFrames,
+        int outputErrors) {
         return new BeaconBenchmarkCompletionRequest.DecoderSample(
             codec,
-            "high",
+            "hevc".equals(codec) ? "main" : "high",
             8,
             1280,
             720,
             60,
             true,
-            60.0,
-            5.0,
-            9.0,
-            0,
-            0,
+            sustainedFps,
+            p95DecodeLatencyMs,
+            p95PresentationLatencyMs,
+            droppedFrames,
+            outputErrors,
             false,
             false);
     }
 
     private static final class RecordingRoundExecutor implements DeviceBenchmarkRoundExecutor {
         private final List<String> startedVectorIds = new ArrayList<>();
+        private final List<Integer> startedRoundRepetitionCounts = new ArrayList<>();
         private Observer observer;
         private int cancelCount;
 
         @Override
         public Run start(BeaconBenchmarkHardwarePlan.DecoderRound round, Observer observer) {
             startedVectorIds.add(round.vectorId());
+            startedRoundRepetitionCounts.add(round.repetitionCount());
             this.observer = observer;
             return () -> cancelCount++;
         }

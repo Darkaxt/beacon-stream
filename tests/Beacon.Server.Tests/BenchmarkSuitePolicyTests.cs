@@ -51,16 +51,40 @@ public sealed class BenchmarkSuitePolicyTests
             capabilities);
 
         Assert.Equal(1, plan.SchemaVersion);
-        DecoderBenchmarkRoundPlan round = Assert.Single(plan.DecoderRounds);
-        Assert.Equal("beacon-h264-high-8-1280x720-60-v1", round.VectorId);
-        Assert.Equal("h264", round.Codec);
-        Assert.Equal("high", round.Profile);
-        Assert.Equal(8, round.BitDepth);
-        Assert.Equal(1280, round.Width);
-        Assert.Equal(720, round.Height);
-        Assert.Equal(60, round.TargetFps);
-        Assert.True(round.RepetitionCount > 0);
+        Assert.Collection(
+            plan.DecoderRounds,
+            preferred => AssertRound(
+                preferred,
+                "beacon-h264-high-8-1280x720-60-v1",
+                1280,
+                720,
+                60),
+            fallback => AssertRound(
+                fallback,
+                "beacon-h264-high-8-640x360-30-v1",
+                640,
+                360,
+                30));
         Assert.True(plan.SamplePowerBeforeAndAfterEachRound);
+    }
+
+    [Fact]
+    public void DecoderPlanDoesNotProbeAboveAdvertisedFrameRate()
+    {
+        var capabilities = new EndpointCapabilities(
+            Av1: false,
+            Hevc: false,
+            H264: true,
+            Hdr10: false,
+            VirtualDisplayHdrSupported: false,
+            MaxFps: 30);
+
+        BenchmarkHardwarePlan plan = BenchmarkSuitePolicy.CreateHardware(
+            BenchmarkTrigger.Automatic,
+            capabilities);
+
+        DecoderBenchmarkRoundPlan round = Assert.Single(plan.DecoderRounds);
+        AssertRound(round, "beacon-h264-high-8-640x360-30-v1", 640, 360, 30);
     }
 
     [Fact]
@@ -78,5 +102,22 @@ public sealed class BenchmarkSuitePolicyTests
             capabilities);
 
         Assert.Empty(plan.DecoderRounds);
+    }
+
+    private static void AssertRound(
+        DecoderBenchmarkRoundPlan round,
+        string vectorId,
+        int width,
+        int height,
+        int targetFps)
+    {
+        Assert.Equal(vectorId, round.VectorId);
+        Assert.Equal("h264", round.Codec);
+        Assert.Equal("high", round.Profile);
+        Assert.Equal(8, round.BitDepth);
+        Assert.Equal(width, round.Width);
+        Assert.Equal(height, round.Height);
+        Assert.Equal(targetFps, round.TargetFps);
+        Assert.True(round.RepetitionCount > 0);
     }
 }

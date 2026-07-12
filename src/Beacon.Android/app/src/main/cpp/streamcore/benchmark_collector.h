@@ -64,6 +64,7 @@ class BenchmarkCollector {
   std::vector<std::optional<DatagramObservation>> datagrams_;
   std::vector<std::uint64_t> arrival_order_;
   std::optional<std::uint64_t> first_reliable_arrival_us_;
+  std::optional<std::uint64_t> last_reliable_arrival_us_;
   std::uint64_t reliable_bytes_{};
   std::uint64_t highest_arrival_sequence_{};
   bool has_arrival_sequence_{};
