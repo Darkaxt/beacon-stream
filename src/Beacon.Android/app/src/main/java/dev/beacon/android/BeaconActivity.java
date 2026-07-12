@@ -503,8 +503,7 @@ public final class BeaconActivity extends Activity {
         return new BeaconViewModel(
             config.clientId(),
             config.serverUrl(),
-            new BeaconApiClient(this, config),
-            new BeaconStreamCore(frame -> { }));
+            new BeaconApiClient(this, config));
     }
 
     BeaconViewModel createOwnedModelForInstrumentation() {

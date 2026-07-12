@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
@@ -168,7 +169,7 @@ public final class BeaconViewModelTest {
         AtomicInteger allocations = new AtomicInteger();
         BeaconViewModel model = new BeaconViewModel(
             "z-fold-7", "https://server", service,
-            sink -> {
+            (sink, failureObserver, benchmarkObserver) -> {
                 allocations.incrementAndGet();
                 throw new AssertionError("StreamCore allocated after close.");
             });
@@ -186,6 +187,152 @@ public final class BeaconViewModelTest {
         assertEquals("", service.actions());
     }
 
+    @Test
+    public void benchmarkPrepareStartsNativeRunAndCompletionSubmitsRawEvidence() throws Exception {
+        FakeService service = new FakeService();
+        service.benchmarkPrepare = new BeaconApiClient.BeaconResult(200, benchmarkGrantBody());
+        RecordingBenchmarkCoreFactory factory = new RecordingBenchmarkCoreFactory();
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7", "https://server", service, factory);
+
+        model.runBenchmark(
+            benchmarkRequest("manual"),
+            new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples()));
+        factory.emitCompletedNetworkResult();
+        service.awaitBenchmarkCompletion();
+
+        assertEquals("benchmark prepare,benchmark complete", service.actions());
+        assertEquals(1, factory.bindings.startCount);
+        assertEquals(1, factory.bindings.stopCount);
+        assertEquals("benchmark complete: 200", model.status());
+        assertTrue(service.lastBenchmarkCompletion.toJson().toString().contains("\"rttMs\":2.5"));
+        model.close();
+    }
+
+    @Test
+    public void reusedBenchmarkEvidenceDoesNotAllocateStreamCore() throws Exception {
+        FakeService service = new FakeService();
+        service.benchmarkPrepare = new BeaconApiClient.BeaconResult(
+            200,
+            "{\"disposition\":\"reuse\",\"runId\":\"3c13df40-26c4-40c6-8414-268734f1024d\",\"connection\":null}");
+        AtomicInteger allocations = new AtomicInteger();
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7", "https://server", service,
+            (sink, failureObserver, benchmarkObserver) -> {
+                allocations.incrementAndGet();
+                throw new AssertionError("Reused evidence allocated StreamCore.");
+            });
+
+        model.runBenchmark(
+            benchmarkRequest("automatic"),
+            new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples()));
+
+        assertEquals("benchmark prepare", service.actions());
+        assertEquals(0, allocations.get());
+        assertEquals("benchmark reuse: 200", model.status());
+        model.close();
+    }
+
+    @Test
+    public void nativeStartFailureCancelsPreparedBenchmarkRun() throws Exception {
+        FakeService service = new FakeService();
+        service.benchmarkPrepare = new BeaconApiClient.BeaconResult(200, benchmarkGrantBody());
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7", "https://server", service,
+            (sink, failureObserver, benchmarkObserver) -> new BeaconStreamCore(
+                new RejectingCoreBindings(),
+                sink,
+                Executors.newSingleThreadExecutor(),
+                () -> { },
+                failureObserver,
+                benchmarkObserver));
+
+        assertThrows(IllegalStateException.class, () -> model.runBenchmark(
+            benchmarkRequest("manual"),
+            new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples())));
+
+        assertEquals("benchmark prepare,benchmark cancel", service.actions());
+        model.close();
+    }
+
+    @Test
+    public void explicitBenchmarkCancellationStopsNativeRunAndCancelsServerRuntime() throws Exception {
+        FakeService service = new FakeService();
+        service.benchmarkPrepare = new BeaconApiClient.BeaconResult(200, benchmarkGrantBody());
+        RecordingBenchmarkCoreFactory factory = new RecordingBenchmarkCoreFactory();
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7", "https://server", service, factory);
+
+        model.runBenchmark(
+            benchmarkRequest("manual"),
+            new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples()));
+        model.cancelBenchmark();
+
+        assertEquals("benchmark prepare,benchmark cancel", service.actions());
+        assertEquals(1, factory.bindings.stopCount);
+        assertEquals("benchmark cancel: 200", model.status());
+        model.close();
+    }
+
+    @Test
+    public void nativeTransportLossCancelsServerBenchmarkWithoutCrashingCallback() throws Exception {
+        FakeService service = new FakeService();
+        service.benchmarkPrepare = new BeaconApiClient.BeaconResult(200, benchmarkGrantBody());
+        RecordingBenchmarkCoreFactory factory = new RecordingBenchmarkCoreFactory();
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7", "https://server", service, factory);
+
+        model.runBenchmark(
+            benchmarkRequest("automatic"),
+            new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples()));
+        factory.emitConnectionLost();
+        service.awaitBenchmarkCancellation();
+
+        assertEquals("benchmark prepare,benchmark cancel", service.actions());
+        assertEquals("benchmark transport: failed", model.status());
+        model.close();
+    }
+
+    @Test
+    public void rejectedCompletionEvidenceCancelsStillPendingServerRuntime() throws Exception {
+        FakeService service = new FakeService();
+        service.benchmarkPrepare = new BeaconApiClient.BeaconResult(200, benchmarkGrantBody());
+        service.next = new BeaconApiClient.BeaconResult(400, "invalid benchmark evidence");
+        RecordingBenchmarkCoreFactory factory = new RecordingBenchmarkCoreFactory();
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7", "https://server", service, factory);
+
+        model.runBenchmark(
+            benchmarkRequest("manual"),
+            new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples()));
+        factory.emitCompletedNetworkResult();
+        service.awaitBenchmarkCancellation();
+
+        assertEquals(
+            "benchmark prepare,benchmark complete,benchmark cancel",
+            service.actions());
+        assertEquals("benchmark complete: 400", model.status());
+        assertEquals("invalid benchmark evidence", model.latestError());
+        model.close();
+    }
+
+    @Test
+    public void malformedPreparedGrantCancelsRunIdBeforeReportingContractFailure() throws Exception {
+        FakeService service = new FakeService();
+        service.benchmarkPrepare = new BeaconApiClient.BeaconResult(
+            200,
+            "{\"disposition\":\"start-new\",\"runId\":\"3c13df40-26c4-40c6-8414-268734f1024d\",\"connection\":null}");
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7", "https://server", service);
+
+        assertThrows(IllegalArgumentException.class, () -> model.runBenchmark(
+            benchmarkRequest("manual"),
+            new BeaconBenchmarkDeviceEvidence(decoderSamples(), powerSamples())));
+
+        assertEquals("benchmark prepare,benchmark cancel", service.actions());
+        model.close();
+    }
+
     private static BeaconApiClient.ClientCapabilities capabilities() {
         return new BeaconApiClient.ClientCapabilities(true, true, true, false, false, 120, true, "2560x1600@120");
     }
@@ -200,6 +347,63 @@ public final class BeaconViewModelTest {
 
     private static String grantBody(String ticket) {
         return "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"" + ticket + "\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"s\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"}}}";
+    }
+
+    private static BeaconBenchmarkPrepareRequest benchmarkRequest(String trigger) {
+        BeaconNetworkIdentityHasher hasher = new BeaconNetworkIdentityHasher(
+            new BeaconNetworkIdentityHasher.SaltStorage() {
+                private String value = "";
+                @Override public String read() { return value; }
+                @Override public boolean write(String encodedSalt) {
+                    value = encodedSalt;
+                    return true;
+                }
+            },
+            () -> new byte[32]);
+        return new BeaconBenchmarkPrepareRequest(
+            trigger,
+            new BeaconBenchmarkPrepareRequest.FingerprintSet(
+                BeaconBenchmarkPrepareRequest.NetworkFingerprint.fromLocalNetwork(
+                    3,
+                    "server-route",
+                    "wifi",
+                    "192.168.1.0/24",
+                    "6ghz",
+                    5,
+                    "1000+mbps",
+                    "private-ssid",
+                    "00:11:22:33:44:55",
+                    hasher),
+                new BeaconBenchmarkPrepareRequest.HardwareFingerprint(
+                    3,
+                    "device-revision",
+                    "15",
+                    "1.0",
+                    "display-revision",
+                    "codec-revision")));
+    }
+
+    private static List<BeaconBenchmarkCompletionRequest.DecoderSample> decoderSamples() {
+        return Arrays.asList(new BeaconBenchmarkCompletionRequest.DecoderSample(
+            "h264", "high", 8, 2560, 1600, 120, true,
+            120.0, 5.0, 9.0, 0, 0, false, false));
+    }
+
+    private static List<BeaconBenchmarkCompletionRequest.PowerSample> powerSamples() {
+        return Arrays.asList(new BeaconBenchmarkCompletionRequest.PowerSample(
+            80, false, "nominal"));
+    }
+
+    private static String benchmarkGrantBody() {
+        return "{\"disposition\":\"start-new\",\"runId\":\"3c13df40-26c4-40c6-8414-268734f1024d\",\"connection\":{" +
+            "\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\"," +
+            "\"planRevision\":9,\"planExplanation\":\"benchmark\"," +
+            "\"sessionId\":\"benchmark:3c13df40-26c4-40c6-8414-268734f1024d\"," +
+            "\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"," +
+            "\"benchmark\":{\"runId\":\"3c13df40-26c4-40c6-8414-268734f1024d\",\"schemaVersion\":1," +
+            "\"reliableRound\":{\"packetCount\":16,\"payloadBytes\":32768,\"measurementIntervalUs\":250000}," +
+            "\"datagramRound\":{\"packetCount\":64,\"payloadBytes\":1000,\"measurementIntervalUs\":250000}," +
+            "\"runToken\":\"AAECAwQFBgcICQoLDA0ODw==\"}}}";
     }
 
     private static boolean allZero(byte[] bytes) {
@@ -232,10 +436,78 @@ public final class BeaconViewModelTest {
         @Override public void release(long handle) { releaseCount++; }
     }
 
+    private static final class RecordingBenchmarkCoreFactory implements BeaconViewModel.StreamCoreFactory {
+        private final RecordingBenchmarkCoreBindings bindings = new RecordingBenchmarkCoreBindings();
+
+        @Override
+        public BeaconStreamCore create(
+            BeaconStreamCore.EncodedFrameSink sink,
+            BeaconStreamCore.FailureObserver failureObserver,
+            BeaconStreamCore.BenchmarkObserver benchmarkObserver) {
+            return new BeaconStreamCore(
+                bindings,
+                sink,
+                Executors.newSingleThreadExecutor(),
+                () -> { },
+                failureObserver,
+                benchmarkObserver);
+        }
+
+        void emitCompletedNetworkResult() {
+            bindings.callbacks.onBenchmarkCompleted(
+                96.5,
+                new long[] { 0, 1 },
+                new int[] { 1000, 1000 },
+                new long[] { 2000, 2500 },
+                new long[] { 0, 300 },
+                new int[] { 0, 1 },
+                new boolean[] { true, false },
+                bindings.generation);
+        }
+
+        void emitConnectionLost() {
+            bindings.callbacks.onConnectionLost(bindings.generation);
+        }
+    }
+
+    private static final class RecordingBenchmarkCoreBindings implements BeaconStreamCore.Bindings {
+        private BeaconStreamCore.NativeCallbacks callbacks;
+        private long generation;
+        private int startCount;
+        private int stopCount;
+
+        @Override public long create(BeaconStreamCore.NativeCallbacks callbacks) {
+            this.callbacks = callbacks;
+            return 10;
+        }
+        @Override public boolean start(long handle, BeaconStreamSession.NativeGrant grant) {
+            startCount++;
+            generation = grant.generation;
+            return true;
+        }
+        @Override public void sendInput(long handle, BeaconApiClient.InputBatch input) { }
+        @Override public void replaceSurface(long handle, Object surface) { }
+        @Override public void stop(long handle) { stopCount++; }
+        @Override public void release(long handle) { }
+    }
+
+    private static final class RejectingCoreBindings implements BeaconStreamCore.Bindings {
+        @Override public long create(BeaconStreamCore.NativeCallbacks callbacks) { return 11; }
+        @Override public boolean start(long handle, BeaconStreamSession.NativeGrant grant) { return false; }
+        @Override public void sendInput(long handle, BeaconApiClient.InputBatch input) { }
+        @Override public void replaceSurface(long handle, Object surface) { }
+        @Override public void stop(long handle) { }
+        @Override public void release(long handle) { }
+    }
+
     private static final class FakeService implements BeaconViewModel.BeaconService {
         private final StringBuilder actionLog = new StringBuilder();
         private BeaconApiClient.BeaconResult next = new BeaconApiClient.BeaconResult(200, "ok body");
         private BeaconApiClient.GameSelection lastGame;
+        private BeaconApiClient.BeaconResult benchmarkPrepare = new BeaconApiClient.BeaconResult(200, "{}");
+        private BeaconBenchmarkCompletionRequest lastBenchmarkCompletion;
+        private final CountDownLatch benchmarkCompleted = new CountDownLatch(1);
+        private final CountDownLatch benchmarkCancelled = new CountDownLatch(1);
 
         String actions() {
             return actionLog.toString();
@@ -247,6 +519,14 @@ public final class BeaconViewModelTest {
             }
             actionLog.append(action);
             return next;
+        }
+
+        void awaitBenchmarkCompletion() throws InterruptedException {
+            benchmarkCompleted.await();
+        }
+
+        void awaitBenchmarkCancellation() throws InterruptedException {
+            benchmarkCancelled.await();
         }
 
         @Override
@@ -290,6 +570,30 @@ public final class BeaconViewModelTest {
         public BeaconApiClient.BeaconResult launch(BeaconApiClient.GameSelection game) throws IOException {
             lastGame = game;
             return record("launch");
+        }
+
+        @Override
+        public BeaconApiClient.BeaconResult prepareBenchmark(
+            BeaconBenchmarkPrepareRequest request) throws IOException {
+            record("benchmark prepare");
+            return benchmarkPrepare;
+        }
+
+        @Override
+        public BeaconApiClient.BeaconResult completeBenchmark(
+            String runId,
+            BeaconBenchmarkCompletionRequest request) throws IOException {
+            lastBenchmarkCompletion = request;
+            BeaconApiClient.BeaconResult result = record("benchmark complete");
+            benchmarkCompleted.countDown();
+            return result;
+        }
+
+        @Override
+        public BeaconApiClient.BeaconResult cancelBenchmark(String runId) throws IOException {
+            BeaconApiClient.BeaconResult result = record("benchmark cancel");
+            benchmarkCancelled.countDown();
+            return result;
         }
 
         @Override
