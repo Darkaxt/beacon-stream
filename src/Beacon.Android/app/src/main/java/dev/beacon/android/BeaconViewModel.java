@@ -200,15 +200,6 @@ public final class BeaconViewModel implements AutoCloseable {
         latestError = "";
     }
 
-    public void preflightAndLaunch(
-        BeaconApiClient.ProfilePatch patch,
-        BeaconApiClient.ClientCapabilities capabilities,
-        BeaconApiClient.ClientTelemetry telemetry,
-        BeaconApiClient.GameSelection game) throws IOException {
-        preflight(patch, capabilities, telemetry);
-        launch(game);
-    }
-
     public void preflightBenchmarkAndLaunch(
         BeaconApiClient.ProfilePatch patch,
         BeaconApiClient.ClientCapabilities capabilities,

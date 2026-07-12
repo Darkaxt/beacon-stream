@@ -16,6 +16,7 @@ import java.util.List;
 
 final class AndroidSystemBenchmarkHardwareSource
     implements AndroidBenchmarkFingerprintProbe.HardwareSource {
+    private static final char[] HEX = "0123456789abcdef".toCharArray();
     private final Context context;
     private final AndroidCodecCatalog codecCatalog;
 
@@ -96,9 +97,13 @@ final class AndroidSystemBenchmarkHardwareSource
         try {
             byte[] bytes = MessageDigest.getInstance("SHA-256").digest(
                 value.getBytes(StandardCharsets.UTF_8));
-            StringBuilder result = new StringBuilder(bytes.length * 2);
-            for (byte item : bytes) result.append(String.format("%02x", item & 0xff));
-            return result.toString();
+            char[] result = new char[bytes.length * 2];
+            for (int index = 0; index < bytes.length; index++) {
+                int valueByte = bytes[index] & 0xff;
+                result[index * 2] = HEX[valueByte >>> 4];
+                result[index * 2 + 1] = HEX[valueByte & 0x0f];
+            }
+            return new String(result);
         } catch (NoSuchAlgorithmException error) {
             throw new IllegalStateException("SHA-256 is unavailable.", error);
         }

@@ -25,6 +25,8 @@ final class AndroidBenchmarkChangeMonitor implements AutoCloseable {
     private NetworkCapabilities capabilities;
     private LinkProperties linkProperties;
     private AndroidBenchmarkNetworkState current = AndroidBenchmarkNetworkState.disconnected();
+    private boolean networkRegistered;
+    private boolean displayRegistered;
     private boolean started;
 
     AndroidBenchmarkChangeMonitor(Context context) {
@@ -83,8 +85,17 @@ final class AndroidBenchmarkChangeMonitor implements AutoCloseable {
         }
         listener = value;
         started = true;
-        connectivity.registerDefaultNetworkCallback(networkCallback, handler);
-        if (displays != null) displays.registerDisplayListener(displayListener, handler);
+        try {
+            connectivity.registerDefaultNetworkCallback(networkCallback, handler);
+            networkRegistered = true;
+            if (displays != null) {
+                displays.registerDisplayListener(displayListener, handler);
+                displayRegistered = true;
+            }
+        } catch (RuntimeException failure) {
+            rollbackRegistration(failure);
+            throw failure;
+        }
     }
 
     synchronized AndroidBenchmarkNetworkState current() {
@@ -96,8 +107,14 @@ final class AndroidBenchmarkChangeMonitor implements AutoCloseable {
         if (!started) return;
         started = false;
         listener = null;
-        connectivity.unregisterNetworkCallback(networkCallback);
-        if (displays != null) displays.unregisterDisplayListener(displayListener);
+        if (networkRegistered) {
+            connectivity.unregisterNetworkCallback(networkCallback);
+            networkRegistered = false;
+        }
+        if (displayRegistered) {
+            displays.unregisterDisplayListener(displayListener);
+            displayRegistered = false;
+        }
     }
 
     private void updateCapabilities(Network value, NetworkCapabilities updated) {
@@ -155,12 +172,16 @@ final class AndroidBenchmarkChangeMonitor implements AutoCloseable {
         String rawSsid = null;
         String rawBssid = null;
         if (capabilities.getTransportInfo() instanceof WifiInfo wifi) {
-            int frequency = wifi.getFrequency();
-            wifiBand = AndroidBenchmarkFingerprintProbe.wifiBand(frequency);
-            wifiChannel = AndroidBenchmarkFingerprintProbe.wifiChannel(frequency);
-            linkSpeedMbps = Math.max(linkSpeedMbps, wifi.getLinkSpeed());
-            rawSsid = availableSsid(wifi.getSSID());
-            rawBssid = availableBssid(wifi.getBSSID());
+            try {
+                int frequency = wifi.getFrequency();
+                wifiBand = AndroidBenchmarkFingerprintProbe.wifiBand(frequency);
+                wifiChannel = AndroidBenchmarkFingerprintProbe.wifiChannel(frequency);
+                linkSpeedMbps = Math.max(linkSpeedMbps, wifi.getLinkSpeed());
+                rawSsid = availableSsid(wifi.getSSID());
+                rawBssid = availableBssid(wifi.getBSSID());
+            } catch (SecurityException ignored) {
+                // Redacted transport facts still provide a stable, privacy-safe fingerprint.
+            }
         }
         return new AndroidBenchmarkNetworkState(
             transport,
@@ -210,6 +231,27 @@ final class AndroidBenchmarkChangeMonitor implements AutoCloseable {
     private static String availableBssid(String value) {
         if (value == null || "02:00:00:00:00:00".equalsIgnoreCase(value)) return null;
         return value.trim().isEmpty() ? null : value.trim();
+    }
+
+    private void rollbackRegistration(RuntimeException primaryFailure) {
+        started = false;
+        listener = null;
+        if (displayRegistered) {
+            try {
+                displays.unregisterDisplayListener(displayListener);
+            } catch (RuntimeException rollbackFailure) {
+                primaryFailure.addSuppressed(rollbackFailure);
+            }
+            displayRegistered = false;
+        }
+        if (networkRegistered) {
+            try {
+                connectivity.unregisterNetworkCallback(networkCallback);
+            } catch (RuntimeException rollbackFailure) {
+                primaryFailure.addSuppressed(rollbackFailure);
+            }
+            networkRegistered = false;
+        }
     }
 
     interface Listener {

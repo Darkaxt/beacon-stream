@@ -117,23 +117,6 @@ public final class BeaconViewModelTest {
     }
 
     @Test
-    public void preflightAndLaunchKeepsServerOwnedOrdering() throws Exception {
-        FakeService service = new FakeService();
-        service.next = new BeaconApiClient.BeaconResult(200, grantBody());
-        BeaconStreamCore core = new BeaconStreamCore(
-            new RecordingCoreBindings(), frame -> { }, Executors.newSingleThreadExecutor());
-        BeaconViewModel model = new BeaconViewModel("z-fold-7", "https://server", service, core);
-
-        model.preflightAndLaunch(
-            new BeaconApiClient.ProfilePatch(),
-            capabilities(),
-            telemetry(),
-            BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
-
-        assertEquals("patch,capabilities,telemetry,launch", service.actions());
-    }
-
-    @Test
     public void sessionPreflightMustCompleteBeforeLaunch() throws Exception {
         FakeService service = new FakeService();
         service.benchmarkPrepare = new BeaconApiClient.BeaconResult(
