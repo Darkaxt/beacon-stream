@@ -1,4 +1,5 @@
 #include "certificate_pin.h"
+#include "test_failure.h"
 
 #include <openssl/evp.h>
 #include <openssl/sha.h>
@@ -6,7 +7,6 @@
 
 #include <array>
 #include <cstddef>
-#include <cstdlib>
 #include <memory>
 #include <span>
 #include <vector>
@@ -15,11 +15,7 @@ namespace {
 
 void free_openssl_bytes(unsigned char *bytes) noexcept { OPENSSL_free(bytes); }
 
-void require(bool condition) {
-  if (!condition) {
-    std::abort();
-  }
-}
+#define require(expression) BEACON_TEST_REQUIRE(expression)
 
 void validates_exact_der_spki_sha256_pin() {
   std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)> key(

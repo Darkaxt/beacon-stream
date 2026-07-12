@@ -20,7 +20,18 @@ public sealed record PlannedStream(
     int InitialBitrateMbps,
     string Transport,
     string CongestionPolicy,
-    string Reason = "Default stream plan.");
+    string Reason,
+    Guid BenchmarkRunId,
+    string BenchmarkEvidenceRevision)
+{
+    public string CodecProfile { get; init; } = "";
+
+    public int BitDepth { get; init; }
+
+    public bool TenBitPresentationVerified { get; init; }
+
+    public bool HdrPresentationVerified { get; init; }
+}
 
 public sealed record SessionPlan(
     string SessionId,

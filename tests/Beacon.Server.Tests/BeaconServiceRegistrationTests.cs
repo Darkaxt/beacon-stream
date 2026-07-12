@@ -1,4 +1,5 @@
 using System.Reflection;
+using Beacon.Core.Benchmarks;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
 using Beacon.Core.Input;
@@ -233,6 +234,38 @@ public sealed class BeaconServiceRegistrationTests
 
         Assert.IsType<FileClientProfileRepository>(repository);
         Assert.Equal(profilePath, repository.Location);
+    }
+
+    [Fact]
+    public void BenchmarkEvidencePathUsesIndependentFileRepository()
+    {
+        string evidencePath = Path.Combine(Path.GetTempPath(), $"beacon-benchmarks-{Guid.NewGuid():N}.json");
+        using ServiceProvider provider = BuildProvider(
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.BenchmarkEvidencePathConfigurationKey, evidencePath));
+
+        IBenchmarkEvidenceRepository repository = provider.GetRequiredService<IBenchmarkEvidenceRepository>();
+
+        Assert.IsType<FileBenchmarkEvidenceRepository>(repository);
+        Assert.Equal(evidencePath, repository.Location);
+    }
+
+    [Fact]
+    public void FakeHostSeedsMeasuredZFoldEvidenceWithoutChangingExplicitStore()
+    {
+        using ServiceProvider fakeProvider = BuildProvider();
+        IBenchmarkEvidenceRepository fakeRepository = fakeProvider.GetRequiredService<IBenchmarkEvidenceRepository>();
+        BenchmarkEvidence seeded = Assert.Single(fakeRepository.LoadEvidence());
+
+        Assert.Equal("z-fold-7", seeded.ClientId.Value);
+        Assert.NotNull(seeded.CompletedAt);
+        Assert.NotNull(seeded.SelectedResult);
+
+        string evidencePath = Path.Combine(Path.GetTempPath(), $"beacon-benchmarks-{Guid.NewGuid():N}.json");
+        using ServiceProvider explicitProvider = BuildProvider(
+            new KeyValuePair<string, string?>(BeaconServiceRegistration.BenchmarkEvidencePathConfigurationKey, evidencePath));
+        IBenchmarkEvidenceRepository explicitRepository = explicitProvider.GetRequiredService<IBenchmarkEvidenceRepository>();
+
+        Assert.Empty(explicitRepository.LoadEvidence());
     }
 
     [Fact]

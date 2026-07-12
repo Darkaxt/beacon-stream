@@ -205,7 +205,8 @@ public sealed class ArchitectureRecoveryBoundaryTests
         string[] nativeTestRoots =
         [
             ToPlatformPath(root, "tests/Beacon.StreamProtocol.Tests"),
-            ToPlatformPath(root, "tests/Beacon.StreamWorker.Tests")
+            ToPlatformPath(root, "tests/Beacon.StreamWorker.Tests"),
+            ToPlatformPath(root, "src/Beacon.Android/app/src/main/cpp/streamcore/tests")
         ];
         var crashAssertion = new Regex(
             @"\b(?:assert|abort)\s*\(",

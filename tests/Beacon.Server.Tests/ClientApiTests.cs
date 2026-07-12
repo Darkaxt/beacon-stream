@@ -357,7 +357,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
-    public async Task CapabilitiesAndTelemetryInfluencePlanWithoutChangingDisplayGeometry()
+    public async Task CapabilitiesAndBenchmarkEvidenceInfluencePlanWithoutChangingDisplayGeometry()
     {
         WebApplicationFactory<Program> pairedFactory = factory.WithWebHostBuilder(_ => { });
         HttpClient client = pairedFactory.CreateClient();
@@ -377,14 +377,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             hdr10 = false,
             virtualDisplayHdrSupported = false
         });
-        HttpResponseMessage telemetry = await client.PostAsJsonAsync($"/clients/{clientId}/telemetry", new
-        {
-            rttMs = 95,
-            packetLossPercent = 3.5,
-            decoderLoadPercent = 78,
-            estimatedBandwidthMbps = 80,
-            wifiBand = "wifi-5"
-        });
+        await CompleteBenchmarkAsync(client, clientId, codec: "hevc", fps: 60, throughputMbps: 36, rttMs: 95);
         HttpResponseMessage plan = await client.PostAsJsonAsync($"/clients/{clientId}/plan", new
         {
             appId = "steam-shortcut:3767414131",
@@ -393,7 +386,6 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         });
 
         Assert.Equal(HttpStatusCode.OK, capabilities.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, telemetry.StatusCode);
         Assert.Equal(HttpStatusCode.OK, plan.StatusCode);
 
         using JsonDocument document = await JsonDocument.ParseAsync(await plan.Content.ReadAsStreamAsync());
@@ -433,14 +425,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             virtualDisplayHdrSupported = false,
             maxFps = 120
         });
-        await client.PostAsJsonAsync($"/clients/{clientId}/telemetry", new
-        {
-            rttMs = 8,
-            packetLossPercent = 0,
-            decoderLoadPercent = 20,
-            estimatedBandwidthMbps = 200,
-            wifiBand = "wifi-7"
-        });
+        await CompleteBenchmarkAsync(client, clientId, codec: "av1", fps: 120, throughputMbps: 100, rttMs: 8);
 
         HttpResponseMessage response = await client.PostAsJsonAsync($"/clients/{clientId}/plan", new
         {
@@ -1575,6 +1560,65 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
+
+    private static async Task CompleteBenchmarkAsync(
+        HttpClient client,
+        string clientId,
+        string codec,
+        int fps,
+        double throughputMbps,
+        double rttMs)
+    {
+        object fingerprints = new
+        {
+            network = new
+            {
+                schemaVersion = 3,
+                serverRoute = "192.168.1.10",
+                transport = "wifi",
+                localNetworkPrefix = "192.168.1.0/24",
+                wifiBand = "6-ghz",
+                wifiChannel = 37,
+                linkSpeedBucket = "500-999-mbps",
+                saltedNetworkIdHash = new string('a', 64)
+            },
+            hardware = new
+            {
+                schemaVersion = 3,
+                deviceCapabilityRevision = "test-capabilities",
+                androidVersion = "16",
+                apkVersion = "test",
+                displayModeInventoryRevision = "2560x1600-120",
+                codecInventoryRevision = codec
+            }
+        };
+        HttpResponseMessage prepare = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/prepare",
+            new { trigger = "automatic", fingerprints });
+        Assert.Equal(HttpStatusCode.OK, prepare.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await prepare.Content.ReadAsStreamAsync());
+        Guid runId = document.RootElement.GetProperty("runId").GetGuid();
+
+        HttpResponseMessage complete = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/{runId:D}/complete",
+            new
+            {
+                networkSamples = new[]
+                {
+                    new { sequence = 1, payloadBytes = 1200, rttMs, jitterMs = 1.0, received = true, throughputMbps, reorderDistance = 0 }
+                },
+                decoderSamples = new[]
+                {
+                    new { codec, profile = "main", bitDepth = 8, width = 2560, height = 1600, targetFps = fps, configured = true, sustainedFps = fps, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0 }
+                },
+                powerSamples = new[]
+                {
+                    new { batteryPercent = 80, isCharging = false, thermalState = "nominal" }
+                }
+            });
+        Assert.Equal(HttpStatusCode.OK, complete.StatusCode);
+    }
+
     private sealed class RecordingClientInputSink : IClientInputSink
     {
         public List<ClientInputBatch> Batches { get; } = [];

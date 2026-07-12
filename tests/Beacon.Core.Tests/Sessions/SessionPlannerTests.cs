@@ -1,3 +1,4 @@
+using Beacon.Core.Benchmarks;
 using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
@@ -22,7 +23,7 @@ public sealed class SessionPlannerTests
         SessionPlanResult result = SessionPlanner.CreatePlan(
             ClientProfile.CreateZFold7Default(),
             new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: true, VirtualDisplayHdrSupported: true),
-            new TelemetrySnapshot(RttMs: 8, PacketLossPercent: 0, DecoderLoadPercent: 12),
+            CreateEvidence(),
             Dispatch);
 
         Assert.True(result.Success);
@@ -42,7 +43,7 @@ public sealed class SessionPlannerTests
         SessionPlanResult result = SessionPlanner.CreatePlan(
             ClientProfile.CreateZFold7Default(),
             new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: true, VirtualDisplayHdrSupported: false),
-            new TelemetrySnapshot(RttMs: 8, PacketLossPercent: 0, DecoderLoadPercent: 12),
+            CreateEvidence(),
             Dispatch);
 
         Assert.True(result.Success);
@@ -63,7 +64,7 @@ public sealed class SessionPlannerTests
         SessionPlanResult result = SessionPlanner.CreatePlan(
             profile,
             new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: true, VirtualDisplayHdrSupported: false, MaxFps: 120),
-            new TelemetrySnapshot(RttMs: 8, PacketLossPercent: 0, DecoderLoadPercent: 20, EstimatedBandwidthMbps: 120, WifiBand: "wifi-7"),
+            CreateEvidence(),
             Dispatch);
 
         SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
@@ -83,7 +84,7 @@ public sealed class SessionPlannerTests
         SessionPlanResult result = SessionPlanner.CreatePlan(
             profile,
             new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: true, VirtualDisplayHdrSupported: false),
-            new TelemetrySnapshot(RttMs: 8, PacketLossPercent: 0, DecoderLoadPercent: 12),
+            CreateEvidence(),
             Dispatch);
 
         Assert.False(result.Success);
@@ -98,7 +99,7 @@ public sealed class SessionPlannerTests
         SessionPlanResult result = SessionPlanner.CreatePlan(
             ClientProfile.CreateZFold7Default(),
             new EndpointCapabilities(Av1: false, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false),
-            new TelemetrySnapshot(RttMs: 95, PacketLossPercent: 3.5, DecoderLoadPercent: 78),
+            CreateEvidence(codec: "hevc", fps: 60, bitrateMbps: 25, rttMs: 95, packetLossPercent: 3.5),
             Dispatch);
 
         Assert.True(result.Success);
@@ -117,7 +118,7 @@ public sealed class SessionPlannerTests
         SessionPlanResult result = SessionPlanner.CreatePlan(
             ClientProfile.CreateZFold7Default(),
             new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: true, VirtualDisplayHdrSupported: false, MaxFps: 120),
-            new TelemetrySnapshot(RttMs: 8, PacketLossPercent: 0, DecoderLoadPercent: 20, EstimatedBandwidthMbps: 120, WifiBand: "wifi-7"),
+            CreateEvidence(reason: "Excellent LAN benchmark evidence kept 120 FPS."),
             Dispatch);
 
         SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
@@ -133,7 +134,7 @@ public sealed class SessionPlannerTests
         SessionPlanResult result = SessionPlanner.CreatePlan(
             ClientProfile.CreateZFold7Default(),
             new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false, MaxFps: 120),
-            new TelemetrySnapshot(RttMs: 115, PacketLossPercent: 0.5, DecoderLoadPercent: 35, EstimatedBandwidthMbps: 80, WifiBand: "wifi-5"),
+            CreateEvidence(fps: 60, bitrateMbps: 25, rttMs: 115, packetLossPercent: 0.5, reason: "RTT 115ms selected latency protection."),
             Dispatch);
 
         SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
@@ -150,7 +151,7 @@ public sealed class SessionPlannerTests
         SessionPlanResult result = SessionPlanner.CreatePlan(
             ClientProfile.CreateZFold7Default(),
             new EndpointCapabilities(Av1: false, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false, MaxFps: 120),
-            new TelemetrySnapshot(RttMs: 22, PacketLossPercent: 3.2, DecoderLoadPercent: 40, EstimatedBandwidthMbps: 90, WifiBand: "wifi-6"),
+            CreateEvidence(codec: "hevc", bitrateMbps: 35, rttMs: 22, packetLossPercent: 3.2),
             Dispatch);
 
         SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
@@ -172,7 +173,7 @@ public sealed class SessionPlannerTests
         SessionPlanResult result = SessionPlanner.CreatePlan(
             profile,
             new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false, MaxFps: 120),
-            new TelemetrySnapshot(RttMs: 8, PacketLossPercent: 0, DecoderLoadPercent: 20, EstimatedBandwidthMbps: 200, WifiBand: "wifi-7"),
+            CreateEvidence(),
             Dispatch);
 
         SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
@@ -186,7 +187,7 @@ public sealed class SessionPlannerTests
         SessionPlanResult result = SessionPlanner.CreatePlan(
             ClientProfile.CreateZFold7Default(),
             new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false, MaxFps: 120),
-            new TelemetrySnapshot(RttMs: 12, PacketLossPercent: 0, DecoderLoadPercent: 88, EstimatedBandwidthMbps: 100, WifiBand: "wifi-6", BatteryPercent: 9, ThermalState: "hot"),
+            CreateEvidence(fps: 60, bitrateMbps: 30, rttMs: 12, powerConstrained: true, reason: "Thermal benchmark evidence selected power-save planning."),
             Dispatch);
 
         SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
@@ -207,7 +208,7 @@ public sealed class SessionPlannerTests
         SessionPlanResult result = SessionPlanner.CreatePlan(
             profile,
             new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false, MaxFps: 120),
-            new TelemetrySnapshot(RttMs: 8, PacketLossPercent: 0, DecoderLoadPercent: 20, EstimatedBandwidthMbps: 120, WifiBand: "wifi-7"),
+            CreateEvidence(codec: "hevc", reason: "Codec selected from profile preference hevc."),
             Dispatch);
 
         SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
@@ -225,13 +226,13 @@ public sealed class SessionPlannerTests
             Hdr10: false,
             VirtualDisplayHdrSupported: false,
             MaxFps: 120);
-        TelemetrySnapshot excellent = new(
-            RttMs: 8,
-            PacketLossPercent: 0,
-            DecoderLoadPercent: 20,
-            EstimatedBandwidthMbps: 120,
-            WifiBand: "wifi-7");
-        TelemetrySnapshot congested = excellent with { RttMs = 115 };
+        BenchmarkPlanEvidence excellent = CreateEvidence(revision: "benchmark-a");
+        BenchmarkPlanEvidence congested = CreateEvidence(
+            fps: 60,
+            bitrateMbps: 25,
+            rttMs: 115,
+            revision: "benchmark-b",
+            runId: Guid.Parse("66ea5505-9c2e-40b2-8c54-1e31be4d8012"));
 
         SessionPlan first = Assert.IsType<SessionPlan>(SessionPlanner.CreatePlan(
             ClientProfile.CreateZFold7Default(), capabilities, excellent, Dispatch).Plan);
@@ -244,4 +245,39 @@ public sealed class SessionPlannerTests
         Assert.Equal(first.Revision, repeated.Revision);
         Assert.NotEqual(first.Revision, changed.Revision);
     }
+
+    private static BenchmarkPlanEvidence CreateEvidence(
+        string codec = "av1",
+        int fps = 120,
+        int bitrateMbps = 65,
+        double rttMs = 8,
+        double packetLossPercent = 0,
+        bool powerConstrained = false,
+        string reason = "Active benchmark selected the stream limits.",
+        string revision = "benchmark-a",
+        Guid? runId = null) =>
+        new(
+            RunId: runId ?? Guid.Parse("39b5f009-f495-4f84-b5e6-6d3911bfaa16"),
+            Revision: revision,
+            SelectedResult: new SelectedBenchmarkResult(
+                Codec: codec,
+                MaxSustainableFps: fps,
+                InitialBitrateMbps: bitrateMbps,
+                SustainableThroughputMbps: 100,
+                RttMs: rttMs,
+                JitterMs: 1.5,
+                PacketLossPercent: packetLossPercent,
+                PowerConstrained: powerConstrained,
+                Reasons: [reason],
+                Profile: codec.ToLowerInvariant() switch
+                {
+                    "h264" => "high",
+                    "hevc" => "main10",
+                    _ => "main"
+                },
+                BitDepth: codec.Equals("h264", StringComparison.OrdinalIgnoreCase) ? 8 : 10,
+                Width: 2560,
+                Height: 1600,
+                P95DecodeLatencyMs: 5,
+                P95PresentationLatencyMs: 9));
 }

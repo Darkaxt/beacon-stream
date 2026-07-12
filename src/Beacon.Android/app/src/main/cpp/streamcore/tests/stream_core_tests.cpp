@@ -2,13 +2,13 @@
 
 #include "stream_control.pb.h"
 #include "beacon/stream/media_datagram.h"
+#include "test_failure.h"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <new>
 #include <optional>
 #include <span>
@@ -22,11 +22,7 @@ namespace {
 namespace android_stream = beacon::android::streamcore;
 namespace stream_v1 = beacon::stream::v1;
 
-void require(bool condition) {
-  if (!condition) {
-    std::abort();
-  }
-}
+#define require(expression) BEACON_TEST_REQUIRE(expression)
 
 std::vector<std::byte> payload(std::span<const std::byte> framed) {
   require(framed.size() >= 4);
@@ -499,7 +495,7 @@ void failed_assembler_allocation_preserves_existing_core_ownership() {
   require(core.state() == android_stream::State::failed);
   if (!core.ticket_consumed()) {
     std::fputs("assembler allocation failure replaced the active grant\n", stderr);
-    std::abort();
+    BEACON_TEST_REQUIRE(false);
   }
   require(core.start(grant()));
   require(core.state() == android_stream::State::connecting);

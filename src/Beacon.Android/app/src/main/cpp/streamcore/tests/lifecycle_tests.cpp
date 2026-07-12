@@ -5,11 +5,11 @@
 #include "lifecycle_generation.h"
 #include "session_registry.h"
 #include "surface_owner.h"
+#include "test_failure.h"
 
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
-#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -101,7 +101,7 @@ class MsQuicClientTestAccess {
       std::uint64_t id, std::uint64_t generation) {
     if (validate_stream_start(role, status, id) ==
         StreamStartValidation::accepted) {
-      std::abort();
+      BEACON_TEST_REQUIRE(false);
     }
     client.fail_stream_start(generation);
   }
@@ -114,9 +114,7 @@ namespace {
 
 namespace android_stream = beacon::android::streamcore;
 
-void require(bool condition) {
-  if (!condition) std::abort();
-}
+#define require(expression) BEACON_TEST_REQUIRE(expression)
 
 void cleanup_runs_only_after_callback_scope_exits() {
   auto barrier = std::make_shared<android_stream::CallbackBarrier>();

@@ -28,6 +28,9 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.True(root.GetProperty("clients").GetArrayLength() > 0);
         Assert.True(root.GetProperty("games").GetProperty("total").GetInt32() > 0);
         Assert.Equal("z-fold-7", root.GetProperty("clients")[0].GetProperty("clientId").GetString());
+        JsonElement benchmark = Assert.Single(root.GetProperty("clients")[0].GetProperty("benchmarks").EnumerateArray());
+        Assert.Equal("av1", benchmark.GetProperty("selectedResult").GetProperty("codec").GetString());
+        Assert.Equal(1, benchmark.GetProperty("networkSamples").GetArrayLength());
         Assert.Equal("steam-shortcut:3767414131", root.GetProperty("sessions")[0].GetProperty("appId").GetString());
         Assert.Equal("running", root.GetProperty("streams")[0].GetProperty("state").GetString());
         Assert.Equal("client-z-fold-7", root.GetProperty("streams")[0].GetProperty("displayId").GetString());
@@ -38,6 +41,7 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.Equal("FakeDisplayBackend", root.GetProperty("host").GetProperty("displayBackend").GetString());
         Assert.Equal("FakeStreamingBackend", root.GetProperty("host").GetProperty("streamingBackend").GetString());
         Assert.Equal("memory", root.GetProperty("profiles").GetProperty("store").GetString());
+        Assert.Equal("memory", root.GetProperty("benchmarks").GetProperty("store").GetString());
         Assert.False(root.GetProperty("profiles").TryGetProperty("pairingEnabled", out _));
         Assert.True(root.GetProperty("inputHealth").GetProperty("ready").GetBoolean());
         Assert.Equal("no-op", root.GetProperty("inputHealth").GetProperty("backend").GetString());
@@ -181,9 +185,12 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
     [Fact]
     public async Task SnapshotIncludesClientInputDiagnostics()
     {
-        HttpClient client = factory.CreateClient();
+        using WebApplicationFactory<Program> isolatedFactory = factory.WithWebHostBuilder(_ => { });
+        HttpClient client = isolatedFactory.CreateClient();
 
-        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        HttpResponseMessage launch = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/launch",
+            new { gameId = "steam-shortcut:3767414131" });
         HttpResponseMessage input = await client.PostAsJsonAsync("/clients/z-fold-7/input", new
         {
             sequence = 42,
@@ -194,6 +201,7 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         });
         HttpResponseMessage response = await client.GetAsync("/admin/snapshot");
 
+        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
         Assert.Equal(HttpStatusCode.OK, input.StatusCode);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());

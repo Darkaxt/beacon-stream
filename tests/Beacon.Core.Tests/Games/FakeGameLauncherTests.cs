@@ -59,5 +59,13 @@ public sealed class FakeGameLauncherTests
             new ClientId("z-fold-7"),
             game.Id,
             new PlannedDisplay("client-z-fold-7", 2560, 1600, 120, "virtual-primary", HdrPreference.Prefer, false, "sdr", "HDR unavailable."),
-            new PlannedStream("av1", 120, 65, "lan-direct", "adaptive"));
+            new PlannedStream(
+                "av1",
+                120,
+                65,
+                "lan-direct",
+                "adaptive",
+                "Test benchmark evidence.",
+                Guid.Parse("33acde60-b29f-4f03-b2b2-f51337bdb9a5"),
+                "test-benchmark-revision"));
 }

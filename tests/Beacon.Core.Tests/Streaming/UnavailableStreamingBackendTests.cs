@@ -52,5 +52,13 @@ public sealed class UnavailableStreamingBackendTests
             HdrEnabled: false,
             "sdr",
             "HDR unavailable during the recovery fixture."),
-        Stream: new PlannedStream("h264", 120, 65, "beacon", "measured"));
+        Stream: new PlannedStream(
+            "h264",
+            120,
+            65,
+            "beacon",
+            "measured",
+            "Test benchmark evidence.",
+            Guid.Parse("33acde60-b29f-4f03-b2b2-f51337bdb9a5"),
+            "test-benchmark-revision"));
 }

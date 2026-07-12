@@ -564,7 +564,15 @@ public sealed class StreamWorkerStreamingBackendTests
             HdrEnabled: false,
             "sdr",
             "test"),
-        new PlannedStream("h264", 120, 45, "beacon-quic", "adaptive", "test"));
+        new PlannedStream(
+            "h264",
+            120,
+            45,
+            "beacon-quic",
+            "adaptive",
+            "test",
+            Guid.Parse("33acde60-b29f-4f03-b2b2-f51337bdb9a5"),
+            "test-benchmark-revision"));
 
     private static WorkerIpcEnvelope TransportReady(uint port) => new()
     {
