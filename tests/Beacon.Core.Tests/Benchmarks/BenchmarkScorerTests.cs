@@ -173,6 +173,51 @@ public sealed class BenchmarkScorerTests
         Assert.True(selected.HdrPresentationVerified);
     }
 
+    [Fact]
+    public void DecoderSelectionIsIndependentOfInputOrderWhenLeadingPrioritiesTie()
+    {
+        DecoderBenchmarkSample preferred = CreateSafeDecoder() with
+        {
+            Width = 3840,
+            Height = 2160,
+            P95DecodeLatencyMs = 10,
+            P95PresentationLatencyMs = 14
+        };
+        DecoderBenchmarkSample slowerPresentation = CreateSafeDecoder() with
+        {
+            Width = 3840,
+            Height = 2160,
+            P95DecodeLatencyMs = 7,
+            P95PresentationLatencyMs = 15
+        };
+        DecoderBenchmarkSample lowerResolution = CreateSafeDecoder() with
+        {
+            Width = 2560,
+            Height = 1600,
+            P95DecodeLatencyMs = 7,
+            P95PresentationLatencyMs = 11
+        };
+
+        DecoderBenchmarkSample[][] permutations =
+        [
+            [preferred, slowerPresentation, lowerResolution],
+            [preferred, lowerResolution, slowerPresentation],
+            [slowerPresentation, preferred, lowerResolution],
+            [slowerPresentation, lowerResolution, preferred],
+            [lowerResolution, preferred, slowerPresentation],
+            [lowerResolution, slowerPresentation, preferred]
+        ];
+
+        foreach (DecoderBenchmarkSample[] permutation in permutations)
+        {
+            SelectedBenchmarkResult selected = BenchmarkScorer.Select(CreateInput(permutation));
+
+            Assert.Equal((3840, 2160), (selected.Width, selected.Height));
+            Assert.Equal(14, selected.P95PresentationLatencyMs);
+            Assert.Equal(10, selected.P95DecodeLatencyMs);
+        }
+    }
+
     [Theory]
     [MemberData(nameof(UnsafeDecoderSamples))]
     public void RejectsDecoderCandidatesWithoutExactSafePresentationEvidence(DecoderBenchmarkSample decoder)
@@ -231,12 +276,15 @@ public sealed class BenchmarkScorerTests
         };
 
     private static BenchmarkScoringInput CreateInput(DecoderBenchmarkSample decoder) =>
+        CreateInput([decoder]);
+
+    private static BenchmarkScoringInput CreateInput(IReadOnlyList<DecoderBenchmarkSample> decoders) =>
         new(
             NetworkSamples:
             [
                 new(1, 1200, 8, 1, Received: true, ThroughputMbps: 100, ReorderDistance: 0),
             ],
-            DecoderSamples: [decoder],
+            DecoderSamples: decoders,
             PowerSamples: [],
             NetworkCoverage: new(FirstSequence: 1, ExpectedPacketCount: 1));
 

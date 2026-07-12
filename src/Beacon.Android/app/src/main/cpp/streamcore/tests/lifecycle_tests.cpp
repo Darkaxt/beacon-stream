@@ -114,8 +114,6 @@ namespace {
 
 namespace android_stream = beacon::android::streamcore;
 
-#define require(expression) BEACON_TEST_REQUIRE(expression)
-
 void cleanup_runs_only_after_callback_scope_exits() {
   auto barrier = std::make_shared<android_stream::CallbackBarrier>();
   std::mutex mutex;
@@ -136,13 +134,13 @@ void cleanup_runs_only_after_callback_scope_exits() {
           cleanup_ran = true;
           changed.notify_all();
         });
-    require(!cleanup_ran);
+    BEACON_TEST_REQUIRE(!cleanup_ran);
     callback_exited = true;
   }
   std::unique_lock lock(mutex);
   changed.wait(lock, [&] { return cleanup_ran; });
-  require(cleanup_observed_exit);
-  require(cleanup_thread != callback_thread);
+  BEACON_TEST_REQUIRE(cleanup_observed_exit);
+  BEACON_TEST_REQUIRE(cleanup_thread != callback_thread);
 }
 
 void destruction_action_runs_after_cleanup_action_returns() {
@@ -167,13 +165,13 @@ void destruction_action_runs_after_cleanup_action_returns() {
       });
   std::unique_lock lock(mutex);
   changed.wait(lock, [&] { return destruction_ran; });
-  require(destruction_observed_cleanup_return);
+  BEACON_TEST_REQUIRE(destruction_observed_cleanup_return);
 }
 
 void close_waits_for_inflight_native_callback() {
   android_stream::CallbackGate gate;
   auto callback = gate.try_enter();
-  require(callback.has_value());
+  BEACON_TEST_REQUIRE(callback.has_value());
   std::mutex mutex;
   std::condition_variable changed;
   bool close_started = false;
@@ -194,7 +192,7 @@ void close_waits_for_inflight_native_callback() {
   {
     std::unique_lock lock(mutex);
     changed.wait(lock, [&] { return close_started; });
-    require(!close_finished);
+    BEACON_TEST_REQUIRE(!close_finished);
   }
   callback.reset();
   {
@@ -202,7 +200,7 @@ void close_waits_for_inflight_native_callback() {
     changed.wait(lock, [&] { return close_finished; });
   }
   closer.join();
-  require(!gate.try_enter().has_value());
+  BEACON_TEST_REQUIRE(!gate.try_enter().has_value());
 }
 
 void surface_replacement_releases_every_acquisition_once() {
@@ -219,31 +217,31 @@ void surface_replacement_releases_every_acquisition_once() {
   owner.replace(acquire(3));
   owner.close();
   owner.close();
-  require(acquired == 3);
-  require(released == 3);
+  BEACON_TEST_REQUIRE(acquired == 3);
+  BEACON_TEST_REQUIRE(released == 3);
 }
 
 void production_msquic_settings_use_liveness_heartbeat_without_idle_ownership() {
   const QUIC_SETTINGS settings = android_stream::make_msquic_client_settings();
-  require(settings.IsSet.IdleTimeoutMs == TRUE);
-  require(settings.IdleTimeoutMs == 0);
-  require(settings.IsSet.KeepAliveIntervalMs == TRUE);
-  require(settings.KeepAliveIntervalMs == 1000);
+  BEACON_TEST_REQUIRE(settings.IsSet.IdleTimeoutMs == TRUE);
+  BEACON_TEST_REQUIRE(settings.IdleTimeoutMs == 0);
+  BEACON_TEST_REQUIRE(settings.IsSet.KeepAliveIntervalMs == TRUE);
+  BEACON_TEST_REQUIRE(settings.KeepAliveIntervalMs == 1000);
 }
 
 void production_receive_uses_synchronous_ownership() {
-  require(android_stream::msquic_receive_is_synchronous());
-  require(!android_stream::msquic_receive_requires_completion());
+  BEACON_TEST_REQUIRE(android_stream::msquic_receive_is_synchronous());
+  BEACON_TEST_REQUIRE(!android_stream::msquic_receive_requires_completion());
 }
 
 void send_buffers_are_securely_cleared_before_destruction() {
   std::vector<std::byte> bytes{
       std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4}};
   android_stream::secure_clear_send_bytes(bytes);
-  require(std::ranges::all_of(bytes, [](std::byte value) {
+  BEACON_TEST_REQUIRE(std::ranges::all_of(bytes, [](std::byte value) {
     return value == std::byte{};
   }));
-  require(android_stream::MsQuicClientTestAccess::
+  BEACON_TEST_REQUIRE(android_stream::MsQuicClientTestAccess::
               send_context_clear_wipes_bytes_and_buffer());
 }
 
@@ -304,33 +302,33 @@ void transport_shutdown_accepts_pending_generation_before_completion() {
         return true;
       });
 
-  require(android_stream::MsQuicClientTestAccess::shutdown_initiated_by_transport(
+  BEACON_TEST_REQUIRE(android_stream::MsQuicClientTestAccess::shutdown_initiated_by_transport(
               client) == QUIC_STATUS_SUCCESS);
-  require(android_stream::MsQuicClientTestAccess::shutdown_started(client));
-  require(client.connect(endpoint(2)));
-  require(android_stream::MsQuicClientTestAccess::shutdown_complete(client) ==
+  BEACON_TEST_REQUIRE(android_stream::MsQuicClientTestAccess::shutdown_started(client));
+  BEACON_TEST_REQUIRE(client.connect(endpoint(2)));
+  BEACON_TEST_REQUIRE(android_stream::MsQuicClientTestAccess::shutdown_complete(client) ==
           QUIC_STATUS_SUCCESS);
   {
     std::unique_lock lock(mutex);
     changed.wait(lock, [&] { return reconnect_started; });
   }
-  require(reconnect_generation == 2);
-  require(callbacks.loss_generations == std::vector<std::uint64_t>{1});
+  BEACON_TEST_REQUIRE(reconnect_generation == 2);
+  BEACON_TEST_REQUIRE(callbacks.loss_generations == std::vector<std::uint64_t>{1});
 }
 
 void explicit_shutdown_stale_loss_is_generation_filtered() {
   ProductionCallbacks callbacks;
   android_stream::MsQuicClient client(callbacks);
   android_stream::LifecycleGeneration lifecycle;
-  require(lifecycle.activate(1));
+  BEACON_TEST_REQUIRE(lifecycle.activate(1));
   android_stream::MsQuicClientTestAccess::prime_connection(
       client, 1, true, [](const android_stream::Endpoint &) { return true; });
-  require(client.connect(endpoint(2)));
-  require(lifecycle.activate(2));
-  require(android_stream::MsQuicClientTestAccess::shutdown_initiated_by_peer(
+  BEACON_TEST_REQUIRE(client.connect(endpoint(2)));
+  BEACON_TEST_REQUIRE(lifecycle.activate(2));
+  BEACON_TEST_REQUIRE(android_stream::MsQuicClientTestAccess::shutdown_initiated_by_peer(
               client) == QUIC_STATUS_SUCCESS);
-  require(callbacks.loss_generations == std::vector<std::uint64_t>{1});
-  require(!lifecycle.is_current(callbacks.loss_generations.front()));
+  BEACON_TEST_REQUIRE(callbacks.loss_generations == std::vector<std::uint64_t>{1});
+  BEACON_TEST_REQUIRE(!lifecycle.is_current(callbacks.loss_generations.front()));
 }
 
 void current_generation_receives_one_production_loss() {
@@ -338,11 +336,11 @@ void current_generation_receives_one_production_loss() {
   android_stream::MsQuicClient client(callbacks);
   android_stream::MsQuicClientTestAccess::prime_connection(
       client, 7, false, [](const android_stream::Endpoint &) { return true; });
-  require(android_stream::MsQuicClientTestAccess::shutdown_initiated_by_transport(
+  BEACON_TEST_REQUIRE(android_stream::MsQuicClientTestAccess::shutdown_initiated_by_transport(
               client) == QUIC_STATUS_SUCCESS);
-  require(android_stream::MsQuicClientTestAccess::shutdown_initiated_by_peer(
+  BEACON_TEST_REQUIRE(android_stream::MsQuicClientTestAccess::shutdown_initiated_by_peer(
               client) == QUIC_STATUS_SUCCESS);
-  require(callbacks.loss_generations == std::vector<std::uint64_t>{7});
+  BEACON_TEST_REQUIRE(callbacks.loss_generations == std::vector<std::uint64_t>{7});
 }
 
 void local_stream_start_rejections_report_one_production_loss() {
@@ -357,7 +355,7 @@ void local_stream_start_rejections_report_one_production_loss() {
   android_stream::MsQuicClientTestAccess::reject_stream_start(
       unexpected_id_client, android_stream::StreamRole::input,
       QUIC_STATUS_SUCCESS, 6, 11);
-  require(unexpected_id_callbacks.loss_generations ==
+  BEACON_TEST_REQUIRE(unexpected_id_callbacks.loss_generations ==
           std::vector<std::uint64_t>{11});
 
   ProductionCallbacks failed_status_callbacks;
@@ -368,7 +366,7 @@ void local_stream_start_rejections_report_one_production_loss() {
   android_stream::MsQuicClientTestAccess::reject_stream_start(
       failed_status_client, android_stream::StreamRole::feedback,
       QUIC_STATUS_CONNECTION_REFUSED, 6, 12);
-  require(failed_status_callbacks.loss_generations ==
+  BEACON_TEST_REQUIRE(failed_status_callbacks.loss_generations ==
           std::vector<std::uint64_t>{12});
 }
 #endif
@@ -377,34 +375,34 @@ void production_callbacks_copy_receive_and_defer_shutdown_cleanup() {
   ProductionCallbacks callbacks;
   android_stream::MsQuicClient client(callbacks);
   constexpr std::array bytes{std::byte{1}, std::byte{2}, std::byte{3}};
-  require(android_stream::MsQuicClientTestAccess::receive_session(
+  BEACON_TEST_REQUIRE(android_stream::MsQuicClientTestAccess::receive_session(
               client, bytes) == QUIC_STATUS_SUCCESS);
-  require(callbacks.received == std::vector<std::byte>(bytes.begin(), bytes.end()));
+  BEACON_TEST_REQUIRE(callbacks.received == std::vector<std::byte>(bytes.begin(), bytes.end()));
 
   std::atomic<bool> callback_returned{false};
   callbacks.callback_returned = &callback_returned;
-  require(android_stream::MsQuicClientTestAccess::shutdown_complete_for_release(
+  BEACON_TEST_REQUIRE(android_stream::MsQuicClientTestAccess::shutdown_complete_for_release(
               client, callback_returned) == QUIC_STATUS_SUCCESS);
   std::unique_lock lock(callbacks.mutex);
   callbacks.changed.wait(lock, [&] { return callbacks.closed; });
-  require(callbacks.cleanup_observed_callback_return);
+  BEACON_TEST_REQUIRE(callbacks.cleanup_observed_callback_return);
 }
 
 void production_stream_ids_are_exact() {
-  require(android_stream::expected_stream_id(android_stream::StreamRole::session) == 0);
-  require(android_stream::expected_stream_id(android_stream::StreamRole::input) == 2);
-  require(android_stream::expected_stream_id(android_stream::StreamRole::feedback) == 6);
-  require(android_stream::stream_id_matches(android_stream::StreamRole::session, 0));
-  require(android_stream::stream_id_matches(android_stream::StreamRole::input, 2));
-  require(android_stream::stream_id_matches(android_stream::StreamRole::feedback, 6));
-  require(!android_stream::stream_id_matches(android_stream::StreamRole::feedback, 2));
-  require(android_stream::validate_stream_start(
+  BEACON_TEST_REQUIRE(android_stream::expected_stream_id(android_stream::StreamRole::session) == 0);
+  BEACON_TEST_REQUIRE(android_stream::expected_stream_id(android_stream::StreamRole::input) == 2);
+  BEACON_TEST_REQUIRE(android_stream::expected_stream_id(android_stream::StreamRole::feedback) == 6);
+  BEACON_TEST_REQUIRE(android_stream::stream_id_matches(android_stream::StreamRole::session, 0));
+  BEACON_TEST_REQUIRE(android_stream::stream_id_matches(android_stream::StreamRole::input, 2));
+  BEACON_TEST_REQUIRE(android_stream::stream_id_matches(android_stream::StreamRole::feedback, 6));
+  BEACON_TEST_REQUIRE(!android_stream::stream_id_matches(android_stream::StreamRole::feedback, 2));
+  BEACON_TEST_REQUIRE(android_stream::validate_stream_start(
               android_stream::StreamRole::session, QUIC_STATUS_SUCCESS, 0) ==
           android_stream::StreamStartValidation::accepted);
-  require(android_stream::validate_stream_start(
+  BEACON_TEST_REQUIRE(android_stream::validate_stream_start(
               android_stream::StreamRole::input, QUIC_STATUS_SUCCESS, 6) ==
           android_stream::StreamStartValidation::unexpected_id);
-  require(android_stream::validate_stream_start(
+  BEACON_TEST_REQUIRE(android_stream::validate_stream_start(
               android_stream::StreamRole::feedback,
               QUIC_STATUS_CONNECTION_REFUSED, 6) ==
           android_stream::StreamStartValidation::failed_status);
@@ -415,49 +413,49 @@ void deferred_shutdown_covers_release_and_pending_reconnect() {
   endpoint.host = "beacon.example";
   endpoint.port = 47990;
   const auto release = android_stream::select_shutdown_cleanup_action(true, endpoint);
-  require(release.notify_closed);
-  require(!release.reconnect.has_value());
+  BEACON_TEST_REQUIRE(release.notify_closed);
+  BEACON_TEST_REQUIRE(!release.reconnect.has_value());
   const auto reconnect = android_stream::select_shutdown_cleanup_action(false, endpoint);
-  require(!reconnect.notify_closed);
-  require(reconnect.reconnect.has_value());
-  require(reconnect.reconnect->host == "beacon.example");
+  BEACON_TEST_REQUIRE(!reconnect.notify_closed);
+  BEACON_TEST_REQUIRE(reconnect.reconnect.has_value());
+  BEACON_TEST_REQUIRE(reconnect.reconnect->host == "beacon.example");
   const auto idle = android_stream::select_shutdown_cleanup_action(false, std::nullopt);
-  require(!idle.notify_closed);
-  require(!idle.reconnect.has_value());
+  BEACON_TEST_REQUIRE(!idle.notify_closed);
+  BEACON_TEST_REQUIRE(!idle.reconnect.has_value());
 }
 
 void grant_mapping_matches_every_current_protocol_mode() {
   beacon::stream::v1::VideoCodec codec{};
   beacon::stream::v1::DynamicRange dynamic_range{};
-  require(android_stream::grant_video_codec_enum_name("h264") ==
+  BEACON_TEST_REQUIRE(android_stream::grant_video_codec_enum_name("h264") ==
           "VIDEO_CODEC_H264");
-  require(android_stream::grant_video_codec_enum_name("av1") ==
+  BEACON_TEST_REQUIRE(android_stream::grant_video_codec_enum_name("av1") ==
           "VIDEO_CODEC_AV1");
-  require(android_stream::grant_dynamic_range_enum_name("sdr") ==
+  BEACON_TEST_REQUIRE(android_stream::grant_dynamic_range_enum_name("sdr") ==
           "DYNAMIC_RANGE_SDR");
-  require(android_stream::grant_dynamic_range_enum_name("hdr10") ==
+  BEACON_TEST_REQUIRE(android_stream::grant_dynamic_range_enum_name("hdr10") ==
           "DYNAMIC_RANGE_HDR10");
-  require(android_stream::map_grant_video_codec("h264", codec));
-  require(codec == beacon::stream::v1::VIDEO_CODEC_H264);
-  require(android_stream::map_grant_video_codec("hevc", codec));
-  require(codec == beacon::stream::v1::VIDEO_CODEC_HEVC);
-  require(android_stream::map_grant_video_codec("av1", codec));
-  require(codec == beacon::stream::v1::VIDEO_CODEC_AV1);
-  require(android_stream::map_grant_dynamic_range("sdr", dynamic_range));
-  require(dynamic_range == beacon::stream::v1::DYNAMIC_RANGE_SDR);
-  require(android_stream::map_grant_dynamic_range("hdr10", dynamic_range));
-  require(dynamic_range == beacon::stream::v1::DYNAMIC_RANGE_HDR10);
-  require(!android_stream::map_grant_video_codec("vp9", codec));
-  require(!android_stream::map_grant_dynamic_range("dolby_vision", dynamic_range));
+  BEACON_TEST_REQUIRE(android_stream::map_grant_video_codec("h264", codec));
+  BEACON_TEST_REQUIRE(codec == beacon::stream::v1::VIDEO_CODEC_H264);
+  BEACON_TEST_REQUIRE(android_stream::map_grant_video_codec("hevc", codec));
+  BEACON_TEST_REQUIRE(codec == beacon::stream::v1::VIDEO_CODEC_HEVC);
+  BEACON_TEST_REQUIRE(android_stream::map_grant_video_codec("av1", codec));
+  BEACON_TEST_REQUIRE(codec == beacon::stream::v1::VIDEO_CODEC_AV1);
+  BEACON_TEST_REQUIRE(android_stream::map_grant_dynamic_range("sdr", dynamic_range));
+  BEACON_TEST_REQUIRE(dynamic_range == beacon::stream::v1::DYNAMIC_RANGE_SDR);
+  BEACON_TEST_REQUIRE(android_stream::map_grant_dynamic_range("hdr10", dynamic_range));
+  BEACON_TEST_REQUIRE(dynamic_range == beacon::stream::v1::DYNAMIC_RANGE_HDR10);
+  BEACON_TEST_REQUIRE(!android_stream::map_grant_video_codec("vp9", codec));
+  BEACON_TEST_REQUIRE(!android_stream::map_grant_dynamic_range("dolby_vision", dynamic_range));
   android_stream::SelectedVideo selected;
-  require(android_stream::map_selected_video_grant(
+  BEACON_TEST_REQUIRE(android_stream::map_selected_video_grant(
       "av1", 2560, 1600, 120, 1, "hdr10", selected));
-  require(selected.codec == beacon::stream::v1::VIDEO_CODEC_AV1);
-  require(selected.width == 2560);
-  require(selected.height == 1600);
-  require(selected.fps_numerator == 120);
-  require(selected.fps_denominator == 1);
-  require(selected.dynamic_range == beacon::stream::v1::DYNAMIC_RANGE_HDR10);
+  BEACON_TEST_REQUIRE(selected.codec == beacon::stream::v1::VIDEO_CODEC_AV1);
+  BEACON_TEST_REQUIRE(selected.width == 2560);
+  BEACON_TEST_REQUIRE(selected.height == 1600);
+  BEACON_TEST_REQUIRE(selected.fps_numerator == 120);
+  BEACON_TEST_REQUIRE(selected.fps_denominator == 1);
+  BEACON_TEST_REQUIRE(selected.dynamic_range == beacon::stream::v1::DYNAMIC_RANGE_HDR10);
 }
 
 void closing_registry_retains_until_callback_completion() {
@@ -466,19 +464,20 @@ void closing_registry_retains_until_callback_completion() {
   auto session = std::make_shared<TestSession>();
   const auto handle = registry.add(session);
 
-  require(registry.begin_close(handle) == session);
-  require(!registry.find_active(handle));
-  require(registry.retain(handle) == session);
-  require(registry.size() == 1);
+  BEACON_TEST_REQUIRE(registry.begin_close(handle) == session);
+  BEACON_TEST_REQUIRE(!registry.find_active(handle));
+  BEACON_TEST_REQUIRE(registry.retain(handle) == session);
+  BEACON_TEST_REQUIRE(registry.size() == 1);
 
   std::mutex mutex;
   std::condition_variable changed;
   bool callback_entered = false;
   bool callback_may_complete = false;
   bool callback_completed = false;
+  bool callback_retained_session = false;
   std::thread callback([&] {
     auto retained = registry.retain(handle);
-    require(retained == session);
+    callback_retained_session = retained == session;
     {
       std::unique_lock lock(mutex);
       callback_entered = true;
@@ -496,37 +495,39 @@ void closing_registry_retains_until_callback_completion() {
   {
     std::unique_lock lock(mutex);
     changed.wait(lock, [&] { return callback_entered; });
-    require(registry.size() == 1);
-    require(registry.retain(handle) == session);
+    BEACON_TEST_REQUIRE(registry.size() == 1);
+    BEACON_TEST_REQUIRE(registry.retain(handle) == session);
     callback_may_complete = true;
     changed.notify_all();
     changed.wait(lock, [&] { return callback_completed; });
   }
   callback.join();
-  require(registry.size() == 0);
-  require(!registry.retain(handle));
+  BEACON_TEST_REQUIRE(callback_retained_session);
+  BEACON_TEST_REQUIRE(registry.size() == 0);
+  BEACON_TEST_REQUIRE(!registry.retain(handle));
 }
 
 }  // namespace
 
 int main() {
-  cleanup_runs_only_after_callback_scope_exits();
-  destruction_action_runs_after_cleanup_action_returns();
-  close_waits_for_inflight_native_callback();
-  surface_replacement_releases_every_acquisition_once();
-  production_msquic_settings_use_liveness_heartbeat_without_idle_ownership();
-  production_receive_uses_synchronous_ownership();
-  send_buffers_are_securely_cleared_before_destruction();
-  production_callbacks_copy_receive_and_defer_shutdown_cleanup();
+  return beacon::stream::testing::run_tests([] {
+    cleanup_runs_only_after_callback_scope_exits();
+    destruction_action_runs_after_cleanup_action_returns();
+    close_waits_for_inflight_native_callback();
+    surface_replacement_releases_every_acquisition_once();
+    production_msquic_settings_use_liveness_heartbeat_without_idle_ownership();
+    production_receive_uses_synchronous_ownership();
+    send_buffers_are_securely_cleared_before_destruction();
+    production_callbacks_copy_receive_and_defer_shutdown_cleanup();
 #ifndef NDEBUG
-  transport_shutdown_accepts_pending_generation_before_completion();
-  explicit_shutdown_stale_loss_is_generation_filtered();
-  current_generation_receives_one_production_loss();
-  local_stream_start_rejections_report_one_production_loss();
+    transport_shutdown_accepts_pending_generation_before_completion();
+    explicit_shutdown_stale_loss_is_generation_filtered();
+    current_generation_receives_one_production_loss();
+    local_stream_start_rejections_report_one_production_loss();
 #endif
-  production_stream_ids_are_exact();
-  deferred_shutdown_covers_release_and_pending_reconnect();
-  grant_mapping_matches_every_current_protocol_mode();
-  closing_registry_retains_until_callback_completion();
-  return 0;
+    production_stream_ids_are_exact();
+    deferred_shutdown_covers_release_and_pending_reconnect();
+    grant_mapping_matches_every_current_protocol_mode();
+    closing_registry_retains_until_callback_completion();
+  });
 }

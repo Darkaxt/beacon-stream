@@ -4,6 +4,7 @@ import org.junit.Test;
 
 import java.util.Arrays;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
@@ -53,15 +54,33 @@ public final class BeaconNetworkIdentityHasherTest {
     public void failedSaltPersistenceStopsFingerprintCreation() {
         FakeSaltStorage storage = new FakeSaltStorage();
         storage.acceptWrites = false;
+        byte[] generatedSalt = bytes(0x63);
         BeaconNetworkIdentityHasher hasher = new BeaconNetworkIdentityHasher(
             storage,
-            () -> bytes(0x63));
+            () -> generatedSalt);
 
         IllegalStateException error = assertThrows(
             IllegalStateException.class,
             () -> hasher.hash("private-wifi-name", "00:11:22:33:44:55"));
 
         assertEquals("Could not persist the local network identity salt.", error.getMessage());
+        assertArrayEquals(new byte[32], generatedSalt);
+    }
+
+    @Test
+    public void throwingSaltPersistenceZeroesGeneratedSalt() {
+        byte[] generatedSalt = bytes(0x64);
+        IllegalStateException persistenceFailure = new IllegalStateException("injected write failure");
+        BeaconNetworkIdentityHasher hasher = new BeaconNetworkIdentityHasher(
+            new ThrowingSaltStorage(persistenceFailure),
+            () -> generatedSalt);
+
+        IllegalStateException error = assertThrows(
+            IllegalStateException.class,
+            () -> hasher.hash("private-wifi-name", "00:11:22:33:44:55"));
+
+        assertEquals(persistenceFailure, error);
+        assertArrayEquals(new byte[32], generatedSalt);
     }
 
     @Test
@@ -126,6 +145,24 @@ public final class BeaconNetworkIdentityHasherTest {
                 this.encodedSalt = encodedSalt;
             }
             return acceptWrites;
+        }
+    }
+
+    private static final class ThrowingSaltStorage implements BeaconNetworkIdentityHasher.SaltStorage {
+        private final RuntimeException failure;
+
+        ThrowingSaltStorage(RuntimeException failure) {
+            this.failure = failure;
+        }
+
+        @Override
+        public String read() {
+            return "";
+        }
+
+        @Override
+        public boolean write(String encodedSalt) {
+            throw failure;
         }
     }
 }

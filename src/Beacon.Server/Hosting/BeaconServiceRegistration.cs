@@ -42,7 +42,9 @@ public static class BeaconServiceRegistration
             environmentHostMode: Environment.GetEnvironmentVariable(HostModeEnvironmentVariable),
             environmentClientProfilesPath: Environment.GetEnvironmentVariable(ClientProfilesPathEnvironmentVariable),
             environmentStreamingMode: Environment.GetEnvironmentVariable(StreamingModeEnvironmentVariable),
-            environmentStreamWorkerPath: Environment.GetEnvironmentVariable(StreamWorkerPathEnvironmentVariable));
+            environmentStreamWorkerPath: Environment.GetEnvironmentVariable(StreamWorkerPathEnvironmentVariable),
+            environmentBenchmarkEvidencePath: Environment.GetEnvironmentVariable(
+                BenchmarkEvidencePathEnvironmentVariable));
 
     public static IServiceCollection AddBeaconServices(
         this IServiceCollection services,
@@ -54,7 +56,8 @@ public static class BeaconServiceRegistration
             environmentHostMode,
             environmentClientProfilesPath,
             environmentStreamingMode: null,
-            environmentStreamWorkerPath: null);
+            environmentStreamWorkerPath: null,
+            environmentBenchmarkEvidencePath: null);
 
     public static IServiceCollection AddBeaconServices(
         this IServiceCollection services,
@@ -62,7 +65,8 @@ public static class BeaconServiceRegistration
         string? environmentHostMode,
         string? environmentClientProfilesPath,
         string? environmentStreamingMode,
-        string? environmentStreamWorkerPath)
+        string? environmentStreamWorkerPath,
+        string? environmentBenchmarkEvidencePath)
     {
         BeaconHostMode hostMode = ResolveHostMode(configuration, environmentHostMode);
         BeaconStreamingMode streamingMode = ResolveStreamingMode(
@@ -87,7 +91,7 @@ public static class BeaconServiceRegistration
         services.AddSingleton<IBenchmarkEvidenceRepository>(_ =>
             CreateBenchmarkEvidenceRepository(
                 configuration,
-                Environment.GetEnvironmentVariable(BenchmarkEvidencePathEnvironmentVariable),
+                environmentBenchmarkEvidencePath,
                 hostMode));
         BeaconSecurityOptions securityOptions = CreateSecurityOptions(configuration);
         services.AddSingleton(securityOptions);

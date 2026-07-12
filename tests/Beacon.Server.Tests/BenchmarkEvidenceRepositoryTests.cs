@@ -17,7 +17,7 @@ public sealed class BenchmarkEvidenceRepositoryTests
             BenchmarkEvidence evidence = CreateEvidence(
                 Guid.Parse("e84a03c5-e089-4a60-adba-f61a114c74c1"),
                 new DateTimeOffset(2026, 7, 12, 12, 0, 0, TimeSpan.Zero));
-            var repository = new FileBenchmarkEvidenceRepository(path);
+            using var repository = new FileBenchmarkEvidenceRepository(path);
 
             repository.SaveEvidence([evidence]);
             BenchmarkEvidence loaded = Assert.Single(repository.LoadEvidence());
@@ -58,7 +58,7 @@ public sealed class BenchmarkEvidenceRepositoryTests
         {
             Directory.CreateDirectory(directory);
             File.WriteAllText(path, "{\"version\":99,\"evidence\":[]}");
-            var repository = new FileBenchmarkEvidenceRepository(path);
+            using var repository = new FileBenchmarkEvidenceRepository(path);
 
             InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => repository.LoadEvidence());
 
@@ -74,10 +74,37 @@ public sealed class BenchmarkEvidenceRepositoryTests
     }
 
     [Fact]
+    public void FileRepositoryRejectsSecondLiveWriterUntilTheFirstIsDisposed()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"beacon-benchmark-lease-{Guid.NewGuid():N}");
+        string path = Path.Combine(directory, "benchmark-evidence.json");
+
+        try
+        {
+            using (var repository = new FileBenchmarkEvidenceRepository(path))
+            {
+                InvalidOperationException error = Assert.Throws<InvalidOperationException>(
+                    () => new FileBenchmarkEvidenceRepository(path));
+
+                Assert.Contains("exclusive writer lease", error.Message, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains(path, error.Message, StringComparison.Ordinal);
+            }
+
+            using var replacement = new FileBenchmarkEvidenceRepository(path);
+            Assert.Equal(path, replacement.Location);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void ClientStoreSelectsNewestCompletedEvidenceAndPreservesHistory()
     {
-        var repository = new InMemoryBenchmarkEvidenceRepository();
-        var store = new InMemoryClientStore(new InMemoryClientProfileRepository(), repository);
         BenchmarkEvidence older = CreateEvidence(
             Guid.Parse("e84a03c5-e089-4a60-adba-f61a114c74c1"),
             new DateTimeOffset(2026, 7, 11, 12, 0, 0, TimeSpan.Zero));
@@ -94,10 +121,8 @@ public sealed class BenchmarkEvidenceRepositoryTests
             PowerSamples = [],
             NetworkCoverage = null
         };
-
-        store.SaveBenchmarkEvidence(newer);
-        store.SaveBenchmarkEvidence(older);
-        store.SaveBenchmarkEvidence(incomplete);
+        var repository = new InMemoryBenchmarkEvidenceRepository([newer, older, incomplete]);
+        var store = new InMemoryClientStore(new InMemoryClientProfileRepository(), repository);
 
         BenchmarkPlanEvidence selected = Assert.IsType<BenchmarkPlanEvidence>(
             store.GetLatestBenchmarkPlanEvidence(
@@ -119,21 +144,32 @@ public sealed class BenchmarkEvidenceRepositoryTests
             Guid.Parse("da1f9e17-38c0-4568-be44-18ca59a9beb3"),
             new DateTimeOffset(2026, 7, 12, 12, 0, 0, TimeSpan.Zero));
 
-        Assert.Throws<IOException>(() => store.SaveBenchmarkEvidence(evidence));
+        Assert.Throws<IOException>(() => store.PrepareBenchmarkRun(
+            evidence.ClientId,
+            BenchmarkTrigger.Manual,
+            evidence.Fingerprints,
+            evidence.StartedAt,
+            TimeSpan.FromDays(7)));
 
-        Assert.Null(store.GetBenchmarkEvidence(evidence.RunId));
+        Assert.Empty(store.GetBenchmarkEvidence(evidence.ClientId.Value));
     }
 
     [Fact]
     public void FailedPreparationDoesNotReplaceTheCurrentPlanningFingerprint()
     {
         DateTimeOffset now = new(2026, 7, 12, 13, 0, 0, TimeSpan.Zero);
-        var repository = new SwitchableBenchmarkEvidenceRepository();
-        var store = new InMemoryClientStore(new InMemoryClientProfileRepository(), repository);
         BenchmarkEvidence existing = CreateEvidence(
             Guid.Parse("3f32b673-d1eb-4dc0-8d15-249490a28a7f"),
             now.AddHours(-1));
-        store.SaveBenchmarkEvidence(existing);
+        var repository = new SwitchableBenchmarkEvidenceRepository([existing]);
+        var store = new InMemoryClientStore(new InMemoryClientProfileRepository(), repository);
+        BenchmarkPreparationResult reused = store.PrepareBenchmarkRun(
+            existing.ClientId,
+            BenchmarkTrigger.Automatic,
+            existing.Fingerprints,
+            now,
+            TimeSpan.FromDays(7));
+        Assert.Equal(BenchmarkPreparationDisposition.Reuse, reused.Disposition);
         repository.FailWrites = true;
         BenchmarkFingerprintSet changed = existing.Fingerprints with
         {
@@ -159,8 +195,6 @@ public sealed class BenchmarkEvidenceRepositoryTests
     [Fact]
     public async Task ConcurrentCompletionCommitsExactlyOneResult()
     {
-        var repository = new InMemoryBenchmarkEvidenceRepository();
-        var store = new InMemoryClientStore(new InMemoryClientProfileRepository(), repository);
         BenchmarkEvidence completed = CreateEvidence(
             Guid.Parse("2148288c-a071-42e7-9e60-5f2926ec70a0"),
             new DateTimeOffset(2026, 7, 12, 12, 0, 0, TimeSpan.Zero));
@@ -173,7 +207,8 @@ public sealed class BenchmarkEvidenceRepositoryTests
             PowerSamples = [],
             NetworkCoverage = null
         };
-        store.SaveBenchmarkEvidence(pending);
+        var repository = new InMemoryBenchmarkEvidenceRepository([pending]);
+        var store = new InMemoryClientStore(new InMemoryClientProfileRepository(), repository);
 
         Task<bool>[] attempts = Enumerable.Range(0, 2)
             .Select(index => Task.Run(() => store.TryCompleteBenchmarkEvidence(
@@ -291,9 +326,10 @@ public sealed class BenchmarkEvidenceRepositoryTests
             throw new IOException("Persistence failed.");
     }
 
-    private sealed class SwitchableBenchmarkEvidenceRepository : IBenchmarkEvidenceRepository
+    private sealed class SwitchableBenchmarkEvidenceRepository(
+        IEnumerable<BenchmarkEvidence>? initialEvidence = null) : IBenchmarkEvidenceRepository
     {
-        private BenchmarkEvidence[] evidence = [];
+        private BenchmarkEvidence[] evidence = initialEvidence?.ToArray() ?? [];
 
         public bool FailWrites { get; set; }
 

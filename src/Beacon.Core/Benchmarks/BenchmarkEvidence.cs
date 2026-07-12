@@ -61,14 +61,14 @@ public sealed record SelectedBenchmarkResult(
     double PacketLossPercent,
     bool PowerConstrained,
     IReadOnlyList<string> Reasons,
-    string Profile = "",
-    int BitDepth = 0,
-    int Width = 0,
-    int Height = 0,
-    bool TenBitPresentationVerified = false,
-    bool HdrPresentationVerified = false,
-    double P95DecodeLatencyMs = 0,
-    double? P95PresentationLatencyMs = null);
+    string Profile,
+    int BitDepth,
+    int Width,
+    int Height,
+    bool TenBitPresentationVerified,
+    bool HdrPresentationVerified,
+    double P95DecodeLatencyMs,
+    double? P95PresentationLatencyMs);
 
 public sealed record BenchmarkPlanEvidence(
     Guid RunId,

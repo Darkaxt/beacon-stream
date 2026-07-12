@@ -76,22 +76,21 @@ public static class BenchmarkEvidenceValidator
             throw Invalid("Completed benchmark evidence requires a selected result.");
         }
 
-        Validate(new BenchmarkScoringInput(
+        var scoringInput = new BenchmarkScoringInput(
             evidence.NetworkSamples,
             evidence.DecoderSamples,
             evidence.PowerSamples,
-            NetworkCoverage: evidence.NetworkCoverage));
+            NetworkCoverage: evidence.NetworkCoverage);
+        Validate(scoringInput);
         Validate(evidence.SelectedResult);
 
         SelectedBenchmarkResult rescored;
         try
         {
-            rescored = BenchmarkScorer.Select(new BenchmarkScoringInput(
-                evidence.NetworkSamples,
-                evidence.DecoderSamples,
-                evidence.PowerSamples,
-                evidence.SelectedResult.Codec,
-                evidence.NetworkCoverage));
+            rescored = BenchmarkScorer.SelectValidated(scoringInput with
+            {
+                CodecPreference = evidence.SelectedResult.Codec
+            });
         }
         catch (InvalidOperationException error)
         {
@@ -119,7 +118,7 @@ public static class BenchmarkEvidenceValidator
             sample.HdrPresentationVerified == evidence.SelectedResult.HdrPresentationVerified &&
             sample.P95DecodeLatencyMs == evidence.SelectedResult.P95DecodeLatencyMs &&
             sample.P95PresentationLatencyMs == evidence.SelectedResult.P95PresentationLatencyMs &&
-            IsSafeDecoderEvidence(sample));
+            DecoderBenchmarkCertification.IsCertified(sample));
         if (!matchesDecoder)
         {
             throw Invalid("Selected benchmark result does not match certified decoder evidence.");
@@ -247,7 +246,7 @@ public static class BenchmarkEvidenceValidator
         }
 
         RequireFiniteNonNegative(result.P95PresentationLatencyMs.Value, "Selected presentation P95 latency");
-        double frameDurationMs = 1000.0 / result.MaxSustainableFps;
+        double frameDurationMs = DecoderBenchmarkCertification.FrameDurationMs(result.MaxSustainableFps);
         if (result.P95DecodeLatencyMs > frameDurationMs ||
             result.P95PresentationLatencyMs.Value > 2 * frameDurationMs)
         {
@@ -399,18 +398,6 @@ public static class BenchmarkEvidenceValidator
         {
             throw Invalid("Decoder target FPS is outside the supported range.");
         }
-    }
-
-    private static bool IsSafeDecoderEvidence(DecoderBenchmarkSample sample)
-    {
-        double frameDurationMs = 1000.0 / sample.TargetFps;
-        return sample.Configured &&
-            sample.DroppedFrames == 0 &&
-            sample.OutputErrors == 0 &&
-            sample.SustainedFps >= sample.TargetFps &&
-            sample.P95DecodeLatencyMs <= frameDurationMs &&
-            sample.P95PresentationLatencyMs is not null &&
-            sample.P95PresentationLatencyMs.Value <= 2 * frameDurationMs;
     }
 
     private static long GetLastSequence(NetworkBenchmarkCoverage coverage)

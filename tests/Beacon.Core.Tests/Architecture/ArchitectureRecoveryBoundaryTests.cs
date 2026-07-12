@@ -223,6 +223,27 @@ public sealed class ArchitectureRecoveryBoundaryTests
         Assert.Empty(violations);
     }
 
+    [Fact]
+    public void NativeTestFailureConsumersUseTheUnwindingRunner()
+    {
+        string root = FindRepositoryRoot();
+        string[] nativeTestRoots =
+        [
+            ToPlatformPath(root, "tests/Beacon.StreamProtocol.Tests"),
+            ToPlatformPath(root, "src/Beacon.Android/app/src/main/cpp/streamcore/tests")
+        ];
+
+        string[] violations = nativeTestRoots
+            .SelectMany(path => Directory.EnumerateFiles(path, "*.cpp", SearchOption.AllDirectories))
+            .Where(path => File.ReadAllText(path).Contains("#include \"test_failure.h\"", StringComparison.Ordinal))
+            .Where(path => !File.ReadAllText(path).Contains("testing::run_tests(", StringComparison.Ordinal))
+            .Select(path => ToRepositoryRelativePath(root, path))
+            .Order()
+            .ToArray();
+
+        Assert.Empty(violations);
+    }
+
     private static async Task<IReadOnlyList<string>> EnumerateTrackedSourceFilesAsync(string root)
     {
         var startInfo = new ProcessStartInfo("git")

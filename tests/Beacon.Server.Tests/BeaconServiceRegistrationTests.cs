@@ -22,6 +22,7 @@ using Beacon.Server.Streaming;
 
 namespace Beacon.Server.Tests;
 
+[Collection(BeaconServiceRegistrationEnvironmentCollection.Name)]
 public sealed class BeaconServiceRegistrationTests
 {
     [Fact]
@@ -208,6 +209,7 @@ public sealed class BeaconServiceRegistrationTests
                 typeof(string),
                 typeof(string),
                 typeof(string),
+                typeof(string),
                 typeof(string)
             ],
             modifiers: null);
@@ -221,6 +223,59 @@ public sealed class BeaconServiceRegistrationTests
         Assert.NotNull(compositionOverload);
         MethodInfo composition = compositionOverload;
         Assert.All(composition.GetParameters(), parameter => Assert.False(parameter.HasDefaultValue));
+    }
+
+    [Fact]
+    public void ControlledCompositionIgnoresAmbientBenchmarkPathUnlessExplicitlySupplied()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"beacon-ambient-benchmarks-{Guid.NewGuid():N}");
+        string ambientPath = Path.Combine(directory, "benchmark-evidence.json");
+        string? previousPath = Environment.GetEnvironmentVariable(
+            BeaconServiceRegistration.BenchmarkEvidencePathEnvironmentVariable);
+
+        try
+        {
+            Environment.SetEnvironmentVariable(
+                BeaconServiceRegistration.BenchmarkEvidencePathEnvironmentVariable,
+                ambientPath);
+            var controlledServices = new ServiceCollection();
+            controlledServices.AddBeaconServices(
+                CreateConfiguration(),
+                environmentHostMode: null,
+                environmentClientProfilesPath: null,
+                environmentStreamingMode: null,
+                environmentStreamWorkerPath: null,
+                environmentBenchmarkEvidencePath: null);
+            using ServiceProvider controlledProvider = controlledServices.BuildServiceProvider();
+
+            Assert.IsType<InMemoryBenchmarkEvidenceRepository>(
+                controlledProvider.GetRequiredService<IBenchmarkEvidenceRepository>());
+
+            var explicitServices = new ServiceCollection();
+            explicitServices.AddBeaconServices(
+                CreateConfiguration(),
+                environmentHostMode: null,
+                environmentClientProfilesPath: null,
+                environmentStreamingMode: null,
+                environmentStreamWorkerPath: null,
+                environmentBenchmarkEvidencePath: ambientPath);
+            using ServiceProvider explicitProvider = explicitServices.BuildServiceProvider();
+            IBenchmarkEvidenceRepository explicitRepository =
+                explicitProvider.GetRequiredService<IBenchmarkEvidenceRepository>();
+
+            Assert.IsType<FileBenchmarkEvidenceRepository>(explicitRepository);
+            Assert.Equal(ambientPath, explicitRepository.Location);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                BeaconServiceRegistration.BenchmarkEvidencePathEnvironmentVariable,
+                previousPath);
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
     }
 
     [Fact]
@@ -291,7 +346,8 @@ public sealed class BeaconServiceRegistrationTests
             environmentHostMode: null,
             environmentClientProfilesPath: null,
             environmentStreamingMode: "fake",
-            environmentStreamWorkerPath: null);
+            environmentStreamWorkerPath: null,
+            environmentBenchmarkEvidencePath: null);
         using ServiceProvider provider = services.BuildServiceProvider(new ServiceProviderOptions
         {
             ValidateOnBuild = true,
@@ -376,7 +432,8 @@ public sealed class BeaconServiceRegistrationTests
             environmentHostMode: null,
             environmentClientProfilesPath: null,
             environmentStreamingMode: null,
-            environmentStreamWorkerPath: environmentPath);
+            environmentStreamWorkerPath: environmentPath,
+            environmentBenchmarkEvidencePath: null);
         await using ServiceProvider provider = services.BuildServiceProvider(new ServiceProviderOptions
         {
             ValidateOnBuild = true,
@@ -403,4 +460,10 @@ public sealed class BeaconServiceRegistrationTests
         new ConfigurationBuilder()
             .AddInMemoryCollection(values)
             .Build();
+}
+
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class BeaconServiceRegistrationEnvironmentCollection
+{
+    public const string Name = "Beacon service registration environment";
 }

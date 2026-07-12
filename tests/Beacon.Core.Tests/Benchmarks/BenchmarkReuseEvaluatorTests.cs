@@ -118,7 +118,15 @@ public sealed class BenchmarkReuseEvaluatorTests
             JitterMs: 1.2,
             PacketLossPercent: 0,
             PowerConstrained: false,
-            Reasons: ["H.264 120 FPS passed active decode validation."]);
+            Reasons: ["H.264 120 FPS passed active decode validation."],
+            Profile: "high",
+            BitDepth: 8,
+            Width: 2560,
+            Height: 1600,
+            TenBitPresentationVerified: false,
+            HdrPresentationVerified: false,
+            P95DecodeLatencyMs: 5,
+            P95PresentationLatencyMs: 9);
 
         return new BenchmarkEvidence(
             RunId: Guid.Parse("d16c4121-f8e8-442f-891e-4bb260bf3b9a"),

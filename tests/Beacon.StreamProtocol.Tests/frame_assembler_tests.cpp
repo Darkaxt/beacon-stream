@@ -129,9 +129,10 @@ void capacity_eviction_requests_idr_and_complete_idr_recovers() {
 }  // namespace
 
 int main() {
-  reordered_chunks_complete_one_access_unit();
-  duplicate_overlap_and_inconsistent_chunks_are_rejected();
-  malformed_offsets_and_planned_size_are_rejected_before_allocation();
-  capacity_eviction_requests_idr_and_complete_idr_recovers();
-  return 0;
+  return beacon::stream::testing::run_tests([] {
+    reordered_chunks_complete_one_access_unit();
+    duplicate_overlap_and_inconsistent_chunks_are_rejected();
+    malformed_offsets_and_planned_size_are_rejected_before_allocation();
+    capacity_eviction_requests_idr_and_complete_idr_recovers();
+  });
 }

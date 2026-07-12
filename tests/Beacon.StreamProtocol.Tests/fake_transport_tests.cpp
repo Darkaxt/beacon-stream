@@ -59,7 +59,8 @@ void shutdown_is_idempotent_and_closes_the_connection_once() {
 }  // namespace
 
 int main() {
-  faults_are_selected_only_by_packet_sequence();
-  shutdown_is_idempotent_and_closes_the_connection_once();
-  return 0;
+  return beacon::stream::testing::run_tests([] {
+    faults_are_selected_only_by_packet_sequence();
+    shutdown_is_idempotent_and_closes_the_connection_once();
+  });
 }
