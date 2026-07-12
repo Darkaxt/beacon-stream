@@ -268,5 +268,16 @@ public sealed class SessionPlannerTests
                 JitterMs: 1.5,
                 PacketLossPercent: packetLossPercent,
                 PowerConstrained: powerConstrained,
-                Reasons: [reason]));
+                Reasons: [reason],
+                Profile: codec.ToLowerInvariant() switch
+                {
+                    "h264" => "high",
+                    "hevc" => "main10",
+                    _ => "main"
+                },
+                BitDepth: codec.Equals("h264", StringComparison.OrdinalIgnoreCase) ? 8 : 10,
+                Width: 2560,
+                Height: 1600,
+                P95DecodeLatencyMs: 5,
+                P95PresentationLatencyMs: 9));
 }

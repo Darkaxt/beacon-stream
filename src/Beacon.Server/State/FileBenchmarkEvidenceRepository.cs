@@ -35,7 +35,23 @@ public sealed class FileBenchmarkEvidenceRepository(string path) : IBenchmarkEvi
             {
                 using FileStream stream = File.OpenRead(path);
                 BenchmarkEvidenceDocument? document = JsonSerializer.Deserialize<BenchmarkEvidenceDocument>(stream, JsonOptions);
-                return document?.Evidence ?? [];
+                if (document is null)
+                {
+                    throw new InvalidOperationException($"Benchmark evidence store '{path}' is empty.");
+                }
+
+                if (document.Version != 1)
+                {
+                    throw new InvalidOperationException(
+                        $"Benchmark evidence store '{path}' uses unsupported version {document.Version}.");
+                }
+
+                foreach (BenchmarkEvidence evidence in document.Evidence)
+                {
+                    BenchmarkEvidenceValidator.Validate(evidence);
+                }
+
+                return document.Evidence;
             }
             catch (JsonException ex)
             {

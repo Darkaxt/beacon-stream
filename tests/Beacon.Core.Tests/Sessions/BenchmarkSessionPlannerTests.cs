@@ -96,6 +96,32 @@ public sealed class BenchmarkSessionPlannerTests
     }
 
     [Fact]
+    public void RejectsUncertifiedLegacySelection()
+    {
+        BenchmarkPlanEvidence evidence = CreatePlanEvidence("h264", 120, 70) with
+        {
+            SelectedResult = CreatePlanEvidence("h264", 120, 70).SelectedResult with
+            {
+                Profile = "",
+                BitDepth = 0,
+                Width = 0,
+                Height = 0,
+                P95PresentationLatencyMs = null
+            }
+        };
+
+        SessionPlanResult result = SessionPlanner.CreatePlan(
+            ClientProfile.CreateZFold7Default(),
+            new EndpointCapabilities(false, false, true, false, false),
+            evidence,
+            Dispatch);
+
+        Assert.False(result.Success);
+        Assert.Null(result.Plan);
+        Assert.Contains("benchmark evidence is invalid", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void DisplayDimensionsNeverExceedCertifiedMode()
     {
         BenchmarkPlanEvidence evidence = CreatePlanEvidence("h264", 60, 35) with
@@ -219,7 +245,12 @@ public sealed class BenchmarkSessionPlannerTests
                 PacketLossPercent: 0,
                 PowerConstrained: false,
                 Reasons: ["Selected from active network and decoder measurements."],
-                Profile: codec == "h264" ? "high" : "main10",
+                Profile: codec switch
+                {
+                    "h264" => "high",
+                    "hevc" => "main10",
+                    _ => "main"
+                },
                 BitDepth: codec == "h264" ? 8 : 10,
                 Width: 2560,
                 Height: 1600,

@@ -83,6 +83,31 @@ public static class BenchmarkEvidenceValidator
             NetworkCoverage: evidence.NetworkCoverage));
         Validate(evidence.SelectedResult);
 
+        SelectedBenchmarkResult rescored;
+        try
+        {
+            rescored = BenchmarkScorer.Select(new BenchmarkScoringInput(
+                evidence.NetworkSamples,
+                evidence.DecoderSamples,
+                evidence.PowerSamples,
+                evidence.SelectedResult.Codec,
+                evidence.NetworkCoverage));
+        }
+        catch (InvalidOperationException error)
+        {
+            throw Invalid("Selected benchmark result cannot be reproduced from measured evidence.", error);
+        }
+
+        if (evidence.SelectedResult.InitialBitrateMbps != rescored.InitialBitrateMbps ||
+            evidence.SelectedResult.SustainableThroughputMbps != rescored.SustainableThroughputMbps ||
+            evidence.SelectedResult.RttMs != rescored.RttMs ||
+            evidence.SelectedResult.JitterMs != rescored.JitterMs ||
+            evidence.SelectedResult.PacketLossPercent != rescored.PacketLossPercent ||
+            evidence.SelectedResult.PowerConstrained != rescored.PowerConstrained)
+        {
+            throw Invalid("Selected benchmark network result does not match measured network and power evidence.");
+        }
+
         bool matchesDecoder = evidence.DecoderSamples.Any(sample =>
             sample.Codec.Equals(evidence.SelectedResult.Codec, StringComparison.OrdinalIgnoreCase) &&
             sample.Profile.Equals(evidence.SelectedResult.Profile, StringComparison.Ordinal) &&
@@ -187,6 +212,13 @@ public static class BenchmarkEvidenceValidator
         RequireText(fingerprints.Network.Transport, "Network transport");
         RequireText(fingerprints.Network.LocalNetworkPrefix, "Local network prefix");
         RequireText(fingerprints.Network.LinkSpeedBucket, "Network link speed bucket");
+        if (fingerprints.Network.SaltedNetworkIdHash is { } saltedHash &&
+            (saltedHash.Length != 64 || saltedHash.Any(character =>
+                character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f'))))
+        {
+            throw Invalid("Salted network identity hash must be 64 lowercase hexadecimal characters.");
+        }
+
         if (fingerprints.Network.WifiChannel is <= 0 or > 233)
         {
             throw Invalid("Wi-Fi channel is outside the supported range.");
@@ -203,7 +235,7 @@ public static class BenchmarkEvidenceValidator
     {
         ArgumentNullException.ThrowIfNull(result);
         ValidateCodec(result.Codec);
-        RequireText(result.Profile, "Selected decoder profile");
+        ValidateProfile(result.Codec, result.Profile, result.BitDepth);
         ValidateBitDepth(result.BitDepth, result.TenBitPresentationVerified, result.HdrPresentationVerified);
         ValidateDimension(result.Width, "Selected decoder width");
         ValidateDimension(result.Height, "Selected decoder height");
@@ -228,6 +260,11 @@ public static class BenchmarkEvidenceValidator
         }
 
         RequireFinitePositive(result.SustainableThroughputMbps, "Selected sustainable throughput");
+        if (result.InitialBitrateMbps > result.SustainableThroughputMbps)
+        {
+            throw Invalid("Selected initial bitrate cannot exceed measured sustainable throughput.");
+        }
+
         RequireFiniteNonNegative(result.RttMs, "Selected RTT");
         RequireFiniteNonNegative(result.JitterMs, "Selected jitter");
         if (!double.IsFinite(result.PacketLossPercent) || result.PacketLossPercent is < 0 or > 100)
@@ -260,7 +297,7 @@ public static class BenchmarkEvidenceValidator
     private static void Validate(DecoderBenchmarkSample sample)
     {
         ValidateCodec(sample.Codec);
-        RequireText(sample.Profile, "Decoder profile");
+        ValidateProfile(sample.Codec, sample.Profile, sample.BitDepth);
         ValidateBitDepth(sample.BitDepth, sample.TenBitPresentationVerified, sample.HdrPresentationVerified);
         ValidateDimension(sample.Width, "Decoder width");
         ValidateDimension(sample.Height, "Decoder height");
@@ -314,6 +351,37 @@ public static class BenchmarkEvidenceValidator
         if (!SupportedCodecs.Contains(codec))
         {
             throw Invalid("Decoder codec is not supported.");
+        }
+    }
+
+    private static void ValidateProfile(string codec, string profile, int bitDepth)
+    {
+        RequireText(profile, "Decoder profile");
+        bool supported = codec.ToLowerInvariant() switch
+        {
+            "h264" => profile.Equals("baseline", StringComparison.OrdinalIgnoreCase) ||
+                profile.Equals("main", StringComparison.OrdinalIgnoreCase) ||
+                profile.Equals("high", StringComparison.OrdinalIgnoreCase),
+            "hevc" => profile.Equals("main", StringComparison.OrdinalIgnoreCase) ||
+                profile.Equals("main10", StringComparison.OrdinalIgnoreCase),
+            "av1" => profile.Equals("main", StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
+        if (!supported)
+        {
+            throw Invalid($"Decoder profile '{profile}' is not supported for {codec}.");
+        }
+
+        bool profileMatchesBitDepth = codec.ToLowerInvariant() switch
+        {
+            "h264" => bitDepth == 8,
+            "hevc" when profile.Equals("main", StringComparison.OrdinalIgnoreCase) => bitDepth == 8,
+            "hevc" when profile.Equals("main10", StringComparison.OrdinalIgnoreCase) => bitDepth == 10,
+            _ => true
+        };
+        if (!profileMatchesBitDepth)
+        {
+            throw Invalid($"Decoder profile '{profile}' does not support {bitDepth}-bit depth for {codec}.");
         }
     }
 

@@ -9,6 +9,7 @@ import java.util.stream.Collectors;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public final class BeaconBenchmarkPrepareRequestTest {
@@ -56,14 +57,37 @@ public final class BeaconBenchmarkPrepareRequestTest {
         assertEquals(1, storage.writeCount);
     }
 
+    @Test
+    public void fingerprintsRequireTheServerOwnedSchemaVersion() {
+        RecordingSaltStorage storage = new RecordingSaltStorage();
+        BeaconNetworkIdentityHasher hasher = hasher(storage);
+
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> BeaconBenchmarkPrepareRequest.NetworkFingerprint.fromLocalNetwork(
+                4,
+                "192.168.1.10",
+                "wifi",
+                "192.168.1.0/24",
+                "6-ghz",
+                37,
+                "500-999-mbps",
+                RAW_SSID,
+                RAW_BSSID,
+                hasher));
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> new BeaconBenchmarkPrepareRequest.HardwareFingerprint(
+                4,
+                "caps-a",
+                "16",
+                "1.0.0",
+                "display-a",
+                "codec-a"));
+    }
+
     private static BeaconBenchmarkPrepareRequest request(RecordingSaltStorage storage) {
-        BeaconNetworkIdentityHasher hasher = new BeaconNetworkIdentityHasher(
-            storage,
-            () -> {
-                byte[] salt = new byte[32];
-                Arrays.fill(salt, (byte) 0x5a);
-                return salt;
-            });
+        BeaconNetworkIdentityHasher hasher = hasher(storage);
         BeaconBenchmarkPrepareRequest.NetworkFingerprint network =
             BeaconBenchmarkPrepareRequest.NetworkFingerprint.fromLocalNetwork(
                 3,
@@ -87,6 +111,16 @@ public final class BeaconBenchmarkPrepareRequestTest {
         return new BeaconBenchmarkPrepareRequest(
             "automatic",
             new BeaconBenchmarkPrepareRequest.FingerprintSet(network, hardware));
+    }
+
+    private static BeaconNetworkIdentityHasher hasher(RecordingSaltStorage storage) {
+        return new BeaconNetworkIdentityHasher(
+            storage,
+            () -> {
+                byte[] salt = new byte[32];
+                Arrays.fill(salt, (byte) 0x5a);
+                return salt;
+            });
     }
 
     private static void assertPrivate(String value) {

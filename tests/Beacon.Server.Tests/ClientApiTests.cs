@@ -1580,7 +1580,7 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
                 wifiBand = "6-ghz",
                 wifiChannel = 37,
                 linkSpeedBucket = "500-999-mbps",
-                saltedNetworkIdHash = "test-network"
+                saltedNetworkIdHash = new string('a', 64)
             },
             hardware = new
             {

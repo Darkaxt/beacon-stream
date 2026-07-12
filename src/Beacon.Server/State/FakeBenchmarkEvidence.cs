@@ -21,7 +21,8 @@ internal static class FakeBenchmarkEvidence
         SelectedBenchmarkResult selected = BenchmarkScorer.Select(new(
             networkSamples,
             decoderSamples,
-            powerSamples));
+            powerSamples,
+            NetworkCoverage: BenchmarkSuitePolicy.NetworkCoverage));
 
         return new BenchmarkEvidence(
             RunId: Guid.Parse("80b224b6-d499-4e59-912d-c5575459c356"),
@@ -35,6 +36,7 @@ internal static class FakeBenchmarkEvidence
             NetworkSamples: networkSamples,
             DecoderSamples: decoderSamples,
             PowerSamples: powerSamples,
-            SelectedResult: selected);
+            SelectedResult: selected,
+            NetworkCoverage: BenchmarkSuitePolicy.NetworkCoverage);
     }
 }

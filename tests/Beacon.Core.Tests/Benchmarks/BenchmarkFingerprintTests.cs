@@ -18,7 +18,7 @@ public sealed class BenchmarkFingerprintTests
         Assert.NotEqual(baseline.Revision, (baseline with { WifiBand = "5-ghz" }).Revision);
         Assert.NotEqual(baseline.Revision, (baseline with { WifiChannel = 44 }).Revision);
         Assert.NotEqual(baseline.Revision, (baseline with { LinkSpeedBucket = "1000-plus-mbps" }).Revision);
-        Assert.NotEqual(baseline.Revision, (baseline with { SaltedNetworkIdHash = "salted-network-b" }).Revision);
+        Assert.NotEqual(baseline.Revision, (baseline with { SaltedNetworkIdHash = new string('b', 64) }).Revision);
     }
 
     [Fact]
@@ -42,7 +42,7 @@ public sealed class BenchmarkFingerprintTests
         const string rawBssid = "00:11:22:33:44:55";
         NetworkFingerprint fingerprint = CreateNetworkFingerprint() with
         {
-            SaltedNetworkIdHash = "f4b2e83d6f1482020eec78c6a8a99990"
+            SaltedNetworkIdHash = "f4b2e83d6f1482020eec78c6a8a99990f4b2e83d6f1482020eec78c6a8a99990"
         };
 
         string json = JsonSerializer.Serialize(fingerprint);
@@ -62,7 +62,7 @@ public sealed class BenchmarkFingerprintTests
             WifiBand: "6-ghz",
             WifiChannel: 37,
             LinkSpeedBucket: "500-999-mbps",
-            SaltedNetworkIdHash: "salted-network-a");
+            SaltedNetworkIdHash: new string('a', 64));
 
     internal static HardwareFingerprint CreateHardwareFingerprint() =>
         new(

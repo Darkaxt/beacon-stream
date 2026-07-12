@@ -28,20 +28,13 @@ public static class SessionPlanner
         }
 
         SelectedBenchmarkResult measured = benchmark.SelectedResult;
-        bool hasCertifiedMode = measured.Width != 0 ||
-            measured.Height != 0 ||
-            measured.BitDepth != 0 ||
-            measured.Profile.Length != 0;
-        if (hasCertifiedMode)
+        try
         {
-            try
-            {
-                BenchmarkEvidenceValidator.Validate(measured);
-            }
-            catch (ArgumentException error)
-            {
-                return new SessionPlanResult(false, null, $"Benchmark evidence is invalid: {error.Message}");
-            }
+            BenchmarkEvidenceValidator.Validate(measured);
+        }
+        catch (ArgumentException error)
+        {
+            return new SessionPlanResult(false, null, $"Benchmark evidence is invalid: {error.Message}");
         }
 
         if (!SupportsCodec(measured.Codec, capabilities))
@@ -126,17 +119,11 @@ public static class SessionPlanner
 
         bool hdrEnabled = profile.Display.HdrPreference != HdrPreference.Off && hdrBlocker is null;
         string hdrReason = CreateHdrReason(profile.Display.HdrPreference, hdrEnabled, hdrBlocker);
-        int width = selection.CertifiedWidth > 0
-            ? Math.Min(profile.Display.PreferredWidth, selection.CertifiedWidth)
-            : profile.Display.PreferredWidth;
-        int height = selection.CertifiedHeight > 0
-            ? Math.Min(profile.Display.PreferredHeight, selection.CertifiedHeight)
-            : profile.Display.PreferredHeight;
-        string dimensionReason = selection.CertifiedWidth <= 0 || selection.CertifiedHeight <= 0
-            ? "Legacy benchmark evidence did not include certified display dimensions."
-            : width != profile.Display.PreferredWidth || height != profile.Display.PreferredHeight
-                ? $"Display dimensions were limited to the certified benchmark mode {width}x{height}."
-                : "Display dimensions are within the certified benchmark mode.";
+        int width = Math.Min(profile.Display.PreferredWidth, selection.CertifiedWidth);
+        int height = Math.Min(profile.Display.PreferredHeight, selection.CertifiedHeight);
+        string dimensionReason = width != profile.Display.PreferredWidth || height != profile.Display.PreferredHeight
+            ? $"Display dimensions were limited to the certified benchmark mode {width}x{height}."
+            : "Display dimensions are within the certified benchmark mode.";
         string displayReason = $"{CreateDisplayModeReason(profile.Display.Mode)} {dimensionReason} {hdrReason}";
 
         var display = new PlannedDisplay(

@@ -166,48 +166,41 @@ public static class ClientEndpoints
                 return Results.BadRequest(new { error = "Benchmark preparation JSON is invalid." });
             }
 
-            if (request is null || !IsValid(request.Fingerprints))
+            if (request is null)
             {
                 return Results.BadRequest(new { error = "Complete network and hardware fingerprints are required." });
             }
 
-            DateTimeOffset evaluatedAt = DateTimeOffset.UtcNow;
-            BenchmarkEvidence? existing = store.GetLatestCompletedBenchmarkEvidence(clientId);
-            BenchmarkReuseDecision decision = BenchmarkReuseEvaluator.Decide(
-                request.Trigger,
-                request.Fingerprints,
-                existing,
-                evaluatedAt,
-                MaximumBenchmarkEvidenceAge);
-            if (decision.Disposition == BenchmarkRunDisposition.Reuse && existing is not null)
+            try
             {
-                return Results.Ok(new
-                {
-                    disposition = "reuse",
-                    runId = existing.RunId,
-                    evidenceRevision = existing.Revision,
-                    selectedResult = existing.SelectedResult,
-                    reason = decision.Reason
-                });
+                BenchmarkEvidenceValidator.Validate(request.Fingerprints);
+            }
+            catch (ArgumentException)
+            {
+                return Results.BadRequest(new { error = "Benchmark fingerprints are invalid." });
             }
 
-            var pending = new BenchmarkEvidence(
-                RunId: Guid.NewGuid(),
-                ClientId: new ClientId(clientId),
-                Trigger: request.Trigger,
-                Fingerprints: request.Fingerprints,
-                StartedAt: evaluatedAt,
-                CompletedAt: null,
-                NetworkSamples: [],
-                DecoderSamples: [],
-                PowerSamples: [],
-                SelectedResult: null);
-            store.SaveBenchmarkEvidence(pending);
+            BenchmarkPreparationResult preparation = store.PrepareBenchmarkRun(
+                new ClientId(clientId),
+                request.Trigger,
+                request.Fingerprints,
+                DateTimeOffset.UtcNow,
+                MaximumBenchmarkEvidenceAge);
             return Results.Ok(new
             {
-                disposition = "start-new",
-                runId = pending.RunId,
-                reason = decision.Reason
+                disposition = preparation.Disposition switch
+                {
+                    BenchmarkPreparationDisposition.Reuse => "reuse",
+                    BenchmarkPreparationDisposition.Continue => "continue",
+                    _ => "start-new"
+                },
+                runId = preparation.Evidence.RunId,
+                evidenceRevision = preparation.Evidence.CompletedAt is null
+                    ? null
+                    : preparation.Evidence.Revision,
+                selectedResult = preparation.Evidence.SelectedResult,
+                networkCoverage = BenchmarkSuitePolicy.NetworkCoverage,
+                reason = preparation.Reason
             });
         });
 
@@ -241,7 +234,8 @@ public static class ClientEndpoints
                     request.NetworkSamples,
                     request.DecoderSamples,
                     request.PowerSamples,
-                    store.GetProfile(clientId)!.Stream.CodecPreference);
+                    store.GetProfile(clientId)!.Stream.CodecPreference,
+                    BenchmarkSuitePolicy.NetworkCoverage);
                 SelectedBenchmarkResult selected = BenchmarkScorer.Select(scoringInput);
                 BenchmarkEvidence completed = pending with
                 {
@@ -249,19 +243,28 @@ public static class ClientEndpoints
                     NetworkSamples = request.NetworkSamples.ToArray(),
                     DecoderSamples = request.DecoderSamples.ToArray(),
                     PowerSamples = request.PowerSamples.ToArray(),
-                    SelectedResult = selected
+                    SelectedResult = selected,
+                    NetworkCoverage = BenchmarkSuitePolicy.NetworkCoverage
                 };
-                store.SaveBenchmarkEvidence(completed);
+                if (!store.TryCompleteBenchmarkEvidence(runId, clientId, completed, out BenchmarkEvidence? committed))
+                {
+                    return Results.Conflict(new { error = "Benchmark run was completed or replaced concurrently." });
+                }
+
                 return Results.Ok(new
                 {
-                    runId = completed.RunId,
-                    evidenceRevision = completed.Revision,
-                    selectedResult = completed.SelectedResult
+                    runId = committed!.RunId,
+                    evidenceRevision = committed.Revision,
+                    selectedResult = committed.SelectedResult
                 });
             }
             catch (InvalidOperationException ex)
             {
                 return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (ArgumentException)
+            {
+                return Results.BadRequest(new { error = "Benchmark evidence is invalid." });
             }
         });
 
@@ -285,10 +288,24 @@ public static class ClientEndpoints
                 return resolution.Error;
             }
 
-            BenchmarkPlanEvidence? benchmark = clients.GetLatestBenchmarkPlanEvidence(
-                clientId,
-                DateTimeOffset.UtcNow,
-                MaximumBenchmarkEvidenceAge);
+            BenchmarkPlanEvidence? benchmark;
+            try
+            {
+                benchmark = clients.GetLatestBenchmarkPlanEvidence(
+                    clientId,
+                    DateTimeOffset.UtcNow,
+                    MaximumBenchmarkEvidenceAge,
+                    profile.Stream.CodecPreference);
+            }
+            catch (Exception error) when (error is InvalidOperationException or ArgumentException)
+            {
+                return Results.Conflict(new
+                {
+                    error = $"Benchmark evidence does not certify codec preference " +
+                        $"'{profile.Stream.CodecPreference}': {error.Message}"
+                });
+            }
+
             if (benchmark is null)
             {
                 return Results.Conflict(new { error = "Completed benchmark evidence is required before session planning." });
@@ -336,10 +353,24 @@ public static class ClientEndpoints
                 return resolution.Error;
             }
 
-            BenchmarkPlanEvidence? benchmark = clients.GetLatestBenchmarkPlanEvidence(
-                clientId,
-                DateTimeOffset.UtcNow,
-                MaximumBenchmarkEvidenceAge);
+            BenchmarkPlanEvidence? benchmark;
+            try
+            {
+                benchmark = clients.GetLatestBenchmarkPlanEvidence(
+                    clientId,
+                    DateTimeOffset.UtcNow,
+                    MaximumBenchmarkEvidenceAge,
+                    profile.Stream.CodecPreference);
+            }
+            catch (Exception error) when (error is InvalidOperationException or ArgumentException)
+            {
+                return Results.Conflict(new
+                {
+                    error = $"Benchmark evidence does not certify codec preference " +
+                        $"'{profile.Stream.CodecPreference}': {error.Message}"
+                });
+            }
+
             if (benchmark is null)
             {
                 return Results.Conflict(new { error = "Completed benchmark evidence is required before launch." });
@@ -937,19 +968,6 @@ public static class ClientEndpoints
 
         return false;
     }
-
-    private static bool IsValid(BenchmarkFingerprintSet fingerprints) =>
-        fingerprints.Network.SchemaVersion > 0 &&
-        !string.IsNullOrWhiteSpace(fingerprints.Network.ServerRoute) &&
-        !string.IsNullOrWhiteSpace(fingerprints.Network.Transport) &&
-        !string.IsNullOrWhiteSpace(fingerprints.Network.LocalNetworkPrefix) &&
-        !string.IsNullOrWhiteSpace(fingerprints.Network.LinkSpeedBucket) &&
-        fingerprints.Hardware.SchemaVersion > 0 &&
-        !string.IsNullOrWhiteSpace(fingerprints.Hardware.DeviceCapabilityRevision) &&
-        !string.IsNullOrWhiteSpace(fingerprints.Hardware.AndroidVersion) &&
-        !string.IsNullOrWhiteSpace(fingerprints.Hardware.ApkVersion) &&
-        !string.IsNullOrWhiteSpace(fingerprints.Hardware.DisplayModeInventoryRevision) &&
-        !string.IsNullOrWhiteSpace(fingerprints.Hardware.CodecInventoryRevision);
 
     private static ConnectionGrant CreateConnectionGrant(
         SessionPlan plan,

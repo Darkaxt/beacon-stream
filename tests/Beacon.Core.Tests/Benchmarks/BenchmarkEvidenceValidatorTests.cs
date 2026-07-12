@@ -6,6 +6,96 @@ namespace Beacon.Core.Tests.Benchmarks;
 public sealed class BenchmarkEvidenceValidatorTests
 {
     [Fact]
+    public void RejectsNonHashedNetworkIdentityValue()
+    {
+        BenchmarkEvidence evidence = CreateEvidence();
+        evidence = evidence with
+        {
+            Fingerprints = evidence.Fingerprints with
+            {
+                Network = evidence.Fingerprints.Network with { SaltedNetworkIdHash = "raw-network-name" }
+            }
+        };
+
+        ArgumentException error = Assert.Throws<ArgumentException>(() => BenchmarkEvidenceValidator.Validate(evidence));
+
+        Assert.Contains("salted", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("hash", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RejectsUnsupportedCodecProfile()
+    {
+        BenchmarkEvidence evidence = CreateEvidence();
+        evidence = evidence with
+        {
+            DecoderSamples =
+            [
+                evidence.DecoderSamples[0] with { Profile = "made-up-profile" }
+            ],
+            SelectedResult = evidence.SelectedResult! with { Profile = "made-up-profile" }
+        };
+
+        ArgumentException error = Assert.Throws<ArgumentException>(() => BenchmarkEvidenceValidator.Validate(evidence));
+
+        Assert.Contains("profile", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RejectsCodecProfileBitDepthMismatch()
+    {
+        BenchmarkEvidence evidence = CreateEvidence();
+        evidence = evidence with
+        {
+            DecoderSamples =
+            [
+                evidence.DecoderSamples[0] with
+                {
+                    BitDepth = 8,
+                    TenBitPresentationVerified = false,
+                    HdrPresentationVerified = false
+                }
+            ],
+            SelectedResult = evidence.SelectedResult! with
+            {
+                BitDepth = 8,
+                TenBitPresentationVerified = false,
+                HdrPresentationVerified = false
+            }
+        };
+
+        ArgumentException error = Assert.Throws<ArgumentException>(() => BenchmarkEvidenceValidator.Validate(evidence));
+
+        Assert.Contains("bit depth", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RejectsInitialBitrateAboveMeasuredThroughput()
+    {
+        BenchmarkEvidence evidence = CreateEvidence() with
+        {
+            SelectedResult = CreateEvidence().SelectedResult! with { InitialBitrateMbps = 101 }
+        };
+
+        ArgumentException error = Assert.Throws<ArgumentException>(() => BenchmarkEvidenceValidator.Validate(evidence));
+
+        Assert.Contains("throughput", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RejectsSelectedNetworkMetricsThatDoNotMatchSamples()
+    {
+        BenchmarkEvidence evidence = CreateEvidence() with
+        {
+            SelectedResult = CreateEvidence().SelectedResult! with { RttMs = 99 }
+        };
+
+        ArgumentException error = Assert.Throws<ArgumentException>(() => BenchmarkEvidenceValidator.Validate(evidence));
+
+        Assert.Contains("network", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void AcceptsExactSupportedSchemaAndPossibleValues()
     {
         BenchmarkEvidence evidence = CreateEvidence();
@@ -86,7 +176,30 @@ public sealed class BenchmarkEvidenceValidatorTests
     {
         BenchmarkEvidence evidence = CreateEvidence() with { Trigger = (BenchmarkTrigger)999 };
 
-        Assert.Throws<ArgumentException>(() => evidence.ToPlanEvidence());
+        Assert.Throws<ArgumentException>(() => evidence.ToPlanEvidence("auto"));
+    }
+
+    [Fact]
+    public void PlanEvidenceRescoresStoredRawSamplesForCurrentServerPolicy()
+    {
+        BenchmarkEvidence evidence = CreateEvidence();
+        DecoderBenchmarkSample h264 = evidence.DecoderSamples[0] with
+        {
+            Codec = "h264",
+            Profile = "high",
+            BitDepth = 8,
+            TenBitPresentationVerified = false,
+            HdrPresentationVerified = false
+        };
+        evidence = evidence with { DecoderSamples = [.. evidence.DecoderSamples, h264] };
+
+        BenchmarkPlanEvidence planEvidence = evidence.ToPlanEvidence("h264");
+
+        Assert.Equal("h264", planEvidence.SelectedResult.Codec);
+        Assert.NotEqual(evidence.Revision, planEvidence.Revision);
+        Assert.Contains(
+            planEvidence.SelectedResult.Reasons,
+            reason => reason.Contains("profile", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

@@ -114,7 +114,7 @@ public sealed record BenchmarkEvidence(
         NetworkCoverage?.FirstSequence.ToString(CultureInfo.InvariantCulture),
         NetworkCoverage?.ExpectedPacketCount.ToString(CultureInfo.InvariantCulture));
 
-    public BenchmarkPlanEvidence ToPlanEvidence()
+    public BenchmarkPlanEvidence ToPlanEvidence(string codecPreference)
     {
         if (CompletedAt is null || SelectedResult is null)
         {
@@ -122,6 +122,14 @@ public sealed record BenchmarkEvidence(
         }
 
         BenchmarkEvidenceValidator.Validate(this);
-        return new BenchmarkPlanEvidence(RunId, Revision, SelectedResult);
+        SelectedBenchmarkResult selected = BenchmarkScorer.Select(new BenchmarkScoringInput(
+            NetworkSamples,
+            DecoderSamples,
+            PowerSamples,
+            codecPreference,
+            NetworkCoverage));
+        BenchmarkEvidence rescored = this with { SelectedResult = selected };
+        BenchmarkEvidenceValidator.Validate(rescored);
+        return new BenchmarkPlanEvidence(RunId, rescored.Revision, selected);
     }
 }

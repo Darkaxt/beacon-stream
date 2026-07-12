@@ -49,6 +49,31 @@ public sealed class BenchmarkEvidenceRepositoryTests
     }
 
     [Fact]
+    public void FileRepositoryRejectsUnsupportedDocumentVersion()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"beacon-benchmark-version-{Guid.NewGuid():N}");
+        string path = Path.Combine(directory, "benchmark-evidence.json");
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(path, "{\"version\":99,\"evidence\":[]}");
+            var repository = new FileBenchmarkEvidenceRepository(path);
+
+            InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => repository.LoadEvidence());
+
+            Assert.Contains("version", error.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public void ClientStoreSelectsNewestCompletedEvidenceAndPreservesHistory()
     {
         var repository = new InMemoryBenchmarkEvidenceRepository();
@@ -63,7 +88,11 @@ public sealed class BenchmarkEvidenceRepositoryTests
         {
             RunId = Guid.Parse("4da32eb9-e1de-4196-9dce-f07ca86d21b4"),
             CompletedAt = null,
-            SelectedResult = null
+            SelectedResult = null,
+            NetworkSamples = [],
+            DecoderSamples = [],
+            PowerSamples = [],
+            NetworkCoverage = null
         };
 
         store.SaveBenchmarkEvidence(newer);
@@ -74,16 +103,151 @@ public sealed class BenchmarkEvidenceRepositoryTests
             store.GetLatestBenchmarkPlanEvidence(
                 "z-fold-7",
                 new DateTimeOffset(2026, 7, 12, 13, 0, 0, TimeSpan.Zero),
-                TimeSpan.FromDays(7)));
+                TimeSpan.FromDays(7),
+                "auto"));
         Assert.Equal(newer.RunId, selected.RunId);
         Assert.Equal(newer.Revision, selected.Revision);
         Assert.Equal(3, repository.LoadEvidence().Count);
     }
 
+    [Fact]
+    public void FailedPersistenceDoesNotPublishEvidenceInMemory()
+    {
+        var repository = new FailingBenchmarkEvidenceRepository();
+        var store = new InMemoryClientStore(new InMemoryClientProfileRepository(), repository);
+        BenchmarkEvidence evidence = CreateEvidence(
+            Guid.Parse("da1f9e17-38c0-4568-be44-18ca59a9beb3"),
+            new DateTimeOffset(2026, 7, 12, 12, 0, 0, TimeSpan.Zero));
+
+        Assert.Throws<IOException>(() => store.SaveBenchmarkEvidence(evidence));
+
+        Assert.Null(store.GetBenchmarkEvidence(evidence.RunId));
+    }
+
+    [Fact]
+    public void FailedPreparationDoesNotReplaceTheCurrentPlanningFingerprint()
+    {
+        DateTimeOffset now = new(2026, 7, 12, 13, 0, 0, TimeSpan.Zero);
+        var repository = new SwitchableBenchmarkEvidenceRepository();
+        var store = new InMemoryClientStore(new InMemoryClientProfileRepository(), repository);
+        BenchmarkEvidence existing = CreateEvidence(
+            Guid.Parse("3f32b673-d1eb-4dc0-8d15-249490a28a7f"),
+            now.AddHours(-1));
+        store.SaveBenchmarkEvidence(existing);
+        repository.FailWrites = true;
+        BenchmarkFingerprintSet changed = existing.Fingerprints with
+        {
+            Network = existing.Fingerprints.Network with { WifiChannel = 44 }
+        };
+
+        Assert.Throws<IOException>(() => store.PrepareBenchmarkRun(
+            existing.ClientId,
+            BenchmarkTrigger.Automatic,
+            changed,
+            now,
+            TimeSpan.FromDays(7)));
+
+        BenchmarkPlanEvidence planEvidence = Assert.IsType<BenchmarkPlanEvidence>(
+            store.GetLatestBenchmarkPlanEvidence(
+                existing.ClientId.Value,
+                now,
+                TimeSpan.FromDays(7),
+                "auto"));
+        Assert.Equal(existing.RunId, planEvidence.RunId);
+    }
+
+    [Fact]
+    public async Task ConcurrentCompletionCommitsExactlyOneResult()
+    {
+        var repository = new InMemoryBenchmarkEvidenceRepository();
+        var store = new InMemoryClientStore(new InMemoryClientProfileRepository(), repository);
+        BenchmarkEvidence completed = CreateEvidence(
+            Guid.Parse("2148288c-a071-42e7-9e60-5f2926ec70a0"),
+            new DateTimeOffset(2026, 7, 12, 12, 0, 0, TimeSpan.Zero));
+        BenchmarkEvidence pending = completed with
+        {
+            CompletedAt = null,
+            SelectedResult = null,
+            NetworkSamples = [],
+            DecoderSamples = [],
+            PowerSamples = [],
+            NetworkCoverage = null
+        };
+        store.SaveBenchmarkEvidence(pending);
+
+        Task<bool>[] attempts = Enumerable.Range(0, 2)
+            .Select(index => Task.Run(() => store.TryCompleteBenchmarkEvidence(
+                pending.RunId,
+                pending.ClientId.Value,
+                completed,
+                out _)))
+            .ToArray();
+        bool[] results = await Task.WhenAll(attempts);
+
+        Assert.Single(results, result => result);
+        BenchmarkEvidence stored = Assert.Single(repository.LoadEvidence());
+        Assert.NotNull(stored.CompletedAt);
+        Assert.NotNull(stored.SelectedResult);
+    }
+
+    [Fact]
+    public void PreparationReusesMatchingHistoryAndPendingRunsByFingerprint()
+    {
+        DateTimeOffset now = new(2026, 7, 12, 12, 0, 0, TimeSpan.Zero);
+        BenchmarkEvidence networkA = CreateEvidence(
+            Guid.Parse("e84a03c5-e089-4a60-adba-f61a114c74c1"),
+            now.AddHours(-2));
+        BenchmarkEvidence networkB = CreateEvidence(
+            Guid.Parse("f4e51e63-58f3-45b2-ab71-bafbd30dc957"),
+            now.AddHours(-1)) with
+        {
+            Fingerprints = networkA.Fingerprints with
+            {
+                Network = networkA.Fingerprints.Network with { WifiChannel = 44 }
+            }
+        };
+        var repository = new InMemoryBenchmarkEvidenceRepository([networkA, networkB]);
+        var store = new InMemoryClientStore(new InMemoryClientProfileRepository(), repository);
+
+        BenchmarkPreparationResult returnedToA = store.PrepareBenchmarkRun(
+            networkA.ClientId,
+            BenchmarkTrigger.Automatic,
+            networkA.Fingerprints,
+            now,
+            TimeSpan.FromDays(7));
+        BenchmarkFingerprintSet networkC = networkA.Fingerprints with
+        {
+            Network = networkA.Fingerprints.Network with { WifiChannel = 149 }
+        };
+        BenchmarkPreparationResult firstC = store.PrepareBenchmarkRun(
+            networkA.ClientId,
+            BenchmarkTrigger.Automatic,
+            networkC,
+            now,
+            TimeSpan.FromDays(7));
+        BenchmarkPreparationResult repeatedC = store.PrepareBenchmarkRun(
+            networkA.ClientId,
+            BenchmarkTrigger.Automatic,
+            networkC,
+            now.AddSeconds(1),
+            TimeSpan.FromDays(7));
+
+        Assert.Equal(BenchmarkPreparationDisposition.Reuse, returnedToA.Disposition);
+        Assert.Equal(networkA.RunId, returnedToA.Evidence.RunId);
+        Assert.Equal(BenchmarkPreparationDisposition.StartNew, firstC.Disposition);
+        Assert.Equal(BenchmarkPreparationDisposition.Continue, repeatedC.Disposition);
+        Assert.Equal(firstC.Evidence.RunId, repeatedC.Evidence.RunId);
+        Assert.Null(store.GetLatestBenchmarkPlanEvidence(
+            networkA.ClientId.Value,
+            now.AddSeconds(1),
+            TimeSpan.FromDays(7),
+            "auto"));
+    }
+
     internal static BenchmarkEvidence CreateEvidence(Guid runId, DateTimeOffset completedAt)
     {
         var fingerprints = new BenchmarkFingerprintSet(
-            new NetworkFingerprint(3, "192.168.1.10", "wifi", "192.168.1.0/24", "6-ghz", 37, "500-999-mbps", "salted-network-a"),
+            new NetworkFingerprint(3, "192.168.1.10", "wifi", "192.168.1.0/24", "6-ghz", 37, "500-999-mbps", new string('a', 64)),
             new HardwareFingerprint(3, "caps-a", "16", "1.0.0", "display-a", "codec-a"));
         NetworkBenchmarkSample[] networkSamples =
         [
@@ -94,7 +258,12 @@ public sealed class BenchmarkEvidenceRepositoryTests
             new("h264", "high", 8, 2560, 1600, 120, true, 120, 5, 9, 0, 0)
         ];
         EndpointPowerSample[] powerSamples = [new(80, false, "nominal")];
-        SelectedBenchmarkResult selected = BenchmarkScorer.Select(new(networkSamples, decoderSamples, powerSamples));
+        var coverage = new NetworkBenchmarkCoverage(FirstSequence: 1, ExpectedPacketCount: 1);
+        SelectedBenchmarkResult selected = BenchmarkScorer.Select(new(
+            networkSamples,
+            decoderSamples,
+            powerSamples,
+            NetworkCoverage: coverage));
 
         return new BenchmarkEvidence(
             runId,
@@ -106,6 +275,42 @@ public sealed class BenchmarkEvidenceRepositoryTests
             networkSamples,
             decoderSamples,
             powerSamples,
-            selected);
+            selected,
+            coverage);
+    }
+
+    private sealed class FailingBenchmarkEvidenceRepository : IBenchmarkEvidenceRepository
+    {
+        public string Kind => "failing";
+
+        public string? Location => null;
+
+        public IReadOnlyList<BenchmarkEvidence> LoadEvidence() => [];
+
+        public void SaveEvidence(IReadOnlyList<BenchmarkEvidence> evidence) =>
+            throw new IOException("Persistence failed.");
+    }
+
+    private sealed class SwitchableBenchmarkEvidenceRepository : IBenchmarkEvidenceRepository
+    {
+        private BenchmarkEvidence[] evidence = [];
+
+        public bool FailWrites { get; set; }
+
+        public string Kind => "switchable";
+
+        public string? Location => null;
+
+        public IReadOnlyList<BenchmarkEvidence> LoadEvidence() => evidence;
+
+        public void SaveEvidence(IReadOnlyList<BenchmarkEvidence> values)
+        {
+            if (FailWrites)
+            {
+                throw new IOException("Persistence failed.");
+            }
+
+            evidence = values.ToArray();
+        }
     }
 }

@@ -4,6 +4,8 @@ import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 
 public final class BeaconBenchmarkPrepareRequest {
+    private static final int SUPPORTED_SCHEMA_VERSION = 3;
+
     private final String trigger;
     private final FingerprintSet fingerprints;
 
@@ -90,8 +92,8 @@ public final class BeaconBenchmarkPrepareRequest {
             Integer wifiChannel,
             String linkSpeedBucket,
             String saltedNetworkIdHash) {
-            if (schemaVersion <= 0) {
-                throw new IllegalArgumentException("schemaVersion must be positive.");
+            if (schemaVersion != SUPPORTED_SCHEMA_VERSION) {
+                throw new IllegalArgumentException("schemaVersion must be 3.");
             }
             this.schemaVersion = schemaVersion;
             this.serverRoute = requireText(serverRoute, "serverRoute");
@@ -166,8 +168,8 @@ public final class BeaconBenchmarkPrepareRequest {
             String apkVersion,
             String displayModeInventoryRevision,
             String codecInventoryRevision) {
-            if (schemaVersion <= 0) {
-                throw new IllegalArgumentException("schemaVersion must be positive.");
+            if (schemaVersion != SUPPORTED_SCHEMA_VERSION) {
+                throw new IllegalArgumentException("schemaVersion must be 3.");
             }
             this.schemaVersion = schemaVersion;
             this.deviceCapabilityRevision = requireText(
