@@ -134,6 +134,22 @@ public final class BeaconStreamCoreInstrumentationTest {
     }
 
     @Test
+    public void testProductionJniParsesBenchmarkGrantWithoutVideoMode() {
+        BeaconStreamCore core = new BeaconStreamCore(frame -> { });
+        BeaconStreamSession session = BeaconStreamSession.parse(
+            "https://127.0.0.1",
+            "z-fold-7",
+            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":9,\"planExplanation\":\"preflight\",\"sessionId\":\"benchmark:3c13df40-26c4-40c6-8414-268734f1024d\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"benchmark\":{\"runId\":\"3c13df40-26c4-40c6-8414-268734f1024d\",\"schemaVersion\":1,\"reliableRound\":{\"packetCount\":16,\"payloadBytes\":32768,\"measurementIntervalUs\":250000},\"datagramRound\":{\"packetCount\":64,\"payloadBytes\":1000,\"measurementIntervalUs\":250000},\"runToken\":\"AAECAwQFBgcICQoLDA0ODw==\"}}}");
+        BeaconStreamSession.NativeGrant grant = session.consumeNativeGrant(1);
+        try {
+            assertTrue(BeaconStreamCore.parseNativeGrantForTest(grant));
+        } finally {
+            grant.clearSecrets();
+            core.close();
+        }
+    }
+
+    @Test
     public void testProductionJniRejectsNullInputFieldsWithoutCheckJniAbort() {
         BeaconStreamCore core = new BeaconStreamCore(frame -> { });
         assertThrows(IllegalArgumentException.class, () -> core.sendInput(null));
@@ -174,6 +190,50 @@ public final class BeaconStreamCoreInstrumentationTest {
         BeaconStreamCore.emitNativeFrameForTest(handle, new byte[] { 1, 2, 3 }, 7);
         callbackEntered.await();
         BeaconStreamCore.releaseNativeHandleForTest(handle);
+        BeaconStreamCore.awaitNativeRegistryIdleForTest();
+        assertEquals(0, BeaconStreamCore.nativeRegistrySizeForTest());
+    }
+
+    @Test
+    public void testNativeBenchmarkResultCrossesJniAndRegistryDrains()
+        throws InterruptedException {
+        BeaconStreamCore loader = new BeaconStreamCore(frame -> { });
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        BeaconStreamCore.NativeCallbacks callbacks = new BeaconStreamCore.NativeCallbacks() {
+            @Override public void onFrame(
+                byte[] bytes, long presentationTimeUs, long sequence, long generation) { }
+
+            @Override public void onConnectionLost(long generation) { }
+
+            @Override public void onBenchmarkCompleted(
+                double sustainableThroughputMbps,
+                long[] sequences,
+                int[] payloadBytes,
+                long[] rttUs,
+                long[] jitterUs,
+                int[] reorderDistances,
+                boolean[] received,
+                long generation) {
+                assertEquals(96.5, sustainableThroughputMbps, 0.001);
+                assertEquals(2, sequences.length);
+                assertEquals(1, sequences[1]);
+                assertEquals(1000, payloadBytes[1]);
+                assertEquals(2500, rttUs[1]);
+                assertEquals(300, jitterUs[1]);
+                assertEquals(1, reorderDistances[1]);
+                assertTrue(!received[1]);
+                assertEquals(7, generation);
+                callbackEntered.countDown();
+            }
+        };
+        long handle = BeaconStreamCore.createNativeHandleForTest(callbacks);
+        assertTrue(handle != 0);
+
+        BeaconStreamCore.emitNativeBenchmarkResultForTest(handle, 7);
+
+        callbackEntered.await();
+        BeaconStreamCore.releaseNativeHandleForTest(handle);
+        loader.close();
         BeaconStreamCore.awaitNativeRegistryIdleForTest();
         assertEquals(0, BeaconStreamCore.nativeRegistrySizeForTest());
     }

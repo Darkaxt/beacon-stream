@@ -14,10 +14,53 @@ import java.util.List;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 public final class BeaconStreamCoreTest {
+    @Test
+    public void benchmarkCompletionUsesCallbackExecutorAndPreservesPacketEvidence() throws Exception {
+        RecordingBindings bindings = new RecordingBindings();
+        ExecutorService executor = Executors.newSingleThreadExecutor(r -> new Thread(r, "beacon-benchmark"));
+        CountDownLatch delivered = new CountDownLatch(1);
+        AtomicReference<String> callbackThread = new AtomicReference<>();
+        AtomicReference<BeaconStreamCore.BenchmarkNetworkResult> observed = new AtomicReference<>();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings,
+            frame -> { },
+            executor,
+            () -> { },
+            stage -> { },
+            result -> {
+                callbackThread.set(Thread.currentThread().getName());
+                observed.set(result);
+                delivered.countDown();
+            });
+        core.start(benchmarkSession());
+
+        bindings.callbacks.onBenchmarkCompleted(
+            96.5,
+            new long[] { 0, 1 },
+            new int[] { 1000, 1000 },
+            new long[] { 2000, 2500 },
+            new long[] { 0, 300 },
+            new int[] { 0, 1 },
+            new boolean[] { true, false },
+            1);
+
+        delivered.await();
+        BeaconStreamCore.BenchmarkNetworkResult result = observed.get();
+        assertNotNull(result);
+        assertEquals("beacon-benchmark", callbackThread.get());
+        assertEquals(96.5, result.sustainableThroughputMbps, 0.001);
+        assertEquals(2, result.samples.size());
+        assertEquals(2500, result.samples.get(1).rttUs);
+        assertEquals(1, result.samples.get(1).reorderDistance);
+        assertFalse(result.samples.get(1).received);
+        core.close();
+    }
+
     @Test
     public void callbacksUseDedicatedExecutorAndStopAfterClose() throws Exception {
         RecordingBindings bindings = new RecordingBindings();
@@ -536,6 +579,13 @@ public final class BeaconStreamCoreTest {
             "https://beacon.example",
             "client",
             "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"" + ticket + "\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"" + sessionId + "\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"}}}");
+    }
+
+    private static BeaconStreamSession benchmarkSession() {
+        return BeaconStreamSession.parse(
+            "https://beacon.example",
+            "client",
+            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":9,\"planExplanation\":\"preflight\",\"sessionId\":\"benchmark:3c13df40-26c4-40c6-8414-268734f1024d\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"benchmark\":{\"runId\":\"3c13df40-26c4-40c6-8414-268734f1024d\",\"schemaVersion\":1,\"reliableRound\":{\"packetCount\":16,\"payloadBytes\":32768,\"measurementIntervalUs\":250000},\"datagramRound\":{\"packetCount\":64,\"payloadBytes\":1000,\"measurementIntervalUs\":250000},\"runToken\":\"AAECAwQFBgcICQoLDA0ODw==\"}}}");
     }
 
     private static boolean allZero(byte[] bytes) {

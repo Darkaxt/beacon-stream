@@ -1,6 +1,9 @@
 package dev.beacon.android;
 
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.CountDownLatch;
@@ -11,6 +14,7 @@ public final class BeaconStreamCore implements AutoCloseable {
     private final ExecutorService callbackExecutor;
     private final FeedbackObserver feedbackObserver;
     private final FailureObserver failureObserver;
+    private final BenchmarkObserver benchmarkObserver;
     private final long handle;
     private boolean open = true;
     private boolean stopped;
@@ -40,12 +44,21 @@ public final class BeaconStreamCore implements AutoCloseable {
         EncodedFrameSink sink,
         FeedbackObserver feedbackObserver,
         FailureObserver failureObserver) {
+        this(sink, feedbackObserver, failureObserver, result -> { });
+    }
+
+    BeaconStreamCore(
+        EncodedFrameSink sink,
+        FeedbackObserver feedbackObserver,
+        FailureObserver failureObserver,
+        BenchmarkObserver benchmarkObserver) {
         this(
             new JniBindings(),
             sink,
             Executors.newSingleThreadExecutor(r -> new Thread(r, "beacon-frame-callback")),
             feedbackObserver,
-            failureObserver);
+            failureObserver,
+            benchmarkObserver);
     }
 
     BeaconStreamCore(Bindings bindings, EncodedFrameSink sink, ExecutorService callbackExecutor) {
@@ -66,8 +79,18 @@ public final class BeaconStreamCore implements AutoCloseable {
         ExecutorService callbackExecutor,
         FeedbackObserver feedbackObserver,
         FailureObserver failureObserver) {
+        this(bindings, sink, callbackExecutor, feedbackObserver, failureObserver, result -> { });
+    }
+
+    BeaconStreamCore(
+        Bindings bindings,
+        EncodedFrameSink sink,
+        ExecutorService callbackExecutor,
+        FeedbackObserver feedbackObserver,
+        FailureObserver failureObserver,
+        BenchmarkObserver benchmarkObserver) {
         if (bindings == null || sink == null || callbackExecutor == null ||
-            feedbackObserver == null || failureObserver == null) {
+            feedbackObserver == null || failureObserver == null || benchmarkObserver == null) {
             throw new IllegalArgumentException("BeaconStreamCore dependencies are required.");
         }
         this.bindings = bindings;
@@ -75,6 +98,7 @@ public final class BeaconStreamCore implements AutoCloseable {
         this.callbackExecutor = callbackExecutor;
         this.feedbackObserver = feedbackObserver;
         this.failureObserver = failureObserver;
+        this.benchmarkObserver = benchmarkObserver;
         this.handle = bindings.create(new NativeCallbacks() {
             @Override public void onFrame(
                 byte[] bytes, long presentationTimeUs, long sequence, long generation) {
@@ -100,6 +124,26 @@ public final class BeaconStreamCore implements AutoCloseable {
                     accepted = true;
                 }
                 if (accepted) reportFailure("transport");
+            }
+
+            @Override public void onBenchmarkCompleted(
+                double sustainableThroughputMbps,
+                long[] sequences,
+                int[] payloadBytes,
+                long[] rttUs,
+                long[] jitterUs,
+                int[] reorderDistances,
+                boolean[] received,
+                long generation) {
+                dispatchBenchmarkResult(
+                    sustainableThroughputMbps,
+                    sequences,
+                    payloadBytes,
+                    rttUs,
+                    jitterUs,
+                    reorderDistances,
+                    received,
+                    generation);
             }
         });
         if (handle == 0) {
@@ -143,7 +187,7 @@ public final class BeaconStreamCore implements AutoCloseable {
             }
             started = true;
         } finally {
-            grant.clearTicket();
+            grant.clearSecrets();
             synchronized (this) {
                 stopped = !started || lossDuringStartGeneration == generation;
                 activeGrant = started ? session : null;
@@ -231,6 +275,14 @@ public final class BeaconStreamCore implements AutoCloseable {
 
     static int nativeRegistrySizeForTest() {
         return nativeTestRegistrySize();
+    }
+
+    static boolean parseNativeGrantForTest(BeaconStreamSession.NativeGrant grant) {
+        return nativeTestParseGrant(grant);
+    }
+
+    static void emitNativeBenchmarkResultForTest(long handle, long generation) {
+        nativeTestEmitBenchmarkResult(handle, generation);
     }
 
     @Override
@@ -327,6 +379,54 @@ public final class BeaconStreamCore implements AutoCloseable {
         }
     }
 
+    private void dispatchBenchmarkResult(
+        double sustainableThroughputMbps,
+        long[] sequences,
+        int[] payloadBytes,
+        long[] rttUs,
+        long[] jitterUs,
+        int[] reorderDistances,
+        boolean[] received,
+        long generation) {
+        if (sequences == null || payloadBytes == null || rttUs == null ||
+            jitterUs == null || reorderDistances == null || received == null ||
+            payloadBytes.length != sequences.length || rttUs.length != sequences.length ||
+            jitterUs.length != sequences.length || reorderDistances.length != sequences.length ||
+            received.length != sequences.length || !Double.isFinite(sustainableThroughputMbps) ||
+            sustainableThroughputMbps <= 0) {
+            reportFailure("benchmark");
+            return;
+        }
+        List<BenchmarkNetworkSample> samples = new ArrayList<>(sequences.length);
+        for (int index = 0; index < sequences.length; index++) {
+            samples.add(new BenchmarkNetworkSample(
+                sequences[index],
+                payloadBytes[index],
+                rttUs[index],
+                jitterUs[index],
+                reorderDistances[index],
+                received[index]));
+        }
+        BenchmarkNetworkResult result = new BenchmarkNetworkResult(
+            sustainableThroughputMbps,
+            samples);
+        synchronized (this) {
+            long expectedGeneration = startingGeneration != 0
+                ? startingGeneration : activeGeneration;
+            if (!open || stopped || generation == 0 || generation != expectedGeneration) {
+                return;
+            }
+            callbackExecutor.execute(() -> {
+                synchronized (BeaconStreamCore.this) {
+                    if (!open || stopped || generation != activeGeneration) {
+                        return;
+                    }
+                }
+                benchmarkObserver.onCompleted(result);
+            });
+        }
+    }
+
     private void beginNativeCall() {
         synchronized (this) {
             awaitLifecycleIdleLocked();
@@ -418,9 +518,54 @@ public final class BeaconStreamCore implements AutoCloseable {
         }
     }
 
+    public static final class BenchmarkNetworkResult {
+        public final double sustainableThroughputMbps;
+        public final List<BenchmarkNetworkSample> samples;
+
+        BenchmarkNetworkResult(
+            double sustainableThroughputMbps,
+            List<BenchmarkNetworkSample> samples) {
+            this.sustainableThroughputMbps = sustainableThroughputMbps;
+            this.samples = Collections.unmodifiableList(new ArrayList<>(samples));
+        }
+    }
+
+    public static final class BenchmarkNetworkSample {
+        public final long sequence;
+        public final int payloadBytes;
+        public final long rttUs;
+        public final long jitterUs;
+        public final int reorderDistance;
+        public final boolean received;
+
+        BenchmarkNetworkSample(
+            long sequence,
+            int payloadBytes,
+            long rttUs,
+            long jitterUs,
+            int reorderDistance,
+            boolean received) {
+            this.sequence = sequence;
+            this.payloadBytes = payloadBytes;
+            this.rttUs = rttUs;
+            this.jitterUs = jitterUs;
+            this.reorderDistance = reorderDistance;
+            this.received = received;
+        }
+    }
+
     interface NativeCallbacks {
         void onFrame(byte[] bytes, long presentationTimeUs, long sequence, long generation);
         void onConnectionLost(long generation);
+        default void onBenchmarkCompleted(
+            double sustainableThroughputMbps,
+            long[] sequences,
+            int[] payloadBytes,
+            long[] rttUs,
+            long[] jitterUs,
+            int[] reorderDistances,
+            boolean[] received,
+            long generation) { }
     }
 
     interface FeedbackObserver {
@@ -429,6 +574,10 @@ public final class BeaconStreamCore implements AutoCloseable {
 
     interface FailureObserver {
         void onFailure(String stage);
+    }
+
+    interface BenchmarkObserver {
+        void onCompleted(BenchmarkNetworkResult result);
     }
 
     interface Bindings {
@@ -475,4 +624,6 @@ public final class BeaconStreamCore implements AutoCloseable {
         long handle, byte[] bytes, long presentationTimeUs);
     private static native void nativeTestAwaitRegistryIdle();
     private static native int nativeTestRegistrySize();
+    private static native boolean nativeTestParseGrant(BeaconStreamSession.NativeGrant grant);
+    private static native void nativeTestEmitBenchmarkResult(long handle, long generation);
 }

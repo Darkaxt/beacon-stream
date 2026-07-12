@@ -6,6 +6,7 @@ import com.google.gson.JsonParser;
 import java.net.URI;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.UUID;
 
 public final class BeaconStreamSession {
     private final String host;
@@ -18,6 +19,7 @@ public final class BeaconStreamSession {
     private final int port;
     private final String publicKeyFingerprint;
     private final SelectedVideo selectedVideo;
+    private final Benchmark benchmark;
     private byte[] ticket;
     private boolean ticketConsumed;
 
@@ -32,7 +34,8 @@ public final class BeaconStreamSession {
         String sessionId,
         int port,
         String publicKeyFingerprint,
-        SelectedVideo selectedVideo) {
+        SelectedVideo selectedVideo,
+        Benchmark benchmark) {
         this.host = host;
         this.clientId = clientId;
         this.protocolVersion = protocolVersion;
@@ -44,6 +47,7 @@ public final class BeaconStreamSession {
         this.port = port;
         this.publicKeyFingerprint = publicKeyFingerprint;
         this.selectedVideo = selectedVideo;
+        this.benchmark = benchmark;
     }
 
     public static BeaconStreamSession parse(String serverUrl, String clientId, String responseBody) {
@@ -72,14 +76,18 @@ public final class BeaconStreamSession {
             if (ticket.length == 0) {
                 throw new IllegalArgumentException("Connection grant ticket is empty.");
             }
-            JsonObject video = connection.getAsJsonObject("selectedVideo");
-            SelectedVideo selectedVideo = new SelectedVideo(
-                requireText(video.get("codec").getAsString(), "selectedVideo.codec"),
-                requiredInt(video, "width"),
-                requiredInt(video, "height"),
-                requiredInt(video, "framesPerSecondNumerator"),
-                requiredInt(video, "framesPerSecondDenominator"),
-                requireText(video.get("dynamicRange").getAsString(), "selectedVideo.dynamicRange"));
+            boolean hasVideo = connection.has("selectedVideo") && connection.get("selectedVideo").isJsonObject();
+            boolean hasBenchmark = connection.has("benchmark") && connection.get("benchmark").isJsonObject();
+            if (hasVideo == hasBenchmark) {
+                throw new IllegalArgumentException(
+                    "Connection grant must contain exactly one video or benchmark start mode.");
+            }
+            SelectedVideo selectedVideo = hasVideo
+                ? parseSelectedVideo(connection.getAsJsonObject("selectedVideo"))
+                : null;
+            Benchmark benchmark = hasBenchmark
+                ? parseBenchmark(connection.getAsJsonObject("benchmark"))
+                : null;
             return new BeaconStreamSession(
                 host,
                 requireText(clientId, "clientId"),
@@ -91,7 +99,8 @@ public final class BeaconStreamSession {
                 requireText(connection.get("sessionId").getAsString(), "sessionId"),
                 port,
                 fingerprint,
-                selectedVideo);
+                selectedVideo,
+                benchmark);
         } catch (IllegalArgumentException error) {
             throw error;
         } catch (RuntimeException error) {
@@ -103,6 +112,7 @@ public final class BeaconStreamSession {
     public int port() { return port; }
     public String sessionId() { return sessionId; }
     public SelectedVideo selectedVideo() { return selectedVideo; }
+    public Benchmark benchmark() { return benchmark; }
 
     public synchronized byte[] consumeTicket() {
         if (ticketConsumed) {
@@ -122,7 +132,43 @@ public final class BeaconStreamSession {
         }
         return new NativeGrant(
             host, clientId, protocolVersion, consumeTicket(), expiresAt, planRevision,
-            planExplanation, sessionId, port, publicKeyFingerprint, selectedVideo, generation);
+            planExplanation, sessionId, port, publicKeyFingerprint, selectedVideo, benchmark, generation);
+    }
+
+    private static SelectedVideo parseSelectedVideo(JsonObject video) {
+        return new SelectedVideo(
+            requireText(video.get("codec").getAsString(), "selectedVideo.codec"),
+            requiredInt(video, "width"),
+            requiredInt(video, "height"),
+            requiredInt(video, "framesPerSecondNumerator"),
+            requiredInt(video, "framesPerSecondDenominator"),
+            requireText(video.get("dynamicRange").getAsString(), "selectedVideo.dynamicRange"));
+    }
+
+    private static Benchmark parseBenchmark(JsonObject value) {
+        String runId = UUID.fromString(
+            requireText(value.get("runId").getAsString(), "benchmark.runId")).toString();
+        byte[] runToken = Base64.getDecoder().decode(
+            requireText(value.get("runToken").getAsString(), "benchmark.runToken"));
+        if (runToken.length != 16) {
+            throw new IllegalArgumentException("benchmark.runToken must contain 16 bytes.");
+        }
+        return new Benchmark(
+            runId,
+            requiredInt(value, "schemaVersion"),
+            parseBenchmarkRound(value.getAsJsonObject("reliableRound"), "benchmark.reliableRound"),
+            parseBenchmarkRound(value.getAsJsonObject("datagramRound"), "benchmark.datagramRound"),
+            runToken);
+    }
+
+    private static BenchmarkRound parseBenchmarkRound(JsonObject value, String name) {
+        if (value == null) {
+            throw new IllegalArgumentException(name + " is required.");
+        }
+        return new BenchmarkRound(
+            requiredInt(value, "packetCount"),
+            requiredInt(value, "payloadBytes"),
+            requiredLong(value, "measurementIntervalUs"));
     }
 
     private static int requiredInt(JsonObject object, String name) {
@@ -130,6 +176,17 @@ public final class BeaconStreamSession {
             throw new IllegalArgumentException(name + " is required.");
         }
         int value = object.get(name).getAsInt();
+        if (value <= 0) {
+            throw new IllegalArgumentException(name + " must be positive.");
+        }
+        return value;
+    }
+
+    private static long requiredLong(JsonObject object, String name) {
+        if (!object.has(name)) {
+            throw new IllegalArgumentException(name + " is required.");
+        }
+        long value = object.get(name).getAsLong();
         if (value <= 0) {
             throw new IllegalArgumentException(name + " must be positive.");
         }
@@ -168,6 +225,51 @@ public final class BeaconStreamSession {
         public String dynamicRange() { return dynamicRange; }
     }
 
+    public static final class Benchmark {
+        private final String runId;
+        private final int schemaVersion;
+        private final BenchmarkRound reliableRound;
+        private final BenchmarkRound datagramRound;
+        private final byte[] runToken;
+
+        Benchmark(
+            String runId,
+            int schemaVersion,
+            BenchmarkRound reliableRound,
+            BenchmarkRound datagramRound,
+            byte[] runToken) {
+            this.runId = runId;
+            this.schemaVersion = schemaVersion;
+            this.reliableRound = reliableRound;
+            this.datagramRound = datagramRound;
+            this.runToken = runToken;
+        }
+
+        public String runId() { return runId; }
+        public int schemaVersion() { return schemaVersion; }
+        public BenchmarkRound reliableRound() { return reliableRound; }
+        public BenchmarkRound datagramRound() { return datagramRound; }
+        public byte[] runToken() { return Arrays.copyOf(runToken, runToken.length); }
+
+        void clearRunToken() { Arrays.fill(runToken, (byte) 0); }
+    }
+
+    public static final class BenchmarkRound {
+        private final int packetCount;
+        private final int payloadBytes;
+        private final long measurementIntervalUs;
+
+        BenchmarkRound(int packetCount, int payloadBytes, long measurementIntervalUs) {
+            this.packetCount = packetCount;
+            this.payloadBytes = payloadBytes;
+            this.measurementIntervalUs = measurementIntervalUs;
+        }
+
+        public int packetCount() { return packetCount; }
+        public int payloadBytes() { return payloadBytes; }
+        public long measurementIntervalUs() { return measurementIntervalUs; }
+    }
+
     static final class NativeGrant {
         final String host;
         final String clientId;
@@ -180,11 +282,13 @@ public final class BeaconStreamSession {
         final int port;
         final String publicKeyFingerprint;
         final SelectedVideo selectedVideo;
+        final Benchmark benchmark;
         final long generation;
 
         NativeGrant(String host, String clientId, int protocolVersion, byte[] ticket, String expiresAt,
                     long planRevision, String planExplanation, String sessionId, int port,
-                    String publicKeyFingerprint, SelectedVideo selectedVideo, long generation) {
+                    String publicKeyFingerprint, SelectedVideo selectedVideo,
+                    Benchmark benchmark, long generation) {
             this.host = host;
             this.clientId = clientId;
             this.protocolVersion = protocolVersion;
@@ -196,9 +300,13 @@ public final class BeaconStreamSession {
             this.port = port;
             this.publicKeyFingerprint = publicKeyFingerprint;
             this.selectedVideo = selectedVideo;
+            this.benchmark = benchmark;
             this.generation = generation;
         }
 
-        void clearTicket() { Arrays.fill(ticket, (byte) 0); }
+        void clearSecrets() {
+            Arrays.fill(ticket, (byte) 0);
+            if (benchmark != null) benchmark.clearRunToken();
+        }
     }
 }

@@ -159,6 +159,22 @@ jobject java_object(JNIEnv *environment, jobject object, const char *field_name,
   return result;
 }
 
+jobject java_optional_object(JNIEnv *environment, jobject object,
+                             const char *field_name,
+                             const char *signature) {
+  if (object == nullptr) throw std::invalid_argument("Java object is required.");
+  jclass type = require_jni_ref(
+      environment, environment->GetObjectClass(object),
+      "Java object class is unavailable.");
+  jfieldID field = require_jni_ref(
+      environment, environment->GetFieldID(type, field_name, signature),
+      "Required Java object field is unavailable.");
+  jobject result = environment->GetObjectField(object, field);
+  check_jni(environment);
+  environment->DeleteLocalRef(type);
+  return result;
+}
+
 class JniStreamSession;
 using JniStreamSessionRegistry = SessionRegistry<JniStreamSession>;
 
@@ -192,6 +208,11 @@ class JniStreamSession final : public MsQuicClientCallbacks,
           environment,
           environment->GetMethodID(type, "onConnectionLost", "(J)V"),
           "Native connection-loss callback is unavailable.");
+      benchmark_method_ = require_jni_ref(
+          environment,
+          environment->GetMethodID(
+              type, "onBenchmarkCompleted", "(D[J[I[J[J[I[ZJ)V"),
+          "Native benchmark callback is unavailable.");
       environment->DeleteLocalRef(type);
     } catch (...) {
       environment->DeleteGlobalRef(callbacks_);
@@ -304,9 +325,29 @@ class JniStreamSession final : public MsQuicClientCallbacks,
                      std::vector<std::byte> bytes) override {
     auto retained = sessions().retain(handle_);
     if (!retained) return;
-    std::lock_guard lock(mutex_);
-    if (!closed_ && lifecycle_.is_current(generation)) {
-      core_.receive_session(bytes);
+    std::optional<BenchmarkCollectionResult> benchmark_result;
+    {
+      std::lock_guard lock(mutex_);
+      if (!closed_ && lifecycle_.is_current(generation)) {
+        core_.receive_session(bytes);
+        benchmark_result = core_.take_benchmark_result();
+      }
+    }
+    if (benchmark_result.has_value()) {
+      try {
+        const auto handle = handle_;
+        DeferredActionQueue::instance().enqueue(
+            destruction_barrier_,
+            [handle, generation,
+             result = std::move(*benchmark_result)]() mutable {
+              auto session = sessions().retain(handle);
+              if (session) {
+                session->dispatch_benchmark_to_java(generation,
+                                                    std::move(result));
+              }
+            });
+      } catch (...) {
+      }
     }
   }
 
@@ -367,6 +408,30 @@ class JniStreamSession final : public MsQuicClientCallbacks,
 
   void state_changed(State) noexcept override {}
 
+#ifndef NDEBUG
+  void benchmark_for_test(std::uint64_t generation) {
+    callback_generation_.store(generation, std::memory_order_release);
+    dispatch_benchmark_to_java(
+        generation,
+        BenchmarkCollectionResult{
+            .sustainable_throughput_mbps = 96.5,
+            .received_datagrams = 1,
+            .samples = {
+                {.sequence = 0,
+                 .payload_bytes = 1000,
+                 .rtt_us = 2000,
+                 .jitter_us = 0,
+                 .reorder_distance = 0,
+                 .received = true},
+                {.sequence = 1,
+                 .payload_bytes = 1000,
+                 .rtt_us = 2500,
+                 .jitter_us = 300,
+                 .reorder_distance = 1,
+                 .received = false}}});
+  }
+#endif
+
  private:
   static void clear_callback_exception(JNIEnv *environment) noexcept {
     if (environment != nullptr && environment->ExceptionCheck()) {
@@ -410,6 +475,79 @@ class JniStreamSession final : public MsQuicClientCallbacks,
     if (attached) java_vm->DetachCurrentThread();
   }
 
+  void dispatch_benchmark_to_java(
+      std::uint64_t generation,
+      BenchmarkCollectionResult result) noexcept {
+    if (callback_generation_.load(std::memory_order_acquire) != generation) return;
+    auto callback = java_callbacks_.try_enter();
+    if (!callback.has_value()) return;
+    JNIEnv *environment = nullptr;
+    bool attached = false;
+    if (java_vm == nullptr) return;
+    if (java_vm->GetEnv(reinterpret_cast<void **>(&environment),
+                        JNI_VERSION_1_6) != JNI_OK) {
+      if (java_vm->AttachCurrentThread(&environment, nullptr) != JNI_OK) return;
+      attached = true;
+    }
+
+    const auto count = static_cast<jsize>(result.samples.size());
+    jlongArray sequences = environment->NewLongArray(count);
+    jintArray payload_bytes = environment->NewIntArray(count);
+    jlongArray rtt_us = environment->NewLongArray(count);
+    jlongArray jitter_us = environment->NewLongArray(count);
+    jintArray reorder_distances = environment->NewIntArray(count);
+    jbooleanArray received = environment->NewBooleanArray(count);
+    if (sequences == nullptr || payload_bytes == nullptr || rtt_us == nullptr ||
+        jitter_us == nullptr || reorder_distances == nullptr ||
+        received == nullptr || environment->ExceptionCheck()) {
+      clear_callback_exception(environment);
+    } else {
+      std::vector<jlong> sequence_values(result.samples.size());
+      std::vector<jint> payload_values(result.samples.size());
+      std::vector<jlong> rtt_values(result.samples.size());
+      std::vector<jlong> jitter_values(result.samples.size());
+      std::vector<jint> reorder_values(result.samples.size());
+      std::vector<jboolean> received_values(result.samples.size());
+      for (std::size_t index = 0; index < result.samples.size(); ++index) {
+        const BenchmarkNetworkSample &sample = result.samples[index];
+        sequence_values[index] = static_cast<jlong>(sample.sequence);
+        payload_values[index] = static_cast<jint>(sample.payload_bytes);
+        rtt_values[index] = static_cast<jlong>(sample.rtt_us);
+        jitter_values[index] = static_cast<jlong>(sample.jitter_us);
+        reorder_values[index] = static_cast<jint>(sample.reorder_distance);
+        received_values[index] = sample.received ? JNI_TRUE : JNI_FALSE;
+      }
+      environment->SetLongArrayRegion(
+          sequences, 0, count, sequence_values.data());
+      environment->SetIntArrayRegion(
+          payload_bytes, 0, count, payload_values.data());
+      environment->SetLongArrayRegion(rtt_us, 0, count, rtt_values.data());
+      environment->SetLongArrayRegion(
+          jitter_us, 0, count, jitter_values.data());
+      environment->SetIntArrayRegion(
+          reorder_distances, 0, count, reorder_values.data());
+      environment->SetBooleanArrayRegion(
+          received, 0, count, received_values.data());
+      if (!environment->ExceptionCheck()) {
+        environment->CallVoidMethod(
+            callbacks_, benchmark_method_,
+            static_cast<jdouble>(result.sustainable_throughput_mbps),
+            sequences, payload_bytes, rtt_us, jitter_us, reorder_distances,
+            received, static_cast<jlong>(generation));
+      }
+      clear_callback_exception(environment);
+    }
+    if (sequences != nullptr) environment->DeleteLocalRef(sequences);
+    if (payload_bytes != nullptr) environment->DeleteLocalRef(payload_bytes);
+    if (rtt_us != nullptr) environment->DeleteLocalRef(rtt_us);
+    if (jitter_us != nullptr) environment->DeleteLocalRef(jitter_us);
+    if (reorder_distances != nullptr) {
+      environment->DeleteLocalRef(reorder_distances);
+    }
+    if (received != nullptr) environment->DeleteLocalRef(received);
+    if (attached) java_vm->DetachCurrentThread();
+  }
+
   void dispatch_loss_to_java(std::uint64_t generation) noexcept {
     if (callback_generation_.load(std::memory_order_acquire) != generation) return;
     auto callback = java_callbacks_.try_enter();
@@ -432,6 +570,7 @@ class JniStreamSession final : public MsQuicClientCallbacks,
   jobject callbacks_{};
   jmethodID frame_method_{};
   jmethodID loss_method_{};
+  jmethodID benchmark_method_{};
   std::uint64_t handle_{};
   MsQuicClient transport_;
   StreamCore core_;
@@ -473,33 +612,96 @@ ConnectionGrant parse_grant(JNIEnv *environment, jobject native_grant) {
   if (grant.ticket.bytes().empty()) {
     throw std::invalid_argument("Connection grant ticket is empty.");
   }
-  jobject video = java_object(
+  jobject video = java_optional_object(
       environment, native_grant, "selectedVideo",
       "Ldev/beacon/android/BeaconStreamSession$SelectedVideo;");
-  const std::string codec_text = java_string(environment, video, "codec");
-  const std::string dynamic_range_text = java_string(environment, video, "dynamicRange");
-  const jint width = java_int(environment, video, "width");
-  const jint height = java_int(environment, video, "height");
-  const jint fps_numerator = java_int(
-      environment, video, "framesPerSecondNumerator");
-  const jint fps_denominator = java_int(
-      environment, video, "framesPerSecondDenominator");
-  if (width <= 0 || height <= 0 || fps_numerator <= 0 ||
-      fps_denominator <= 0) {
-    environment->DeleteLocalRef(video);
-    throw std::invalid_argument("Connection grant video dimensions or frame rate are invalid.");
+  jobject benchmark = java_optional_object(
+      environment, native_grant, "benchmark",
+      "Ldev/beacon/android/BeaconStreamSession$Benchmark;");
+  if ((video == nullptr) == (benchmark == nullptr)) {
+    if (video != nullptr) environment->DeleteLocalRef(video);
+    if (benchmark != nullptr) environment->DeleteLocalRef(benchmark);
+    throw std::invalid_argument(
+        "Connection grant must contain exactly one video or benchmark mode.");
   }
-  if (!map_selected_video_grant(
-          codec_text,
-          static_cast<std::uint32_t>(width),
-          static_cast<std::uint32_t>(height),
-          static_cast<std::uint32_t>(fps_numerator),
-          static_cast<std::uint32_t>(fps_denominator),
-          dynamic_range_text, grant.video)) {
+
+  if (video != nullptr) {
+    const std::string codec_text = java_string(environment, video, "codec");
+    const std::string dynamic_range_text =
+        java_string(environment, video, "dynamicRange");
+    const jint width = java_int(environment, video, "width");
+    const jint height = java_int(environment, video, "height");
+    const jint fps_numerator = java_int(
+        environment, video, "framesPerSecondNumerator");
+    const jint fps_denominator = java_int(
+        environment, video, "framesPerSecondDenominator");
+    if (width <= 0 || height <= 0 || fps_numerator <= 0 ||
+        fps_denominator <= 0) {
+      environment->DeleteLocalRef(video);
+      throw std::invalid_argument(
+          "Connection grant video dimensions or frame rate are invalid.");
+    }
+    if (!map_selected_video_grant(
+            codec_text, static_cast<std::uint32_t>(width),
+            static_cast<std::uint32_t>(height),
+            static_cast<std::uint32_t>(fps_numerator),
+            static_cast<std::uint32_t>(fps_denominator), dynamic_range_text,
+            grant.video)) {
+      environment->DeleteLocalRef(video);
+      throw std::invalid_argument(
+          "Connection grant selects a mode absent from the stream protocol contract.");
+    }
     environment->DeleteLocalRef(video);
-    throw std::invalid_argument("Connection grant selects a mode absent from the stream protocol contract.");
+  } else {
+    BenchmarkGrant mapped;
+    mapped.run_id = java_string(environment, benchmark, "runId");
+    const jint schema_version = java_int(environment, benchmark, "schemaVersion");
+    jobject reliable = java_object(
+        environment, benchmark, "reliableRound",
+        "Ldev/beacon/android/BeaconStreamSession$BenchmarkRound;");
+    jobject datagram = java_object(
+        environment, benchmark, "datagramRound",
+        "Ldev/beacon/android/BeaconStreamSession$BenchmarkRound;");
+    const jint reliable_packet_count =
+        java_int(environment, reliable, "packetCount");
+    const jint reliable_payload_bytes =
+        java_int(environment, reliable, "payloadBytes");
+    const jlong reliable_interval =
+        java_long(environment, reliable, "measurementIntervalUs");
+    const jint datagram_packet_count =
+        java_int(environment, datagram, "packetCount");
+    const jint datagram_payload_bytes =
+        java_int(environment, datagram, "payloadBytes");
+    const jlong datagram_interval =
+        java_long(environment, datagram, "measurementIntervalUs");
+    auto run_token = java_bytes(environment, benchmark, "runToken");
+    environment->DeleteLocalRef(reliable);
+    environment->DeleteLocalRef(datagram);
+    environment->DeleteLocalRef(benchmark);
+    if (mapped.run_id.empty() || schema_version <= 0 ||
+        reliable_packet_count <= 0 || reliable_payload_bytes <= 0 ||
+        reliable_interval <= 0 || datagram_packet_count <= 0 ||
+        datagram_payload_bytes <= 0 || datagram_interval <= 0 ||
+        run_token.size() != mapped.run_token.size()) {
+      throw std::invalid_argument("Connection grant benchmark plan is invalid.");
+    }
+    std::copy(run_token.begin(), run_token.end(), mapped.run_token.begin());
+    std::fill(run_token.begin(), run_token.end(), std::byte{});
+    mapped.schema_version = static_cast<std::uint32_t>(schema_version);
+    mapped.reliable_packet_count =
+        static_cast<std::uint32_t>(reliable_packet_count);
+    mapped.reliable_payload_bytes =
+        static_cast<std::uint32_t>(reliable_payload_bytes);
+    mapped.reliable_measurement_interval_us =
+        static_cast<std::uint64_t>(reliable_interval);
+    mapped.datagram_packet_count =
+        static_cast<std::uint32_t>(datagram_packet_count);
+    mapped.datagram_payload_bytes =
+        static_cast<std::uint32_t>(datagram_payload_bytes);
+    mapped.datagram_measurement_interval_us =
+        static_cast<std::uint64_t>(datagram_interval);
+    grant.benchmark = std::move(mapped);
   }
-  environment->DeleteLocalRef(video);
   return grant;
 }
 
@@ -832,5 +1034,51 @@ extern "C" JNIEXPORT jint JNICALL
 Java_dev_beacon_android_BeaconStreamCore_nativeTestRegistrySize(
     JNIEnv *, jclass) {
   return static_cast<jint>(sessions().size());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_dev_beacon_android_BeaconStreamCore_nativeTestParseGrant(
+    JNIEnv *environment, jclass, jobject native_grant) {
+  try {
+    ConnectionGrant grant =
+        beacon::android::streamcore::parse_grant(environment, native_grant);
+    return grant.benchmark.has_value() &&
+                   grant.video.codec ==
+                       beacon::stream::v1::VIDEO_CODEC_UNSPECIFIED
+               ? JNI_TRUE
+               : JNI_FALSE;
+  } catch (const beacon::android::streamcore::PendingJniException &) {
+    return JNI_FALSE;
+  } catch (const std::exception &error) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/IllegalArgumentException", error.what());
+  } catch (...) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/RuntimeException",
+        "Unexpected Beacon native benchmark grant test failure.");
+  }
+  return JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_beacon_android_BeaconStreamCore_nativeTestEmitBenchmarkResult(
+    JNIEnv *environment, jclass, jlong handle, jlong generation) {
+  auto session = sessions().find_active(static_cast<std::uint64_t>(handle));
+  if (!session || generation <= 0) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/IllegalArgumentException",
+        "Beacon native benchmark test session is invalid.");
+    return;
+  }
+  try {
+    session->benchmark_for_test(static_cast<std::uint64_t>(generation));
+  } catch (const std::exception &error) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/IllegalArgumentException", error.what());
+  } catch (...) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/RuntimeException",
+        "Unexpected Beacon native benchmark callback test failure.");
+  }
 }
 #endif
