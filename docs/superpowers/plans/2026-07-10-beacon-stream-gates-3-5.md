@@ -271,7 +271,7 @@ ctest --preset windows-x64-debug --output-on-failure
   imbalance, unsafe buffer lifetime, compatibility residue, and secret exposure.
 - [x] Add a failing regression before each justified refactor.
 - [x] Repeat Task 9 in full.
-- [ ] Push a second ready PR, wait for every CI job, merge, and synchronize clean `main`.
+- [x] Push a second ready PR, wait for every CI job, merge, and synchronize clean `main`.
 
 ## Gate 4: Automatic And Manual Network/Hardware Benchmark
 
