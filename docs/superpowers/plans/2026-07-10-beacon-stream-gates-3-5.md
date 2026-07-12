@@ -39,18 +39,18 @@ Surface boundary.
 - Modify: `tests/Beacon.Core.Tests/Docs/ReadmeLinkTests.cs`
 - Modify: `docs/extraction-map.md`
 
-- [ ] Add a failing architecture test that permits `MsQuic`, `NVENC`, `WGC`, and
+- [x] Add a failing architecture test that permits `MsQuic`, `NVENC`, `WGC`, and
   `MediaCodec` only behind the selected StreamWorker/StreamCore boundaries and continues to
   prohibit every compatibility name in runtime/test code.
-- [ ] Add a failing documentation test requiring the Gate 3 audit and this plan.
-- [ ] Update the extraction map only after the tests fail for the expected missing links.
-- [ ] Run:
+- [x] Add a failing documentation test requiring the Gate 3 audit and this plan.
+- [x] Update the extraction map only after the tests fail for the expected missing links.
+- [x] Run:
 
 ```powershell
 dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter "ArchitectureRecoveryBoundaryTests|ReadmeLinkTests"
 ```
 
-- [ ] Commit: `test: guard Beacon native streaming boundaries`
+- [x] Commit: `test: guard Beacon native streaming boundaries`
 
 ### Task 2: Establish Reproducible Native Builds And Prove MsQuic Platforms
 
@@ -66,18 +66,18 @@ dotnet test tests/Beacon.Core.Tests/Beacon.Core.Tests.csproj --filter "Architect
 - Modify: `.github/workflows/ci.yml`
 - Modify: `.gitignore`
 
-- [ ] Write a failing lock-manifest test/script check for exact MsQuic, Protobuf,
+- [x] Write a failing lock-manifest test/script check for exact MsQuic, Protobuf,
   nv-codec-header, and future Opus revisions from the source audit.
-- [ ] Bootstrap dependencies into a normal ignored `_deps` directory with SHA verification;
+- [x] Bootstrap dependencies into a normal ignored `_deps` directory with SHA verification;
   never create a submodule or symlink.
-- [ ] Build pinned MsQuic for Windows x64 and Android x86_64/arm64 with CMake/NDK.
-- [ ] Add a minimal encrypted loopback executable that exchanges one reliable message and
+- [x] Build pinned MsQuic for Windows x64 and Android x86_64/arm64 with CMake/NDK.
+- [x] Add a minimal encrypted loopback executable that exchanges one reliable message and
   one datagram using a test certificate.
-- [ ] Run the Android x86_64 side on `emulator-5554` against host `10.0.2.2` and record
+- [x] Run the Android x86_64 side on `emulator-5554` against host `10.0.2.2` and record
   structured success. Recover/recreate the emulator first if it remains offline.
-- [ ] Treat Android MsQuic build or interoperability failure as a blocking source-decision
+- [x] Treat Android MsQuic build or interoperability failure as a blocking source-decision
   failure. Do not hide it behind a second transport.
-- [ ] Run:
+- [x] Run:
 
 ```powershell
 cmake --preset windows-x64
@@ -87,7 +87,7 @@ ctest --preset windows-x64-debug --output-on-failure
 & $env:ANDROID_HOME\platform-tools\adb.exe -s emulator-5554 shell am instrument -w dev.beacon.android.test/android.test.InstrumentationTestRunner
 ```
 
-- [ ] Commit: `build: establish Beacon native streaming toolchain`
+- [x] Commit: `build: establish Beacon native streaming toolchain`
 
 ### Task 3: Define Typed IPC And Stream Contracts
 
@@ -103,18 +103,18 @@ ctest --preset windows-x64-debug --output-on-failure
 - Create: `tests/Beacon.StreamProtocol.Tests/media_datagram_tests.cpp`
 - Modify: `Beacon.slnx`
 
-- [ ] Write failing golden-vector tests for Protobuf length framing, version rejection,
+- [x] Write failing golden-vector tests for Protobuf length framing, version rejection,
   unknown-field tolerance, maximum message size, media-header network byte order, malformed
   chunks, and redacted ticket rendering.
-- [ ] Define the exact messages from the source audit. Keep Worker IPC and public stream
+- [x] Define the exact messages from the source audit. Keep Worker IPC and public stream
   control in separate schemas.
-- [ ] Generate C# and C++ code during build from one schema source. Generated outputs are not
+- [x] Generate C# and C++ code during build from one schema source. Generated outputs are not
   hand-edited.
-- [ ] Implement the fixed 40-byte media header and bounds checks without heap allocation.
-- [ ] Add a static test proving public envelopes contain no executable path, backend,
+- [x] Implement the fixed 40-byte media header and bounds checks without heap allocation.
+- [x] Add a static test proving public envelopes contain no executable path, backend,
   protocol selector, launch URI, raw policy, or long-lived credential.
-- [ ] Run native CTest plus `.NET` contract tests.
-- [ ] Commit: `feat: define Beacon worker and stream contracts`
+- [x] Run native CTest plus `.NET` contract tests.
+- [x] Commit: `feat: define Beacon worker and stream contracts`
 
 ### Task 4: Build Deterministic In-Memory Transport And Session State Machine
 
@@ -127,17 +127,17 @@ ctest --preset windows-x64-debug --output-on-failure
 - Create: `tests/Beacon.StreamProtocol.Tests/session_tests.cpp`
 - Create: `tests/Beacon.StreamProtocol.Tests/frame_assembler_tests.cpp`
 
-- [ ] Write failing tests for ticket acceptance once, wrong client/session/plan rejection,
+- [x] Write failing tests for ticket acceptance once, wrong client/session/plan rejection,
   explicit stop, duplicate stop, connection loss, reconnect with a new ticket, and shutdown
   resource release exactly once.
-- [ ] Write failing deterministic packet tests for reorder, duplicate, overlap, malformed
+- [x] Write failing deterministic packet tests for reorder, duplicate, overlap, malformed
   offset, missing chunk, capacity eviction, IDR request, non-IDR suppression while awaiting
   recovery, and complete-IDR recovery.
-- [ ] Implement `IStreamTransport` and an in-memory transport whose faults are selected by
+- [x] Implement `IStreamTransport` and an in-memory transport whose faults are selected by
   packet sequence. Do not model faults with sleep or wall-clock expiry.
-- [ ] Bound assembly to four incomplete video frames and the planned-size/16 MiB ceiling.
-- [ ] Expose state transitions and metrics as typed events, not log-text parsing.
-- [ ] Commit: `feat: add deterministic Beacon stream state machine`
+- [x] Bound assembly to four incomplete video frames and the planned-size/16 MiB ceiling.
+- [x] Expose state transitions and metrics as typed events, not log-text parsing.
+- [x] Commit: `feat: add deterministic Beacon stream state machine`
 
 ### Task 5: Build StreamWorker Process And Event-Driven Named-Pipe IPC
 
@@ -154,18 +154,18 @@ ctest --preset windows-x64-debug --output-on-failure
 - Create: `tests/Beacon.Platform.Windows.Tests/Streaming/*`
 - Modify: `src/Beacon.Server/Hosting/BeaconServiceRegistration.cs`
 
-- [ ] Write failing tests for owner-only pipe creation, Worker hello/version mismatch,
+- [x] Write failing tests for owner-only pipe creation, Worker hello/version mismatch,
   readiness acknowledgement, concurrent request correlation, malformed/oversized frame,
   explicit shutdown, Worker process exit, and diagnostic secret redaction.
-- [ ] Launch one Worker in the interactive session and assign it to a kill-on-Service-close
+- [x] Launch one Worker in the interactive session and assign it to a kill-on-Service-close
   Job Object. Do not terminate it on stream disconnect.
-- [ ] Use overlapped pipe I/O and process-handle events. A command completes from its typed
+- [x] Use overlapped pipe I/O and process-handle events. A command completes from its typed
   response or Worker process exit; no startup sleep, descriptor poll, or timeout decides it.
-- [ ] Implement a fake capture/encoder source inside Worker that emits deterministic numbered
+- [x] Implement a fake capture/encoder source inside Worker that emits deterministic numbered
   access units through `IStreamTransport`.
-- [ ] Replace `UnavailableStreamingBackend` only after Worker readiness is proven. Keep
+- [x] Replace `UnavailableStreamingBackend` only after Worker readiness is proven. Keep
   `FakeStreamingBackend` restricted to fake-host tests.
-- [ ] Commit: `feat: host Beacon StreamWorker through typed IPC`
+- [x] Commit: `feat: host Beacon StreamWorker through typed IPC`
 
 ### Task 6: Harden Control-Plane Identity And Single-Use Tickets
 
@@ -183,20 +183,20 @@ ctest --preset windows-x64-debug --output-on-failure
 - Modify: `src/Beacon.Android/app/src/main/java/dev/beacon/android/BeaconApiClient.java`
 - Modify: server and Android security tests
 
-- [ ] Write failing tests for persistent server identity, public-key pin mismatch, initial
+- [x] Write failing tests for persistent server identity, public-key pin mismatch, initial
   pending registration, explicit trusted-Cockpit approval, per-client credential hashing,
   authenticated and client-scoped profile/catalog/launch/recovery calls,
   ticket entropy, hash-only Worker provisioning, client/session/plan binding, single use,
   Worker-instance binding, security expiry validation, revocation, reconnect ticket
   replacement, and log redaction.
-- [ ] Require HTTPS and a pinned Beacon public-key fingerprint outside explicit test-host
+- [x] Require HTTPS and a pinned Beacon public-key fingerprint outside explicit test-host
   mode. Existing plain HTTP remains test-only.
-- [ ] Replace shared-token auto-registration with a pending request that only the local
+- [x] Replace shared-token auto-registration with a pending request that only the local
   Cockpit can approve. Approval completion is event-driven; it is not a polling loop.
-- [ ] Store the Android client credential wrapped by Android Keystore; never store the raw
+- [x] Store the Android client credential wrapped by Android Keystore; never store the raw
   pairing token after enrollment.
-- [ ] Make ticket expiry a validation fact only. Do not schedule session teardown from it.
-- [ ] Commit: `feat: authenticate Beacon clients and stream tickets`
+- [x] Make ticket expiry a validation fact only. Do not schedule session teardown from it.
+- [x] Commit: `feat: authenticate Beacon clients and stream tickets`
 
 ### Task 7: Implement The Real MsQuic Transport
 
@@ -235,42 +235,42 @@ ctest --preset windows-x64-debug --output-on-failure
 - Modify: `src/Beacon.Android/app/build.gradle`
 - Modify: `src/Beacon.Android/app/src/main/java/dev/beacon/android/BeaconViewModel.java`
 
-- [ ] Write failing JNI/native tests for lifecycle, certificate pin, ticket handoff,
+- [x] Write failing JNI/native tests for lifecycle, certificate pin, ticket handoff,
   control/input/feedback stream routing, frame callback thread ownership, Surface replacement,
   connection loss, explicit stop, and release exactly once.
-- [ ] Return the actual ephemeral Worker listener port through a typed Worker IPC event and
+- [x] Return the actual ephemeral Worker listener port through a typed Worker IPC event and
   the launch/reconnect connection grant. Include the session id, pinned server public-key
   fingerprint, authoritative selected-video mode needed by the native StartSession handshake,
   and plan explanation; derive the host from the already configured control-plane route. Never guess a
   fixed port or reintroduce an endpoint-role map, launch URI, descriptor, or polling path.
-- [ ] Build native MsQuic/Protobuf into the APK for x86_64 emulator and arm64 physical target.
-- [ ] Connect the native assembler to a fake Java encoded-frame sink first. Do not invoke
+- [x] Build native MsQuic/Protobuf into the APK for x86_64 emulator and arm64 physical target.
+- [x] Connect the native assembler to a fake Java encoded-frame sink first. Do not invoke
   MediaCodec or add a second route in this task.
-- [ ] Make `BeaconViewModel` own exactly one `BeaconStreamCore`; remove any transitional API
+- [x] Make `BeaconViewModel` own exactly one `BeaconStreamCore`; remove any transitional API
   shape once tests move.
-- [ ] Verify APK stop and activity destruction release every native handle under sanitizable
+- [x] Verify APK stop and activity destruction release every native handle under sanitizable
   host tests and Android instrumentation.
-- [ ] Commit: `feat: add single Android Beacon StreamCore route`
+- [x] Commit: `feat: add single Android Beacon StreamCore route`
 
 ### Task 9: Gate 3 Static And Dynamic Validation
 
-- [ ] Run full `.NET`, native CTest, Android unit/build/instrumentation, Client Lab lint/test,
+- [x] Run full `.NET`, native CTest, Android unit/build/instrumentation, Client Lab lint/test,
   Playwright, FakeEndpoint, DisplayProbe read-only, and GameProbe validation.
-- [ ] Run a real Service -> named pipe -> Worker -> MsQuic -> emulator StreamCore fake-media
+- [x] Run a real Service -> named pipe -> Worker -> MsQuic -> emulator StreamCore fake-media
   session. Prove ready, connect, packet receive, input echo, feedback, disconnect, fresh-ticket
   reconnect, stop, Worker crash isolation, and emergency restore from structured state.
-- [ ] Run static absence checks over all source/test/build files for the prohibited upstream
+- [x] Run static absence checks over all source/test/build files for the prohibited upstream
   and alternate-route names.
-- [ ] Confirm logs contain no raw ticket, client credential, private key, executable path, or
+- [x] Confirm logs contain no raw ticket, client credential, private key, executable path, or
   input payload.
-- [ ] Push, open a ready PR, wait for every duplicate CI job, merge, and synchronize `main`.
+- [x] Push, open a ready PR, wait for every duplicate CI job, merge, and synchronize `main`.
 
 ### Task 10: Gate 3 Refactor Audit And Second Sync
 
-- [ ] Audit only proven duplication, ownership leaks, generated-code drift, JNI resource
+- [x] Audit only proven duplication, ownership leaks, generated-code drift, JNI resource
   imbalance, unsafe buffer lifetime, compatibility residue, and secret exposure.
-- [ ] Add a failing regression before each justified refactor.
-- [ ] Repeat Task 9 in full.
+- [x] Add a failing regression before each justified refactor.
+- [x] Repeat Task 9 in full.
 - [ ] Push a second ready PR, wait for every CI job, merge, and synchronize clean `main`.
 
 ## Gate 4: Automatic And Manual Network/Hardware Benchmark
