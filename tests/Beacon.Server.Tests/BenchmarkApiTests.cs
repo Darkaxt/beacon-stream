@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Beacon.Core.Benchmarks;
 using Beacon.Core.Clients;
+using Beacon.Core.Streaming;
 using Beacon.Server.State;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,6 +14,168 @@ namespace Beacon.Server.Tests;
 
 public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
 {
+    [Fact]
+    public async Task NewRunReturnsBenchmarkConnectionGrantWithoutVideoMode()
+    {
+        HttpClient client = factory.CreateClient();
+        string clientId = $"benchmark-grant-{Guid.NewGuid():N}";
+        await RegisterAsync(client, clientId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/prepare",
+            new { trigger = "sessionPreflight", fingerprints = CreateFingerprints() });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+        Guid runId = root.GetProperty("runId").GetGuid();
+        JsonElement plan = root.GetProperty("transportPlan");
+        JsonElement connection = root.GetProperty("connection");
+        JsonElement benchmark = connection.GetProperty("benchmark");
+
+        Assert.Equal("start-new", root.GetProperty("disposition").GetString());
+        Assert.Equal($"benchmark:{runId:D}", connection.GetProperty("sessionId").GetString());
+        Assert.InRange(connection.GetProperty("port").GetInt32(), 1, 65_535);
+        Assert.NotEqual(0UL, connection.GetProperty("planRevision").GetUInt64());
+        Assert.Equal(runId, benchmark.GetProperty("runId").GetGuid());
+        Assert.Equal(1, benchmark.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(
+            plan.GetProperty("reliablePacketCount").GetInt32(),
+            benchmark.GetProperty("reliableRound").GetProperty("packetCount").GetInt32());
+        Assert.Equal(
+            plan.GetProperty("datagramPacketCount").GetInt32(),
+            benchmark.GetProperty("datagramRound").GetProperty("packetCount").GetInt32());
+        Assert.Equal(16, Convert.FromBase64String(benchmark.GetProperty("runToken").GetString()!).Length);
+        Assert.False(connection.TryGetProperty("selectedVideo", out _));
+    }
+
+    [Fact]
+    public async Task CompletionStopsBenchmarkRuntimeAndRevokesItsTicket()
+    {
+        HttpClient client = factory.CreateClient();
+        string clientId = $"benchmark-complete-{Guid.NewGuid():N}";
+        await RegisterAsync(client, clientId);
+        HttpResponseMessage prepareResponse = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/prepare",
+            new { trigger = "sessionPreflight", fingerprints = CreateFingerprints() });
+        using JsonDocument prepare = await JsonDocument.ParseAsync(
+            await prepareResponse.Content.ReadAsStreamAsync());
+        Guid runId = prepare.RootElement.GetProperty("runId").GetGuid();
+        string sessionId = prepare.RootElement
+            .GetProperty("connection")
+            .GetProperty("sessionId")
+            .GetString()!;
+        int packetCount = prepare.RootElement
+            .GetProperty("transportPlan")
+            .GetProperty("datagramPacketCount")
+            .GetInt32();
+        int payloadBytes = prepare.RootElement
+            .GetProperty("transportPlan")
+            .GetProperty("datagramPayloadBytes")
+            .GetInt32();
+
+        HttpResponseMessage complete = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/{runId:D}/complete",
+            new
+            {
+                networkSamples = Enumerable.Range(0, packetCount)
+                    .Select(sequence => new { sequence, payloadBytes, rttMs = 8, jitterMs = 1.0, received = true, throughputMbps = 100, reorderDistance = 0 }),
+                decoderSamples = new[]
+                {
+                    new { codec = "h264", profile = "high", bitDepth = 8, width = 2560, height = 1600, targetFps = 120, configured = true, sustainedFps = 120, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0 }
+                },
+                powerSamples = new[]
+                {
+                    new { batteryPercent = 80, isCharging = false, thermalState = "nominal" }
+                }
+            });
+
+        Assert.Equal(HttpStatusCode.OK, complete.StatusCode);
+        FakeBenchmarkRuntime runtime = factory.Services.GetRequiredService<FakeBenchmarkRuntime>();
+        BenchmarkRuntimeState stopped = Assert.IsType<BenchmarkRuntimeState>(
+            await runtime.GetAsync(sessionId, CancellationToken.None));
+        Assert.Equal("stopped", stopped.State);
+        Assert.Null(stopped.ActiveListenerPort);
+        Assert.Empty(stopped.RunToken);
+        FakeStreamSessionAuthorizer authorizer = Assert.IsType<FakeStreamSessionAuthorizer>(
+            factory.Services.GetRequiredService<IStreamSessionAuthorizer>());
+        Assert.Contains(authorizer.Revocations, value => value.SessionId == sessionId);
+    }
+
+    [Fact]
+    public async Task CancelStopsPendingBenchmarkRuntimeAndRevokesItsTicket()
+    {
+        HttpClient client = factory.CreateClient();
+        string clientId = $"benchmark-cancel-{Guid.NewGuid():N}";
+        await RegisterAsync(client, clientId);
+        HttpResponseMessage prepareResponse = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/prepare",
+            new { trigger = "manual", fingerprints = CreateFingerprints() });
+        using JsonDocument prepare = await JsonDocument.ParseAsync(
+            await prepareResponse.Content.ReadAsStreamAsync());
+        Guid runId = prepare.RootElement.GetProperty("runId").GetGuid();
+        string sessionId = prepare.RootElement
+            .GetProperty("connection")
+            .GetProperty("sessionId")
+            .GetString()!;
+
+        HttpResponseMessage cancel = await client.PostAsync(
+            $"/clients/{clientId}/benchmarks/{runId:D}/cancel",
+            content: null);
+
+        Assert.Equal(HttpStatusCode.OK, cancel.StatusCode);
+        using JsonDocument cancelled = await JsonDocument.ParseAsync(
+            await cancel.Content.ReadAsStreamAsync());
+        Assert.Equal("cancelled", cancelled.RootElement.GetProperty("state").GetString());
+        FakeBenchmarkRuntime runtime = factory.Services.GetRequiredService<FakeBenchmarkRuntime>();
+        Assert.Equal(
+            "stopped",
+            (await runtime.GetAsync(sessionId, CancellationToken.None))?.State);
+        FakeStreamSessionAuthorizer authorizer = Assert.IsType<FakeStreamSessionAuthorizer>(
+            factory.Services.GetRequiredService<IStreamSessionAuthorizer>());
+        Assert.Contains(authorizer.Revocations, value => value.SessionId == sessionId);
+    }
+
+    [Fact]
+    public async Task FingerprintChangeStopsThePreviousPendingRuntimeBeforeStartingTheReplacement()
+    {
+        HttpClient client = factory.CreateClient();
+        string clientId = $"benchmark-restart-{Guid.NewGuid():N}";
+        await RegisterAsync(client, clientId);
+        HttpResponseMessage firstResponse = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/prepare",
+            new { trigger = "automatic", fingerprints = CreateFingerprints(wifiChannel: 37) });
+        using JsonDocument first = await JsonDocument.ParseAsync(
+            await firstResponse.Content.ReadAsStreamAsync());
+        string firstSessionId = first.RootElement
+            .GetProperty("connection")
+            .GetProperty("sessionId")
+            .GetString()!;
+
+        HttpResponseMessage replacementResponse = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/prepare",
+            new { trigger = "automatic", fingerprints = CreateFingerprints(wifiChannel: 44) });
+
+        Assert.Equal(HttpStatusCode.OK, replacementResponse.StatusCode);
+        using JsonDocument replacement = await JsonDocument.ParseAsync(
+            await replacementResponse.Content.ReadAsStreamAsync());
+        string replacementSessionId = replacement.RootElement
+            .GetProperty("connection")
+            .GetProperty("sessionId")
+            .GetString()!;
+        Assert.NotEqual(firstSessionId, replacementSessionId);
+        FakeBenchmarkRuntime runtime = factory.Services.GetRequiredService<FakeBenchmarkRuntime>();
+        Assert.Equal(
+            "stopped",
+            (await runtime.GetAsync(firstSessionId, CancellationToken.None))?.State);
+        Assert.Equal(
+            "running",
+            (await runtime.GetAsync(replacementSessionId, CancellationToken.None))?.State);
+        Assert.True(
+            runtime.Operations.IndexOf($"stop:{firstSessionId}")
+            < runtime.Operations.IndexOf($"start:{replacementSessionId}"));
+    }
+
     [Fact]
     public async Task AutomaticAndManualRunsStoreServerSelectionAndDrivePlanning()
     {

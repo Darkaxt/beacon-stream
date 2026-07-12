@@ -1,3 +1,4 @@
+using Beacon.Core.Benchmarks;
 using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 using Beacon.Core.Input;
@@ -326,6 +327,98 @@ public sealed class StreamWorkerStreamingBackendTests
         Assert.Equal(WorkerIpcEnvelope.BodyOneofCase.StopMedia, host.Commands[2].BodyCase);
         Assert.True(host.IsReady);
         Assert.Equal(0, host.ShutdownCalls);
+    }
+
+    [Fact]
+    public async Task BenchmarkStartMapsExactPlanAndStopKeepsWorkerReady()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        IBenchmarkRuntime benchmarkRuntime = backend;
+        var plan = new BenchmarkRuntimePlan(
+            Guid.Parse("3c13df40-26c4-40c6-8414-268734f1024d"),
+            new ClientId("z-fold-7"),
+            BenchmarkTrigger.Manual,
+            new BenchmarkTransportPlan(64, 65_536, 256, 1000, 1_000_000));
+        host.StartMediaEvents[0].SessionId = plan.SessionId;
+
+        BenchmarkRuntimeStartResult start = await benchmarkRuntime.StartAsync(
+            plan,
+            CancellationToken.None);
+        BenchmarkRuntimeStopResult stop = await benchmarkRuntime.StopAsync(
+            plan.SessionId,
+            CancellationToken.None);
+
+        BenchmarkRuntimeState started = Assert.IsType<BenchmarkRuntimeState>(start.Runtime);
+        Assert.True(start.Success, start.Error);
+        Assert.Equal("running", started.State);
+        Assert.Equal(51234, started.ActiveListenerPort);
+        Assert.Equal(plan.Revision, started.PlanRevision);
+        Assert.Equal(16, started.RunToken.Length);
+        Assert.True(stop.Success, stop.Error);
+        Assert.Equal("stopped", stop.Runtime?.State);
+        Assert.Equal(
+            [
+                WorkerIpcEnvelope.BodyOneofCase.PrepareBenchmark,
+                WorkerIpcEnvelope.BodyOneofCase.StartMedia,
+                WorkerIpcEnvelope.BodyOneofCase.StopMedia
+            ],
+            host.Commands.Select(command => command.BodyCase));
+        PrepareBenchmark prepare = host.Commands[0].PrepareBenchmark;
+        Assert.Equal(plan.RunId.ToString("D"), prepare.Plan.RunId);
+        Assert.Equal((uint)plan.SchemaVersion, prepare.Plan.SchemaVersion);
+        Assert.Equal(64u, prepare.Plan.ReliableRound.PacketCount);
+        Assert.Equal(65_536u, prepare.Plan.ReliableRound.PayloadBytes);
+        Assert.Equal(256u, prepare.Plan.DatagramRound.PacketCount);
+        Assert.Equal(1000u, prepare.Plan.DatagramRound.PayloadBytes);
+        Assert.Equal(1_000_000UL, prepare.Plan.DatagramRound.MeasurementIntervalUs);
+        Assert.Equal(started.RunToken, prepare.Plan.RunToken.ToByteArray());
+        Assert.True(host.IsReady);
+        Assert.Equal(0, host.ShutdownCalls);
+    }
+
+    [Fact]
+    public async Task BenchmarkRuntimeAcceptsOnlyItsBoundBenchmarkEvents()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        IBenchmarkRuntime benchmarkRuntime = backend;
+        IStreamWorkerRuntimeEvents runtimeEvents = backend;
+        var plan = new BenchmarkRuntimePlan(
+            Guid.Parse("bcfb3bd7-e863-4e1d-b68f-86d694baf6c3"),
+            new ClientId("z-fold-7"),
+            BenchmarkTrigger.SessionPreflight,
+            new BenchmarkTransportPlan(16, 32_768, 64, 1000, 250_000));
+        host.StartMediaEvents[0].SessionId = plan.SessionId;
+        Assert.True((await benchmarkRuntime.StartAsync(plan, CancellationToken.None)).Success);
+
+        Assert.True(runtimeEvents.TryBind(new StreamWorkerTransportAuthenticated(
+            ProcessGeneration: 1,
+            plan.SessionId,
+            WorkerSessionGeneration: 7,
+            MaximumDatagramBytes: 1200)));
+        Assert.True(runtimeEvents.IsCurrent(new StreamWorkerFeedbackReceived(
+            ProcessGeneration: 1,
+            plan.SessionId,
+            WorkerSessionGeneration: 7,
+            Sequence: 1,
+            StreamWorkerFeedbackKind.Benchmark,
+            PrimaryValue: 1000,
+            SecondaryValue: 20,
+            Count: 64)));
+        Assert.False(runtimeEvents.IsCurrent(new StreamWorkerFeedbackReceived(
+            ProcessGeneration: 1,
+            plan.SessionId,
+            WorkerSessionGeneration: 7,
+            Sequence: 2,
+            StreamWorkerFeedbackKind.Decoder,
+            PrimaryValue: 0,
+            SecondaryValue: 0,
+            Count: 0)));
+        Assert.True(runtimeEvents.TryDisconnect(new StreamWorkerTransportDisconnected(
+            ProcessGeneration: 1,
+            plan.SessionId,
+            WorkerSessionGeneration: 7)));
     }
 
     [Fact]

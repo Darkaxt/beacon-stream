@@ -1,3 +1,4 @@
+using Beacon.Core.Benchmarks;
 using Beacon.Core.Diagnostics;
 using Beacon.Core.Displays;
 using Beacon.Core.Games;
@@ -217,6 +218,9 @@ public static class BeaconServiceRegistration
             case BeaconStreamingMode.Fake:
                 services.AddSingleton<IStreamSessionAuthorizer, FakeStreamSessionAuthorizer>();
                 services.AddSingleton<IStreamingBackend, FakeStreamingBackend>();
+                services.AddSingleton<FakeBenchmarkRuntime>();
+                services.AddSingleton<IBenchmarkRuntime>(sp =>
+                    sp.GetRequiredService<FakeBenchmarkRuntime>());
                 break;
             case BeaconStreamingMode.Worker:
                 services.AddSingleton(sp => StreamWorkerProcessHostOptions.Create(
@@ -230,6 +234,8 @@ public static class BeaconServiceRegistration
                 services.AddSingleton<IStreamSessionAuthorizer, StreamWorkerSessionAuthorizer>();
                 services.AddSingleton<StreamWorkerStreamingBackend>();
                 services.AddSingleton<IStreamingBackend>(sp =>
+                    sp.GetRequiredService<StreamWorkerStreamingBackend>());
+                services.AddSingleton<IBenchmarkRuntime>(sp =>
                     sp.GetRequiredService<StreamWorkerStreamingBackend>());
                 services.AddSingleton<IStreamWorkerRuntimeEvents>(sp =>
                     sp.GetRequiredService<StreamWorkerStreamingBackend>());
