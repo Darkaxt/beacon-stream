@@ -4,6 +4,7 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
 
@@ -164,6 +165,42 @@ public final class BeaconApiClientTest {
         assertFalse(transport.body.contains("display"));
         assertFalse(transport.body.contains("mode"));
         assertTrue(result.body().contains("\"state\":\"streaming\""));
+    }
+
+    @Test
+    public void benchmarkCompletionPostsRawNetworkDecoderAndPowerFacts() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        BeaconApiClient client = new BeaconApiClient(
+            new BeaconClientConfig("http://server", "z-fold-7"),
+            transport);
+        BeaconStreamCore.BenchmarkNetworkResult network =
+            new BeaconStreamCore.BenchmarkNetworkResult(
+                96.5,
+                Arrays.asList(
+                    new BeaconStreamCore.BenchmarkNetworkSample(0, 1000, 2000, 0, 0, true),
+                    new BeaconStreamCore.BenchmarkNetworkSample(1, 1000, 2500, 300, 1, false)));
+        BeaconBenchmarkCompletionRequest completion =
+            BeaconBenchmarkCompletionRequest.fromNetworkResult(
+                network,
+                Collections.singletonList(new BeaconBenchmarkCompletionRequest.DecoderSample(
+                    "h264", "high", 8, 2560, 1600, 120, true,
+                    120.0, 5.0, 9.0, 0, 0, false, false)),
+                Collections.singletonList(new BeaconBenchmarkCompletionRequest.PowerSample(
+                    80, false, "nominal")));
+
+        client.completeBenchmark(
+            "3c13df40-26c4-40c6-8414-268734f1024d",
+            completion);
+
+        assertEquals(
+            "/clients/z-fold-7/benchmarks/3c13df40-26c4-40c6-8414-268734f1024d/complete",
+            transport.path);
+        assertTrue(transport.body.contains("\"rttMs\":2.5"));
+        assertTrue(transport.body.contains("\"jitterMs\":0.3"));
+        assertTrue(transport.body.contains("\"throughputMbps\":96.5"));
+        assertTrue(transport.body.contains("\"reorderDistance\":1"));
+        assertTrue(transport.body.contains("\"codec\":\"h264\""));
+        assertTrue(transport.body.contains("\"thermalState\":\"nominal\""));
     }
 
     private static final class FakeTransport implements BeaconHttpTransport {

@@ -90,6 +90,35 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         return post("/clients/" + config.clientId() + "/launch", game.toJson());
     }
 
+    public BeaconResult prepareBenchmark(BeaconBenchmarkPrepareRequest request) throws IOException {
+        if (request == null) {
+            throw new IllegalArgumentException("Benchmark preparation request is required.");
+        }
+        return post(
+            "/clients/" + config.clientId() + "/benchmarks/prepare",
+            request.toJson());
+    }
+
+    public BeaconResult completeBenchmark(
+        String runId,
+        BeaconBenchmarkCompletionRequest request) throws IOException {
+        if (runId == null || runId.trim().isEmpty() || request == null) {
+            throw new IllegalArgumentException("Benchmark run and completion evidence are required.");
+        }
+        return post(
+            "/clients/" + config.clientId() + "/benchmarks/" + runId.trim() + "/complete",
+            request.toJson());
+    }
+
+    public BeaconResult cancelBenchmark(String runId) throws IOException {
+        if (runId == null || runId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Benchmark run is required.");
+        }
+        return post(
+            "/clients/" + config.clientId() + "/benchmarks/" + runId.trim() + "/cancel",
+            new JsonObject());
+    }
+
     @Override
     public BeaconResult reconnect() throws IOException {
         return post("/clients/" + config.clientId() + "/reconnect", new JsonObject());
