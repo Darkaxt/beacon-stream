@@ -1598,15 +1598,15 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.Equal(HttpStatusCode.OK, prepare.StatusCode);
         using JsonDocument document = await JsonDocument.ParseAsync(await prepare.Content.ReadAsStreamAsync());
         Guid runId = document.RootElement.GetProperty("runId").GetGuid();
+        int expectedPackets = document.RootElement.GetProperty("networkCoverage").GetProperty("expectedPacketCount").GetInt32();
+        int payloadBytes = document.RootElement.GetProperty("transportPlan").GetProperty("datagramPayloadBytes").GetInt32();
 
         HttpResponseMessage complete = await client.PostAsJsonAsync(
             $"/clients/{clientId}/benchmarks/{runId:D}/complete",
             new
             {
-                networkSamples = new[]
-                {
-                    new { sequence = 1, payloadBytes = 1200, rttMs, jitterMs = 1.0, received = true, throughputMbps, reorderDistance = 0 }
-                },
+                networkSamples = Enumerable.Range(0, expectedPackets)
+                    .Select(sequence => new { sequence, payloadBytes, rttMs, jitterMs = 1.0, received = true, throughputMbps, reorderDistance = 0 }),
                 decoderSamples = new[]
                 {
                     new { codec, profile = "main", bitDepth = 8, width = 2560, height = 1600, targetFps = fps, configured = true, sustainedFps = fps, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0 }

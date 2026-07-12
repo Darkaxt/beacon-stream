@@ -30,7 +30,7 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.Equal("z-fold-7", root.GetProperty("clients")[0].GetProperty("clientId").GetString());
         JsonElement benchmark = Assert.Single(root.GetProperty("clients")[0].GetProperty("benchmarks").EnumerateArray());
         Assert.Equal("av1", benchmark.GetProperty("selectedResult").GetProperty("codec").GetString());
-        Assert.Equal(1, benchmark.GetProperty("networkSamples").GetArrayLength());
+        Assert.Equal(256, benchmark.GetProperty("networkSamples").GetArrayLength());
         Assert.Equal("steam-shortcut:3767414131", root.GetProperty("sessions")[0].GetProperty("appId").GetString());
         Assert.Equal("running", root.GetProperty("streams")[0].GetProperty("state").GetString());
         Assert.Equal("client-z-fold-7", root.GetProperty("streams")[0].GetProperty("displayId").GetString());

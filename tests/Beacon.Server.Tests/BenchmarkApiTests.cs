@@ -29,17 +29,17 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
         using JsonDocument prepareDocument = await JsonDocument.ParseAsync(await prepare.Content.ReadAsStreamAsync());
         Assert.Equal("start-new", prepareDocument.RootElement.GetProperty("disposition").GetString());
         Guid runId = prepareDocument.RootElement.GetProperty("runId").GetGuid();
-        Assert.Equal(1, prepareDocument.RootElement.GetProperty("networkCoverage").GetProperty("firstSequence").GetInt64());
-        Assert.Equal(1, prepareDocument.RootElement.GetProperty("networkCoverage").GetProperty("expectedPacketCount").GetInt32());
+        Assert.Equal(0, prepareDocument.RootElement.GetProperty("networkCoverage").GetProperty("firstSequence").GetInt64());
+        int expectedPackets = prepareDocument.RootElement.GetProperty("networkCoverage").GetProperty("expectedPacketCount").GetInt32();
+        int payloadBytes = prepareDocument.RootElement.GetProperty("transportPlan").GetProperty("datagramPayloadBytes").GetInt32();
+        Assert.Equal(256, expectedPackets);
 
         HttpResponseMessage complete = await client.PostAsJsonAsync(
             $"/clients/{clientId}/benchmarks/{runId:D}/complete",
             new
             {
-                networkSamples = new[]
-                {
-                    new { sequence = 1, payloadBytes = 1200, rttMs = 8, jitterMs = 1.0, received = true, throughputMbps = 100, reorderDistance = 0 }
-                },
+                networkSamples = Enumerable.Range(0, expectedPackets)
+                    .Select(sequence => new { sequence, payloadBytes, rttMs = 8, jitterMs = 1.0, received = true, throughputMbps = 100, reorderDistance = 0 }),
                 decoderSamples = new[]
                 {
                     new { codec = "h264", profile = "high", bitDepth = 8, width = 2560, height = 1600, targetFps = 120, configured = true, sustainedFps = 120, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0 }
@@ -60,7 +60,7 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
         using JsonDocument historyDocument = await JsonDocument.ParseAsync(await history.Content.ReadAsStreamAsync());
         JsonElement stored = Assert.Single(historyDocument.RootElement.GetProperty("runs").EnumerateArray());
         Assert.Equal(runId, stored.GetProperty("runId").GetGuid());
-        Assert.Equal(1, stored.GetProperty("networkSamples").GetArrayLength());
+        Assert.Equal(expectedPackets, stored.GetProperty("networkSamples").GetArrayLength());
         Assert.Equal(1, stored.GetProperty("decoderSamples").GetArrayLength());
         Assert.Equal("h264", stored.GetProperty("selectedResult").GetProperty("codec").GetString());
 

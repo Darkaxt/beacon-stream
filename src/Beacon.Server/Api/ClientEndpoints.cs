@@ -186,6 +186,7 @@ public static class ClientEndpoints
                 request.Fingerprints,
                 DateTimeOffset.UtcNow,
                 MaximumBenchmarkEvidenceAge);
+            BenchmarkTransportPlan transportPlan = BenchmarkSuitePolicy.Create(request.Trigger);
             return Results.Ok(new
             {
                 disposition = preparation.Disposition switch
@@ -199,7 +200,8 @@ public static class ClientEndpoints
                     ? null
                     : preparation.Evidence.Revision,
                 selectedResult = preparation.Evidence.SelectedResult,
-                networkCoverage = BenchmarkSuitePolicy.NetworkCoverage,
+                transportPlan,
+                networkCoverage = BenchmarkSuitePolicy.Coverage(transportPlan),
                 reason = preparation.Reason
             });
         });
@@ -236,12 +238,14 @@ public static class ClientEndpoints
 
             try
             {
+                BenchmarkTransportPlan transportPlan = BenchmarkSuitePolicy.Create(pending.Trigger);
+                NetworkBenchmarkCoverage coverage = BenchmarkSuitePolicy.Coverage(transportPlan);
                 var scoringInput = new BenchmarkScoringInput(
                     request.NetworkSamples,
                     request.DecoderSamples,
                     request.PowerSamples,
                     profile.Stream.CodecPreference,
-                    BenchmarkSuitePolicy.NetworkCoverage);
+                    coverage);
                 SelectedBenchmarkResult selected = BenchmarkScorer.Select(scoringInput);
                 BenchmarkEvidence completed = pending with
                 {
@@ -250,7 +254,7 @@ public static class ClientEndpoints
                     DecoderSamples = request.DecoderSamples.ToArray(),
                     PowerSamples = request.PowerSamples.ToArray(),
                     SelectedResult = selected,
-                    NetworkCoverage = BenchmarkSuitePolicy.NetworkCoverage
+                    NetworkCoverage = coverage
                 };
                 if (!store.TryCompleteBenchmarkEvidence(runId, clientId, completed, out BenchmarkEvidence? committed))
                 {
