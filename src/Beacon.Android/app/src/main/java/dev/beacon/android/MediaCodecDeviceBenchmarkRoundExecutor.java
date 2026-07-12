@@ -1,11 +1,5 @@
 package dev.beacon.android;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
 final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRoundExecutor {
     private final EncodedVideoCodecFactory codecFactory;
     private final BenchmarkVectorRepository vectors;
@@ -72,30 +66,21 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
         EncodedVideoCodecObserver,
         BenchmarkPresentationSurfaceFactory.Observer {
         private final BeaconBenchmarkHardwarePlan.DecoderRound round;
-        private final int expectedFrames;
         private final Observer observer;
-        private final Map<Long, Long> inputTimesNs = new HashMap<>();
-        private final List<Double> decodeLatenciesMs = new ArrayList<>();
-        private final List<Double> presentationLatenciesMs = new ArrayList<>();
+        private final DecoderBenchmarkMeasurements measurements;
         private EncodedVideoCodec codec;
         private BenchmarkPresentationSurface surface;
         private boolean started;
         private boolean finished;
         private boolean eos;
-        private int outputFrames;
-        private int renderedFrames;
-        private int presentedFrames;
-        private int outputErrors;
-        private long firstInputNs = Long.MAX_VALUE;
-        private long lastOutputNs;
 
         RoundState(
             BeaconBenchmarkHardwarePlan.DecoderRound round,
             int expectedFrames,
             Observer observer) {
             this.round = round;
-            this.expectedFrames = expectedFrames;
             this.observer = observer;
+            this.measurements = new DecoderBenchmarkMeasurements(round, expectedFrames);
         }
 
         synchronized void attachSurface(BenchmarkPresentationSurface surface) {
@@ -117,8 +102,7 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
         @Override
         public synchronized void onInputQueued(long presentationTimeUs, long queuedAtNs) {
             if (finished) return;
-            inputTimesNs.put(presentationTimeUs, queuedAtNs);
-            firstInputNs = Math.min(firstInputNs, queuedAtNs);
+            measurements.recordInput(presentationTimeUs, queuedAtNs);
         }
 
         @Override
@@ -128,15 +112,7 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
             boolean rendered) {
             synchronized (this) {
                 if (finished) return;
-                outputFrames++;
-                if (rendered) renderedFrames++;
-                lastOutputNs = Math.max(lastOutputNs, releasedAtNs);
-                Long inputNs = inputTimesNs.get(presentationTimeUs);
-                if (inputNs == null || releasedAtNs < inputNs) {
-                    outputErrors++;
-                } else {
-                    decodeLatenciesMs.add((releasedAtNs - inputNs) / 1_000_000.0);
-                }
+                measurements.recordOutput(presentationTimeUs, releasedAtNs, rendered);
             }
             finishIfDrained();
         }
@@ -145,13 +121,7 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
         public void onFramePresented(long presentationTimeUs, long presentedAtNs) {
             synchronized (this) {
                 if (finished) return;
-                presentedFrames++;
-                Long inputNs = inputTimesNs.get(presentationTimeUs);
-                if (inputNs == null || presentedAtNs < inputNs) {
-                    outputErrors++;
-                } else {
-                    presentationLatenciesMs.add((presentedAtNs - inputNs) / 1_000_000.0);
-                }
+                measurements.recordPresentation(presentationTimeUs, presentedAtNs);
             }
             finishIfDrained();
         }
@@ -169,7 +139,7 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
         public void onError(Throwable failure) {
             synchronized (this) {
                 if (finished) return;
-                outputErrors++;
+                measurements.recordError();
                 eos = true;
             }
             finish(true);
@@ -183,7 +153,7 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
         private void finishIfDrained() {
             boolean ready;
             synchronized (this) {
-                ready = eos && presentedFrames >= renderedFrames;
+                ready = eos && measurements.presentationDrained();
             }
             if (ready) finish(true);
         }
@@ -196,30 +166,7 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
             int cleanupErrors = cleanup();
             BeaconBenchmarkCompletionRequest.DecoderSample sample;
             synchronized (this) {
-                double durationSeconds = firstInputNs == Long.MAX_VALUE ||
-                    lastOutputNs <= firstInputNs
-                    ? 0.0
-                    : (lastOutputNs - firstInputNs) / 1_000_000_000.0;
-                double sustainedFps = durationSeconds <= 0.0
-                    ? 0.0
-                    : outputFrames / durationSeconds;
-                sample = new BeaconBenchmarkCompletionRequest.DecoderSample(
-                    round.codec(),
-                    round.profile(),
-                    round.bitDepth(),
-                    round.width(),
-                    round.height(),
-                    round.targetFps(),
-                    configured,
-                    sustainedFps,
-                    percentile95(decodeLatenciesMs),
-                    presentationLatenciesMs.isEmpty()
-                        ? null
-                        : percentile95(presentationLatenciesMs),
-                    Math.max(0, expectedFrames - outputFrames),
-                    outputErrors + cleanupErrors,
-                    false,
-                    false);
+                sample = measurements.toSample(configured, cleanupErrors);
             }
             observer.onCompleted(sample);
         }
@@ -268,14 +215,6 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
                 finished = true;
             }
             cleanup();
-        }
-
-        private static double percentile95(List<Double> values) {
-            if (values.isEmpty()) return 0.0;
-            List<Double> sorted = new ArrayList<>(values);
-            Collections.sort(sorted);
-            int index = Math.max(0, (int) Math.ceil(sorted.size() * 0.95) - 1);
-            return sorted.get(index);
         }
     }
 }
