@@ -8,7 +8,7 @@ device facts, game selection, and control requests.
 
 ## Current State
 
-Architecture Recovery Gates 0-2 and the Gate 3 implementation define the current repository
+Architecture Recovery Gates 0-3 and the Gate 4 evidence model define the current repository
 state:
 
 - Core, Server, Cockpit, Client Lab, FakeEndpoint, and Android expose protocol-neutral
@@ -20,6 +20,10 @@ state:
   control, input, feedback, and media datagrams over MsQuic.
 - The APK has one JNI StreamCore route. Gate 3 proves it against the real Server and Worker on
   the Android emulator with a deterministic, non-decodable access-unit marker.
+- Versioned network/hardware fingerprints, raw benchmark samples, server-side scoring,
+  automatic reuse decisions, manual always-new runs, history, and persisted plan evidence are
+  implemented. Planning rejects missing or stale evidence instead of reverting to telemetry
+  heuristics.
 - Gate 3 does not claim real video. WGC capture, D3D11 conversion, NVENC H.264, and MediaCodec
   presentation remain Gate 5 work behind the existing Worker/StreamCore contract.
 
@@ -78,11 +82,11 @@ dotnet run --project src\Beacon.Server
 Windows mode exercises the real display, launcher, activity, input, recovery, and
 StreamWorker boundaries. Real encoded video is intentionally unavailable until Gate 5.
 
-Optional profile persistence and pairing:
+Optional profile and benchmark-evidence persistence:
 
 ```powershell
 $env:BEACON_CLIENT_PROFILES_PATH="$env:LOCALAPPDATA\BeaconStream\client-profiles.json"
-$env:BEACON_PAIRING_TOKEN='pair-me'
+$env:BEACON_BENCHMARK_EVIDENCE_PATH="$env:LOCALAPPDATA\BeaconStream\benchmark-evidence.json"
 ```
 
 ## Phone-Free Clients
@@ -99,12 +103,15 @@ Run the deterministic endpoint script:
 ```powershell
 dotnet run --project src\Beacon.FakeEndpoint -- --server http://127.0.0.1:5000
 dotnet run --project src\Beacon.FakeEndpoint -- --server http://127.0.0.1:5000 --telemetry-profile high-rtt
-dotnet run --project src\Beacon.FakeEndpoint -- --server http://127.0.0.1:5000 --client-id handheld-1 --name "Handheld 1" --pairing-token pair-me
+dotnet run --project src\Beacon.FakeEndpoint -- --server http://127.0.0.1:5000 --client-id handheld-1 --name "Handheld 1"
 ```
 
 Telemetry profiles are `excellent-lan`, `congested-lan`, `high-rtt`, `packet-loss`,
-`low-bitrate-cap`, and `thermal-battery`. They provide deterministic planner inputs; they
-are not a live adaptation loop.
+`low-bitrate-cap`, and `thermal-battery`. They exercise operational telemetry only; they do
+not select stream settings. Fake host mode seeds deterministic Z Fold 7 benchmark evidence.
+Other clients prepare and complete benchmark runs through the Beacon control plane before
+planning. Gate 4 transport work will replace submitted fixture samples with measurements from
+the production Worker/StreamCore path.
 
 ## Local Tools
 

@@ -284,16 +284,16 @@ ctest --preset windows-x64-debug --output-on-failure
 - Modify: `src/Beacon.Core/Sessions/SessionPlanner.cs`
 - Modify: client profile persistence models
 
-- [ ] Test versioned network fingerprints, hardware fingerprints, evidence invalidation,
+- [x] Test versioned network fingerprints, hardware fingerprints, evidence invalidation,
   manual always-new runs, candidate scoring, stale-result rejection, and plan explanation.
-- [ ] Store raw samples and selected result server-side. The client reports facts only.
-- [ ] Include route/address, transport, network prefix, Wi-Fi band/channel, link-speed bucket,
+- [x] Store raw samples and selected result server-side. The client reports facts only.
+- [x] Include route/address, transport, network prefix, Wi-Fi band/channel, link-speed bucket,
   salted SSID/BSSID hash when available, codec/decode facts, display refresh, thermals, and
   battery/power state.
-- [ ] Test that raw SSID/BSSID remain APK-local and never enter requests, persistence,
+- [x] Test that raw SSID/BSSID remain APK-local and never enter requests, persistence,
   diagnostics, or logs. Invalidate calibration on every hardware/network/schema/version fact
   listed by `REQ-BENCH-007`.
-- [ ] Commit: `feat: model Beacon benchmark evidence`
+- [x] Commit: `feat: model Beacon benchmark evidence`
 
 ### Task 12: Run Benchmark Traffic Through The Production Transport
 
