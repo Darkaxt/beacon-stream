@@ -23,6 +23,47 @@ namespace Beacon.Server.Tests;
 public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
 {
     [Fact]
+    public async Task AdminSnapshotRendersWorkerEvidenceAsSanitizedMetadata()
+    {
+        var journal = new InMemoryDiagnosticEventJournal();
+        journal.Publish(DiagnosticEvent.Create(
+            DiagnosticSeverity.Information,
+            "stream-worker",
+            "worker.media",
+            "Worker media evidence accepted.",
+            sessionId: "session-a",
+            metadata: new Dictionary<string, string>
+            {
+                ["sequence"] = "2",
+                ["presentationTimeUs"] = "1000000",
+                ["datagramBytes"] = "56"
+            }));
+        WebApplicationFactory<Program> snapshotFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<InMemoryDiagnosticEventJournal>();
+                services.RemoveAll<IDiagnosticEventSink>();
+                services.RemoveAll<IDiagnosticEventSource>();
+                services.AddSingleton(journal);
+                services.AddSingleton<IDiagnosticEventSink>(journal);
+                services.AddSingleton<IDiagnosticEventSource>(journal);
+            }));
+        HttpClient client = snapshotFactory.CreateClient();
+
+        HttpResponseMessage response = await client.GetAsync("/admin/snapshot");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement evidence = Assert.Single(
+            document.RootElement.GetProperty("diagnostics").EnumerateArray(),
+            value => value.GetProperty("operation").GetString() == "worker.media");
+        Assert.Equal("2", evidence.GetProperty("metadata").GetProperty("sequence").GetString());
+        Assert.Equal("56", evidence.GetProperty("metadata").GetProperty("datagramBytes").GetString());
+        Assert.False(evidence.TryGetProperty("ticket", out _));
+        Assert.False(evidence.TryGetProperty("input", out _));
+    }
+
+    [Fact]
     public async Task ClientInputDiagnosticsRedactPayloadAndSinkErrorCanaries()
     {
         const string canary = "HTTP-INPUT-CANARY-b7e4";

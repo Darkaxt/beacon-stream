@@ -8,6 +8,14 @@
 
 namespace beacon::worker {
 
+[[nodiscard]] v1::WorkerIpcEnvelope
+make_connection_observed_event(std::uint64_t connection_generation);
+[[nodiscard]] v1::WorkerIpcEnvelope
+make_connection_configured_event(std::uint64_t connection_generation);
+[[nodiscard]] v1::WorkerIpcEnvelope
+make_transport_connected_event(std::uint64_t connection_generation);
+[[nodiscard]] v1::WorkerIpcEnvelope make_transport_failed_event(
+    std::uint64_t connection_generation, std::uint32_t platform_status_code);
 [[nodiscard]] v1::WorkerIpcEnvelope make_transport_authenticated_event(
     std::string_view session_id, std::uint64_t session_generation,
     std::uint16_t maximum_datagram_bytes);

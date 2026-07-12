@@ -744,8 +744,17 @@ private:
                                3);
     }
     if (accepted_start) {
+      std::uint64_t marker_sequence = 0;
+      {
+        std::lock_guard lock{mutex_};
+        marker_sequence = next_marker_sequence_;
+        if (marker_sequence == 0) {
+          return;
+        }
+        ++next_marker_sequence_;
+      }
       auto packets = synthetic_media_source_.emit_access_unit_marker(
-          1, kSyntheticPresentationTimeUs,
+          marker_sequence, kSyntheticPresentationTimeUs,
           accepted_start->maximum_datagram_bytes);
       if (!packets.empty()) {
         static_cast<void>(send_for_generation(
@@ -940,6 +949,9 @@ private:
         self.pending_session_invalid_ = false;
         self.close_after_session_fin_ = false;
       }
+      self.append_pending_event(
+          make_connection_observed_event(connection_generation));
+      self.drain_pending_events();
       auto *connection_context = new ConnectionContext{
           .owner = &self, .connection_generation = connection_generation};
       self.api_->SetCallbackHandler(
@@ -948,16 +960,25 @@ private:
       const auto status = self.api_->ConnectionSetConfiguration(
           event->NEW_CONNECTION.Connection, self.configuration_);
       if (QUIC_FAILED(status)) {
-        std::lock_guard lock{self.mutex_};
-        if (self.connection_ == event->NEW_CONNECTION.Connection &&
-            self.current_connection_generation_ == connection_generation) {
-          self.connection_ = nullptr;
-          self.current_connection_generation_ = 0;
-          self.clear_pending_session_bytes();
-          self.protocol_.reset();
+        {
+          std::lock_guard lock{self.mutex_};
+          if (self.connection_ == event->NEW_CONNECTION.Connection &&
+              self.current_connection_generation_ == connection_generation) {
+            self.connection_ = nullptr;
+            self.current_connection_generation_ = 0;
+            self.clear_pending_session_bytes();
+            self.protocol_.reset();
+          }
         }
         self.changed_.notify_all();
+        self.append_pending_event(make_transport_failed_event(
+            connection_generation,
+            static_cast<std::uint32_t>(status_code(status))));
+      } else {
+        self.append_pending_event(
+            make_connection_configured_event(connection_generation));
       }
+      self.drain_pending_events();
       return status;
     } catch (...) {
       self.record_listener_callback_exception(
@@ -996,7 +1017,11 @@ private:
         std::lock_guard lock{self.mutex_};
         accepted = self.transport_state_.connected(alpn);
       }
-      if (!accepted) {
+      if (accepted) {
+        self.append_pending_event(
+            make_transport_connected_event(connection_generation));
+        self.drain_pending_events();
+      } else {
         self.api_->ConnectionShutdown(connection,
                                       QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 1);
       }
@@ -1118,10 +1143,17 @@ private:
       break;
     }
     case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT: {
-      std::lock_guard lock{self.mutex_};
-      self.transport_state_.transport_failed(
-          event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status,
-          event->SHUTDOWN_INITIATED_BY_TRANSPORT.ErrorCode);
+      {
+        std::lock_guard lock{self.mutex_};
+        self.transport_state_.transport_failed(
+            event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status,
+            event->SHUTDOWN_INITIATED_BY_TRANSPORT.ErrorCode);
+      }
+      self.append_pending_event(make_transport_failed_event(
+          connection_generation,
+          static_cast<std::uint32_t>(status_code(
+              event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status))));
+      self.drain_pending_events();
       break;
     }
     case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER: {
@@ -1279,6 +1311,7 @@ private:
   std::vector<std::byte> pending_session_bytes_;
   std::string current_session_id_;
   std::uint64_t current_generation_{};
+  std::uint64_t next_marker_sequence_{1};
   std::uint64_t current_connection_generation_{};
   std::uint64_t next_connection_generation_{};
   std::uint16_t local_port_{};

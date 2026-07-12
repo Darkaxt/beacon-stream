@@ -314,6 +314,11 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
 
     private StreamWorkerEvent TranslateEvent(WorkerIpcEnvelope envelope)
     {
+        if (envelope.BodyCase == WorkerIpcEnvelope.BodyOneofCase.WorkerDiagnostic)
+        {
+            return TranslateConnectionDiagnostic(envelope);
+        }
+
         if (string.IsNullOrWhiteSpace(envelope.SessionId))
         {
             throw new StreamWorkerProtocolException("StreamWorker event session identity is invalid.");
@@ -329,6 +334,34 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
             WorkerIpcEnvelope.BodyOneofCase.FeedbackReceived => TranslateFeedback(envelope),
             WorkerIpcEnvelope.BodyOneofCase.MediaEvidence => TranslateMediaEvidence(envelope),
             _ => throw new StreamWorkerProtocolException("StreamWorker emitted an unknown unsolicited event."),
+        };
+    }
+
+    private StreamWorkerEvent TranslateConnectionDiagnostic(WorkerIpcEnvelope envelope)
+    {
+        WorkerDiagnostic diagnostic = envelope.WorkerDiagnostic;
+        if (!string.IsNullOrEmpty(envelope.SessionId)
+            || diagnostic.Severity != DiagnosticSeverity.Information
+            || diagnostic.Boundary != DiagnosticBoundary.Transport
+            || diagnostic.NumericValue == 0)
+        {
+            throw new StreamWorkerProtocolException("StreamWorker connection diagnostic is invalid.");
+        }
+
+        return diagnostic.Code switch
+        {
+            DiagnosticCode.ConnectionObserved when diagnostic.PlatformErrorCode == 0 =>
+                new StreamWorkerConnectionObserved(processGeneration, diagnostic.NumericValue),
+            DiagnosticCode.ConnectionConfigured when diagnostic.PlatformErrorCode == 0 =>
+                new StreamWorkerConnectionConfigured(processGeneration, diagnostic.NumericValue),
+            DiagnosticCode.TransportConnected when diagnostic.PlatformErrorCode == 0 =>
+                new StreamWorkerTransportConnected(processGeneration, diagnostic.NumericValue),
+            DiagnosticCode.TransportFailed when diagnostic.PlatformErrorCode != 0 =>
+                new StreamWorkerTransportFailed(
+                    processGeneration,
+                    diagnostic.NumericValue,
+                    diagnostic.PlatformErrorCode),
+            _ => throw new StreamWorkerProtocolException("StreamWorker connection diagnostic is invalid."),
         };
     }
 

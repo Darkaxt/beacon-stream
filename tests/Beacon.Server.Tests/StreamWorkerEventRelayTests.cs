@@ -119,6 +119,10 @@ public sealed class StreamWorkerEventRelayTests
         await host.WriteAsync(new StreamWorkerFeedbackReceived(
             1, "session", 7, 2, StreamWorkerFeedbackKind.Decoder, 3, 4, 0));
         await host.WriteAsync(new StreamWorkerMediaEvidence(1, "session", 7, 5, 6, 7));
+        await host.WriteAsync(new StreamWorkerConnectionObserved(1, 22));
+        await host.WriteAsync(new StreamWorkerConnectionConfigured(1, 22));
+        await host.WriteAsync(new StreamWorkerTransportConnected(1, 22));
+        await host.WriteAsync(new StreamWorkerTransportFailed(1, 22, 0x80410006));
         await host.WriteAsync(new StreamWorkerProcessExited(1, 23));
         await host.WriteAsync(Input(8, ClientInputEvent.StreamKeyboard(1, true)));
         await host.WriteAsync(Input(9, ClientInputEvent.StreamKeyboard(2, false)));
@@ -132,6 +136,11 @@ public sealed class StreamWorkerEventRelayTests
         Assert.Contains("worker.process_exited", rendered, StringComparison.Ordinal);
         Assert.Contains("worker.feedback", rendered, StringComparison.Ordinal);
         Assert.Contains("worker.media", rendered, StringComparison.Ordinal);
+        Assert.Contains("worker.connection_observed", rendered, StringComparison.Ordinal);
+        Assert.Contains("worker.connection_configured", rendered, StringComparison.Ordinal);
+        Assert.Contains("worker.transport_connected", rendered, StringComparison.Ordinal);
+        Assert.Contains("worker.transport_failed", rendered, StringComparison.Ordinal);
+        Assert.Contains("platformStatusCode=2151743494", rendered, StringComparison.Ordinal);
         Assert.Contains("input.dispatch_failed", rendered, StringComparison.Ordinal);
         Assert.Contains("input.rejected", rendered, StringComparison.Ordinal);
         Assert.Equal(1, runtime.ExitCalls);

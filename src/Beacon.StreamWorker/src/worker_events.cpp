@@ -13,6 +13,51 @@ v1::WorkerIpcEnvelope event_envelope(std::string_view session_id) {
 
 } // namespace
 
+v1::WorkerIpcEnvelope
+make_connection_observed_event(std::uint64_t connection_generation) {
+  auto event = event_envelope({});
+  auto *body = event.mutable_worker_diagnostic();
+  body->set_severity(v1::DIAGNOSTIC_SEVERITY_INFORMATION);
+  body->set_boundary(v1::DIAGNOSTIC_BOUNDARY_TRANSPORT);
+  body->set_code(v1::DIAGNOSTIC_CODE_CONNECTION_OBSERVED);
+  body->set_numeric_value(connection_generation);
+  return event;
+}
+
+v1::WorkerIpcEnvelope
+make_connection_configured_event(std::uint64_t connection_generation) {
+  auto event = event_envelope({});
+  auto *body = event.mutable_worker_diagnostic();
+  body->set_severity(v1::DIAGNOSTIC_SEVERITY_INFORMATION);
+  body->set_boundary(v1::DIAGNOSTIC_BOUNDARY_TRANSPORT);
+  body->set_code(v1::DIAGNOSTIC_CODE_CONNECTION_CONFIGURED);
+  body->set_numeric_value(connection_generation);
+  return event;
+}
+
+v1::WorkerIpcEnvelope
+make_transport_connected_event(std::uint64_t connection_generation) {
+  auto event = event_envelope({});
+  auto *body = event.mutable_worker_diagnostic();
+  body->set_severity(v1::DIAGNOSTIC_SEVERITY_INFORMATION);
+  body->set_boundary(v1::DIAGNOSTIC_BOUNDARY_TRANSPORT);
+  body->set_code(v1::DIAGNOSTIC_CODE_TRANSPORT_CONNECTED);
+  body->set_numeric_value(connection_generation);
+  return event;
+}
+
+v1::WorkerIpcEnvelope make_transport_failed_event(
+    std::uint64_t connection_generation, std::uint32_t platform_status_code) {
+  auto event = event_envelope({});
+  auto *body = event.mutable_worker_diagnostic();
+  body->set_severity(v1::DIAGNOSTIC_SEVERITY_INFORMATION);
+  body->set_boundary(v1::DIAGNOSTIC_BOUNDARY_TRANSPORT);
+  body->set_code(v1::DIAGNOSTIC_CODE_TRANSPORT_FAILED);
+  body->set_platform_error_code(platform_status_code);
+  body->set_numeric_value(connection_generation);
+  return event;
+}
+
 v1::WorkerIpcEnvelope make_transport_authenticated_event(
     std::string_view session_id, std::uint64_t session_generation,
     std::uint16_t maximum_datagram_bytes) {

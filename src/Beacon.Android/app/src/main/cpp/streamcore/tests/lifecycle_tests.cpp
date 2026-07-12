@@ -95,6 +95,16 @@ class MsQuicClientTestAccess {
     std::lock_guard lock(client.mutex_);
     return client.shutdown_started_;
   }
+
+  static void reject_stream_start(
+      MsQuicClient &client, StreamRole role, QUIC_STATUS status,
+      std::uint64_t id, std::uint64_t generation) {
+    if (validate_stream_start(role, status, id) ==
+        StreamStartValidation::accepted) {
+      std::abort();
+    }
+    client.fail_stream_start(generation);
+  }
 #endif
 };
 
@@ -215,10 +225,12 @@ void surface_replacement_releases_every_acquisition_once() {
   require(released == 3);
 }
 
-void production_msquic_settings_disable_idle_timeout() {
+void production_msquic_settings_use_liveness_heartbeat_without_idle_ownership() {
   const QUIC_SETTINGS settings = android_stream::make_msquic_client_settings();
   require(settings.IsSet.IdleTimeoutMs == TRUE);
   require(settings.IdleTimeoutMs == 0);
+  require(settings.IsSet.KeepAliveIntervalMs == TRUE);
+  require(settings.KeepAliveIntervalMs == 1000);
 }
 
 void production_receive_uses_synchronous_ownership() {
@@ -334,6 +346,33 @@ void current_generation_receives_one_production_loss() {
               client) == QUIC_STATUS_SUCCESS);
   require(callbacks.loss_generations == std::vector<std::uint64_t>{7});
 }
+
+void local_stream_start_rejections_report_one_production_loss() {
+  ProductionCallbacks unexpected_id_callbacks;
+  android_stream::MsQuicClient unexpected_id_client(unexpected_id_callbacks);
+  android_stream::MsQuicClientTestAccess::prime_connection(
+      unexpected_id_client, 11, false,
+      [](const android_stream::Endpoint &) { return true; });
+  android_stream::MsQuicClientTestAccess::reject_stream_start(
+      unexpected_id_client, android_stream::StreamRole::input,
+      QUIC_STATUS_SUCCESS, 6, 11);
+  android_stream::MsQuicClientTestAccess::reject_stream_start(
+      unexpected_id_client, android_stream::StreamRole::input,
+      QUIC_STATUS_SUCCESS, 6, 11);
+  require(unexpected_id_callbacks.loss_generations ==
+          std::vector<std::uint64_t>{11});
+
+  ProductionCallbacks failed_status_callbacks;
+  android_stream::MsQuicClient failed_status_client(failed_status_callbacks);
+  android_stream::MsQuicClientTestAccess::prime_connection(
+      failed_status_client, 12, false,
+      [](const android_stream::Endpoint &) { return true; });
+  android_stream::MsQuicClientTestAccess::reject_stream_start(
+      failed_status_client, android_stream::StreamRole::feedback,
+      QUIC_STATUS_CONNECTION_REFUSED, 6, 12);
+  require(failed_status_callbacks.loss_generations ==
+          std::vector<std::uint64_t>{12});
+}
 #endif
 
 void production_callbacks_copy_receive_and_defer_shutdown_cleanup() {
@@ -361,15 +400,16 @@ void production_stream_ids_are_exact() {
   require(android_stream::stream_id_matches(android_stream::StreamRole::input, 2));
   require(android_stream::stream_id_matches(android_stream::StreamRole::feedback, 6));
   require(!android_stream::stream_id_matches(android_stream::StreamRole::feedback, 2));
-  android_stream::StreamOpenAudit production_audit;
-  require(production_audit.accept(android_stream::StreamRole::session, 0));
-  require(production_audit.accept(android_stream::StreamRole::input, 2));
-  require(production_audit.accept(android_stream::StreamRole::feedback, 6));
-  android_stream::StreamOpenAudit wrong_order;
-  require(!wrong_order.accept(android_stream::StreamRole::input, 2));
-  android_stream::StreamOpenAudit wrong_id;
-  require(wrong_id.accept(android_stream::StreamRole::session, 0));
-  require(!wrong_id.accept(android_stream::StreamRole::input, 6));
+  require(android_stream::validate_stream_start(
+              android_stream::StreamRole::session, QUIC_STATUS_SUCCESS, 0) ==
+          android_stream::StreamStartValidation::accepted);
+  require(android_stream::validate_stream_start(
+              android_stream::StreamRole::input, QUIC_STATUS_SUCCESS, 6) ==
+          android_stream::StreamStartValidation::unexpected_id);
+  require(android_stream::validate_stream_start(
+              android_stream::StreamRole::feedback,
+              QUIC_STATUS_CONNECTION_REFUSED, 6) ==
+          android_stream::StreamStartValidation::failed_status);
 }
 
 void deferred_shutdown_covers_release_and_pending_reconnect() {
@@ -476,7 +516,7 @@ int main() {
   destruction_action_runs_after_cleanup_action_returns();
   close_waits_for_inflight_native_callback();
   surface_replacement_releases_every_acquisition_once();
-  production_msquic_settings_disable_idle_timeout();
+  production_msquic_settings_use_liveness_heartbeat_without_idle_ownership();
   production_receive_uses_synchronous_ownership();
   send_buffers_are_securely_cleared_before_destruction();
   production_callbacks_copy_receive_and_defer_shutdown_cleanup();
@@ -484,6 +524,7 @@ int main() {
   transport_shutdown_accepts_pending_generation_before_completion();
   explicit_shutdown_stale_loss_is_generation_filtered();
   current_generation_receives_one_production_loss();
+  local_stream_start_rejections_report_one_production_loss();
 #endif
   production_stream_ids_are_exact();
   deferred_shutdown_covers_release_and_pending_reconnect();

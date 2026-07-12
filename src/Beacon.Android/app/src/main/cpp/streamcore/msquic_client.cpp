@@ -9,10 +9,31 @@
 #include <string_view>
 #include <utility>
 
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
+
 namespace beacon::android::streamcore {
 namespace {
 
 constexpr std::string_view beacon_alpn{"beacon-stream/1"};
+constexpr std::uint32_t transport_heartbeat_interval_ms{1000};
+
+void log_transport_stage(std::string_view stage, std::uint64_t generation,
+                         std::uint64_t value) noexcept {
+#if defined(__ANDROID__)
+  __android_log_print(
+      ANDROID_LOG_INFO, "BeaconStreamCore",
+      "BEACON_STREAMCORE_TRANSPORT %.*s generation=%llu value=%llu",
+      static_cast<int>(stage.size()), stage.data(),
+      static_cast<unsigned long long>(generation),
+      static_cast<unsigned long long>(value));
+#else
+  static_cast<void>(stage);
+  static_cast<void>(generation);
+  static_cast<void>(value);
+#endif
+}
 
 }  // namespace
 
@@ -20,6 +41,8 @@ QUIC_SETTINGS make_msquic_client_settings() noexcept {
   QUIC_SETTINGS settings{};
   settings.IdleTimeoutMs = 0;
   settings.IsSet.IdleTimeoutMs = TRUE;
+  settings.KeepAliveIntervalMs = transport_heartbeat_interval_ms;
+  settings.IsSet.KeepAliveIntervalMs = TRUE;
   settings.DatagramReceiveEnabled = TRUE;
   settings.IsSet.DatagramReceiveEnabled = TRUE;
   return settings;
@@ -45,18 +68,12 @@ bool stream_id_matches(StreamRole role, std::uint64_t id) noexcept {
   return id == expected_stream_id(role);
 }
 
-bool StreamOpenAudit::accept(StreamRole role, std::uint64_t id) noexcept {
-  constexpr std::array<StreamRole, 3> order{
-      StreamRole::session, StreamRole::input, StreamRole::feedback};
-  if (next_ >= order.size() || role != order[next_] ||
-      !stream_id_matches(role, id)) {
-    return false;
-  }
-  ++next_;
-  return true;
+StreamStartValidation validate_stream_start(StreamRole role, QUIC_STATUS status,
+                                            std::uint64_t id) noexcept {
+  if (QUIC_FAILED(status)) return StreamStartValidation::failed_status;
+  return stream_id_matches(role, id) ? StreamStartValidation::accepted
+                                     : StreamStartValidation::unexpected_id;
 }
-
-void StreamOpenAudit::reset() noexcept { next_ = 0; }
 
 ShutdownCleanupAction select_shutdown_cleanup_action(
     bool release_requested, std::optional<Endpoint> pending_endpoint) {
@@ -90,7 +107,6 @@ bool MsQuicClient::connect(const Endpoint &endpoint) {
   certificate_validated_ = false;
   cleanup_scheduled_ = false;
   loss_reported_ = false;
-  stream_open_audit_.reset();
   expected_pin_ = endpoint.spki_pin;
   connection_generation_ = endpoint.generation;
 #ifndef NDEBUG
@@ -144,6 +160,8 @@ bool MsQuicClient::connect(const Endpoint &endpoint) {
 bool MsQuicClient::open_stream(StreamRole role) {
   std::lock_guard lock(mutex_);
   if (connection_ == nullptr || shutdown_started_) {
+    log_transport_stage("stream_open_rejected", connection_generation_,
+                        static_cast<std::uint64_t>(role));
     return false;
   }
   HQUIC *target = nullptr;
@@ -166,26 +184,27 @@ bool MsQuicClient::open_stream(StreamRole role) {
       break;
   }
   context->generation = connection_generation_;
-  if (*target != nullptr ||
-      QUIC_FAILED(api_->StreamOpen(connection_, flags, stream_callback, context,
-                                   target))) {
+  const auto open_status = *target == nullptr
+                               ? api_->StreamOpen(connection_, flags,
+                                                  stream_callback, context,
+                                                  target)
+                               : QUIC_STATUS_INVALID_STATE;
+  if (QUIC_FAILED(open_status)) {
+    log_transport_stage("stream_open_failed", connection_generation_,
+                        static_cast<std::uint32_t>(open_status));
     return false;
   }
-  if (QUIC_FAILED(api_->StreamStart(*target, QUIC_STREAM_START_FLAG_IMMEDIATE))) {
+  const auto start_status =
+      api_->StreamStart(*target, QUIC_STREAM_START_FLAG_IMMEDIATE);
+  if (QUIC_FAILED(start_status)) {
+    log_transport_stage("stream_start_failed", connection_generation_,
+                        static_cast<std::uint32_t>(start_status));
     api_->StreamClose(*target);
     *target = nullptr;
     return false;
   }
-  QUIC_UINT62 stream_id = 0;
-  std::uint32_t stream_id_size = sizeof(stream_id);
-  if (QUIC_FAILED(api_->GetParam(*target, QUIC_PARAM_STREAM_ID,
-                                 &stream_id_size, &stream_id)) ||
-      !stream_open_audit_.accept(role, stream_id)) {
-    api_->StreamShutdown(*target, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 1);
-    api_->StreamClose(*target);
-    *target = nullptr;
-    return false;
-  }
+  log_transport_stage("stream_start_queued", connection_generation_,
+                      static_cast<std::uint64_t>(role));
   return true;
 }
 
@@ -242,6 +261,32 @@ void MsQuicClient::release() {
   }
 }
 
+void MsQuicClient::report_local_failure(std::uint64_t generation) noexcept {
+  bool report_loss = false;
+  try {
+    {
+      std::lock_guard lock(mutex_);
+      if (generation != connection_generation_ || connection_ == nullptr ||
+          release_requested_) {
+        return;
+      }
+      if (!shutdown_started_) {
+        shutdown_started_ = true;
+        if (api_ != nullptr) {
+          api_->ConnectionShutdown(connection_, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE,
+                                   1);
+        }
+      }
+      if (!loss_reported_) {
+        loss_reported_ = true;
+        report_loss = true;
+      }
+    }
+    if (report_loss) callbacks_.connection_lost(generation);
+  } catch (...) {
+  }
+}
+
 QUIC_STATUS QUIC_API MsQuicClient::connection_callback(
     HQUIC connection, void *context, QUIC_CONNECTION_EVENT *event) {
   if (context == nullptr || event == nullptr) return QUIC_STATUS_INVALID_PARAMETER;
@@ -264,6 +309,9 @@ QUIC_STATUS QUIC_API MsQuicClient::connection_callback(
           std::lock_guard lock(self.mutex_);
           self.certificate_validated_ = valid;
         }
+        log_transport_stage(valid ? "certificate_accepted"
+                                  : "certificate_rejected",
+                            self.connection_generation_, der.size());
         return valid ? QUIC_STATUS_SUCCESS : QUIC_STATUS_BAD_CERTIFICATE;
       }
       case QUIC_CONNECTION_EVENT_CONNECTED: {
@@ -275,6 +323,7 @@ QUIC_STATUS QUIC_API MsQuicClient::connection_callback(
           valid = self.certificate_validated_;
           generation = self.connection_generation_;
         }
+        log_transport_stage("connected", generation, valid ? 1 : 0);
         if (!valid) return QUIC_STATUS_BAD_CERTIFICATE;
         self.callbacks_.transport_connected(generation);
         break;
@@ -315,6 +364,12 @@ QUIC_STATUS QUIC_API MsQuicClient::connection_callback(
             report_loss = true;
           }
         }
+        const auto status =
+            event->Type == QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT
+                ? static_cast<std::uint64_t>(static_cast<std::uint32_t>(
+                      event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status))
+                : event->SHUTDOWN_INITIATED_BY_PEER.ErrorCode;
+        log_transport_stage("shutdown", generation, status);
         if (report_loss) self.callbacks_.connection_lost(generation);
         break;
       }
@@ -354,6 +409,29 @@ QUIC_STATUS QUIC_API MsQuicClient::stream_callback(
     auto &self = *stream_context.owner;
     auto callback_scope = self.callback_barrier_->enter();
     switch (event->Type) {
+      case QUIC_STREAM_EVENT_START_COMPLETE: {
+        const auto validation = validate_stream_start(
+            stream_context.role, event->START_COMPLETE.Status,
+            event->START_COMPLETE.ID);
+        if (validation == StreamStartValidation::accepted) {
+          log_transport_stage("stream_started", stream_context.generation,
+                              event->START_COMPLETE.ID);
+          break;
+        }
+        log_transport_stage(
+            validation == StreamStartValidation::failed_status
+                ? "stream_start_complete_failed"
+                : "stream_id_rejected",
+            stream_context.generation,
+            validation == StreamStartValidation::failed_status
+                ? static_cast<std::uint32_t>(event->START_COMPLETE.Status)
+                : static_cast<std::uint64_t>(event->START_COMPLETE.ID));
+        const auto generation = stream_context.generation;
+        DeferredActionQueue::instance().enqueue(
+            self.callback_barrier_,
+            [&self, generation] { self.fail_stream_start(generation); });
+        break;
+      }
       case QUIC_STREAM_EVENT_RECEIVE: {
         if (event->RECEIVE.BufferCount != 0 &&
             event->RECEIVE.Buffers == nullptr) {
@@ -405,6 +483,10 @@ HQUIC MsQuicClient::stream_for(StreamRole role) const noexcept {
     case StreamRole::feedback: return feedback_stream_;
   }
   return nullptr;
+}
+
+void MsQuicClient::fail_stream_start(std::uint64_t generation) noexcept {
+  report_local_failure(generation);
 }
 
 void MsQuicClient::close_api_handles() {

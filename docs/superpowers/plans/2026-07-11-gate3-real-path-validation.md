@@ -320,11 +320,15 @@ git push
 **Files:**
 - Modify: `src/Beacon.Android/app/src/androidTest/java/dev/beacon/android/BeaconStreamCoreInstrumentationTest.java`
 - Create: `src/Beacon.Android/app/src/androidTest/java/dev/beacon/android/Gate3SessionEvidence.java`
+- Modify: `src/Beacon.Android/app/src/main/java/dev/beacon/android/BeaconStreamCore.java`
+- Modify: `src/Beacon.Android/app/src/test/java/dev/beacon/android/BeaconStreamCoreTest.java`
+- Modify: `src/Beacon.Android/app/src/main/cpp/streamcore/msquic_client.cpp`
+- Modify: `src/Beacon.Android/app/src/main/cpp/streamcore/tests/lifecycle_tests.cpp`
 - Create: `scripts/test-gate3-emulator-session.ps1`
 - Modify: `scripts/test-android.ps1`
 - Test: `tests/Beacon.Server.Tests/ClientApiTests.cs`
 
-- [ ] **Step 1: Add failing instrumentation contract tests**
+- [x] **Step 1: Add failing instrumentation contract tests**
 
 Add two separately invokable methods, `gate3ConnectSendAndDisconnect` and
 `gate3ReconnectAndStop`, that require `serverUrl` and `clientId` instrumentation arguments.
@@ -340,7 +344,7 @@ assertTrue(evidence.transportClosed());
 
 The second method asserts a different ticket fingerprint and a new received-frame sequence.
 
-- [ ] **Step 2: Run Android build and verify the new acceptance test fails without a host**
+- [x] **Step 2: Run Android build and verify the new acceptance test fails without a host**
 
 ```powershell
 gradle -p src\Beacon.Android assembleDebug assembleDebugAndroidTest --console=plain
@@ -349,7 +353,7 @@ gradle -p src\Beacon.Android assembleDebug assembleDebugAndroidTest --console=pl
 Expected: compilation passes; invoking either Gate 3 method without arguments fails closed
 with the missing argument name.
 
-- [ ] **Step 3: Implement the process-level PowerShell runner**
+- [x] **Step 3: Implement the process-level PowerShell runner**
 
 The script must:
 
@@ -365,7 +369,7 @@ The script must:
 Use process exit handles, stdout events, and exact child-process identity. Do not use sleeps,
 fixed ports, or repeated HTTP readiness probes.
 
-- [ ] **Step 4: Run the real emulator session**
+- [x] **Step 4: Run the real emulator session**
 
 ```powershell
 .\scripts\test-gate3-emulator-session.ps1 -Serial emulator-5554
@@ -383,7 +387,7 @@ BEACON_GATE3_WORKER_CRASH_ISOLATED
 BEACON_GATE3_EMERGENCY_RESTORE_OK
 ```
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```powershell
 git add src/Beacon.Android/app/src/androidTest scripts/test-gate3-emulator-session.ps1 scripts/test-android.ps1 tests/Beacon.Server.Tests/ClientApiTests.cs

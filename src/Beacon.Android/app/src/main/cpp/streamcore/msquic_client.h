@@ -28,14 +28,10 @@ void secure_clear_send_bytes(std::vector<std::byte> &bytes) noexcept;
 [[nodiscard]] std::uint64_t expected_stream_id(StreamRole role) noexcept;
 [[nodiscard]] bool stream_id_matches(StreamRole role, std::uint64_t id) noexcept;
 
-class StreamOpenAudit {
- public:
-  [[nodiscard]] bool accept(StreamRole role, std::uint64_t id) noexcept;
-  void reset() noexcept;
+enum class StreamStartValidation { accepted, failed_status, unexpected_id };
 
- private:
-  std::size_t next_{};
-};
+[[nodiscard]] StreamStartValidation validate_stream_start(
+    StreamRole role, QUIC_STATUS status, std::uint64_t id) noexcept;
 
 struct ShutdownCleanupAction {
   bool notify_closed{};
@@ -67,6 +63,7 @@ class MsQuicClient final : public Transport {
   bool send(StreamRole role, std::vector<std::byte> bytes) override;
   void shutdown() override;
   void release() override;
+  void report_local_failure(std::uint64_t generation) noexcept;
 
  private:
   friend class MsQuicClientTestAccess;
@@ -91,6 +88,7 @@ class MsQuicClient final : public Transport {
   static QUIC_STATUS QUIC_API stream_callback(
       HQUIC stream, void *context, QUIC_STREAM_EVENT *event);
   HQUIC stream_for(StreamRole role) const noexcept;
+  void fail_stream_start(std::uint64_t generation) noexcept;
   void close_api_handles();
   void complete_shutdown();
 
@@ -117,7 +115,6 @@ class MsQuicClient final : public Transport {
   std::shared_ptr<CallbackBarrier> callback_barrier_{
       std::make_shared<CallbackBarrier>()};
   bool cleanup_scheduled_{};
-  StreamOpenAudit stream_open_audit_;
 #ifndef NDEBUG
   std::function<bool(const Endpoint &)> test_connect_hook_;
   bool test_skip_msquic_handle_cleanup_{};

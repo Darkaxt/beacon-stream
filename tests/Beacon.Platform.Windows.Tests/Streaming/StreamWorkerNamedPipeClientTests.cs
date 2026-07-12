@@ -13,6 +13,89 @@ namespace Beacon.Platform.Windows.Tests.Streaming;
 public sealed class StreamWorkerNamedPipeClientTests
 {
     [Fact]
+    public async Task ZeroIdConnectionObservedDiagnosticUsesNeutralMetadataEvent()
+    {
+        await using PipePair pipes = await PipePair.CreateAsync();
+        var processExit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = Channel.CreateBounded<StreamWorkerEvent>(1);
+        Task worker = Task.Run(async () =>
+        {
+            await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Ready(1));
+            await WriteAsync(pipes.Worker, new WorkerIpcEnvelope
+            {
+                ProtocolVersion = ProtocolVersion.Current,
+                WorkerDiagnostic = new WorkerDiagnostic
+                {
+                    Severity = DiagnosticSeverity.Information,
+                    Boundary = DiagnosticBoundary.Transport,
+                    Code = DiagnosticCode.ConnectionObserved,
+                    NumericValue = 17
+                }
+            });
+        });
+        await using var client = new StreamWorkerNamedPipeClient(
+            pipes.Service, processExit.Task, 42, processGeneration: 9, events.Writer);
+        await client.InitializeAsync(CancellationToken.None);
+
+        StreamWorkerConnectionObserved observed = Assert.IsType<StreamWorkerConnectionObserved>(
+            await events.Reader.ReadAsync());
+
+        Assert.Equal(9, observed.ProcessGeneration);
+        Assert.Null(observed.SessionId);
+        Assert.Equal(17UL, observed.ConnectionGeneration);
+        Assert.DoesNotContain(
+            observed.GetType().GetProperties(),
+            property => typeof(IMessage).IsAssignableFrom(property.PropertyType));
+        await worker;
+    }
+
+    [Fact]
+    public async Task ZeroIdConnectionMilestonesUseNeutralMetadataEvents()
+    {
+        await using PipePair pipes = await PipePair.CreateAsync();
+        var processExit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = Channel.CreateBounded<StreamWorkerEvent>(3);
+        Task worker = Task.Run(async () =>
+        {
+            await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Ready(1));
+            await WriteAsync(pipes.Worker, ConnectionDiagnostic(DiagnosticCode.ConnectionConfigured, 17));
+            await WriteAsync(pipes.Worker, ConnectionDiagnostic(DiagnosticCode.TransportConnected, 17));
+            await WriteAsync(pipes.Worker, ConnectionDiagnostic(
+                DiagnosticCode.TransportFailed,
+                17,
+                platformErrorCode: 0x80410006));
+        });
+        await using var client = new StreamWorkerNamedPipeClient(
+            pipes.Service, processExit.Task, 42, processGeneration: 9, events.Writer);
+        await client.InitializeAsync(CancellationToken.None);
+
+        StreamWorkerConnectionConfigured configured = Assert.IsType<StreamWorkerConnectionConfigured>(
+            await events.Reader.ReadAsync());
+        StreamWorkerTransportConnected connected = Assert.IsType<StreamWorkerTransportConnected>(
+            await events.Reader.ReadAsync());
+        StreamWorkerTransportFailed failed = Assert.IsType<StreamWorkerTransportFailed>(
+            await events.Reader.ReadAsync());
+
+        Assert.Equal(17UL, configured.ConnectionGeneration);
+        Assert.Equal(17UL, connected.ConnectionGeneration);
+        Assert.Equal(17UL, failed.ConnectionGeneration);
+        Assert.Equal(0x80410006u, failed.PlatformStatusCode);
+        Assert.All(
+            new StreamWorkerEvent[] { configured, connected, failed },
+            value =>
+            {
+                Assert.Equal(9, value.ProcessGeneration);
+                Assert.Null(value.SessionId);
+                Assert.DoesNotContain(
+                    value.GetType().GetProperties(),
+                    property => typeof(IMessage).IsAssignableFrom(property.PropertyType));
+            });
+        await worker;
+    }
+
+    [Fact]
     public async Task LegacyConstructorFailsClosedOnFirstUnsolicitedEventWithoutBlockingCommand()
     {
         await using PipePair pipes = await PipePair.CreateAsync();
@@ -479,6 +562,22 @@ public sealed class StreamWorkerNamedPipeClientTests
             ErrorCode = succeeded ? WorkerErrorCode.None : WorkerErrorCode.OperationFailed,
         },
     };
+
+    private static WorkerIpcEnvelope ConnectionDiagnostic(
+        DiagnosticCode code,
+        ulong connectionGeneration,
+        uint platformErrorCode = 0) => new()
+        {
+            ProtocolVersion = ProtocolVersion.Current,
+            WorkerDiagnostic = new WorkerDiagnostic
+            {
+                Severity = DiagnosticSeverity.Information,
+                Boundary = DiagnosticBoundary.Transport,
+                Code = code,
+                PlatformErrorCode = platformErrorCode,
+                NumericValue = connectionGeneration
+            }
+        };
 
     private static WorkerIpcEnvelope InputEventEnvelope()
     {

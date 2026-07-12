@@ -227,6 +227,7 @@ struct ClientState {
   bool failed{};
   bool certificate_seen{};
   bool send_data_after_auth{true};
+  std::uint64_t expected_marker_sequence{1};
   stream_v1::SessionErrorCode authentication_error{
       stream_v1::SESSION_ERROR_CODE_UNSPECIFIED};
   std::string raw_ticket{kRawTicket};
@@ -386,7 +387,7 @@ QUIC_STATUS QUIC_API connection_callback(HQUIC connection, void *context,
     std::lock_guard lock{state.mutex};
     state.datagram_received =
         parsed.error == beacon::stream::MediaDatagramError::none &&
-        parsed.header.sequence == 1 &&
+        parsed.header.sequence == state.expected_marker_sequence &&
         parsed.header.presentation_time_us == 1'000'000 &&
         parsed.header.chunk_count == 1 &&
         parsed.header.flags ==
@@ -534,11 +535,44 @@ bool collect_stream_events(
   bool input = false;
   bool feedback = false;
   bool media = false;
-  while (!authenticated || !input || !feedback || !media) {
+  bool connection_observed = false;
+  bool connection_configured = false;
+  bool transport_connected = false;
+  while (!connection_observed || !connection_configured ||
+         !transport_connected || !authenticated || !input || !feedback ||
+         !media) {
     worker_v1::WorkerIpcEnvelope event;
     if (channel.read(event) != beacon::worker::FrameDecodeStatus::success ||
-        event.protocol_version() != 1 || event.request_id() != 0 ||
-        event.session_id() != "session-a") {
+        event.protocol_version() != 1 || event.request_id() != 0) {
+      return false;
+    }
+    if (event.body_case() == worker_v1::WorkerIpcEnvelope::kWorkerDiagnostic) {
+      if (!event.session_id().empty() ||
+          event.worker_diagnostic().severity() !=
+              worker_v1::DIAGNOSTIC_SEVERITY_INFORMATION ||
+          event.worker_diagnostic().boundary() !=
+              worker_v1::DIAGNOSTIC_BOUNDARY_TRANSPORT ||
+          event.worker_diagnostic().platform_error_code() != 0 ||
+          event.worker_diagnostic().numeric_value() != 1) {
+        return false;
+      }
+      switch (event.worker_diagnostic().code()) {
+      case worker_v1::DIAGNOSTIC_CODE_CONNECTION_OBSERVED:
+        connection_observed = true;
+        break;
+      case worker_v1::DIAGNOSTIC_CODE_CONNECTION_CONFIGURED:
+        connection_configured = true;
+        break;
+      case worker_v1::DIAGNOSTIC_CODE_TRANSPORT_CONNECTED:
+        transport_connected = true;
+        break;
+      default:
+        return false;
+      }
+      events.push_back(std::move(event));
+      continue;
+    }
+    if (event.session_id() != "session-a") {
       return false;
     }
     switch (event.body_case()) {
@@ -712,7 +746,7 @@ int run_worker_process_probe(const std::wstring &worker_path,
   responses.clear();
   auto start = worker_command(3, "session-a");
   auto *media = start.mutable_start_media();
-  media->set_listen_address("127.0.0.1");
+  media->set_listen_address("0.0.0.0");
   media->set_listen_port(0);
   media->set_certificate_fingerprint(
       reinterpret_cast<const char *>(fingerprint.data()), fingerprint.size());
@@ -1212,6 +1246,7 @@ int wmain(int argument_count, wchar_t **arguments) {
   ClientState fresh_client;
   fresh_client.expected_fingerprint = expected_fingerprint;
   fresh_client.raw_ticket = fresh_raw_ticket;
+  fresh_client.expected_marker_sequence = 2;
   if (!start_client(fresh_client, listener.local_port()))
     return 20;
   {
@@ -1232,17 +1267,46 @@ int wmain(int argument_count, wchar_t **arguments) {
   listener.wait_until_disconnected();
   {
     std::lock_guard lock{event_mutex};
-    const auto media_events =
-        std::ranges::count_if(worker_events, [](const auto &event) {
-          return event.body_case() ==
-                 beacon::worker::v1::WorkerIpcEnvelope::kMediaEvidence;
-        });
-    if (media_events != 2 || worker_events.empty() ||
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> media_evidence;
+    for (const auto &event : worker_events) {
+      if (event.body_case() ==
+          beacon::worker::v1::WorkerIpcEnvelope::kMediaEvidence) {
+        media_evidence.emplace_back(event.media_evidence().session_generation(),
+                                    event.media_evidence().sequence());
+      }
+    }
+    const auto has_connection_diagnostic =
+        [&worker_events](beacon::worker::v1::DiagnosticCode code,
+                         std::uint64_t connection_generation) {
+          return std::ranges::any_of(worker_events, [&](const auto &event) {
+            return event.body_case() ==
+                       beacon::worker::v1::WorkerIpcEnvelope::kWorkerDiagnostic &&
+                   event.worker_diagnostic().boundary() ==
+                       beacon::worker::v1::DIAGNOSTIC_BOUNDARY_TRANSPORT &&
+                   event.worker_diagnostic().code() == code &&
+                   event.worker_diagnostic().numeric_value() ==
+                       connection_generation;
+          });
+        };
+    if (worker_events.empty() ||
+        worker_events.front().body_case() !=
+            beacon::worker::v1::WorkerIpcEnvelope::kWorkerDiagnostic ||
+        worker_events.front().worker_diagnostic().boundary() !=
+            beacon::worker::v1::DIAGNOSTIC_BOUNDARY_TRANSPORT ||
+        worker_events.front().worker_diagnostic().code() !=
+            beacon::worker::v1::DIAGNOSTIC_CODE_CONNECTION_OBSERVED ||
+        worker_events.front().worker_diagnostic().numeric_value() != 1 ||
+        !has_connection_diagnostic(
+            beacon::worker::v1::DIAGNOSTIC_CODE_CONNECTION_CONFIGURED, 1) ||
+        !has_connection_diagnostic(
+            beacon::worker::v1::DIAGNOSTIC_CODE_TRANSPORT_CONNECTED, 1) ||
+        media_evidence !=
+            std::vector<std::pair<std::uint64_t, std::uint64_t>>{{1, 1},
+                                                                 {2, 2}} ||
+        worker_events.empty() ||
         worker_events.back().body_case() !=
             beacon::worker::v1::WorkerIpcEnvelope::kTransportDisconnected ||
-        worker_events.back()
-                .transport_disconnected()
-                .session_generation() != 2)
+        worker_events.back().transport_disconnected().session_generation() != 2)
       return 23;
   }
   const auto close_events = listener.take_transport_events();

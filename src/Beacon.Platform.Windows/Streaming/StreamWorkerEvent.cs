@@ -53,6 +53,23 @@ public sealed record StreamWorkerMediaEvidence(
     ulong PresentationTimeUs,
     uint DatagramBytes) : StreamWorkerEvent(ProcessGeneration, SessionId);
 
+public sealed record StreamWorkerConnectionObserved(
+    long ProcessGeneration,
+    ulong ConnectionGeneration) : StreamWorkerEvent(ProcessGeneration, SessionId: null);
+
+public sealed record StreamWorkerConnectionConfigured(
+    long ProcessGeneration,
+    ulong ConnectionGeneration) : StreamWorkerEvent(ProcessGeneration, SessionId: null);
+
+public sealed record StreamWorkerTransportConnected(
+    long ProcessGeneration,
+    ulong ConnectionGeneration) : StreamWorkerEvent(ProcessGeneration, SessionId: null);
+
+public sealed record StreamWorkerTransportFailed(
+    long ProcessGeneration,
+    ulong ConnectionGeneration,
+    uint PlatformStatusCode) : StreamWorkerEvent(ProcessGeneration, SessionId: null);
+
 public sealed record StreamWorkerProcessExited(
     long ProcessGeneration,
     int ExitCode) : StreamWorkerEvent(ProcessGeneration, SessionId: null);

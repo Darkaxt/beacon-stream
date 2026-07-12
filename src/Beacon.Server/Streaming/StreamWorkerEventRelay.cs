@@ -134,6 +134,39 @@ public sealed class StreamWorkerEventRelay(
     {
         switch (workerEvent)
         {
+            case StreamWorkerConnectionObserved observed:
+                Publish(
+                    "worker.connection_observed",
+                    "Worker transport connection observed.",
+                    observed,
+                    DiagnosticSeverity.Information,
+                    ("connectionGeneration", observed.ConnectionGeneration));
+                break;
+            case StreamWorkerConnectionConfigured configured:
+                Publish(
+                    "worker.connection_configured",
+                    "Worker transport connection configured.",
+                    configured,
+                    DiagnosticSeverity.Information,
+                    ("connectionGeneration", configured.ConnectionGeneration));
+                break;
+            case StreamWorkerTransportConnected connected:
+                Publish(
+                    "worker.transport_connected",
+                    "Worker transport connected.",
+                    connected,
+                    DiagnosticSeverity.Information,
+                    ("connectionGeneration", connected.ConnectionGeneration));
+                break;
+            case StreamWorkerTransportFailed failed:
+                Publish(
+                    "worker.transport_failed",
+                    "Worker transport failed.",
+                    failed,
+                    DiagnosticSeverity.Warning,
+                    ("connectionGeneration", failed.ConnectionGeneration),
+                    ("platformStatusCode", failed.PlatformStatusCode));
+                break;
             case StreamWorkerTransportAuthenticated authenticated:
                 bool bound = runtimeEvents.TryBind(authenticated);
                 Publish(

@@ -3,6 +3,8 @@ package dev.beacon.android;
 import android.app.Instrumentation;
 import android.content.Intent;
 import android.graphics.SurfaceTexture;
+import android.os.Bundle;
+import android.util.Log;
 import android.view.Surface;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -43,12 +45,12 @@ public final class BeaconStreamCoreInstrumentationTest {
         }, executor);
         core.start(session("instrumented-frame"));
 
-        bindings.callbacks.onFrame(new byte[] { 1 }, 2, 1);
+        bindings.callbacks.onFrame(new byte[] { 1 }, 2, 1, 1);
         delivered.await();
         assertEquals("beacon-device-frame", callbackThread.get());
         assertNotEquals(Thread.currentThread().getName(), callbackThread.get());
         core.close();
-        bindings.callbacks.onFrame(new byte[] { 2 }, 3, 1);
+        bindings.callbacks.onFrame(new byte[] { 2 }, 3, 2, 1);
         assertEquals(1, frames.get());
     }
 
@@ -87,9 +89,9 @@ public final class BeaconStreamCoreInstrumentationTest {
             },
             Executors.newSingleThreadExecutor());
         core.start(session("instrumented-drain"));
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1);
+        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
         sinkEntered.await();
-        bindings.callbacks.onFrame(new byte[] { 2 }, 2, 1);
+        bindings.callbacks.onFrame(new byte[] { 2 }, 2, 2, 1);
         Thread closer = new Thread(() -> {
             closeStarted.countDown();
             core.close();
@@ -150,7 +152,7 @@ public final class BeaconStreamCoreInstrumentationTest {
         CountDownLatch callbackEntered = new CountDownLatch(1);
         BeaconStreamCore.NativeCallbacks callbacks = new BeaconStreamCore.NativeCallbacks() {
             @Override public void onFrame(
-                byte[] bytes, long presentationTimeUs, long generation) {
+                byte[] bytes, long presentationTimeUs, long sequence, long generation) {
                 callbackEntered.countDown();
                 throw new IllegalStateException("instrumented callback failure");
             }
@@ -194,6 +196,177 @@ public final class BeaconStreamCoreInstrumentationTest {
         assertTrue(!ownedCore.isOpen());
         assertTrue(ownedCore.callbackExecutorShutdown());
         assertTrue(activity.workerExecutorShutdown());
+    }
+
+    @Test
+    public void gate3ConnectSendAndDisconnect() throws Exception {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        String serverUrl = requireArgument(InstrumentationRegistry.getArguments(), "serverUrl");
+        String clientId = requireArgument(InstrumentationRegistry.getArguments(), "clientId");
+        Gate3SessionEvidence evidence = Gate3SessionEvidence.startFirstInvocation(
+            instrumentation.getTargetContext(), clientId);
+        BeaconStreamCore core = new BeaconStreamCore(
+            evidence, evidence::recordFeedbackSent, evidence::recordStreamFailure);
+        BeaconApiClient api = new BeaconApiClient(
+            instrumentation.getTargetContext(), new BeaconClientConfig(serverUrl, clientId));
+        BeaconViewModel model = new BeaconViewModel(clientId, serverUrl, api, core);
+        try {
+            registerAndLaunch(model);
+            evidence.recordGrant(model.latestStream());
+            evidence.awaitMarkerAndFeedback();
+            model.sendInput(BeaconApiClient.InputBatch.pointerTap(1, 0.5, 0.5));
+            evidence.recordInputSent();
+            evidence.persistForReconnect();
+        } finally {
+            model.close();
+            BeaconStreamCore.awaitNativeRegistryIdleForTest();
+            evidence.recordTransportClosedAfterNativeDrain();
+        }
+
+        assertFirstInvocationEvidence(evidence);
+        emit("BEACON_GATE3_READY");
+        emit("BEACON_GATE3_FRAME 1");
+        emit("BEACON_GATE3_INPUT_ECHO 1");
+        emit("BEACON_GATE3_FEEDBACK 1");
+    }
+
+    @Test
+    public void gate3EvidenceFailsClosedOnPreMarkerTransportLoss() {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        Gate3SessionEvidence evidence = Gate3SessionEvidence.startFirstInvocation(
+            instrumentation.getTargetContext(), "gate3-failure-fixture");
+
+        evidence.recordStreamFailure("transport");
+
+        AssertionError error = assertThrows(
+            AssertionError.class, evidence::awaitMarkerAndFeedback);
+        assertTrue(error.getMessage().contains("transport"));
+    }
+
+    @Test
+    public void gate3ReconnectAndStop() throws Exception {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        String serverUrl = requireArgument(InstrumentationRegistry.getArguments(), "serverUrl");
+        String clientId = requireArgument(InstrumentationRegistry.getArguments(), "clientId");
+        Gate3SessionEvidence.PreviousInvocation previous = Gate3SessionEvidence.loadPrevious(
+            instrumentation.getTargetContext(), clientId);
+        Gate3SessionEvidence evidence = Gate3SessionEvidence.startReconnect(
+            instrumentation.getTargetContext(), clientId);
+        BeaconStreamCore core = new BeaconStreamCore(
+            evidence, evidence::recordFeedbackSent, evidence::recordStreamFailure);
+        BeaconApiClient api = new BeaconApiClient(
+            instrumentation.getTargetContext(), new BeaconClientConfig(serverUrl, clientId));
+        BeaconViewModel model = new BeaconViewModel(clientId, serverUrl, api, core);
+        try {
+            model.reconnect();
+            assertSuccessful(model);
+            evidence.recordGrant(model.latestStream());
+            evidence.awaitMarkerAndFeedback();
+            evidence.assertFreshReconnect(previous);
+            model.stopStream();
+            assertSuccessful(model);
+        } finally {
+            model.close();
+            BeaconStreamCore.awaitNativeRegistryIdleForTest();
+            evidence.recordTransportClosedAfterNativeDrain();
+        }
+
+        assertTrue(evidence.transportConnected());
+        assertEquals(1L, evidence.receivedFrameCount());
+        assertTrue(evidence.feedbackSent());
+        assertTrue(evidence.transportClosed());
+        evidence.clearPersistedReconnect();
+        emit("BEACON_GATE3_RECONNECT_FRESH_TICKET");
+    }
+
+    @Test
+    public void gate3ConnectAndAwaitWorkerCrash() throws Exception {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        String serverUrl = requireArgument(InstrumentationRegistry.getArguments(), "serverUrl");
+        String clientId = requireArgument(InstrumentationRegistry.getArguments(), "clientId");
+        Gate3SessionEvidence evidence = Gate3SessionEvidence.startReconnect(
+            instrumentation.getTargetContext(), clientId);
+        BeaconStreamCore core = new BeaconStreamCore(
+            evidence, evidence::recordFeedbackSent, evidence::recordStreamFailure);
+        BeaconApiClient api = new BeaconApiClient(
+            instrumentation.getTargetContext(), new BeaconClientConfig(serverUrl, clientId));
+        BeaconViewModel model = new BeaconViewModel(clientId, serverUrl, api, core);
+        try {
+            registerAndLaunch(model);
+            evidence.recordGrant(model.latestStream());
+            evidence.awaitMarkerAndFeedback();
+            emit("BEACON_GATE3_WORKER_CRASH_ARMED");
+            core.awaitConnectionLossForTest(1);
+            assertEquals(1, core.connectionLossCountForTest());
+            assertTrue(core.stoppedForTest());
+        } finally {
+            model.close();
+            BeaconStreamCore.awaitNativeRegistryIdleForTest();
+            evidence.recordTransportClosedAfterNativeDrain();
+        }
+
+        assertTrue(evidence.transportConnected());
+        assertEquals(1L, evidence.receivedFrameCount());
+        assertTrue(evidence.feedbackSent());
+        assertTrue(evidence.transportClosed());
+        emit("BEACON_GATE3_WORKER_CRASH_OBSERVED");
+    }
+
+    private static String requireArgument(Bundle arguments, String name) {
+        String value = arguments.getString(name);
+        if (value == null || value.trim().isEmpty()) {
+            throw new IllegalArgumentException(
+                "Missing required instrumentation argument: " + name);
+        }
+        return value.trim();
+    }
+
+    private static void registerAndLaunch(BeaconViewModel model) throws Exception {
+        model.refresh();
+        assertSuccessful(model);
+        model.beacon(true);
+        assertSuccessful(model);
+        model.reportCapabilities(gate3Capabilities());
+        assertSuccessful(model);
+        model.reportTelemetry(gate3Telemetry());
+        assertSuccessful(model);
+        model.requestPlan(gate3Game());
+        assertSuccessful(model);
+        model.launch(gate3Game());
+        assertSuccessful(model);
+    }
+
+    private static void assertFirstInvocationEvidence(Gate3SessionEvidence evidence) {
+        assertTrue(evidence.transportConnected());
+        assertEquals(1L, evidence.receivedFrameCount());
+        assertEquals(1L, evidence.markerSequence());
+        assertTrue(evidence.inputSent());
+        assertTrue(evidence.feedbackSent());
+        assertTrue(evidence.transportClosed());
+    }
+
+    private static void emit(String marker) {
+        Log.i("BeaconGate3", marker);
+        System.out.println(marker);
+    }
+
+    private static void assertSuccessful(BeaconViewModel model) {
+        assertTrue(model.status(), model.status().matches(".*: 2[0-9][0-9]"));
+        assertTrue(model.latestError(), model.latestError().isEmpty());
+    }
+
+    private static BeaconApiClient.ClientCapabilities gate3Capabilities() {
+        return new BeaconApiClient.ClientCapabilities(
+            false, false, true, false, false, 60, true, "1280x720@60");
+    }
+
+    private static BeaconApiClient.ClientTelemetry gate3Telemetry() {
+        return new BeaconApiClient.ClientTelemetry(
+            1, 0, 1, 1000, "emulator", 100, "nominal");
+    }
+
+    private static BeaconApiClient.GameSelection gate3Game() {
+        return BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131");
     }
 
     private static BeaconStreamSession session(String sessionId) {

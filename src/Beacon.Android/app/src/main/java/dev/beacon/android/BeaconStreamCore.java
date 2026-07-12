@@ -9,6 +9,8 @@ public final class BeaconStreamCore implements AutoCloseable {
     private final Bindings bindings;
     private final EncodedFrameSink sink;
     private final ExecutorService callbackExecutor;
+    private final FeedbackObserver feedbackObserver;
+    private final FailureObserver failureObserver;
     private final long handle;
     private boolean open = true;
     private boolean stopped;
@@ -27,23 +29,60 @@ public final class BeaconStreamCore implements AutoCloseable {
     private static final ThreadLocal<Boolean> IN_SINK_CALLBACK = new ThreadLocal<>();
 
     public BeaconStreamCore(EncodedFrameSink sink) {
-        this(new JniBindings(), sink, Executors.newSingleThreadExecutor(r -> new Thread(r, "beacon-frame-callback")));
+        this(sink, () -> { });
+    }
+
+    BeaconStreamCore(EncodedFrameSink sink, FeedbackObserver feedbackObserver) {
+        this(sink, feedbackObserver, stage -> { });
+    }
+
+    BeaconStreamCore(
+        EncodedFrameSink sink,
+        FeedbackObserver feedbackObserver,
+        FailureObserver failureObserver) {
+        this(
+            new JniBindings(),
+            sink,
+            Executors.newSingleThreadExecutor(r -> new Thread(r, "beacon-frame-callback")),
+            feedbackObserver,
+            failureObserver);
     }
 
     BeaconStreamCore(Bindings bindings, EncodedFrameSink sink, ExecutorService callbackExecutor) {
-        if (bindings == null || sink == null || callbackExecutor == null) {
+        this(bindings, sink, callbackExecutor, () -> { }, stage -> { });
+    }
+
+    BeaconStreamCore(
+        Bindings bindings,
+        EncodedFrameSink sink,
+        ExecutorService callbackExecutor,
+        FeedbackObserver feedbackObserver) {
+        this(bindings, sink, callbackExecutor, feedbackObserver, stage -> { });
+    }
+
+    BeaconStreamCore(
+        Bindings bindings,
+        EncodedFrameSink sink,
+        ExecutorService callbackExecutor,
+        FeedbackObserver feedbackObserver,
+        FailureObserver failureObserver) {
+        if (bindings == null || sink == null || callbackExecutor == null ||
+            feedbackObserver == null || failureObserver == null) {
             throw new IllegalArgumentException("BeaconStreamCore dependencies are required.");
         }
         this.bindings = bindings;
         this.sink = sink;
         this.callbackExecutor = callbackExecutor;
+        this.feedbackObserver = feedbackObserver;
+        this.failureObserver = failureObserver;
         this.handle = bindings.create(new NativeCallbacks() {
             @Override public void onFrame(
-                byte[] bytes, long presentationTimeUs, long generation) {
-                dispatchFrame(bytes, presentationTimeUs, generation);
+                byte[] bytes, long presentationTimeUs, long sequence, long generation) {
+                dispatchFrame(bytes, presentationTimeUs, sequence, generation);
             }
 
             @Override public void onConnectionLost(long generation) {
+                boolean accepted = false;
                 synchronized (BeaconStreamCore.this) {
                     long expectedGeneration = startingGeneration != 0
                         ? startingGeneration : activeGeneration;
@@ -57,7 +96,10 @@ public final class BeaconStreamCore implements AutoCloseable {
                     if (generation == startingGeneration) {
                         lossDuringStartGeneration = generation;
                     }
+                    BeaconStreamCore.this.notifyAll();
+                    accepted = true;
                 }
+                if (accepted) reportFailure("transport");
             }
         });
         if (handle == 0) {
@@ -158,6 +200,15 @@ public final class BeaconStreamCore implements AutoCloseable {
 
     synchronized int connectionLossCountForTest() { return connectionLossCount; }
 
+    synchronized void awaitConnectionLossForTest(int expectedCount) throws InterruptedException {
+        if (expectedCount <= 0) {
+            throw new IllegalArgumentException("Expected connection-loss count must be positive.");
+        }
+        while (connectionLossCount < expectedCount) {
+            wait();
+        }
+    }
+
     synchronized boolean stoppedForTest() { return stopped; }
 
     synchronized long activeGenerationForTest() { return activeGeneration; }
@@ -240,7 +291,7 @@ public final class BeaconStreamCore implements AutoCloseable {
     }
 
     private void dispatchFrame(
-        byte[] bytes, long presentationTimeUs, long generation) {
+        byte[] bytes, long presentationTimeUs, long sequence, long generation) {
         final byte[] copy = Arrays.copyOf(bytes, bytes.length);
         synchronized (this) {
             long expectedGeneration = startingGeneration != 0
@@ -257,13 +308,17 @@ public final class BeaconStreamCore implements AutoCloseable {
                 }
                 IN_SINK_CALLBACK.set(true);
                 try {
-                    sink.onFrame(new EncodedFrame(copy, presentationTimeUs));
+                    sink.onFrame(new EncodedFrame(copy, presentationTimeUs, sequence));
                 } finally {
                     IN_SINK_CALLBACK.remove();
                 }
                 if (beginNativeCallIfOpen(generation)) {
                     try {
                         bindings.sendQueueDepthFeedback(handle, generation, 0, 0);
+                        feedbackObserver.onQueueDepthFeedbackSent();
+                    } catch (RuntimeException | Error error) {
+                        reportFailure("feedback");
+                        throw error;
                     } finally {
                         endNativeCall();
                     }
@@ -340,6 +395,13 @@ public final class BeaconStreamCore implements AutoCloseable {
         }
     }
 
+    private void reportFailure(String stage) {
+        try {
+            failureObserver.onFailure(stage);
+        } catch (RuntimeException | Error ignored) {
+        }
+    }
+
     public interface EncodedFrameSink {
         void onFrame(EncodedFrame frame);
     }
@@ -347,16 +409,26 @@ public final class BeaconStreamCore implements AutoCloseable {
     public static final class EncodedFrame {
         public final byte[] bytes;
         public final long presentationTimeUs;
+        public final long sequence;
 
-        EncodedFrame(byte[] bytes, long presentationTimeUs) {
+        EncodedFrame(byte[] bytes, long presentationTimeUs, long sequence) {
             this.bytes = bytes;
             this.presentationTimeUs = presentationTimeUs;
+            this.sequence = sequence;
         }
     }
 
     interface NativeCallbacks {
-        void onFrame(byte[] bytes, long presentationTimeUs, long generation);
+        void onFrame(byte[] bytes, long presentationTimeUs, long sequence, long generation);
         void onConnectionLost(long generation);
+    }
+
+    interface FeedbackObserver {
+        void onQueueDepthFeedbackSent();
+    }
+
+    interface FailureObserver {
+        void onFailure(String stage);
     }
 
     interface Bindings {

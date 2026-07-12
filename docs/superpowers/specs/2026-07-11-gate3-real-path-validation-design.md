@@ -172,9 +172,13 @@ remains alive:
 4. APK closes transport without quitting the server-owned session;
 5. reconnect obtains a fresh ticket and receives a new access unit;
 6. APK explicitly stops;
-7. the runner terminates the exact Worker child process;
-8. Beacon.Server remains healthy and reports the runtime invalidated;
-9. emergency restore succeeds from structured server state.
+7. a third instrumentation invocation launches a fresh runtime, receives its marker, and
+   remains connected while waiting for native transport loss;
+8. the runner retains the exact Worker process handle and terminates that active child;
+9. StreamCore's MsQuic keepalive heartbeat reports the unacknowledged path as lost without
+   owning or canceling the server-side session;
+10. Beacon.Server remains healthy and reports the runtime invalidated;
+11. emergency restore succeeds from structured server state.
 
 Each invocation reports structured instrumentation evidence. HTTP success alone and a
 nonblank Surface are not accepted as stream proof.
@@ -216,6 +220,9 @@ It injects five unique canaries and asserts all captures omit them:
 ## Failure Semantics
 
 - A Worker crash fails active streaming state but does not crash Beacon.Server.
+- StreamCore uses a transport keepalive heartbeat to observe a silently lost UDP peer while
+  keeping QUIC idle expiry disabled. The heartbeat reports liveness only; Worker process
+  observation and explicit Server state transitions remain authoritative for session state.
 - A disconnected transport stops media resources but does not terminate the app/display
   ownership represented by the server session.
 - A reconnect requires a newly issued ticket. Ticket replay remains rejected.
