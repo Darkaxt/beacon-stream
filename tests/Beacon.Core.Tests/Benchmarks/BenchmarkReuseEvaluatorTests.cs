@@ -42,6 +42,23 @@ public sealed class BenchmarkReuseEvaluatorTests
     }
 
     [Fact]
+    public void SessionPreflightAlwaysStartsNewEvidence()
+    {
+        BenchmarkEvidence evidence = CreateEvidence(EvaluatedAt.AddMinutes(-1));
+
+        BenchmarkReuseDecision decision = BenchmarkReuseEvaluator.Decide(
+            BenchmarkTrigger.SessionPreflight,
+            evidence.Fingerprints,
+            evidence,
+            EvaluatedAt,
+            TimeSpan.FromDays(7));
+
+        Assert.Equal(BenchmarkRunDisposition.StartNew, decision.Disposition);
+        Assert.Null(decision.ReusedRunId);
+        Assert.Contains("preflight", decision.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void MaterialFingerprintChangeStartsNewAutomaticRun()
     {
         BenchmarkEvidence evidence = CreateEvidence(EvaluatedAt.AddHours(-2));

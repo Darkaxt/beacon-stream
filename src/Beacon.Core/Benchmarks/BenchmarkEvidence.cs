@@ -19,6 +19,10 @@ public sealed record NetworkBenchmarkSample(
     double ThroughputMbps,
     int ReorderDistance);
 
+public sealed record NetworkBenchmarkCoverage(
+    long FirstSequence,
+    int ExpectedPacketCount);
+
 public sealed record DecoderBenchmarkSample(
     string Codec,
     string Profile,
@@ -31,7 +35,9 @@ public sealed record DecoderBenchmarkSample(
     double P95DecodeLatencyMs,
     double? P95PresentationLatencyMs,
     int DroppedFrames,
-    int OutputErrors);
+    int OutputErrors,
+    bool TenBitPresentationVerified = false,
+    bool HdrPresentationVerified = false);
 
 public sealed record EndpointPowerSample(
     int? BatteryPercent,
@@ -42,7 +48,8 @@ public sealed record BenchmarkScoringInput(
     IReadOnlyList<NetworkBenchmarkSample> NetworkSamples,
     IReadOnlyList<DecoderBenchmarkSample> DecoderSamples,
     IReadOnlyList<EndpointPowerSample> PowerSamples,
-    string CodecPreference = "auto");
+    string CodecPreference = "auto",
+    NetworkBenchmarkCoverage? NetworkCoverage = null);
 
 public sealed record SelectedBenchmarkResult(
     string Codec,
@@ -53,7 +60,15 @@ public sealed record SelectedBenchmarkResult(
     double JitterMs,
     double PacketLossPercent,
     bool PowerConstrained,
-    IReadOnlyList<string> Reasons);
+    IReadOnlyList<string> Reasons,
+    string Profile = "",
+    int BitDepth = 0,
+    int Width = 0,
+    int Height = 0,
+    bool TenBitPresentationVerified = false,
+    bool HdrPresentationVerified = false,
+    double P95DecodeLatencyMs = 0,
+    double? P95PresentationLatencyMs = null);
 
 public sealed record BenchmarkPlanEvidence(
     Guid RunId,
@@ -70,7 +85,8 @@ public sealed record BenchmarkEvidence(
     IReadOnlyList<NetworkBenchmarkSample> NetworkSamples,
     IReadOnlyList<DecoderBenchmarkSample> DecoderSamples,
     IReadOnlyList<EndpointPowerSample> PowerSamples,
-    SelectedBenchmarkResult? SelectedResult)
+    SelectedBenchmarkResult? SelectedResult,
+    NetworkBenchmarkCoverage? NetworkCoverage = null)
 {
     public string Revision => FingerprintRevision.Create(
         RunId.ToString("D"),
@@ -86,7 +102,17 @@ public sealed record BenchmarkEvidence(
         SelectedResult?.RttMs.ToString("R", CultureInfo.InvariantCulture),
         SelectedResult?.JitterMs.ToString("R", CultureInfo.InvariantCulture),
         SelectedResult?.PacketLossPercent.ToString("R", CultureInfo.InvariantCulture),
-        SelectedResult?.PowerConstrained.ToString(CultureInfo.InvariantCulture));
+        SelectedResult?.PowerConstrained.ToString(CultureInfo.InvariantCulture),
+        SelectedResult?.Profile,
+        SelectedResult?.BitDepth.ToString(CultureInfo.InvariantCulture),
+        SelectedResult?.Width.ToString(CultureInfo.InvariantCulture),
+        SelectedResult?.Height.ToString(CultureInfo.InvariantCulture),
+        SelectedResult?.TenBitPresentationVerified.ToString(CultureInfo.InvariantCulture),
+        SelectedResult?.HdrPresentationVerified.ToString(CultureInfo.InvariantCulture),
+        SelectedResult?.P95DecodeLatencyMs.ToString("R", CultureInfo.InvariantCulture),
+        SelectedResult?.P95PresentationLatencyMs?.ToString("R", CultureInfo.InvariantCulture),
+        NetworkCoverage?.FirstSequence.ToString(CultureInfo.InvariantCulture),
+        NetworkCoverage?.ExpectedPacketCount.ToString(CultureInfo.InvariantCulture));
 
     public BenchmarkPlanEvidence ToPlanEvidence()
     {
@@ -95,6 +121,7 @@ public sealed record BenchmarkEvidence(
             throw new InvalidOperationException("Only completed benchmark evidence can be used for session planning.");
         }
 
+        BenchmarkEvidenceValidator.Validate(this);
         return new BenchmarkPlanEvidence(RunId, Revision, SelectedResult);
     }
 }

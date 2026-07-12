@@ -27,6 +27,11 @@ public static class BenchmarkReuseEvaluator
             return StartNew("Manual benchmark requests always create a new run.");
         }
 
+        if (trigger == BenchmarkTrigger.SessionPreflight)
+        {
+            return StartNew("Session preflight always creates a fresh benchmark run.");
+        }
+
         if (existing is null)
         {
             return StartNew("No prior benchmark evidence is available.");

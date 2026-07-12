@@ -28,6 +28,22 @@ public static class SessionPlanner
         }
 
         SelectedBenchmarkResult measured = benchmark.SelectedResult;
+        bool hasCertifiedMode = measured.Width != 0 ||
+            measured.Height != 0 ||
+            measured.BitDepth != 0 ||
+            measured.Profile.Length != 0;
+        if (hasCertifiedMode)
+        {
+            try
+            {
+                BenchmarkEvidenceValidator.Validate(measured);
+            }
+            catch (ArgumentException error)
+            {
+                return new SessionPlanResult(false, null, $"Benchmark evidence is invalid: {error.Message}");
+            }
+        }
+
         if (!SupportsCodec(measured.Codec, capabilities))
         {
             return new SessionPlanResult(
@@ -84,7 +100,13 @@ public static class SessionPlanner
             CongestionPolicy: congestionPolicy,
             Reason: string.Join(" ", reasons),
             BenchmarkRunId: benchmark.RunId,
-            BenchmarkEvidenceRevision: benchmark.Revision);
+            BenchmarkEvidenceRevision: benchmark.Revision,
+            CodecProfile: measured.Profile,
+            BitDepth: measured.BitDepth,
+            CertifiedWidth: measured.Width,
+            CertifiedHeight: measured.Height,
+            TenBitPresentationVerified: measured.TenBitPresentationVerified,
+            HdrPresentationVerified: measured.HdrPresentationVerified);
 
         return CreatePlan(profile, capabilities, game, selection);
     }
@@ -95,21 +117,32 @@ public static class SessionPlanner
         GameDescriptor game,
         StreamPlanningSelection selection)
     {
-        string? hdrBlocker = GetHdrBlocker(capabilities);
+        string? hdrBlocker = GetHdrBlocker(capabilities, selection);
 
         if (profile.Display.HdrPreference == HdrPreference.Require && hdrBlocker is not null)
         {
             return new SessionPlanResult(false, null, $"HDR required but {hdrBlocker}.");
         }
 
-        bool hdrEnabled = profile.Display.HdrPreference == HdrPreference.Prefer && hdrBlocker is null;
+        bool hdrEnabled = profile.Display.HdrPreference != HdrPreference.Off && hdrBlocker is null;
         string hdrReason = CreateHdrReason(profile.Display.HdrPreference, hdrEnabled, hdrBlocker);
-        string displayReason = $"{CreateDisplayModeReason(profile.Display.Mode)} {hdrReason}";
+        int width = selection.CertifiedWidth > 0
+            ? Math.Min(profile.Display.PreferredWidth, selection.CertifiedWidth)
+            : profile.Display.PreferredWidth;
+        int height = selection.CertifiedHeight > 0
+            ? Math.Min(profile.Display.PreferredHeight, selection.CertifiedHeight)
+            : profile.Display.PreferredHeight;
+        string dimensionReason = selection.CertifiedWidth <= 0 || selection.CertifiedHeight <= 0
+            ? "Legacy benchmark evidence did not include certified display dimensions."
+            : width != profile.Display.PreferredWidth || height != profile.Display.PreferredHeight
+                ? $"Display dimensions were limited to the certified benchmark mode {width}x{height}."
+                : "Display dimensions are within the certified benchmark mode.";
+        string displayReason = $"{CreateDisplayModeReason(profile.Display.Mode)} {dimensionReason} {hdrReason}";
 
         var display = new PlannedDisplay(
             DisplayId: DisplayLease.CreateDisplayId(profile.ClientId),
-            Width: profile.Display.PreferredWidth,
-            Height: profile.Display.PreferredHeight,
+            Width: width,
+            Height: height,
             RefreshHz: profile.Display.PreferredRefreshHz,
             Mode: profile.Display.Mode,
             HdrPreference: profile.Display.HdrPreference,
@@ -125,7 +158,13 @@ public static class SessionPlanner
             CongestionPolicy: selection.CongestionPolicy,
             Reason: selection.Reason,
             BenchmarkRunId: selection.BenchmarkRunId,
-            BenchmarkEvidenceRevision: selection.BenchmarkEvidenceRevision);
+            BenchmarkEvidenceRevision: selection.BenchmarkEvidenceRevision)
+        {
+            CodecProfile = selection.CodecProfile,
+            BitDepth = selection.BitDepth,
+            TenBitPresentationVerified = selection.TenBitPresentationVerified,
+            HdrPresentationVerified = selection.HdrPresentationVerified
+        };
 
         var plan = new SessionPlan(
             SessionId: $"{profile.ClientId.Value}-{game.Id}",
@@ -138,7 +177,9 @@ public static class SessionPlanner
         return new SessionPlanResult(true, plan, null);
     }
 
-    private static string? GetHdrBlocker(EndpointCapabilities capabilities)
+    private static string? GetHdrBlocker(
+        EndpointCapabilities capabilities,
+        StreamPlanningSelection selection)
     {
         if (!capabilities.Hdr10)
         {
@@ -148,6 +189,13 @@ public static class SessionPlanner
         if (!capabilities.VirtualDisplayHdrSupported)
         {
             return "virtual display does not report HDR capability";
+        }
+
+        if (selection.BitDepth != 10 ||
+            !selection.TenBitPresentationVerified ||
+            !selection.HdrPresentationVerified)
+        {
+            return "benchmark evidence did not certify 10-bit HDR presentation";
         }
 
         return null;
@@ -220,6 +268,10 @@ public static class SessionPlanner
             writer.Write(stream.CongestionPolicy);
             writer.Write(stream.BenchmarkRunId.ToByteArray());
             writer.Write(stream.BenchmarkEvidenceRevision);
+            writer.Write(stream.CodecProfile);
+            writer.Write(stream.BitDepth);
+            writer.Write(stream.TenBitPresentationVerified);
+            writer.Write(stream.HdrPresentationVerified);
         }
 
         byte[] digest = SHA256.HashData(material.GetBuffer().AsSpan(0, checked((int)material.Length)));
@@ -236,5 +288,11 @@ public static class SessionPlanner
         string CongestionPolicy,
         string Reason,
         Guid BenchmarkRunId,
-        string BenchmarkEvidenceRevision);
+        string BenchmarkEvidenceRevision,
+        string CodecProfile,
+        int BitDepth,
+        int CertifiedWidth,
+        int CertifiedHeight,
+        bool TenBitPresentationVerified,
+        bool HdrPresentationVerified);
 }

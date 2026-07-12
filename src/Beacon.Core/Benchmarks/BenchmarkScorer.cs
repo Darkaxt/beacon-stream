@@ -2,14 +2,15 @@ namespace Beacon.Core.Benchmarks;
 
 public static class BenchmarkScorer
 {
-    private const double DecoderSustainabilityRatio = 0.95;
     private const double ThroughputBudgetRatio = 0.70;
     private const double LossProtectionRatio = 0.70;
     private const double ThermalProtectionRatio = 0.80;
+    private const int MinimumInitialBitrateMbps = 5;
 
     public static SelectedBenchmarkResult Select(BenchmarkScoringInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
+        BenchmarkEvidenceValidator.Validate(input);
         if (input.NetworkSamples.Count == 0)
         {
             throw new InvalidOperationException("Benchmark scoring requires network samples.");
@@ -56,12 +57,16 @@ public static class BenchmarkScorer
 
         reasons.Add($"{DisplayCodec(selectedDecoder.Codec)} {selectedDecoder.TargetFps} FPS passed active decode validation.");
 
-        double lossPercent = 100.0 * (input.NetworkSamples.Count - received.Length) / input.NetworkSamples.Count;
+        NetworkBenchmarkCoverage coverage = input.NetworkCoverage!;
+        int receivedSequenceCount = received
+            .Select(sample => sample.Sequence)
+            .Distinct()
+            .Count();
+        double lossPercent = 100.0 * (coverage.ExpectedPacketCount - receivedSequenceCount) / coverage.ExpectedPacketCount;
         double sustainableThroughput = received.Min(sample => sample.ThroughputMbps);
         double rttMs = received.Average(sample => sample.RttMs);
         double jitterMs = received.Average(sample => sample.JitterMs);
         double bitrate = sustainableThroughput * ThroughputBudgetRatio;
-        int selectedFps = selectedDecoder.TargetFps;
 
         if (rttMs >= 80)
         {
@@ -78,26 +83,46 @@ public static class BenchmarkScorer
         if (powerConstrained)
         {
             bitrate *= ThermalProtectionRatio;
-            selectedFps = Math.Min(selectedFps, 60);
-            reasons.Add("Measured thermal pressure limited the selected frame rate and bitrate.");
+            reasons.Add("Measured thermal pressure reduced the initial bitrate budget.");
+        }
+
+        int initialBitrate = checked((int)Math.Floor(bitrate));
+        if (initialBitrate < MinimumInitialBitrateMbps)
+        {
+            throw new InvalidOperationException(
+                $"Measured throughput cannot sustain the minimum {MinimumInitialBitrateMbps} Mbps initial bitrate.");
         }
 
         return new SelectedBenchmarkResult(
             Codec: selectedDecoder.Codec.ToLowerInvariant(),
-            MaxSustainableFps: selectedFps,
-            InitialBitrateMbps: Math.Max(5, checked((int)Math.Floor(bitrate))),
+            MaxSustainableFps: selectedDecoder.TargetFps,
+            InitialBitrateMbps: initialBitrate,
             SustainableThroughputMbps: sustainableThroughput,
             RttMs: rttMs,
             JitterMs: jitterMs,
             PacketLossPercent: lossPercent,
             PowerConstrained: powerConstrained,
-            Reasons: reasons);
+            Reasons: reasons,
+            Profile: selectedDecoder.Profile,
+            BitDepth: selectedDecoder.BitDepth,
+            Width: selectedDecoder.Width,
+            Height: selectedDecoder.Height,
+            TenBitPresentationVerified: selectedDecoder.TenBitPresentationVerified,
+            HdrPresentationVerified: selectedDecoder.HdrPresentationVerified,
+            P95DecodeLatencyMs: selectedDecoder.P95DecodeLatencyMs,
+            P95PresentationLatencyMs: selectedDecoder.P95PresentationLatencyMs);
     }
 
     private static bool IsSustainable(DecoderBenchmarkSample sample) =>
         sample.Configured &&
+        sample.DroppedFrames == 0 &&
         sample.OutputErrors == 0 &&
-        sample.SustainedFps >= sample.TargetFps * DecoderSustainabilityRatio;
+        sample.SustainedFps >= sample.TargetFps &&
+        sample.P95DecodeLatencyMs <= FrameDurationMs(sample.TargetFps) &&
+        sample.P95PresentationLatencyMs is not null &&
+        sample.P95PresentationLatencyMs.Value <= 2 * FrameDurationMs(sample.TargetFps);
+
+    private static double FrameDurationMs(int targetFps) => 1000.0 / targetFps;
 
     private static bool IsThermallyConstrained(IReadOnlyList<EndpointPowerSample> samples) =>
         samples.Any(sample =>

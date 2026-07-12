@@ -1,5 +1,6 @@
 using Beacon.Core.Benchmarks;
 using Beacon.Core.Clients;
+using Beacon.Core.Displays;
 using Beacon.Core.Games;
 using Beacon.Core.Sessions;
 
@@ -94,6 +95,116 @@ public sealed class BenchmarkSessionPlannerTests
         Assert.Contains("capabil", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void DisplayDimensionsNeverExceedCertifiedMode()
+    {
+        BenchmarkPlanEvidence evidence = CreatePlanEvidence("h264", 60, 35) with
+        {
+            SelectedResult = CreatePlanEvidence("h264", 60, 35).SelectedResult with
+            {
+                Width = 1920,
+                Height = 1080
+            }
+        };
+
+        SessionPlanResult result = SessionPlanner.CreatePlan(
+            ClientProfile.CreateZFold7Default(),
+            new EndpointCapabilities(true, true, true, false, false),
+            evidence,
+            Dispatch);
+
+        SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
+        Assert.Equal(1920, plan.Display.Width);
+        Assert.Equal(1080, plan.Display.Height);
+    }
+
+    [Fact]
+    public void HdrRequiresCertifiedTenBitHdrPresentationEvidence()
+    {
+        BenchmarkPlanEvidence evidence = CreatePlanEvidence("hevc", 60, 35) with
+        {
+            SelectedResult = CreatePlanEvidence("hevc", 60, 35).SelectedResult with
+            {
+                BitDepth = 10,
+                TenBitPresentationVerified = false,
+                HdrPresentationVerified = false
+            }
+        };
+
+        SessionPlanResult result = SessionPlanner.CreatePlan(
+            ClientProfile.CreateZFold7Default(),
+            new EndpointCapabilities(true, true, true, true, true),
+            evidence,
+            Dispatch);
+
+        SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
+        Assert.False(plan.Display.HdrEnabled);
+        Assert.Contains("benchmark", plan.Display.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void HdrCanBeEnabledWhenTenBitHdrPresentationWasCertified()
+    {
+        BenchmarkPlanEvidence evidence = CreatePlanEvidence("hevc", 60, 35) with
+        {
+            SelectedResult = CreatePlanEvidence("hevc", 60, 35).SelectedResult with
+            {
+                BitDepth = 10,
+                TenBitPresentationVerified = true,
+                HdrPresentationVerified = true
+            }
+        };
+
+        SessionPlanResult result = SessionPlanner.CreatePlan(
+            ClientProfile.CreateZFold7Default(),
+            new EndpointCapabilities(true, true, true, true, true),
+            evidence,
+            Dispatch);
+
+        SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
+        Assert.True(plan.Display.HdrEnabled);
+        Assert.Equal("hdr10", plan.Display.HdrMode);
+    }
+
+    [Fact]
+    public void RequiredHdrFailsWithoutCertifiedPresentationEvidence()
+    {
+        ClientProfile profile = ClientProfile.CreateZFold7Default() with
+        {
+            Display = ClientProfile.CreateZFold7Default().Display with { HdrPreference = HdrPreference.Require }
+        };
+        BenchmarkPlanEvidence evidence = CreatePlanEvidence("hevc", 60, 35);
+
+        SessionPlanResult result = SessionPlanner.CreatePlan(
+            profile,
+            new EndpointCapabilities(true, true, true, true, true),
+            evidence,
+            Dispatch);
+
+        Assert.False(result.Success);
+        Assert.Null(result.Plan);
+        Assert.Contains("benchmark", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RejectsImpossibleCertifiedModeValues()
+    {
+        BenchmarkPlanEvidence evidence = CreatePlanEvidence("h264", 60, 35) with
+        {
+            SelectedResult = CreatePlanEvidence("h264", 60, 35).SelectedResult with { Width = -1 }
+        };
+
+        SessionPlanResult result = SessionPlanner.CreatePlan(
+            ClientProfile.CreateZFold7Default(),
+            new EndpointCapabilities(true, true, true, false, false),
+            evidence,
+            Dispatch);
+
+        Assert.False(result.Success);
+        Assert.Null(result.Plan);
+        Assert.Contains("benchmark evidence", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static BenchmarkPlanEvidence CreatePlanEvidence(string codec, int fps, int bitrateMbps) =>
         new(
             RunId: Guid.Parse("39b5f009-f495-4f84-b5e6-6d3911bfaa16"),
@@ -107,5 +218,13 @@ public sealed class BenchmarkSessionPlannerTests
                 JitterMs: 1.5,
                 PacketLossPercent: 0,
                 PowerConstrained: false,
-                Reasons: ["Selected from active network and decoder measurements."]));
+                Reasons: ["Selected from active network and decoder measurements."],
+                Profile: codec == "h264" ? "high" : "main10",
+                BitDepth: codec == "h264" ? 8 : 10,
+                Width: 2560,
+                Height: 1600,
+                TenBitPresentationVerified: false,
+                HdrPresentationVerified: false,
+                P95DecodeLatencyMs: fps == 120 ? 5 : 8,
+                P95PresentationLatencyMs: fps == 120 ? 9 : 12));
 }

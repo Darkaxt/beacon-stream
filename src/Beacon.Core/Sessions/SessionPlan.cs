@@ -22,7 +22,16 @@ public sealed record PlannedStream(
     string CongestionPolicy,
     string Reason,
     Guid BenchmarkRunId,
-    string BenchmarkEvidenceRevision);
+    string BenchmarkEvidenceRevision)
+{
+    public string CodecProfile { get; init; } = "";
+
+    public int BitDepth { get; init; }
+
+    public bool TenBitPresentationVerified { get; init; }
+
+    public bool HdrPresentationVerified { get; init; }
+}
 
 public sealed record SessionPlan(
     string SessionId,
