@@ -82,7 +82,14 @@ public sealed class BeaconServerIdentity : IDisposable
         try
         {
             File.WriteAllBytes(temporaryPath, pfx);
-            File.Move(temporaryPath, path, overwrite: false);
+            try
+            {
+                File.Move(temporaryPath, path, overwrite: false);
+            }
+            catch (IOException) when (File.Exists(path))
+            {
+                // Another host atomically created the shared identity first.
+            }
         }
         finally
         {

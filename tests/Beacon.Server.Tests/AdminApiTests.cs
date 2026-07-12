@@ -185,9 +185,12 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
     [Fact]
     public async Task SnapshotIncludesClientInputDiagnostics()
     {
-        HttpClient client = factory.CreateClient();
+        using WebApplicationFactory<Program> isolatedFactory = factory.WithWebHostBuilder(_ => { });
+        HttpClient client = isolatedFactory.CreateClient();
 
-        await client.PostAsJsonAsync("/clients/z-fold-7/launch", new { gameId = "steam-shortcut:3767414131" });
+        HttpResponseMessage launch = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/launch",
+            new { gameId = "steam-shortcut:3767414131" });
         HttpResponseMessage input = await client.PostAsJsonAsync("/clients/z-fold-7/input", new
         {
             sequence = 42,
@@ -198,6 +201,7 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         });
         HttpResponseMessage response = await client.GetAsync("/admin/snapshot");
 
+        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
         Assert.Equal(HttpStatusCode.OK, input.StatusCode);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
