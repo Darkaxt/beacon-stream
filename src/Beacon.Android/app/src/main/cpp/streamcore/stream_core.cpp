@@ -14,7 +14,14 @@ namespace stream_v1 = beacon::stream::v1;
 
 #ifndef NDEBUG
 namespace {
+std::atomic<StartFaultHook> start_fault_hook;
 std::atomic<CloseFaultHook> close_fault_hook;
+
+void inject_start_fault(StartFaultPoint point) {
+  if (const auto hook = start_fault_hook.load(std::memory_order_acquire)) {
+    hook(point);
+  }
+}
 
 void inject_close_fault(CloseFaultPoint point) {
   if (const auto hook = close_fault_hook.load(std::memory_order_acquire)) {
@@ -22,6 +29,10 @@ void inject_close_fault(CloseFaultPoint point) {
   }
 }
 }  // namespace
+
+void set_start_fault_hook_for_test(StartFaultHook hook) noexcept {
+  start_fault_hook.store(hook, std::memory_order_release);
+}
 
 void set_close_fault_hook_for_test(CloseFaultHook hook) noexcept {
   close_fault_hook.store(hook, std::memory_order_release);
@@ -78,26 +89,28 @@ void TicketSecret::clear() noexcept {
 StreamCore::StreamCore(Transport &transport, FrameSink &sink,
                        std::uint32_t maximum_frame_bytes)
     : transport_(transport), sink_(sink),
-      assembler_(new FrameAssemblerHolder(
+      assembler_(std::make_unique<FrameAssemblerHolder>(
           std::min(maximum_frame_bytes, maximum_planned_frame_bytes))),
       maximum_frame_bytes_(
           std::min(maximum_frame_bytes, maximum_planned_frame_bytes)) {}
 
 StreamCore::~StreamCore() {
   release();
-  delete assembler_;
 }
 
 bool StreamCore::start(ConnectionGrant grant) {
   if (state_ != State::idle && state_ != State::stopped && state_ != State::failed) {
     return false;
   }
-  delete assembler_;
-  grant_ = std::move(grant);
   const auto selected_limit = derive_maximum_frame_bytes(
-      grant_.video.width, grant_.video.height);
-  assembler_ = new FrameAssemblerHolder(
+      grant.video.width, grant.video.height);
+#ifndef NDEBUG
+  inject_start_fault(StartFaultPoint::assembler_allocation);
+#endif
+  auto replacement = std::make_unique<FrameAssemblerHolder>(
       std::min(maximum_frame_bytes_, selected_limit));
+  grant_ = std::move(grant);
+  assembler_ = std::move(replacement);
   session_bytes_.clear();
   session_sequence_ = 0;
   input_sequence_ = 0;
