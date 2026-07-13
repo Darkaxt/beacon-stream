@@ -30,88 +30,110 @@ bool WgcDisplayCapture::start(const WgcCapturePlan& plan, FrameSink sink) {
   }
   {
     std::lock_guard lock{mutex_};
-    if (active_ || platform_started_) {
+    if (active_ || platform_started_ || starting_) {
       failure_ = WgcCaptureFailure::capture_start_failed;
       return false;
     }
-  }
-
-  const auto targets = platform_->display_targets();
-  const auto target = std::ranges::find_if(
-      targets, [&plan](const WgcDisplayTargetSnapshot& value) {
-        return value.device_name == plan.device_name;
-      });
-  if (target == targets.end()) {
-    set_failure(WgcCaptureFailure::display_missing);
-    return false;
-  }
-  if (!target->active || target->monitor == 0) {
-    set_failure(WgcCaptureFailure::display_inactive);
-    return false;
-  }
-  if (target->width != plan.width || target->height != plan.height) {
-    set_failure(WgcCaptureFailure::display_mode_mismatch);
-    return false;
-  }
-
-  const auto adapters = platform_->graphics_adapters();
-  const WgcAdapterSnapshot* adapter = nullptr;
-  for (const auto& candidate : adapters) {
-    if (candidate.vendor_id == nvidia_vendor_id && !candidate.software &&
-        (adapter == nullptr || candidate.dedicated_video_memory >
-                                   adapter->dedicated_video_memory)) {
-      adapter = &candidate;
-    }
-  }
-  if (adapter == nullptr) {
-    set_failure(WgcCaptureFailure::nvidia_adapter_missing);
-    return false;
-  }
-
-  {
-    std::lock_guard lock{mutex_};
+    starting_ = true;
+    stop_requested_ = false;
+    start_thread_ = std::this_thread::get_id();
     failure_ = WgcCaptureFailure::none;
-    selected_adapter_description_ = adapter->description;
-    pool_width_ = plan.width;
-    pool_height_ = plan.height;
-    sink_ = std::move(sink);
-    active_ = true;
+    pending_frame_.reset();
     consumer_stopping_ = false;
   }
-  consumer_thread_ = std::thread([this] { consume_frames(); });
-  if (!platform_->start_capture(
-          *target, *adapter,
-          [this](CapturedD3d11Frame frame) {
-            receive_frame(std::move(frame));
-          })) {
+
+  try {
+    const auto targets = platform_->display_targets();
+    const auto target = std::ranges::find_if(
+        targets, [&plan](const WgcDisplayTargetSnapshot& value) {
+          return value.device_name == plan.device_name;
+        });
+    if (target == targets.end()) {
+      return fail_start(WgcCaptureFailure::display_missing, false);
+    }
+    if (!target->active || target->monitor == 0) {
+      return fail_start(WgcCaptureFailure::display_inactive, false);
+    }
+    if (target->width != plan.width || target->height != plan.height) {
+      return fail_start(WgcCaptureFailure::display_mode_mismatch, false);
+    }
+
+    const auto adapters = platform_->graphics_adapters();
+    const WgcAdapterSnapshot* adapter = nullptr;
+    for (const auto& candidate : adapters) {
+      if (candidate.vendor_id == nvidia_vendor_id && !candidate.software &&
+          (adapter == nullptr || candidate.dedicated_video_memory >
+                                     adapter->dedicated_video_memory)) {
+        adapter = &candidate;
+      }
+    }
+    if (adapter == nullptr) {
+      return fail_start(WgcCaptureFailure::nvidia_adapter_missing, false);
+    }
+
+    bool stopped_before_platform_start = false;
     {
       std::lock_guard lock{mutex_};
-      active_ = false;
-      sink_ = {};
-      failure_ = WgcCaptureFailure::capture_start_failed;
-      selected_adapter_description_.clear();
-      consumer_stopping_ = true;
+      stopped_before_platform_start = stop_requested_;
+      if (!stopped_before_platform_start) {
+        selected_adapter_description_ = adapter->description;
+        pool_width_ = plan.width;
+        pool_height_ = plan.height;
+        sink_ = std::move(sink);
+        active_ = true;
+      }
     }
-    frame_available_.notify_all();
-    stop_consumer();
-    return false;
+    if (stopped_before_platform_start) {
+      return fail_start(WgcCaptureFailure::capture_start_failed, false);
+    }
+    consumer_thread_ = std::thread([this] { consume_frames(); });
+    const bool platform_started = platform_->start_capture(
+        *target, *adapter,
+        [this](CapturedD3d11Frame frame) {
+          receive_frame(std::move(frame));
+        });
+    if (!platform_started) {
+      return fail_start(WgcCaptureFailure::capture_start_failed, false);
+    }
+
+    bool stop_requested = false;
+    {
+      std::lock_guard lock{mutex_};
+      stop_requested = stop_requested_;
+      if (!stop_requested) {
+        platform_started_ = true;
+        starting_ = false;
+        stop_requested_ = false;
+        start_thread_ = {};
+      }
+    }
+    if (stop_requested) {
+      return fail_start(WgcCaptureFailure::capture_start_failed, true);
+    }
+    start_finished_.notify_all();
+    return true;
+  } catch (...) {
+    return fail_start(WgcCaptureFailure::capture_start_failed, true);
   }
-  {
-    std::lock_guard lock{mutex_};
-    platform_started_ = true;
-  }
-  return true;
 }
 
 void WgcDisplayCapture::stop() noexcept {
   bool stop_platform = false;
   try {
     {
-      std::lock_guard lock{mutex_};
+      std::unique_lock lock{mutex_};
       active_ = false;
       sink_ = {};
       pending_frame_.reset();
       consumer_stopping_ = true;
+      if (starting_) {
+        stop_requested_ = true;
+        frame_available_.notify_all();
+        if (start_thread_ == std::this_thread::get_id()) {
+          return;
+        }
+        start_finished_.wait(lock, [this] { return !starting_; });
+      }
       stop_platform = std::exchange(platform_started_, false);
     }
     frame_available_.notify_all();
@@ -126,6 +148,41 @@ void WgcDisplayCapture::stop() noexcept {
     stop_consumer();
   } catch (...) {
   }
+}
+
+bool WgcDisplayCapture::fail_start(WgcCaptureFailure failure,
+                                   bool stop_platform) noexcept {
+  try {
+    {
+      std::lock_guard lock{mutex_};
+      active_ = false;
+      sink_ = {};
+      pending_frame_.reset();
+      consumer_stopping_ = true;
+      platform_started_ = false;
+      failure_ = failure;
+      selected_adapter_description_.clear();
+    }
+    frame_available_.notify_all();
+    if (stop_platform) {
+      platform_->stop_capture();
+    }
+    {
+      std::unique_lock lock{mutex_};
+      callbacks_drained_.wait(lock,
+                              [this] { return active_callbacks_ == 0; });
+    }
+    stop_consumer();
+  } catch (...) {
+  }
+  {
+    std::lock_guard lock{mutex_};
+    starting_ = false;
+    stop_requested_ = false;
+    start_thread_ = {};
+  }
+  start_finished_.notify_all();
+  return false;
 }
 
 WgcCaptureFailure WgcDisplayCapture::failure() const noexcept {

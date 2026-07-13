@@ -5,8 +5,10 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -46,6 +48,7 @@ class FakePlatform final : public IWgcCapturePlatform {
        .software = false,
        .description = L"NVIDIA RTX"}};
   bool start_result{true};
+  bool throw_during_start{};
   bool recreate_result{true};
   int start_count{};
   int recreate_count{};
@@ -55,6 +58,7 @@ class FakePlatform final : public IWgcCapturePlatform {
   std::uint32_t recreated_width{};
   std::uint32_t recreated_height{};
   FrameCallback callback;
+  std::function<void()> during_start;
 
   [[nodiscard]] std::vector<WgcDisplayTargetSnapshot>
   display_targets() override {
@@ -73,6 +77,12 @@ class FakePlatform final : public IWgcCapturePlatform {
     selected_monitor = target.monitor;
     selected_adapter = adapter.luid;
     callback = std::move(value);
+    if (throw_during_start) {
+      throw std::runtime_error{"capture startup failed"};
+    }
+    if (during_start) {
+      during_start();
+    }
     return start_result;
   }
 
@@ -156,6 +166,45 @@ void missing_nvidia_adapter_and_platform_start_failure_are_truthful() {
     BEACON_TEST_REQUIRE(!capture.start(plan(), [](CapturedD3d11Frame) {}));
     BEACON_TEST_REQUIRE(capture.failure() == WgcCaptureFailure::capture_start_failed);
   }
+}
+
+void throwing_platform_start_fails_transactionally_and_allows_retry() {
+  auto platform = std::make_unique<FakePlatform>();
+  auto* observed = platform.get();
+  platform->throw_during_start = true;
+  WgcDisplayCapture capture{std::move(platform)};
+
+  bool escaped = false;
+  try {
+    BEACON_TEST_REQUIRE(!capture.start(plan(), [](CapturedD3d11Frame) {}));
+  } catch (...) {
+    escaped = true;
+  }
+
+  BEACON_TEST_REQUIRE(!escaped);
+  BEACON_TEST_REQUIRE(capture.failure() ==
+                      WgcCaptureFailure::capture_start_failed);
+  observed->throw_during_start = false;
+  BEACON_TEST_REQUIRE(capture.start(plan(), [](CapturedD3d11Frame) {}));
+  capture.stop();
+  BEACON_TEST_REQUIRE(observed->stop_count == 2);
+}
+
+void stop_requested_during_platform_start_wins_and_allows_retry() {
+  auto platform = std::make_unique<FakePlatform>();
+  auto* observed = platform.get();
+  WgcDisplayCapture capture{std::move(platform)};
+  observed->during_start = [&] { capture.stop(); };
+
+  BEACON_TEST_REQUIRE(!capture.start(plan(), [](CapturedD3d11Frame) {}));
+  BEACON_TEST_REQUIRE(capture.failure() ==
+                      WgcCaptureFailure::capture_start_failed);
+  BEACON_TEST_REQUIRE(observed->stop_count == 1);
+
+  observed->during_start = {};
+  BEACON_TEST_REQUIRE(capture.start(plan(), [](CapturedD3d11Frame) {}));
+  capture.stop();
+  BEACON_TEST_REQUIRE(observed->stop_count == 2);
 }
 
 void frame_callback_preserves_qpc_and_recreates_on_content_size_change() {
@@ -270,6 +319,8 @@ int main() {
     exact_active_display_and_nvidia_adapter_are_selected();
     missing_inactive_and_wrong_mode_targets_fail_before_capture();
     missing_nvidia_adapter_and_platform_start_failure_are_truthful();
+    throwing_platform_start_fails_transactionally_and_allows_retry();
+    stop_requested_during_platform_start_wins_and_allows_retry();
     frame_callback_preserves_qpc_and_recreates_on_content_size_change();
     frame_sink_never_runs_on_the_platform_callback_thread();
     stop_waits_for_inflight_callback_and_releases_once();

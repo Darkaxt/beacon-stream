@@ -96,6 +96,8 @@ class WgcDisplayCapture final {
  private:
   void receive_frame(CapturedD3d11Frame frame) noexcept;
   void consume_frames() noexcept;
+  [[nodiscard]] bool fail_start(WgcCaptureFailure failure,
+                                bool stop_platform) noexcept;
   void stop_consumer() noexcept;
   void set_failure(WgcCaptureFailure value) noexcept;
 
@@ -103,6 +105,7 @@ class WgcDisplayCapture final {
   mutable std::mutex mutex_;
   std::condition_variable callbacks_drained_;
   std::condition_variable frame_available_;
+  std::condition_variable start_finished_;
   FrameSink sink_;
   std::optional<CapturedD3d11Frame> pending_frame_;
   std::thread consumer_thread_;
@@ -114,6 +117,9 @@ class WgcDisplayCapture final {
   bool active_{};
   bool platform_started_{};
   bool consumer_stopping_{};
+  bool starting_{};
+  bool stop_requested_{};
+  std::thread::id start_thread_{};
 };
 
 [[nodiscard]] std::unique_ptr<IWgcCapturePlatform>
