@@ -6,6 +6,7 @@ using Beacon.Core.Benchmarks;
 using Beacon.Core.Input;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
+using Beacon.Platform.Windows.Displays;
 using Beacon.StreamWorker.Contracts.Framing;
 using Beacon.StreamWorker.Contracts.Stream.V1;
 using Beacon.StreamWorker.Contracts.Worker.V1;
@@ -37,6 +38,7 @@ public sealed class StreamWorkerStreamingBackend :
 {
     private readonly IStreamWorkerHost host;
     private readonly IGenerationBoundStreamWorkerHost generationHost;
+    private readonly IWindowsDisplayNameResolver displayNames;
     private readonly ConcurrentDictionary<string, WorkerBoundStreamingSession> sessions =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, WorkerBoundBenchmarkRuntime> benchmarks =
@@ -47,8 +49,16 @@ public sealed class StreamWorkerStreamingBackend :
     private long latestExitedProcessGeneration;
 
     public StreamWorkerStreamingBackend(IStreamWorkerHost host)
+        : this(host, new LogicalDisplayNameResolver())
+    {
+    }
+
+    public StreamWorkerStreamingBackend(
+        IStreamWorkerHost host,
+        IWindowsDisplayNameResolver displayNames)
     {
         this.host = host ?? throw new ArgumentNullException(nameof(host));
+        this.displayNames = displayNames ?? throw new ArgumentNullException(nameof(displayNames));
         generationHost = host as IGenerationBoundStreamWorkerHost
             ?? new LegacyGenerationBoundStreamWorkerHost(host);
     }
@@ -98,6 +108,11 @@ public sealed class StreamWorkerStreamingBackend :
         {
             return StreamingPreflightResult.Fail(invalid);
         }
+        if (!TryResolveDisplayDeviceName(plan, out _))
+        {
+            return StreamingPreflightResult.Fail(
+                $"Windows display target '{plan.Display.DisplayId}' is not mapped to an active device name.");
+        }
         try
         {
             await host.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
@@ -121,11 +136,16 @@ public sealed class StreamWorkerStreamingBackend :
         {
             return StreamingStartResult.Fail(invalid);
         }
+        if (!TryResolveDisplayDeviceName(plan, out string? displayDeviceName))
+        {
+            return StreamingStartResult.Fail(
+                $"Windows display target '{plan.Display.DisplayId}' is not mapped to an active device name.");
+        }
 
         await lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return await StartCoreAsync(plan, cancellationToken).ConfigureAwait(false);
+            return await StartCoreAsync(plan, displayDeviceName, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -135,6 +155,7 @@ public sealed class StreamWorkerStreamingBackend :
 
     private async Task<StreamingStartResult> StartCoreAsync(
         SessionPlan plan,
+        string displayDeviceName,
         CancellationToken cancellationToken)
     {
         await host.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
@@ -155,7 +176,7 @@ public sealed class StreamWorkerStreamingBackend :
         {
             prepared = await generationHost.SendAsync(
                 processGeneration,
-                CreatePrepareCommand(plan),
+                CreatePrepareCommand(plan, displayDeviceName),
                 cancellationToken).ConfigureAwait(false);
         }
         catch (Exception error) when (IsGenerationFailure(error))
@@ -971,23 +992,50 @@ public sealed class StreamWorkerStreamingBackend :
             : null;
     }
 
-    private static WorkerIpcEnvelope CreatePrepareCommand(SessionPlan plan) => new()
-    {
-        SessionId = plan.SessionId,
-        PrepareSession = new PrepareSession
+    private static WorkerIpcEnvelope CreatePrepareCommand(
+        SessionPlan plan,
+        string displayDeviceName) => new()
         {
-            DisplayTarget = plan.Display.DisplayId,
-            VideoCodec = WorkerVideoCodec.H264,
-            Width = checked((uint)plan.Display.Width),
-            Height = checked((uint)plan.Display.Height),
-            FramesPerSecondNumerator = checked((uint)plan.Stream.Fps),
-            FramesPerSecondDenominator = 1,
-            DynamicRange = WorkerDynamicRange.Sdr,
-            MinimumBitrateKbps = checked((uint)Math.Max(1000, plan.Stream.InitialBitrateMbps * 500)),
-            InitialBitrateKbps = checked((uint)plan.Stream.InitialBitrateMbps * 1000),
-            MaximumBitrateKbps = checked((uint)plan.Stream.InitialBitrateMbps * 2000),
-        },
-    };
+            SessionId = plan.SessionId,
+            PrepareSession = new PrepareSession
+            {
+                DisplayTarget = plan.Display.DisplayId,
+                DisplayDeviceName = displayDeviceName,
+                VideoCodec = WorkerVideoCodec.H264,
+                Width = checked((uint)plan.Display.Width),
+                Height = checked((uint)plan.Display.Height),
+                FramesPerSecondNumerator = checked((uint)plan.Stream.Fps),
+                FramesPerSecondDenominator = 1,
+                DynamicRange = WorkerDynamicRange.Sdr,
+                MinimumBitrateKbps = checked((uint)Math.Max(1000, plan.Stream.InitialBitrateMbps * 500)),
+                InitialBitrateKbps = checked((uint)plan.Stream.InitialBitrateMbps * 1000),
+                MaximumBitrateKbps = checked((uint)plan.Stream.InitialBitrateMbps * 2000),
+            },
+        };
+
+    private bool TryResolveDisplayDeviceName(
+        SessionPlan plan,
+        [NotNullWhen(true)] out string? displayDeviceName)
+    {
+        if (!displayNames.TryResolveDisplayName(
+                plan.Display.DisplayId,
+                out displayDeviceName)
+            || string.IsNullOrWhiteSpace(displayDeviceName))
+        {
+            displayDeviceName = null;
+            return false;
+        }
+        return true;
+    }
+
+    private sealed class LogicalDisplayNameResolver : IWindowsDisplayNameResolver
+    {
+        public bool TryResolveDisplayName(string displayId, out string? displayName)
+        {
+            displayName = displayId;
+            return !string.IsNullOrWhiteSpace(displayName);
+        }
+    }
 
     private static WorkerIpcEnvelope CreatePrepareBenchmarkCommand(
         BenchmarkRuntimePlan plan,

@@ -335,14 +335,19 @@ ctest --preset windows-x64-debug --output-on-failure
 - Create: capture unit/integration tests
 - Modify: Worker IPC internal display-target record
 
-- [ ] Test stable monitor resolution, wrong/missing/inactive display failure, selected NVIDIA
+- [x] Test stable monitor resolution, wrong/missing/inactive display failure, selected NVIDIA
   adapter, frame callback, QPC timestamp, content-size change, pool recreation, stop during
   callback, and resource release.
-- [ ] Resolve only the Service-provided internal display target; never capture physical as a
+- [x] Resolve only the Service-provided internal display target; never capture physical as a
   fallback.
-- [ ] Add an explicit manual integration test that paints changing content on the leased
+- [x] Add an explicit manual integration test that paints changing content on the leased
   virtual display and confirms frame hashes change.
-- [ ] Commit: `feat: capture planned display in StreamWorker`
+- [x] Commit: `feat: capture planned display in StreamWorker`
+
+Validation evidence (2026-07-14): the fresh native build passed all 16 tests, the full .NET
+solution passed all 466 tests, and the manual WGC probe captured changing frame hashes with
+monotonic QPC timestamps from both the 2560x1600 physical display and a temporary
+2560x1600@60 SudoVDA lease while selecting the NVIDIA RTX 4090 adapter.
 
 ### Task 15: Convert And Scale On D3D11
 

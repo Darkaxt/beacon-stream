@@ -112,7 +112,8 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::reject(
 std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare(
     const v1::WorkerIpcEnvelope& request) {
   const auto& plan = request.prepare_session();
-  if (request.session_id().empty() || plan.display_target().empty() || plan.width() == 0 ||
+  if (request.session_id().empty() || plan.display_target().empty() ||
+      plan.display_device_name().empty() || plan.width() == 0 ||
       plan.height() == 0 || plan.frames_per_second_numerator() == 0 ||
       plan.frames_per_second_denominator() == 0 ||
       plan.video_codec() != v1::WORKER_VIDEO_CODEC_H264 ||

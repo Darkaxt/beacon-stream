@@ -733,6 +733,7 @@ int run_worker_process_probe(const std::wstring &worker_path,
   auto prepare = worker_command(2, "session-a");
   auto *plan = prepare.mutable_prepare_session();
   plan->set_display_target("display-a");
+  plan->set_display_device_name("\\\\.\\DISPLAY7");
   plan->set_video_codec(worker_v1::WORKER_VIDEO_CODEC_H264);
   plan->set_width(2560);
   plan->set_height(1600);

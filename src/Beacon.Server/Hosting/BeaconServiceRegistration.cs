@@ -234,7 +234,15 @@ public static class BeaconServiceRegistration
                 services.AddSingleton<IGenerationBoundStreamWorkerHost>(sp =>
                     sp.GetRequiredService<StreamWorkerProcessHost>());
                 services.AddSingleton<IStreamSessionAuthorizer, StreamWorkerSessionAuthorizer>();
-                services.AddSingleton<StreamWorkerStreamingBackend>();
+                services.AddSingleton(sp =>
+                {
+                    IStreamWorkerHost host = sp.GetRequiredService<IStreamWorkerHost>();
+                    IWindowsDisplayNameResolver? displayNames =
+                        sp.GetService<IWindowsDisplayNameResolver>();
+                    return displayNames is null
+                        ? new StreamWorkerStreamingBackend(host)
+                        : new StreamWorkerStreamingBackend(host, displayNames);
+                });
                 services.AddSingleton<IStreamingBackend>(sp =>
                     sp.GetRequiredService<StreamWorkerStreamingBackend>());
                 services.AddSingleton<IBenchmarkRuntime>(sp =>
@@ -264,7 +272,12 @@ public static class BeaconServiceRegistration
 
     private static IServiceCollection AddWindowsHostBoundaries(this IServiceCollection services)
     {
-        services.AddSingleton<IWindowsDisplayApi, WindowsDisplayApi>();
+        services.AddSingleton(WindowsDisplayNameMapStore.Default);
+        services.AddSingleton<WindowsDisplayNameMap>();
+        services.AddSingleton<IWindowsDisplayNameResolver>(sp =>
+            sp.GetRequiredService<WindowsDisplayNameMap>());
+        services.AddSingleton<IWindowsDisplayApi>(sp =>
+            new WindowsDisplayApi(sp.GetRequiredService<WindowsDisplayNameMap>()));
         services.AddSingleton<IDisplayBackend, WindowsDisplayBackend>();
         services.AddSingleton<IWindowsRecoveryApi, WindowsRecoveryApi>();
         services.AddSingleton<IRecoveryBackend, WindowsRecoveryBackend>();

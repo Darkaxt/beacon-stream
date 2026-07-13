@@ -2,6 +2,8 @@ add_library(
   BeaconStreamWorkerCore
   STATIC
     src/benchmark_source.cpp
+    src/capture/wgc_display_capture.cpp
+    src/capture/windows_wgc_capture_platform.cpp
     src/named_pipe_channel.cpp
     src/outbound_queue.cpp
     src/quic_listener.cpp
@@ -27,6 +29,10 @@ target_link_libraries(
     crypt32
     ncrypt
     ntdll
+    d3d11
+    dxgi
+    runtimeobject
+    windowsapp
 )
 target_compile_definitions(BeaconStreamWorkerCore PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(BeaconStreamWorkerCore PRIVATE /W4 /WX /permissive-)

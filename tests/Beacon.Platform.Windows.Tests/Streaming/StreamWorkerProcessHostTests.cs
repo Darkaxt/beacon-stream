@@ -597,6 +597,7 @@ public sealed class StreamWorkerProcessHostTests
         PrepareSession = new PrepareSession
         {
             DisplayTarget = "virtual-test",
+            DisplayDeviceName = @"\\.\DISPLAY7",
             VideoCodec = WorkerVideoCodec.H264,
             Width = 2560,
             Height = 1600,

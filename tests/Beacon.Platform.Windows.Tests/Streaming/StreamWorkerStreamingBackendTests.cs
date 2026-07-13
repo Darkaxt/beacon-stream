@@ -4,6 +4,7 @@ using Beacon.Core.Displays;
 using Beacon.Core.Input;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
+using Beacon.Platform.Windows.Displays;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.StreamWorker.Contracts.Framing;
 using Beacon.StreamWorker.Contracts.Worker.V1;
@@ -299,7 +300,9 @@ public sealed class StreamWorkerStreamingBackendTests
     public async Task StartMapsPlanAndStopKeepsWorkerReady()
     {
         var host = new RecordingStreamWorkerHost();
-        var backend = new StreamWorkerStreamingBackend(host);
+        var backend = new StreamWorkerStreamingBackend(
+            host,
+            new FixedDisplayNameResolver(@"\\.\DISPLAY7"));
         SessionPlan plan = CreatePlan();
 
         StreamingPreflightResult preflight = await backend.CheckReadinessAsync(plan, CancellationToken.None);
@@ -315,6 +318,8 @@ public sealed class StreamWorkerStreamingBackendTests
         Assert.Equal(3, host.Commands.Count);
         PrepareSession prepare = Assert.IsType<PrepareSession>(host.Commands[0].PrepareSession);
         Assert.Equal("Z Fold 7", host.Commands[0].SessionId);
+        Assert.Equal("virtual-z-fold-7", prepare.DisplayTarget);
+        Assert.Equal(@"\\.\DISPLAY7", prepare.DisplayDeviceName);
         Assert.Equal(2560u, prepare.Width);
         Assert.Equal(1600u, prepare.Height);
         Assert.Equal(120u, prepare.FramesPerSecondNumerator);
@@ -327,6 +332,24 @@ public sealed class StreamWorkerStreamingBackendTests
         Assert.Equal(WorkerIpcEnvelope.BodyOneofCase.StopMedia, host.Commands[2].BodyCase);
         Assert.True(host.IsReady);
         Assert.Equal(0, host.ShutdownCalls);
+    }
+
+    [Fact]
+    public async Task MissingWindowsDisplayMappingFailsBeforeWorkerReadiness()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(
+            host,
+            new FixedDisplayNameResolver(null));
+
+        StreamingPreflightResult result = await backend.CheckReadinessAsync(
+            CreatePlan(),
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("Windows display target", result.Error, StringComparison.Ordinal);
+        Assert.Equal(0, host.EnsureReadyCalls);
+        Assert.Empty(host.Commands);
     }
 
     [Fact]
@@ -666,6 +689,16 @@ public sealed class StreamWorkerStreamingBackendTests
             "test",
             Guid.Parse("33acde60-b29f-4f03-b2b2-f51337bdb9a5"),
             "test-benchmark-revision"));
+
+    private sealed class FixedDisplayNameResolver(string? displayName)
+        : IWindowsDisplayNameResolver
+    {
+        public bool TryResolveDisplayName(string displayId, out string? resolved)
+        {
+            resolved = displayName;
+            return resolved is not null;
+        }
+    }
 
     private static WorkerIpcEnvelope TransportReady(uint port) => new()
     {

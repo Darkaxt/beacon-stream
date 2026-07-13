@@ -2,7 +2,12 @@ using System.Text.Json;
 
 namespace Beacon.Platform.Windows.Displays;
 
-public sealed class WindowsDisplayNameMap
+public interface IWindowsDisplayNameResolver
+{
+    bool TryResolveDisplayName(string displayId, out string? displayName);
+}
+
+public sealed class WindowsDisplayNameMap : IWindowsDisplayNameResolver
 {
     private readonly Lock gate = new();
     private readonly WindowsDisplayNameMapStore store;

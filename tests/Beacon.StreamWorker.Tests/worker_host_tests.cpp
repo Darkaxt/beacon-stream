@@ -129,6 +129,7 @@ void marker_ready_state_does_not_claim_encoded_or_sent_media() {
   auto prepare = command(20, "session-a");
   auto* plan = prepare.mutable_prepare_session();
   plan->set_display_target("display-a");
+  plan->set_display_device_name("\\\\.\\DISPLAY7");
   plan->set_video_codec(beacon::worker::v1::WORKER_VIDEO_CODEC_H264);
   plan->set_width(2560);
   plan->set_height(1600);
@@ -175,6 +176,7 @@ void failed_listener_open_emits_no_transport_ready_event() {
   auto prepare = command(22, "session-a");
   auto* plan = prepare.mutable_prepare_session();
   plan->set_display_target("display-a");
+  plan->set_display_device_name("\\\\.\\DISPLAY7");
   plan->set_video_codec(beacon::worker::v1::WORKER_VIDEO_CODEC_H264);
   plan->set_width(2560);
   plan->set_height(1600);
@@ -191,6 +193,29 @@ void failed_listener_open_emits_no_transport_ready_event() {
   BEACON_TEST_REQUIRE(std::ranges::none_of(responses, [](const WorkerIpcEnvelope& value) {
     return value.body_case() == WorkerIpcEnvelope::kWorkerTransportReady;
   }));
+}
+
+void prepare_rejects_missing_windows_display_device_name() {
+  RecordingTransport transport;
+  AuthorizedQuicTicketStore tickets;
+  WorkerHost host({std::byte{1}}, 42, transport, tickets);
+  auto prepare = command(24, "session-a");
+  auto* plan = prepare.mutable_prepare_session();
+  plan->set_display_target("display-a");
+  plan->set_video_codec(beacon::worker::v1::WORKER_VIDEO_CODEC_H264);
+  plan->set_width(2560);
+  plan->set_height(1600);
+  plan->set_frames_per_second_numerator(120);
+  plan->set_frames_per_second_denominator(1);
+  plan->set_dynamic_range(beacon::worker::v1::WORKER_DYNAMIC_RANGE_SDR);
+
+  const auto responses = host.dispatch(prepare);
+  const auto& result = completion(responses);
+
+  BEACON_TEST_REQUIRE(!result.worker_completion().succeeded());
+  BEACON_TEST_REQUIRE(
+      result.worker_completion().error_code() ==
+      beacon::worker::v1::WORKER_ERROR_CODE_INVALID_REQUEST);
 }
 
 void benchmark_plan_is_prepared_without_a_display_or_video_mode() {
@@ -271,6 +296,7 @@ int main() {
     unsupported_versions_receive_one_correlated_failure();
     marker_ready_state_does_not_claim_encoded_or_sent_media();
     failed_listener_open_emits_no_transport_ready_event();
+    prepare_rejects_missing_windows_display_device_name();
     benchmark_plan_is_prepared_without_a_display_or_video_mode();
     ticket_authorization_is_hash_only_and_worker_bound();
     explicit_shutdown_is_acknowledged_and_releases_once();

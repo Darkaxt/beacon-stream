@@ -162,6 +162,7 @@ message PrepareSession {
   uint32 minimum_bitrate_kbps = 8;
   uint32 initial_bitrate_kbps = 9;
   uint32 maximum_bitrate_kbps = 10;
+  string display_device_name = 11;
 }
 
 message PrepareBenchmark {
