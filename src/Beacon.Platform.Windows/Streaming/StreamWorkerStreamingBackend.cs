@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
-using System.Threading.Channels;
 using Beacon.Core.Benchmarks;
 using Beacon.Core.Input;
 using Beacon.Core.Sessions;
@@ -37,7 +36,6 @@ public sealed class StreamWorkerStreamingBackend :
     IStreamWorkerRuntimeEvents
 {
     private readonly IStreamWorkerHost host;
-    private readonly IGenerationBoundStreamWorkerHost generationHost;
     private readonly IWindowsDisplayNameResolver displayNames;
     private readonly ConcurrentDictionary<string, WorkerBoundStreamingSession> sessions =
         new(StringComparer.OrdinalIgnoreCase);
@@ -59,8 +57,6 @@ public sealed class StreamWorkerStreamingBackend :
     {
         this.host = host ?? throw new ArgumentNullException(nameof(host));
         this.displayNames = displayNames ?? throw new ArgumentNullException(nameof(displayNames));
-        generationHost = host as IGenerationBoundStreamWorkerHost
-            ?? new LegacyGenerationBoundStreamWorkerHost(host);
     }
 
     internal int RetainedWorkerGenerationHistoryCount
@@ -159,11 +155,11 @@ public sealed class StreamWorkerStreamingBackend :
         CancellationToken cancellationToken)
     {
         await host.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
-        long processGeneration = generationHost.CurrentProcessGeneration;
+        long processGeneration = host.CurrentProcessGeneration;
         byte[] workerInstanceId = host.WorkerInstanceId.ToArray();
         if (!host.IsReady
             || workerInstanceId.Length == 0
-            || !generationHost.IsCurrentProcessGeneration(processGeneration))
+            || !host.IsCurrentProcessGeneration(processGeneration))
         {
             return StreamingStartResult.Fail("Beacon StreamWorker runtime identity is unavailable.");
         }
@@ -174,7 +170,7 @@ public sealed class StreamWorkerStreamingBackend :
         StreamWorkerCommandResponse prepared;
         try
         {
-            prepared = await generationHost.SendAsync(
+            prepared = await host.SendAsync(
                 processGeneration,
                 CreatePrepareCommand(plan, displayDeviceName),
                 cancellationToken).ConfigureAwait(false);
@@ -252,11 +248,11 @@ public sealed class StreamWorkerStreamingBackend :
         CancellationToken cancellationToken)
     {
         await host.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
-        long processGeneration = generationHost.CurrentProcessGeneration;
+        long processGeneration = host.CurrentProcessGeneration;
         byte[] workerInstanceId = host.WorkerInstanceId.ToArray();
         if (!host.IsReady
             || workerInstanceId.Length == 0
-            || !generationHost.IsCurrentProcessGeneration(processGeneration))
+            || !host.IsCurrentProcessGeneration(processGeneration))
         {
             return BenchmarkRuntimeStartResult.Fail(
                 "Beacon StreamWorker runtime identity is unavailable.");
@@ -271,7 +267,7 @@ public sealed class StreamWorkerStreamingBackend :
         StreamWorkerCommandResponse prepared;
         try
         {
-            prepared = await generationHost.SendAsync(
+            prepared = await host.SendAsync(
                 processGeneration,
                 CreatePrepareBenchmarkCommand(plan, runToken),
                 cancellationToken).ConfigureAwait(false);
@@ -357,7 +353,7 @@ public sealed class StreamWorkerStreamingBackend :
             StreamWorkerCommandResponse stopped;
             try
             {
-                stopped = await generationHost.SendAsync(
+                stopped = await host.SendAsync(
                     runtime.ProcessGeneration,
                     new WorkerIpcEnvelope
                     {
@@ -486,7 +482,7 @@ public sealed class StreamWorkerStreamingBackend :
         StreamWorkerCommandResponse stopped;
         try
         {
-            stopped = await generationHost.SendAsync(
+            stopped = await host.SendAsync(
                 runtime.ProcessGeneration,
                 new WorkerIpcEnvelope
                 {
@@ -743,7 +739,7 @@ public sealed class StreamWorkerStreamingBackend :
             && runtime.State.State == "running"
             && runtime.ProcessGeneration == workerEvent.ProcessGeneration
             && host.IsReady
-            && generationHost.IsCurrentProcessGeneration(workerEvent.ProcessGeneration)
+            && host.IsCurrentProcessGeneration(workerEvent.ProcessGeneration)
             && runtime.State.RuntimeGeneration != Guid.Empty;
     }
 
@@ -772,7 +768,7 @@ public sealed class StreamWorkerStreamingBackend :
             && runtime.State.State == "running"
             && runtime.ProcessGeneration == workerEvent.ProcessGeneration
             && host.IsReady
-            && generationHost.IsCurrentProcessGeneration(workerEvent.ProcessGeneration)
+            && host.IsCurrentProcessGeneration(workerEvent.ProcessGeneration)
             && runtime.State.RuntimeGeneration != Guid.Empty;
     }
 
@@ -795,7 +791,7 @@ public sealed class StreamWorkerStreamingBackend :
     {
         ReadOnlyMemory<byte> currentWorkerInstanceId = host.WorkerInstanceId;
         return host.IsReady
-            && generationHost.IsCurrentProcessGeneration(processGeneration)
+            && host.IsCurrentProcessGeneration(processGeneration)
             && !currentWorkerInstanceId.IsEmpty
             && currentWorkerInstanceId.Span.SequenceEqual(workerInstanceId);
     }
@@ -842,7 +838,7 @@ public sealed class StreamWorkerStreamingBackend :
         StreamWorkerCommandResponse started;
         try
         {
-            started = await generationHost.SendAsync(
+            started = await host.SendAsync(
                 processGeneration,
                 new WorkerIpcEnvelope
                 {
@@ -898,7 +894,7 @@ public sealed class StreamWorkerStreamingBackend :
     {
         try
         {
-            StreamWorkerCommandResponse stopped = await generationHost.SendAsync(
+            StreamWorkerCommandResponse stopped = await host.SendAsync(
                 processGeneration,
                 new WorkerIpcEnvelope
                 {
@@ -935,7 +931,7 @@ public sealed class StreamWorkerStreamingBackend :
 
     private async Task ShutdownGenerationAsync(long processGeneration)
     {
-        StreamWorkerCommandResponse response = await generationHost.SendAsync(
+        StreamWorkerCommandResponse response = await host.SendAsync(
             processGeneration,
             new WorkerIpcEnvelope { ShutdownWorker = new ShutdownWorker() },
             CancellationToken.None).ConfigureAwait(false);
@@ -1090,136 +1086,6 @@ public sealed class StreamWorkerStreamingBackend :
 
         public static WorkerTransportStartResult Fail(string error) =>
             new(false, 0, error);
-    }
-
-    private sealed class LegacyGenerationBoundStreamWorkerHost : IGenerationBoundStreamWorkerHost
-    {
-        private readonly IStreamWorkerHost host;
-        private readonly Channel<StreamWorkerEvent> events = Channel.CreateBounded<StreamWorkerEvent>(
-            new BoundedChannelOptions(1)
-            {
-                FullMode = BoundedChannelFullMode.Wait,
-                SingleReader = true,
-                SingleWriter = true,
-                AllowSynchronousContinuations = false,
-            });
-        private readonly SemaphoreSlim commandGate = new(1, 1);
-        private readonly Lock identityGate = new();
-        private byte[] workerInstanceId = [];
-        private long processGeneration;
-
-        public LegacyGenerationBoundStreamWorkerHost(IStreamWorkerHost host)
-        {
-            this.host = host;
-        }
-
-        public ChannelReader<StreamWorkerEvent> Events => events.Reader;
-
-        public long CurrentProcessGeneration => CaptureCurrentGeneration();
-
-        public bool IsCurrentProcessGeneration(long expectedProcessGeneration)
-        {
-            if (!host.IsReady || expectedProcessGeneration <= 0)
-            {
-                return false;
-            }
-            byte[] currentIdentity = host.WorkerInstanceId.ToArray();
-            lock (identityGate)
-            {
-                return expectedProcessGeneration == processGeneration
-                    && currentIdentity.Length > 0
-                    && currentIdentity.AsSpan().SequenceEqual(workerInstanceId);
-            }
-        }
-
-        public async Task<StreamWorkerCommandResponse> SendAsync(
-            long expectedProcessGeneration,
-            WorkerIpcEnvelope command,
-            CancellationToken cancellationToken)
-        {
-            await commandGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            try
-            {
-                byte[] before = host.WorkerInstanceId.ToArray();
-                long currentGeneration = CaptureGeneration(before);
-                if (!host.IsReady
-                    || before.Length == 0
-                    || currentGeneration != expectedProcessGeneration)
-                {
-                    throw new StreamWorkerGenerationChangedException(expectedProcessGeneration);
-                }
-
-                StreamWorkerCommandResponse response;
-                try
-                {
-                    response = await host.SendAsync(command, cancellationToken).ConfigureAwait(false);
-                }
-                catch
-                {
-                    await FailIfGenerationChangedAsync(before, expectedProcessGeneration).ConfigureAwait(false);
-                    throw;
-                }
-                await FailIfGenerationChangedAsync(before, expectedProcessGeneration).ConfigureAwait(false);
-                return response;
-            }
-            finally
-            {
-                commandGate.Release();
-            }
-        }
-
-        private long CaptureCurrentGeneration()
-        {
-            if (!host.IsReady)
-            {
-                return 0;
-            }
-            return CaptureGeneration(host.WorkerInstanceId.ToArray());
-        }
-
-        private long CaptureGeneration(byte[] identity)
-        {
-            if (identity.Length == 0)
-            {
-                return 0;
-            }
-            lock (identityGate)
-            {
-                if (!identity.AsSpan().SequenceEqual(workerInstanceId))
-                {
-                    workerInstanceId = identity;
-                    processGeneration++;
-                }
-                return processGeneration;
-            }
-        }
-
-        private async Task FailIfGenerationChangedAsync(
-            byte[] before,
-            long expectedProcessGeneration)
-        {
-            byte[] after = host.WorkerInstanceId.ToArray();
-            bool identityChanged = !after.AsSpan().SequenceEqual(before);
-            if (identityChanged)
-            {
-                if (after.Length > 0)
-                {
-                    _ = CaptureGeneration(after);
-                }
-                try
-                {
-                    await host.ShutdownAsync(CancellationToken.None).ConfigureAwait(false);
-                }
-                finally
-                {
-                    throw new StreamWorkerGenerationChangedException(expectedProcessGeneration);
-                }
-            }
-            if (!host.IsReady)
-            {
-                throw new StreamWorkerGenerationChangedException(expectedProcessGeneration);
-            }
-        }
     }
 
     private sealed class WorkerBoundStreamingSession(

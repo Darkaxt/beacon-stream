@@ -102,6 +102,26 @@ public sealed class ArchitectureRecoveryBoundaryTests
     }
 
     [Fact]
+    public void StreamWorkerBackendHasOneAuthoritativeHostContract()
+    {
+        string root = FindRepositoryRoot();
+        string host = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.Platform.Windows/Streaming/StreamWorkerProcessHost.cs"));
+        string backend = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.Platform.Windows/Streaming/StreamWorkerStreamingBackend.cs"));
+        string registration = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.Server/Hosting/BeaconServiceRegistration.cs"));
+
+        Assert.DoesNotContain("IGenerationBoundStreamWorkerHost", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("IGenerationBoundStreamWorkerHost", backend, StringComparison.Ordinal);
+        Assert.DoesNotContain("IGenerationBoundStreamWorkerHost", registration, StringComparison.Ordinal);
+        Assert.DoesNotContain("LegacyGenerationBoundStreamWorkerHost", backend, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CompatibilityGuardUsesOneTrackedDefinitionManifest()
     {
         string root = FindRepositoryRoot();

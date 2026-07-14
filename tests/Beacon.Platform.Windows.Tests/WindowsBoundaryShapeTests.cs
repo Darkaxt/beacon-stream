@@ -5,35 +5,10 @@ using Beacon.StreamWorker.Contracts.Worker.V1;
 
 namespace Beacon.Platform.Windows.Tests;
 
-public sealed class PublicApiCompatibilityTests
+public sealed class WindowsBoundaryShapeTests
 {
     [Fact]
-    public void StreamWorkerHostRetainsExactOriginalMembers()
-    {
-        Type contract = typeof(IStreamWorkerHost);
-
-        Assert.Equal(
-            ["IsReady", "WorkerInstanceId"],
-            contract.GetProperties(BindingFlags.Public | BindingFlags.Instance)
-                .Select(property => property.Name)
-                .Order(StringComparer.Ordinal));
-        Assert.NotNull(contract.GetMethod(
-            nameof(IStreamWorkerHost.EnsureReadyAsync),
-            [typeof(CancellationToken)]));
-        Assert.NotNull(contract.GetMethod(
-            nameof(IStreamWorkerHost.SendAsync),
-            [typeof(WorkerIpcEnvelope), typeof(CancellationToken)]));
-        Assert.NotNull(contract.GetMethod(
-            nameof(IStreamWorkerHost.ShutdownAsync),
-            [typeof(CancellationToken)]));
-        Assert.Equal(
-            3,
-            contract.GetMethods(BindingFlags.Public | BindingFlags.Instance)
-                .Count(method => !method.IsSpecialName));
-    }
-
-    [Fact]
-    public void OriginalPublicConstructorsRemainAvailable()
+    public void WindowsInputAndNamedPipeConstructorsRemainAvailable()
     {
         Assert.NotNull(typeof(WindowsInputCommand).GetConstructor(
         [
@@ -51,11 +26,6 @@ public sealed class PublicApiCompatibilityTests
             typeof(Task<int>),
             typeof(uint)
         ]));
-        Assert.NotNull(typeof(StreamWorkerStreamingBackend).GetConstructor(
-        [
-            typeof(IStreamWorkerHost)
-        ]));
-
         var command = new WindowsInputCommand(
             Kind: WindowsInputCommandKind.KeyboardKey,
             X: null,

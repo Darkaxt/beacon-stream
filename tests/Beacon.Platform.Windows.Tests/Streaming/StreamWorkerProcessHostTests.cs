@@ -14,7 +14,7 @@ namespace Beacon.Platform.Windows.Tests.Streaming;
 public sealed class StreamWorkerProcessHostTests
 {
     [Fact]
-    public async Task LegacyHostWithoutEventSubscriptionFailsClosedBeforeBoundedBackpressure()
+    public async Task HostWithoutEventSubscriptionFailsClosedBeforeBoundedBackpressure()
     {
         await using ConnectedStreams streams = await ConnectedStreams.CreateAsync();
         TestLaunch launch = TestLaunch.Waiting(streams.Service);
@@ -42,15 +42,15 @@ public sealed class StreamWorkerProcessHostTests
             new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
             new QueueLaunchFactory(launch),
             eventCapacity: 1);
-        IStreamWorkerHost legacyHost = host;
+        IStreamWorkerHost workerHost = host;
         try
         {
-            await legacyHost.EnsureReadyAsync(CancellationToken.None);
+            await workerHost.EnsureReadyAsync(CancellationToken.None);
 
             StreamWorkerProtocolException error = await Assert.ThrowsAsync<StreamWorkerProtocolException>(() =>
-                legacyHost.SendAsync(Prepare("session"), CancellationToken.None));
+                workerHost.SendAsync(Prepare("session"), CancellationToken.None));
             Exception? shutdownError = await Record.ExceptionAsync(() =>
-                legacyHost.ShutdownAsync(CancellationToken.None));
+                workerHost.ShutdownAsync(CancellationToken.None));
             try
             {
                 await worker;
@@ -61,7 +61,7 @@ public sealed class StreamWorkerProcessHostTests
 
             Assert.Equal("StreamWorker emitted an event without an active event subscription.", error.Message);
             Assert.Null(shutdownError);
-            Assert.False(legacyHost.IsReady);
+            Assert.False(workerHost.IsReady);
         }
         finally
         {
@@ -76,7 +76,7 @@ public sealed class StreamWorkerProcessHostTests
         await using var host = new StreamWorkerProcessHost(
             new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
             new QueueLaunchFactory(launch));
-        var events = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost events = host;
         _ = events.Events;
 
         StreamWorkerProcessExitedException error = await Assert.ThrowsAsync<StreamWorkerProcessExitedException>(
@@ -117,7 +117,7 @@ public sealed class StreamWorkerProcessHostTests
         await using var host = new StreamWorkerProcessHost(
             new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
             new QueueLaunchFactory(launch));
-        var events = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost events = host;
         _ = events.Events;
 
         await Assert.ThrowsAnyAsync<Exception>(() => host.EnsureReadyAsync(CancellationToken.None));
@@ -143,7 +143,7 @@ public sealed class StreamWorkerProcessHostTests
         var host = new StreamWorkerProcessHost(
             new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
             new QueueLaunchFactory(first, replacement));
-        var events = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost events = host;
         _ = events.Events;
         try
         {
@@ -182,7 +182,7 @@ public sealed class StreamWorkerProcessHostTests
         var host = new StreamWorkerProcessHost(
             new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
             factory);
-        var generationHost = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost generationHost = host;
         try
         {
             await host.EnsureReadyAsync(CancellationToken.None);
@@ -234,7 +234,7 @@ public sealed class StreamWorkerProcessHostTests
         var host = new StreamWorkerProcessHost(
             new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
             new QueueLaunchFactory(launch));
-        var eventSource = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost eventSource = host;
         _ = eventSource.Events;
         await host.EnsureReadyAsync(CancellationToken.None);
 
@@ -271,7 +271,7 @@ public sealed class StreamWorkerProcessHostTests
         var host = new StreamWorkerProcessHost(
             new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
             new QueueLaunchFactory(launch));
-        var eventSource = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost eventSource = host;
         _ = eventSource.Events;
         await host.EnsureReadyAsync(CancellationToken.None);
 
@@ -301,7 +301,7 @@ public sealed class StreamWorkerProcessHostTests
                 publicationEntered.SetResult();
                 await allowPublication.Task;
             });
-        var eventSource = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost eventSource = host;
         _ = eventSource.Events;
         await host.EnsureReadyAsync(CancellationToken.None);
 
@@ -356,7 +356,7 @@ public sealed class StreamWorkerProcessHostTests
                 await allowPublication.Task;
             },
             processExitPublicationStarted: _ => exitWriteStarted.SetResult());
-        var eventSource = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost eventSource = host;
         _ = eventSource.Events;
         await host.EnsureReadyAsync(CancellationToken.None);
         _ = await eventSource.SendAsync(

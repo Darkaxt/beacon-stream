@@ -159,7 +159,6 @@ public sealed class StreamWorkerEventRelayTests
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IStreamWorkerHost>(worker);
-                services.AddSingleton<IGenerationBoundStreamWorkerHost>(worker);
                 services.AddSingleton<IStreamWorkerRuntimeEvents>(runtime);
                 services.AddSingleton(sink);
                 services.AddSingleton(diagnostics);
@@ -167,7 +166,7 @@ public sealed class StreamWorkerEventRelayTests
             })
             .Build();
 
-    private sealed class EventHost : IStreamWorkerHost, IGenerationBoundStreamWorkerHost
+    private sealed class EventHost : IStreamWorkerHost
     {
         private readonly Channel<StreamWorkerEvent> channel;
         private readonly TaskCompletionSource shutdownEntered =

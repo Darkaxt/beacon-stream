@@ -15,63 +15,6 @@ namespace Beacon.Platform.Windows.Tests.Streaming;
 public sealed class StreamWorkerStreamingBackendTests
 {
     [Fact]
-    public async Task LegacyHostSupportsStableStartAndStopWithoutGenerationInterface()
-    {
-        var host = new LegacyRecordingStreamWorkerHost();
-        var backend = new StreamWorkerStreamingBackend(host);
-        SessionPlan plan = CreatePlan();
-
-        StreamingStartResult start = await backend.StartAsync(plan, CancellationToken.None);
-        StreamingStopResult stop = await backend.StopAsync(plan.SessionId, CancellationToken.None);
-
-        Assert.True(start.Success, start.Error);
-        Assert.True(stop.Success, stop.Error);
-        Assert.Equal(
-            [
-                WorkerIpcEnvelope.BodyOneofCase.PrepareSession,
-                WorkerIpcEnvelope.BodyOneofCase.StartMedia,
-                WorkerIpcEnvelope.BodyOneofCase.StopMedia
-            ],
-            host.Commands.Select(command => command.BodyCase));
-    }
-
-    [Fact]
-    public async Task LegacyHostIdentityChangeFailsStartTruthfully()
-    {
-        var host = new LegacyRecordingStreamWorkerHost
-        {
-            ReplaceAfter = WorkerIpcEnvelope.BodyOneofCase.PrepareSession
-        };
-        var backend = new StreamWorkerStreamingBackend(host);
-
-        StreamingStartResult result = await backend.StartAsync(CreatePlan(), CancellationToken.None);
-
-        Assert.False(result.Success);
-        Assert.Equal("Beacon StreamWorker generation changed during stream start.", result.Error);
-        Assert.Empty(backend.GetSessions());
-        Assert.False(host.MediaStarted);
-    }
-
-    [Fact]
-    public async Task LegacyStartMediaReplacementIsShutDownBeforeGenerationFailure()
-    {
-        var host = new LegacyRecordingStreamWorkerHost
-        {
-            ReplaceAfter = WorkerIpcEnvelope.BodyOneofCase.StartMedia
-        };
-        var backend = new StreamWorkerStreamingBackend(host);
-
-        StreamingStartResult result = await backend.StartAsync(CreatePlan(), CancellationToken.None);
-
-        Assert.False(result.Success);
-        Assert.Equal("Beacon StreamWorker generation changed during stream start.", result.Error);
-        Assert.Equal(1, host.ShutdownCalls);
-        Assert.False(host.IsReady);
-        Assert.False(host.MediaStarted);
-        Assert.Empty(backend.GetSessions());
-    }
-
-    [Fact]
     public async Task WorkerExitBetweenPrepareAndStartDoesNotCreateOrUseReplacement()
     {
         var host = new RecordingStreamWorkerHost { ExitAfterPrepare = true };
@@ -715,7 +658,7 @@ public sealed class StreamWorkerStreamingBackendTests
         WorkerTransportReady = new WorkerTransportReady { ListenerPort = port },
     };
 
-    private sealed class RecordingStreamWorkerHost : IStreamWorkerHost, IGenerationBoundStreamWorkerHost
+    private sealed class RecordingStreamWorkerHost : IStreamWorkerHost
     {
         private readonly Channel<StreamWorkerEvent> events = Channel.CreateUnbounded<StreamWorkerEvent>();
         private byte[] workerInstanceId = [1, 2, 3];
@@ -884,64 +827,4 @@ public sealed class StreamWorkerStreamingBackendTests
         }
     }
 
-    private sealed class LegacyRecordingStreamWorkerHost : IStreamWorkerHost
-    {
-        private byte[] workerInstanceId = [1, 2, 3];
-        private ulong requestId;
-
-        public bool IsReady { get; private set; } = true;
-
-        public ReadOnlyMemory<byte> WorkerInstanceId => workerInstanceId;
-
-        public WorkerIpcEnvelope.BodyOneofCase ReplaceAfter { get; init; }
-
-        public bool MediaStarted { get; private set; }
-
-        public int ShutdownCalls { get; private set; }
-
-        public List<WorkerIpcEnvelope> Commands { get; } = [];
-
-        public Task EnsureReadyAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task<StreamWorkerCommandResponse> SendAsync(
-            WorkerIpcEnvelope command,
-            CancellationToken cancellationToken)
-        {
-            Commands.Add(command.Clone());
-            ulong currentRequestId = ++requestId;
-            IReadOnlyList<WorkerIpcEnvelope> events = [];
-            if (command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.StartMedia)
-            {
-                MediaStarted = true;
-                WorkerIpcEnvelope transportReady = TransportReady(51234);
-                transportReady.RequestId = currentRequestId;
-                events = [transportReady];
-            }
-            if (command.BodyCase == ReplaceAfter)
-            {
-                workerInstanceId = [9, 8, 7];
-            }
-            return Task.FromResult(new StreamWorkerCommandResponse(
-                new WorkerIpcEnvelope
-                {
-                    ProtocolVersion = ProtocolVersion.Current,
-                    RequestId = currentRequestId,
-                    SessionId = command.SessionId,
-                    WorkerCompletion = new WorkerCompletion
-                    {
-                        Succeeded = true,
-                        ErrorCode = WorkerErrorCode.None
-                    }
-                },
-                events));
-        }
-
-        public Task ShutdownAsync(CancellationToken cancellationToken)
-        {
-            ShutdownCalls++;
-            IsReady = false;
-            MediaStarted = false;
-            return Task.CompletedTask;
-        }
-    }
 }

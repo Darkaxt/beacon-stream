@@ -549,6 +549,14 @@ failure returns `503` before physical restore/removal. The full managed solution
 and Client Lab plus its Playwright lifecycle remain green. Evidence:
 `docs/validation/2026-07-14-inactive-disconnect-compensation.md`.
 
+Worker-host ownership evidence (2026-07-14): the backend, relay, and service composition now use
+one generation-aware `IStreamWorkerHost` contract. The synthetic legacy-generation adapter and
+its compatibility-only tests were removed, and an architecture regression prevents the split
+contract from returning. Core, Windows platform, and Server suites pass. Ticket authorization's
+remaining unpinned command path and worker-specific Core authorization names remain open for the
+next recovery slice. Evidence:
+`docs/validation/2026-07-14-stream-worker-host-contract.md`.
+
 ## Deferred Until Gate 5 Passes
 
 Create separate audited plans, in this order, for:

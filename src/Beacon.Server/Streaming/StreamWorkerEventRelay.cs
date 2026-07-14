@@ -6,7 +6,7 @@ using Beacon.Platform.Windows.Streaming;
 namespace Beacon.Server.Streaming;
 
 public sealed class StreamWorkerEventRelay(
-    IGenerationBoundStreamWorkerHost eventSource,
+    IStreamWorkerHost eventSource,
     IStreamWorkerRuntimeEvents runtimeEvents,
     IClientInputSink inputSink,
     IDiagnosticEventSink diagnostics) : BackgroundService
@@ -84,17 +84,14 @@ public sealed class StreamWorkerEventRelay(
     private async Task StopCoreAsync(CancellationToken cancellationToken)
     {
         bool graceful = false;
-        if (eventSource is IStreamWorkerHost lifecycleHost)
+        try
         {
-            try
-            {
-                await lifecycleHost.ShutdownAsync(cancellationToken).ConfigureAwait(false);
-                graceful = true;
-            }
-            catch (Exception)
-            {
-                PublishShutdownFailure();
-            }
+            await eventSource.ShutdownAsync(cancellationToken).ConfigureAwait(false);
+            graceful = true;
+        }
+        catch (Exception)
+        {
+            PublishShutdownFailure();
         }
 
         if (graceful)

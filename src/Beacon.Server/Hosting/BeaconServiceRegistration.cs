@@ -233,8 +233,6 @@ public static class BeaconServiceRegistration
                 services.AddSingleton<StreamWorkerProcessHost>();
                 services.AddSingleton<IStreamWorkerHost>(sp =>
                     sp.GetRequiredService<StreamWorkerProcessHost>());
-                services.AddSingleton<IGenerationBoundStreamWorkerHost>(sp =>
-                    sp.GetRequiredService<StreamWorkerProcessHost>());
                 services.AddSingleton<IStreamSessionAuthorizer, StreamWorkerSessionAuthorizer>();
                 services.AddSingleton(sp =>
                 {

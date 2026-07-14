@@ -26,32 +26,28 @@ public interface IStreamWorkerHost
 
     ReadOnlyMemory<byte> WorkerInstanceId { get; }
 
+    ChannelReader<StreamWorkerEvent> Events { get; }
+
+    long CurrentProcessGeneration { get; }
+
     Task EnsureReadyAsync(CancellationToken cancellationToken);
 
+    bool IsCurrentProcessGeneration(long processGeneration);
+
     Task<StreamWorkerCommandResponse> SendAsync(
+        WorkerIpcEnvelope command,
+        CancellationToken cancellationToken);
+
+    Task<StreamWorkerCommandResponse> SendAsync(
+        long expectedProcessGeneration,
         WorkerIpcEnvelope command,
         CancellationToken cancellationToken);
 
     Task ShutdownAsync(CancellationToken cancellationToken);
 }
 
-public interface IGenerationBoundStreamWorkerHost
-{
-    ChannelReader<StreamWorkerEvent> Events { get; }
-
-    long CurrentProcessGeneration { get; }
-
-    bool IsCurrentProcessGeneration(long processGeneration);
-
-    Task<StreamWorkerCommandResponse> SendAsync(
-        long expectedProcessGeneration,
-        WorkerIpcEnvelope command,
-        CancellationToken cancellationToken);
-}
-
 public sealed class StreamWorkerProcessHost :
     IStreamWorkerHost,
-    IGenerationBoundStreamWorkerHost,
     IAsyncDisposable
 {
     private readonly StreamWorkerProcessHostOptions options;
