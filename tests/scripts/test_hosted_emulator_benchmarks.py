@@ -243,6 +243,16 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
         self.assertIn('-DBUILD_TESTING="${x86_64_build_testing}"', build_script)
         self.assertIn('-DBUILD_TESTING=OFF', build_script)
 
+    def test_hosted_android_job_bounds_native_parallelism(self):
+        workflow = (REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        android_job = workflow.split("  android:\n", 1)[1].split(
+            "\n  native-windows:", 1
+        )[0]
+
+        self.assertIn("    env:\n      CMAKE_BUILD_PARALLEL_LEVEL: 2\n", android_job)
+
     def test_runner_propagates_test_host_shutdown_failure(self):
         result = self._run({"BEACON_FAKE_SERVER_EXIT": "17"})
 
