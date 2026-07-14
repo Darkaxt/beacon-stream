@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Beacon.Core.Benchmarks;
 using Beacon.Server.Security;
 
@@ -42,14 +43,82 @@ public sealed class BenchmarkRuntimeOrchestrator(
     StreamTicketProvisioningService ticketProvisioning,
     BeaconServerIdentity serverIdentity)
 {
+    private readonly ConcurrentDictionary<string, Lazy<Task<BenchmarkRuntimeGrantResult>>>
+        startOperations = new(StringComparer.Ordinal);
+    private readonly SemaphoreSlim lifecycleGate = new(1, 1);
+
     public async Task<BenchmarkRuntimeGrantResult> StartAsync(
+        BenchmarkRuntimePlan plan,
+        IReadOnlyList<Guid> supersededRunIds,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Lazy<Task<BenchmarkRuntimeGrantResult>>? candidate = null;
+        candidate = new Lazy<Task<BenchmarkRuntimeGrantResult>>(
+            () => RunStartOperationAsync(plan, supersededRunIds, candidate!),
+            LazyThreadSafetyMode.ExecutionAndPublication);
+        Lazy<Task<BenchmarkRuntimeGrantResult>> operation = startOperations.GetOrAdd(
+            plan.SessionId,
+            candidate);
+        return await operation.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<string?> StopAsync(
+        string clientId,
+        Guid runId,
+        CancellationToken cancellationToken)
+    {
+        await lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await StopCoreAsync(clientId, runId, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            lifecycleGate.Release();
+        }
+    }
+
+    private async Task<BenchmarkRuntimeGrantResult> RunStartOperationAsync(
+        BenchmarkRuntimePlan plan,
+        IReadOnlyList<Guid> supersededRunIds,
+        Lazy<Task<BenchmarkRuntimeGrantResult>> operation)
+    {
+        try
+        {
+            // The server-owned prepare continues if one duplicate caller disconnects.
+            await lifecycleGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                return await StartCoreAsync(
+                    plan,
+                    supersededRunIds,
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+            finally
+            {
+                lifecycleGate.Release();
+            }
+        }
+        finally
+        {
+            _ = ((ICollection<KeyValuePair<
+                string,
+                Lazy<Task<BenchmarkRuntimeGrantResult>>>>)startOperations).Remove(
+                    new KeyValuePair<string, Lazy<Task<BenchmarkRuntimeGrantResult>>>(
+                        plan.SessionId,
+                        operation));
+        }
+    }
+
+    private async Task<BenchmarkRuntimeGrantResult> StartCoreAsync(
         BenchmarkRuntimePlan plan,
         IReadOnlyList<Guid> supersededRunIds,
         CancellationToken cancellationToken)
     {
         foreach (Guid supersededRunId in supersededRunIds)
         {
-            string? cleanupError = await StopAsync(
+            string? cleanupError = await StopCoreAsync(
                 plan.ClientId.Value,
                 supersededRunId,
                 cancellationToken).ConfigureAwait(false);
@@ -116,7 +185,7 @@ public sealed class BenchmarkRuntimeOrchestrator(
             ticketResult.Ticket));
     }
 
-    public async Task<string?> StopAsync(
+    private async Task<string?> StopCoreAsync(
         string clientId,
         Guid runId,
         CancellationToken cancellationToken)
