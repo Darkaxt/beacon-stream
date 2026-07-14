@@ -23,6 +23,40 @@ public static class DisplayProbeApp
                     output.Write(DisplayProbeFormatter.FormatStatus(driverStatus, topology));
                     return 0;
 
+                case DriverSessionDisplayProbeCommand:
+                    if (api is not IWindowsDisplayLeaseSession driverSession)
+                    {
+                        error.WriteLine("The active display API does not expose a SudoVDA driver session.");
+                        return 2;
+                    }
+
+                    const string probeDisplayId = "probe-driver-session";
+                    SudoVdaDriverLeaseHoldResult holdResult = await driverSession.HoldAsync(
+                        probeDisplayId,
+                        CancellationToken.None);
+                    if (!holdResult.Success)
+                    {
+                        output.WriteLine($"driver-session: failed - {holdResult.Error}");
+                        return 2;
+                    }
+
+                    try
+                    {
+                        SudoVdaDriverLeaseSessionSnapshot snapshot = driverSession.Snapshot;
+                        string watchdog = snapshot.WatchdogTimeoutSeconds is uint timeoutSeconds
+                            ? $"{timeoutSeconds}s"
+                            : "unknown";
+                        output.WriteLine(
+                            $"driver-session: success leases={snapshot.LeaseCount} watchdog={watchdog} " +
+                            $"heartbeat={(snapshot.HeartbeatActive ? "active" : "not-required")} " +
+                            $"healthy={snapshot.Healthy.ToString().ToLowerInvariant()} - {snapshot.Diagnostic}");
+                        return snapshot.Healthy ? 0 : 2;
+                    }
+                    finally
+                    {
+                        await driverSession.ReleaseAsync(probeDisplayId, CancellationToken.None);
+                    }
+
                 case PrepareDisplayProbeCommand prepare:
                     var prepareBackend = new WindowsDisplayBackend(api);
                     DisplayEnsureResult prepareResult = await prepareBackend.PrepareVirtualDisplayAsync(

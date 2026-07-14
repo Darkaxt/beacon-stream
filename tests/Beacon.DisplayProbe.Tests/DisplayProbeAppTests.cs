@@ -107,7 +107,28 @@ public sealed class DisplayProbeAppTests
         Assert.Equal("client-z-fold-7", Assert.Single(api.RemovedDisplays));
     }
 
-    private sealed class ProbeWindowsDisplayApi : IWindowsDisplayApi
+    [Fact]
+    public async Task DriverSessionCommandHoldsReportsAndReleasesDriverControlWithoutCreatingDisplay()
+    {
+        var api = new ProbeWindowsDisplayApi();
+        using var output = new StringWriter();
+
+        int exitCode = await DisplayProbeApp.RunAsync(
+            api,
+            ["driver-session"],
+            output,
+            TextWriter.Null);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("driver-session: success", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("watchdog=3s", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("heartbeat=active", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("probe-driver-session", Assert.Single(api.HeldDisplayIds));
+        Assert.Equal("probe-driver-session", Assert.Single(api.ReleasedDisplayIds));
+        Assert.Empty(api.CreatedDisplays);
+    }
+
+    private sealed class ProbeWindowsDisplayApi : IWindowsDisplayApi, IWindowsDisplayLeaseSession
     {
         public DisplayTopologySnapshot CurrentTopology { get; set; } =
             DisplayTopologySnapshot.PhysicalOnly("physical-laptop-panel", 2560, 1600, 120);
@@ -124,9 +145,20 @@ public sealed class DisplayProbeAppTests
 
         public List<string> RemovedDisplays { get; } = [];
 
+        public List<string> HeldDisplayIds { get; } = [];
+
+        public List<string> ReleasedDisplayIds { get; } = [];
+
         public int PrimaryCalls { get; private set; }
 
         public int RestoreCalls { get; private set; }
+
+        public SudoVdaDriverLeaseSessionSnapshot Snapshot => new(
+            LeaseCount: HeldDisplayIds.Count - ReleasedDisplayIds.Count,
+            WatchdogTimeoutSeconds: 3,
+            HeartbeatActive: HeldDisplayIds.Count > ReleasedDisplayIds.Count,
+            Healthy: true,
+            Diagnostic: "probe heartbeat healthy");
 
         public DisplayDriverStatus GetDriverStatus() => new(true, "SudoVDA driver is ready.");
 
@@ -184,5 +216,19 @@ public sealed class DisplayProbeAppTests
 
         public Task<DisplayHdrCapability> QueryHdrCapabilityAsync(string displayId, CancellationToken cancellationToken) =>
             Task.FromResult(new DisplayHdrCapability(false, false, "SDR only."));
+
+        public Task<SudoVdaDriverLeaseHoldResult> HoldAsync(
+            string displayId,
+            CancellationToken cancellationToken)
+        {
+            HeldDisplayIds.Add(displayId);
+            return Task.FromResult(SudoVdaDriverLeaseHoldResult.Held());
+        }
+
+        public Task ReleaseAsync(string displayId, CancellationToken cancellationToken)
+        {
+            ReleasedDisplayIds.Add(displayId);
+            return Task.CompletedTask;
+        }
     }
 }

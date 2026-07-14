@@ -367,6 +367,15 @@ first-lease, multiple-lease, final-release, failure-diagnostic, and no-cleanup b
 validation may query and use SudoVDA through Beacon but must not control Apollo or restart the
 shared driver on this workstation.
 
+Validation evidence (2026-07-14): deterministic session tests prove idle, first-lease,
+duplicate/multiple-lease, scheduled ping, final-release, disabled-watchdog, heartbeat-fault,
+recovery, native-open failure, backend rollback, and health-reporting behavior. The complete
+.NET solution passes all 482 tests and the compatibility guard passes. The real
+`driver-session` probe opened Beacon's SudoVDA control handle, read protocol `0.2.1` and the
+currently loaded `0s` watchdog, sent an immediate heartbeat, released the hold, and left the
+machine physical-only, non-mirrored, and primary at 2560x1600@240. No Apollo process, service,
+configuration, or driver-device lifecycle action was used.
+
 ### Task 15: Convert And Scale On D3D11
 
 **Files:**

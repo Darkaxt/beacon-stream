@@ -72,4 +72,12 @@ public sealed class DisplayProbeCommandLineTests
         var recover = Assert.IsType<RecoverDisplayProbeCommand>(command);
         Assert.Equal("z-fold-7", recover.ClientId);
     }
+
+    [Fact]
+    public void ParseDriverSessionCommandHasNoDisplayRequirement()
+    {
+        DisplayProbeCommand command = DisplayProbeCommandLine.Parse(["driver-session"]);
+
+        Assert.IsType<DriverSessionDisplayProbeCommand>(command);
+    }
 }

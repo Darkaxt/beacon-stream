@@ -24,6 +24,8 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi
 
     public DisplayApiResult PrimaryResult { get; set; } = DisplayApiResult.Ok();
 
+    public DisplayApiResult CreateResult { get; set; } = DisplayApiResult.Ok();
+
     public List<(string DisplayId, int Width, int Height, int RefreshHz)> CreatedDisplays { get; } = [];
 
     public List<string> PrimaryRequests { get; } = [];
@@ -31,6 +33,8 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi
     public List<string> RestoreRequests { get; } = [];
 
     public List<string> RemovedDisplays { get; } = [];
+
+    public int TopologyQueryCount { get; private set; }
 
     public static FakeWindowsDisplayApi ReadyWithGoodTopology()
     {
@@ -63,16 +67,24 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi
         CancellationToken cancellationToken)
     {
         CreatedDisplays.Add((displayId, width, height, refreshHz));
+        if (!CreateResult.Success)
+        {
+            return Task.FromResult(CreateResult);
+        }
+
         if (AfterCreateTopology is not null)
         {
             CurrentTopology = AfterCreateTopology;
         }
 
-        return Task.FromResult(DisplayApiResult.Ok());
+        return Task.FromResult(CreateResult);
     }
 
-    public Task<DisplayTopologySnapshot> QueryTopologyAsync(CancellationToken cancellationToken) =>
-        Task.FromResult(CurrentTopology);
+    public Task<DisplayTopologySnapshot> QueryTopologyAsync(CancellationToken cancellationToken)
+    {
+        TopologyQueryCount++;
+        return Task.FromResult(CurrentTopology);
+    }
 
     public Task<DisplayApiResult> SetVirtualPrimaryAsync(string displayId, CancellationToken cancellationToken)
     {

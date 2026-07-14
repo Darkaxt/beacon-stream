@@ -18,6 +18,15 @@ Read-only status:
 dotnet run --project src/Beacon.DisplayProbe -- status
 ```
 
+Native driver-session validation without creating or changing a display:
+
+```powershell
+dotnet run --project src/Beacon.DisplayProbe -- driver-session
+```
+
+This opens Beacon's own SudoVDA control session, queries the watchdog, sends an immediate
+heartbeat, reports the session state, and releases it. It does not query or control Apollo.
+
 Topology-changing commands:
 
 ```powershell

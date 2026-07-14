@@ -5,7 +5,11 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Beacon.Platform.Windows.Displays;
 
-public sealed class WindowsDisplayApi : IWindowsDisplayApi
+public sealed class WindowsDisplayApi :
+    IWindowsDisplayApi,
+    IWindowsDisplayLeaseSession,
+    IDisposable,
+    IAsyncDisposable
 {
     private const uint DisplayDeviceActive = 0x00000001;
     private const uint DisplayDevicePrimaryDevice = 0x00000004;
@@ -42,12 +46,15 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
     private const uint DisplayConfigPixelFormat32Bpp = 4;
     private const uint IoctlAddVirtualDisplay = 0x800;
     private const uint IoctlRemoveVirtualDisplay = 0x801;
+    private const uint IoctlGetWatchdog = 0x803;
+    private const uint IoctlDriverPing = 0x888;
     private const uint IoctlGetProtocolVersion = 0x8FF;
     private const byte ExpectedProtocolMajor = 0;
     private const byte ExpectedProtocolMinor = 2;
     private const int EnumCurrentSettings = -1;
     private static readonly Guid SudoVdaInterfaceGuid = new("e5bcc234-1e0c-418a-a0d4-ef8b7501414d");
     private readonly WindowsDisplayNameMap displayNameMap;
+    private readonly SudoVdaDriverLeaseSession driverLeaseSession;
 
     public WindowsDisplayApi()
         : this(new WindowsDisplayNameMap(WindowsDisplayNameMapStore.Default))
@@ -55,9 +62,35 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
     }
 
     public WindowsDisplayApi(WindowsDisplayNameMap displayNameMap)
+        : this(
+            displayNameMap,
+            new SudoVdaDriverLeaseSession(
+                new WindowsSudoVdaDriverConnectionFactory(),
+                new TaskDelaySudoVdaHeartbeatScheduler()))
+    {
+    }
+
+    internal WindowsDisplayApi(
+        WindowsDisplayNameMap displayNameMap,
+        SudoVdaDriverLeaseSession driverLeaseSession)
     {
         this.displayNameMap = displayNameMap;
+        this.driverLeaseSession = driverLeaseSession;
     }
+
+    public SudoVdaDriverLeaseSessionSnapshot Snapshot => driverLeaseSession.Snapshot;
+
+    public Task<SudoVdaDriverLeaseHoldResult> HoldAsync(
+        string displayId,
+        CancellationToken cancellationToken) =>
+        driverLeaseSession.HoldAsync(displayId, cancellationToken);
+
+    public Task ReleaseAsync(string displayId, CancellationToken cancellationToken) =>
+        driverLeaseSession.ReleaseAsync(displayId, cancellationToken);
+
+    public ValueTask DisposeAsync() => driverLeaseSession.DisposeAsync();
+
+    public void Dispose() => driverLeaseSession.Dispose();
 
     public DisplayDriverStatus GetDriverStatus()
     {
@@ -947,7 +980,7 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
         return displayNameMap.CreateDisplayIdByDisplayNameSnapshot();
     }
 
-    private static SafeFileHandle? OpenSudoVdaDevice(out string diagnostic)
+    internal static SafeFileHandle? OpenSudoVdaDevice(out string diagnostic)
     {
         Guid interfaceGuid = SudoVdaInterfaceGuid;
         IntPtr deviceInfoSet = NativeMethods.SetupDiGetClassDevs(
@@ -1051,6 +1084,42 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
         return success;
     }
 
+    internal static SudoVdaWatchdogQueryResult QuerySudoVdaWatchdog(SafeFileHandle handle)
+    {
+        bool success = NativeMethods.DeviceIoControl(
+            handle,
+            BuildSudoVdaControlCode(IoctlGetWatchdog),
+            IntPtr.Zero,
+            0,
+            out SudoVdaWatchdogOut output,
+            Marshal.SizeOf<SudoVdaWatchdogOut>(),
+            out _,
+            IntPtr.Zero);
+
+        return success
+            ? SudoVdaWatchdogQueryResult.Ok(new SudoVdaWatchdogState(output.Timeout, output.Countdown))
+            : SudoVdaWatchdogQueryResult.Fail(
+                $"Unable to read SudoVDA watchdog state. Win32={Marshal.GetLastWin32Error()}.");
+    }
+
+    internal static SudoVdaDriverOperationResult PingSudoVdaDriver(SafeFileHandle handle)
+    {
+        bool success = NativeMethods.DeviceIoControl(
+            handle,
+            BuildSudoVdaControlCode(IoctlDriverPing),
+            IntPtr.Zero,
+            0,
+            IntPtr.Zero,
+            0,
+            out _,
+            IntPtr.Zero);
+
+        return success
+            ? SudoVdaDriverOperationResult.Ok()
+            : SudoVdaDriverOperationResult.Fail(
+                $"SudoVDA heartbeat was not acknowledged. Win32={Marshal.GetLastWin32Error()}.");
+    }
+
     private static class NativeMethods
     {
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -1116,6 +1185,30 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
             IntPtr inBuffer,
             int inBufferSize,
             out SudoVdaProtocolVersionOut outBuffer,
+            int outBufferSize,
+            out uint bytesReturned,
+            IntPtr overlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool DeviceIoControl(
+            SafeFileHandle device,
+            uint ioControlCode,
+            IntPtr inBuffer,
+            int inBufferSize,
+            out SudoVdaWatchdogOut outBuffer,
+            int outBufferSize,
+            out uint bytesReturned,
+            IntPtr overlapped);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool DeviceIoControl(
+            SafeFileHandle device,
+            uint ioControlCode,
+            IntPtr inBuffer,
+            int inBufferSize,
+            IntPtr outBuffer,
             int outBufferSize,
             out uint bytesReturned,
             IntPtr overlapped);
@@ -1284,6 +1377,13 @@ public sealed class WindowsDisplayApi : IWindowsDisplayApi
     private struct SudoVdaProtocolVersionOut
     {
         public SudoVdaProtocolVersion Version;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SudoVdaWatchdogOut
+    {
+        public uint Timeout;
+        public uint Countdown;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]

@@ -4,6 +4,8 @@ public abstract record DisplayProbeCommand;
 
 public sealed record StatusDisplayProbeCommand : DisplayProbeCommand;
 
+public sealed record DriverSessionDisplayProbeCommand : DisplayProbeCommand;
+
 public sealed record PrepareDisplayProbeCommand(
     string ClientId,
     int Width,
@@ -38,6 +40,7 @@ public static class DisplayProbeCommandLine
         return args[0].ToLowerInvariant() switch
         {
             "status" => new StatusDisplayProbeCommand(),
+            "driver-session" => new DriverSessionDisplayProbeCommand(),
             "prepare" => ParsePrepare(args),
             "ensure" => ParseEnsure(args),
             "primary" => new PrimaryDisplayProbeCommand(ReadRequiredOption(args, "--client")),
