@@ -386,11 +386,12 @@ public final class BeaconStreamCoreTest {
     public void frameDeliveryDoesNotFabricateQueueDepthFeedback() throws Exception {
         RecordingBindings bindings = new RecordingBindings();
         AtomicInteger order = new AtomicInteger();
+        AtomicReference<Integer> frameOrder = new AtomicReference<>();
         CountDownLatch frameDelivered = new CountDownLatch(1);
         BeaconStreamCore core = new BeaconStreamCore(
             bindings,
             frame -> {
-                assertEquals(1, order.incrementAndGet());
+                frameOrder.set(order.incrementAndGet());
                 frameDelivered.countDown();
             },
             Executors.newSingleThreadExecutor());
@@ -400,6 +401,7 @@ public final class BeaconStreamCoreTest {
         frameDelivered.await();
         assertEquals(-1, bindings.lastQueuedAccessUnits);
         assertEquals(-1, bindings.lastDroppedAccessUnits);
+        assertEquals(Integer.valueOf(1), frameOrder.get());
         assertEquals(1, order.get());
         core.close();
     }
@@ -410,15 +412,17 @@ public final class BeaconStreamCoreTest {
         CountDownLatch frameDelivered = new CountDownLatch(1);
         CountDownLatch observerCalled = new CountDownLatch(1);
         AtomicInteger order = new AtomicInteger();
+        AtomicReference<Integer> frameOrder = new AtomicReference<>();
+        AtomicReference<Integer> observerOrder = new AtomicReference<>();
         BeaconStreamCore core = new BeaconStreamCore(
             bindings,
             frame -> {
-                assertEquals(1, order.incrementAndGet());
+                frameOrder.set(order.incrementAndGet());
                 frameDelivered.countDown();
             },
             Executors.newSingleThreadExecutor(),
             () -> {
-                assertEquals(3, order.incrementAndGet());
+                observerOrder.set(order.incrementAndGet());
                 observerCalled.countDown();
             });
         bindings.feedbackOrder = order;
@@ -429,6 +433,8 @@ public final class BeaconStreamCoreTest {
         core.sendQueueDepthFeedback(1, 0, 0);
         observerCalled.await();
 
+        assertEquals(Integer.valueOf(1), frameOrder.get());
+        assertEquals(Integer.valueOf(3), observerOrder.get());
         assertEquals(3, order.get());
         core.close();
     }

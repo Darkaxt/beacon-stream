@@ -31,6 +31,15 @@ android {
             jniLibs.srcDir 'build/generated/jniLibs/release'
         }
     }
+
+    testOptions {
+        unitTests.all {
+            testLogging {
+                events 'started', 'passed', 'skipped', 'failed'
+                exceptionFormat 'full'
+            }
+        }
+    }
 }
 
 def repositoryRoot = rootProject.projectDir.toPath().resolve('../..').normalize().toFile()
