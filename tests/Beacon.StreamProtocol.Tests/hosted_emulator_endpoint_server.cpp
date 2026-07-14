@@ -614,7 +614,8 @@ private:
             stop_accepted = true;
           }
         }
-        if (output.close_connection) {
+        if (output.connection_disposition ==
+            ServerConnectionDisposition::protocol_failure) {
           set_failure_locked(HostedEmulatorEndpointFailure::protocol);
           protocol_failed = true;
         }
@@ -625,7 +626,7 @@ private:
     bool reply_failed = false;
     for (std::size_t index = 0; index < output.session_replies.size();
          ++index) {
-      const bool close_after = output.close_connection &&
+      const bool close_after = output.should_close_connection() &&
                                index + 1U == output.session_replies.size();
       if (!send_session_reply(stream, std::move(output.session_replies[index]),
                               close_after)) {
@@ -638,7 +639,7 @@ private:
                       22);
       return;
     }
-    if (protocol_failed && output.close_connection &&
+    if (protocol_failed && output.should_close_connection() &&
         !output.session_replies.empty()) {
       return;
     }

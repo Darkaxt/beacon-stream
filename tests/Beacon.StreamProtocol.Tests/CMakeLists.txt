@@ -58,6 +58,35 @@ target_compile_definitions(
 target_link_libraries(BeaconAccessUnitVectorTests PRIVATE Beacon::StreamProtocol)
 add_test(NAME BeaconStreamProtocol.AccessUnitVector COMMAND BeaconAccessUnitVectorTests)
 
+if(WIN32)
+  add_executable(
+    BeaconAndroidStreamCoreHostTests
+    ../../src/Beacon.Android/app/src/main/cpp/streamcore/benchmark_collector.cpp
+    ../../src/Beacon.Android/app/src/main/cpp/streamcore/stream_core.cpp
+    ../../src/Beacon.Android/app/src/main/cpp/streamcore/tests/stream_core_tests.cpp
+  )
+  target_include_directories(
+    BeaconAndroidStreamCoreHostTests
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ../../src/Beacon.Android/app/src/main/cpp/streamcore
+  )
+  target_link_libraries(
+    BeaconAndroidStreamCoreHostTests
+    PRIVATE
+      Beacon::StreamContracts
+      Beacon::StreamProtocol
+  )
+  target_compile_options(
+    BeaconAndroidStreamCoreHostTests
+    PRIVATE /W4 /WX /permissive-
+  )
+  add_test(
+    NAME BeaconAndroid.StreamCoreHost
+    COMMAND BeaconAndroidStreamCoreHostTests
+  )
+endif()
+
 if(ANDROID)
   add_executable(
     BeaconAndroidStreamCoreTests

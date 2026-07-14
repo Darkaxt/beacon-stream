@@ -61,6 +61,7 @@ class MsQuicClient final : public Transport {
   bool connect(const Endpoint &endpoint) override;
   bool open_stream(StreamRole role) override;
   bool send(StreamRole role, std::vector<std::byte> bytes) override;
+  bool send_final(StreamRole role, std::vector<std::byte> bytes) override;
   void shutdown() override;
   void release() override;
   void report_local_failure(std::uint64_t generation) noexcept;

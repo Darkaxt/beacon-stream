@@ -24,6 +24,12 @@ enum class QuicPeerStreamRole {
   invalid,
 };
 
+enum class ServerConnectionDisposition {
+  keep_open,
+  protocol_failure,
+  session_complete,
+};
+
 struct ServerSessionProtocolOutput {
   struct AcceptedAuthentication {
     std::string session_id;
@@ -75,7 +81,8 @@ struct ServerSessionProtocolOutput {
     stream::v1::FeedbackStreamEnvelope feedback;
   };
 
-  bool close_connection{};
+  ServerConnectionDisposition connection_disposition{
+      ServerConnectionDisposition::keep_open};
   bool stale_callback{};
   std::vector<std::vector<std::byte>> session_replies;
   std::vector<TransportPacket> packets;
@@ -83,6 +90,10 @@ struct ServerSessionProtocolOutput {
   std::vector<AcceptedSessionAction> accepted_session_actions;
   std::vector<ParsedInput> inputs;
   std::vector<ParsedFeedback> feedback;
+
+  [[nodiscard]] bool should_close_connection() const noexcept {
+    return connection_disposition != ServerConnectionDisposition::keep_open;
+  }
 };
 
 [[nodiscard]] QuicPeerStreamRole

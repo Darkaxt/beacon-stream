@@ -824,6 +824,8 @@ private:
                   std::is_same_v<
                       Action, stream::ServerSessionProtocolOutput::
                                   AcceptedStopSession>) {
+                accepted_benchmark.reset();
+                benchmark_source_.cancel();
                 append_pending_media_event(accepted);
               } else if constexpr (
                   std::is_same_v<
@@ -860,8 +862,8 @@ private:
     bool reply_failed = false;
     for (std::size_t index = 0; index < output.session_replies.size();
          ++index) {
-      const bool close_after =
-          output.close_connection && index + 1 == output.session_replies.size();
+      const bool close_after = output.should_close_connection() &&
+                               index + 1 == output.session_replies.size();
       if (!send_session_reply(stream, std::move(output.session_replies[index]),
                               close_after)) {
         reply_failed = true;
@@ -869,7 +871,7 @@ private:
       }
     }
     if (reply_failed ||
-        (output.close_connection && output.session_replies.empty())) {
+        (output.should_close_connection() && output.session_replies.empty())) {
       api_->ConnectionShutdown(connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE,
                                3);
     }

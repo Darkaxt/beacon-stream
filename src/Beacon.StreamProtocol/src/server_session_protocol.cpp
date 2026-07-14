@@ -169,7 +169,8 @@ ServerSessionProtocol::receive(QuicPeerStreamRole role,
     buffered = &feedback_bytes_;
     break;
   case QuicPeerStreamRole::invalid:
-    output.close_connection = true;
+    output.connection_disposition =
+        ServerConnectionDisposition::protocol_failure;
     clear_stream_bytes();
     return output;
   }
@@ -177,7 +178,8 @@ ServerSessionProtocol::receive(QuicPeerStreamRole role,
       maximum_stream_message_bytes + 4U;
   if (bytes.size() > maximum_buffered_bytes ||
       buffered->size() > maximum_buffered_bytes - bytes.size()) {
-    output.close_connection = true;
+    output.connection_disposition =
+        ServerConnectionDisposition::protocol_failure;
     clear_stream_bytes();
     return output;
   }
@@ -187,7 +189,8 @@ ServerSessionProtocol::receive(QuicPeerStreamRole role,
     const auto message_bytes =
         read_u32(std::span<const std::byte, 4>{buffered->data(), 4});
     if (message_bytes == 0 || message_bytes > maximum_stream_message_bytes) {
-      output.close_connection = true;
+      output.connection_disposition =
+          ServerConnectionDisposition::protocol_failure;
       clear_stream_bytes();
       return output;
     }
@@ -253,7 +256,8 @@ ServerSessionProtocol::receive(QuicPeerStreamRole role,
                       .session_generation = current_generation_,
                       .maximum_datagram_bytes = maximum_datagram_bytes_};
             } else {
-              output.close_connection = true;
+              output.connection_disposition =
+                  ServerConnectionDisposition::protocol_failure;
             }
           }
         }
@@ -286,7 +290,7 @@ ServerSessionProtocol::receive(QuicPeerStreamRole role,
                   message.cancel_benchmark().run_id() == benchmark_run_id_;
         } else if (valid &&
                    body == stream_v1::SessionStreamEnvelope::kStopSession) {
-          valid = started_ && benchmark_run_id_.empty() &&
+          valid = started_ &&
                   message.stop_session().reason() !=
                       stream_v1::SESSION_STOP_REASON_UNSPECIFIED;
         } else if (valid &&
@@ -329,6 +333,9 @@ ServerSessionProtocol::receive(QuicPeerStreamRole role,
                     .session_generation = current_generation_,
                     .stop_session = message.stop_session()});
             started_ = false;
+            benchmark_run_id_.clear();
+            output.connection_disposition =
+                ServerConnectionDisposition::session_complete;
           } else if (body == stream_v1::SessionStreamEnvelope::kRequestIdr) {
             output.accepted_session_actions.emplace_back(
                 ServerSessionProtocolOutput::AcceptedIdrRequest{
@@ -380,11 +387,12 @@ ServerSessionProtocol::receive(QuicPeerStreamRole role,
       }
     }
     if (!valid) {
-      output.close_connection = true;
+      output.connection_disposition =
+          ServerConnectionDisposition::protocol_failure;
       clear_stream_bytes();
       return output;
     }
-    if (output.close_connection) {
+    if (output.should_close_connection()) {
       clear_stream_bytes();
       return output;
     }

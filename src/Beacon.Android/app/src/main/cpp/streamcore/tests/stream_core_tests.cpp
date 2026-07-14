@@ -53,6 +53,12 @@ struct FakeTransport final : android_stream::Transport {
     sends.push_back({role, std::move(bytes)});
     return true;
   }
+  bool send_final(android_stream::StreamRole role,
+                  std::vector<std::byte> bytes) override {
+    if (throw_on_send) throw std::runtime_error("injected send failure");
+    final_sends.push_back({role, std::move(bytes)});
+    return true;
+  }
   void shutdown() override {
     ++shutdown_count;
     if (throw_on_shutdown) throw std::runtime_error("injected shutdown failure");
@@ -62,6 +68,7 @@ struct FakeTransport final : android_stream::Transport {
   android_stream::Endpoint endpoint;
   std::vector<android_stream::StreamRole> opened;
   std::vector<Send> sends;
+  std::vector<Send> final_sends;
   int shutdown_count{};
   int release_count{};
   int connect_count{};
@@ -175,6 +182,27 @@ std::vector<std::byte> accepted_reply(std::uint64_t sequence = 1) {
   bytes[3] = static_cast<std::byte>(size);
   BEACON_TEST_REQUIRE(reply.SerializeToArray(bytes.data() + 4, static_cast<int>(size)));
   return bytes;
+}
+
+void stop_finishes_the_reliable_session_stream_before_connection_shutdown() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(grant()));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+
+  core.stop();
+
+  BEACON_TEST_REQUIRE(transport.final_sends.size() == 1);
+  BEACON_TEST_REQUIRE(transport.final_sends.front().role ==
+                      android_stream::StreamRole::session);
+  const auto stop = parse_session(transport.final_sends.front().bytes);
+  BEACON_TEST_REQUIRE(stop.body_case() ==
+                      stream_v1::SessionStreamEnvelope::kStopSession);
+  BEACON_TEST_REQUIRE(stop.stop_session().reason() ==
+                      stream_v1::SESSION_STOP_REASON_CLIENT_REQUEST);
+  BEACON_TEST_REQUIRE(transport.shutdown_count == 0);
 }
 
 std::vector<std::byte> framed_session(
@@ -365,7 +393,7 @@ void benchmark_packets_produce_echoes_and_explicit_completion_evidence() {
   BEACON_TEST_REQUIRE(!core.take_benchmark_result().has_value());
 }
 
-void benchmark_stop_cancels_and_allows_a_fresh_run() {
+void benchmark_stop_finishes_the_session() {
   FakeTransport transport;
   FakeSink sink;
   android_stream::StreamCore core(transport, sink);
@@ -375,13 +403,13 @@ void benchmark_stop_cancels_and_allows_a_fresh_run() {
 
   core.stop();
   BEACON_TEST_REQUIRE(core.state() == android_stream::State::stopped);
-  BEACON_TEST_REQUIRE(transport.sends.size() == 3);
-  const auto cancel = parse_session(transport.sends[2].bytes);
-  BEACON_TEST_REQUIRE(cancel.body_case() ==
-                      stream_v1::SessionStreamEnvelope::kCancelBenchmark);
-  BEACON_TEST_REQUIRE(cancel.cancel_benchmark().run_id() ==
-                      "11111111-1111-1111-1111-111111111111");
-  BEACON_TEST_REQUIRE(core.start(benchmark_grant()));
+  BEACON_TEST_REQUIRE(transport.sends.size() == 2);
+  BEACON_TEST_REQUIRE(transport.final_sends.size() == 1);
+  const auto stop = parse_session(transport.final_sends.front().bytes);
+  BEACON_TEST_REQUIRE(stop.body_case() ==
+                      stream_v1::SessionStreamEnvelope::kStopSession);
+  BEACON_TEST_REQUIRE(stop.stop_session().reason() ==
+                      stream_v1::SESSION_STOP_REASON_CLIENT_REQUEST);
 }
 
 void accepted_auth_forwards_every_selected_video_mode_exactly() {
@@ -441,16 +469,22 @@ void sequences_are_monotonic_per_typed_channel() {
   const auto second_input_bytes = payload(transport.sends[3].bytes);
   stream_v1::InputStreamEnvelope first_input;
   stream_v1::InputStreamEnvelope second_input;
-  BEACON_TEST_REQUIRE(first_input.ParseFromArray(first_input_bytes.data(), first_input_bytes.size()));
-  BEACON_TEST_REQUIRE(second_input.ParseFromArray(second_input_bytes.data(), second_input_bytes.size()));
+  BEACON_TEST_REQUIRE(first_input.ParseFromArray(
+      first_input_bytes.data(), static_cast<int>(first_input_bytes.size())));
+  BEACON_TEST_REQUIRE(second_input.ParseFromArray(
+      second_input_bytes.data(), static_cast<int>(second_input_bytes.size())));
   BEACON_TEST_REQUIRE(first_input.sequence() == 1 && second_input.sequence() == 2);
 
   const auto first_feedback_bytes = payload(transport.sends[4].bytes);
   const auto second_feedback_bytes = payload(transport.sends[5].bytes);
   stream_v1::FeedbackStreamEnvelope first_feedback;
   stream_v1::FeedbackStreamEnvelope second_feedback;
-  BEACON_TEST_REQUIRE(first_feedback.ParseFromArray(first_feedback_bytes.data(), first_feedback_bytes.size()));
-  BEACON_TEST_REQUIRE(second_feedback.ParseFromArray(second_feedback_bytes.data(), second_feedback_bytes.size()));
+  BEACON_TEST_REQUIRE(first_feedback.ParseFromArray(
+      first_feedback_bytes.data(),
+      static_cast<int>(first_feedback_bytes.size())));
+  BEACON_TEST_REQUIRE(second_feedback.ParseFromArray(
+      second_feedback_bytes.data(),
+      static_cast<int>(second_feedback_bytes.size())));
   BEACON_TEST_REQUIRE(first_feedback.sequence() == 1 && second_feedback.sequence() == 2);
 }
 
@@ -618,6 +652,7 @@ void close_faults_never_skip_transport_release() {
     BEACON_TEST_REQUIRE(core.on_connected());
     BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
     sink.throw_on_state = true;
+    transport.throw_on_send = true;
     transport.throw_on_shutdown = true;
     core.release();
     core.release();
@@ -723,7 +758,8 @@ int main() {
     accepted_auth_starts_selected_video();
     accepted_auth_starts_benchmark_without_starting_video();
     benchmark_packets_produce_echoes_and_explicit_completion_evidence();
-    benchmark_stop_cancels_and_allows_a_fresh_run();
+    benchmark_stop_finishes_the_session();
+    stop_finishes_the_reliable_session_stream_before_connection_shutdown();
     accepted_auth_forwards_every_selected_video_mode_exactly();
     sequences_are_monotonic_per_typed_channel();
     decoder_feedback_and_reset_requests_preserve_typed_payloads();

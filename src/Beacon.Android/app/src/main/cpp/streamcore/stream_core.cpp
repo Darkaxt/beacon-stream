@@ -411,6 +411,7 @@ void StreamCore::stop() noexcept {
   if (state_ == State::released || state_ == State::stopped) {
     return;
   }
+  bool terminal_send_queued = false;
   if (state_ == State::streaming || state_ == State::benchmarking) {
     try {
 #ifndef NDEBUG
@@ -420,22 +421,18 @@ void StreamCore::stop() noexcept {
       envelope.set_protocol_version(1);
       envelope.set_session_id(grant_.session_id);
       envelope.set_sequence(++session_sequence_);
-      if (state_ == State::benchmarking && grant_.benchmark.has_value()) {
-        envelope.mutable_cancel_benchmark()->set_run_id(
-            grant_.benchmark->run_id);
-      } else {
-        envelope.mutable_stop_session()->set_reason(
-            stream_v1::SESSION_STOP_REASON_CLIENT_REQUEST);
-      }
+      envelope.mutable_stop_session()->set_reason(
+          stream_v1::SESSION_STOP_REASON_CLIENT_REQUEST);
 #ifndef NDEBUG
       inject_close_fault(CloseFaultPoint::stop_serialization);
 #endif
-      transport_.send(StreamRole::session, frame_message(envelope));
+      terminal_send_queued = transport_.send_final(
+          StreamRole::session, frame_message(envelope));
     } catch (...) {
     }
   }
   benchmark_collector_.cancel();
-  if (!shutdown_) {
+  if (!terminal_send_queued && !shutdown_) {
     shutdown_ = true;
     try {
       transport_.shutdown();

@@ -121,6 +121,7 @@ class Transport {
   virtual bool connect(const Endpoint &endpoint) = 0;
   virtual bool open_stream(StreamRole role) = 0;
   virtual bool send(StreamRole role, std::vector<std::byte> bytes) = 0;
+  virtual bool send_final(StreamRole role, std::vector<std::byte> bytes) = 0;
   virtual void shutdown() = 0;
   virtual void release() = 0;
 };

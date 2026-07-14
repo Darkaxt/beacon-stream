@@ -20,6 +20,7 @@
 namespace {
 
 using beacon::stream::QuicPeerStreamRole;
+using beacon::stream::ServerConnectionDisposition;
 using QuicSessionProtocol = beacon::stream::ServerSessionProtocol;
 using QuicSessionProtocolOutput = beacon::stream::ServerSessionProtocolOutput;
 namespace stream_v1 = beacon::stream::v1;
@@ -40,6 +41,16 @@ const Action *accepted_action(const QuicSessionProtocolOutput &output) {
     }
   }
   return nullptr;
+}
+
+bool kept_open(const QuicSessionProtocolOutput &output) {
+  return output.connection_disposition ==
+         ServerConnectionDisposition::keep_open;
+}
+
+bool protocol_failed(const QuicSessionProtocolOutput &output) {
+  return output.connection_disposition ==
+         ServerConnectionDisposition::protocol_failure;
 }
 
 std::span<const std::byte> bytes(std::string_view value) {
@@ -289,7 +300,7 @@ void fragmented_authentication_consumes_ticket_and_returns_negotiated_limit() {
   const auto second = protocol.receive(QuicPeerStreamRole::session,
                                        std::span{bytes}.subspan(3), 1'000);
 
-  BEACON_TEST_REQUIRE(!first.close_connection);
+  BEACON_TEST_REQUIRE(kept_open(first));
   BEACON_TEST_REQUIRE(first.session_replies.empty());
   BEACON_TEST_REQUIRE(protocol.authenticated());
   const auto reply = reply_from(second);
@@ -317,7 +328,7 @@ void replay_and_version_mismatch_return_typed_rejections() {
   const auto replayed =
       replay.receive(QuicPeerStreamRole::session,
                      frame(authenticate("raw-ticket-replay")), 1'000);
-  BEACON_TEST_REQUIRE(replayed.close_connection);
+  BEACON_TEST_REQUIRE(protocol_failed(replayed));
   BEACON_TEST_REQUIRE(
       reply_from(replayed).session_authenticated().error_code() ==
       stream_v1::SESSION_ERROR_CODE_TICKET_REPLAYED);
@@ -327,7 +338,7 @@ void replay_and_version_mismatch_return_typed_rejections() {
   QuicSessionProtocol version(store);
   const auto rejected =
       version.receive(QuicPeerStreamRole::session, frame(wrong_version), 1'000);
-  BEACON_TEST_REQUIRE(rejected.close_connection);
+  BEACON_TEST_REQUIRE(protocol_failed(rejected));
   BEACON_TEST_REQUIRE(
       reply_from(rejected).session_authenticated().error_code() ==
       stream_v1::SESSION_ERROR_CODE_UNSUPPORTED_VERSION);
@@ -339,8 +350,7 @@ void authenticated_streams_are_routed_independently() {
   QuicSessionProtocol protocol(store);
   const auto auth = frame(authenticate("raw-ticket-routes"));
   BEACON_TEST_REQUIRE(
-      !protocol.receive(QuicPeerStreamRole::session, auth, 1'000)
-           .close_connection);
+      kept_open(protocol.receive(QuicPeerStreamRole::session, auth, 1'000)));
   const auto started = protocol.receive(QuicPeerStreamRole::session,
                                         frame(start_session(2)), 1'000);
   BEACON_TEST_REQUIRE(accepted_action<AcceptedStartSession>(started) !=
@@ -401,30 +411,25 @@ void idr_requests_require_an_active_media_session_and_typed_reason() {
   BEACON_TEST_REQUIRE(
       before_start_store.authorize(grant("raw-ticket-idr-before-start")));
   QuicSessionProtocol before_start(before_start_store);
-  BEACON_TEST_REQUIRE(
-      !before_start
-           .receive(QuicPeerStreamRole::session,
-                    frame(authenticate("raw-ticket-idr-before-start")), 1'000)
-           .close_connection);
+  BEACON_TEST_REQUIRE(kept_open(before_start.receive(
+      QuicPeerStreamRole::session,
+      frame(authenticate("raw-ticket-idr-before-start")), 1'000)));
   stream_v1::SessionStreamEnvelope premature;
   premature.set_protocol_version(1);
   premature.set_session_id("session-a");
   premature.set_sequence(2);
   premature.mutable_request_idr()->set_reason(
       stream_v1::IDR_REQUEST_REASON_DATAGRAM_LOSS);
-  BEACON_TEST_REQUIRE(
-      before_start.receive(QuicPeerStreamRole::session, frame(premature), 1'000)
-          .close_connection);
+  BEACON_TEST_REQUIRE(protocol_failed(before_start.receive(
+      QuicPeerStreamRole::session, frame(premature), 1'000)));
 
   AuthorizedQuicTicketStore unspecified_store;
   BEACON_TEST_REQUIRE(
       unspecified_store.authorize(grant("raw-ticket-idr-unspecified")));
   QuicSessionProtocol unspecified(unspecified_store);
-  BEACON_TEST_REQUIRE(
-      !unspecified
-           .receive(QuicPeerStreamRole::session,
-                    frame(authenticate("raw-ticket-idr-unspecified")), 1'000)
-           .close_connection);
+  BEACON_TEST_REQUIRE(kept_open(unspecified.receive(
+      QuicPeerStreamRole::session,
+      frame(authenticate("raw-ticket-idr-unspecified")), 1'000)));
   const auto started = unspecified.receive(QuicPeerStreamRole::session,
                                            frame(start_session(2)), 1'000);
   BEACON_TEST_REQUIRE(accepted_action<AcceptedStartSession>(started) !=
@@ -434,9 +439,8 @@ void idr_requests_require_an_active_media_session_and_typed_reason() {
   invalid.set_session_id("session-a");
   invalid.set_sequence(3);
   invalid.mutable_request_idr();
-  BEACON_TEST_REQUIRE(
-      unspecified.receive(QuicPeerStreamRole::session, frame(invalid), 1'000)
-          .close_connection);
+  BEACON_TEST_REQUIRE(protocol_failed(unspecified.receive(
+      QuicPeerStreamRole::session, frame(invalid), 1'000)));
 }
 
 void start_session_is_typed_once_per_authenticated_generation() {
@@ -495,7 +499,7 @@ void start_session_must_match_every_authorized_video_field() {
     const auto rejected = protocol.receive(
         QuicPeerStreamRole::session, frame(start), 1'001);
 
-    BEACON_TEST_REQUIRE(rejected.close_connection);
+    BEACON_TEST_REQUIRE(protocol_failed(rejected));
     BEACON_TEST_REQUIRE(
         accepted_action<AcceptedStartSession>(rejected) == nullptr);
   }
@@ -523,6 +527,9 @@ void stop_session_clears_active_state_before_another_idr_request() {
   BEACON_TEST_REQUIRE(accepted_stop->session_generation == 1);
   BEACON_TEST_REQUIRE(accepted_stop->stop_session.reason() ==
                       stream_v1::SESSION_STOP_REASON_CLIENT_REQUEST);
+  BEACON_TEST_REQUIRE(
+      stopped.connection_disposition ==
+      ServerConnectionDisposition::session_complete);
 
   stream_v1::SessionStreamEnvelope idr;
   idr.set_protocol_version(1);
@@ -530,9 +537,8 @@ void stop_session_clears_active_state_before_another_idr_request() {
   idr.set_sequence(4);
   idr.mutable_request_idr()->set_reason(
       stream_v1::IDR_REQUEST_REASON_DATAGRAM_LOSS);
-  BEACON_TEST_REQUIRE(
-      protocol.receive(QuicPeerStreamRole::session, frame(idr), 1'003)
-          .close_connection);
+  BEACON_TEST_REQUIRE(protocol_failed(protocol.receive(
+      QuicPeerStreamRole::session, frame(idr), 1'003)));
 }
 
 void coalesced_session_actions_preserve_protocol_order() {
@@ -555,7 +561,9 @@ void coalesced_session_actions_preserve_protocol_order() {
   const auto output =
       protocol.receive(QuicPeerStreamRole::session, bytes, 1'001);
 
-  BEACON_TEST_REQUIRE(!output.close_connection);
+  BEACON_TEST_REQUIRE(
+      output.connection_disposition ==
+      ServerConnectionDisposition::session_complete);
   BEACON_TEST_REQUIRE(output.accepted_session_actions.size() == 3);
   BEACON_TEST_REQUIRE(
       std::holds_alternative<
@@ -587,7 +595,7 @@ void benchmark_start_and_cancel_are_typed_for_the_authenticated_generation() {
 
   auto started = protocol.receive(QuicPeerStreamRole::session,
                                   frame(start_benchmark(2)), 1'001);
-  BEACON_TEST_REQUIRE(!started.close_connection);
+  BEACON_TEST_REQUIRE(kept_open(started));
   const auto *accepted_start = accepted_action<AcceptedStartBenchmark>(started);
   BEACON_TEST_REQUIRE(accepted_start != nullptr);
   BEACON_TEST_REQUIRE(
@@ -601,7 +609,7 @@ void benchmark_start_and_cancel_are_typed_for_the_authenticated_generation() {
 
   auto canceled = protocol.receive(QuicPeerStreamRole::session,
                                    frame(cancel_benchmark(3)), 1'002);
-  BEACON_TEST_REQUIRE(!canceled.close_connection);
+  BEACON_TEST_REQUIRE(kept_open(canceled));
   const auto *accepted_cancel =
       accepted_action<AcceptedCancelBenchmark>(canceled);
   BEACON_TEST_REQUIRE(accepted_cancel != nullptr);
@@ -610,6 +618,33 @@ void benchmark_start_and_cancel_are_typed_for_the_authenticated_generation() {
       authenticated.accepted_authentication->session_generation);
   BEACON_TEST_REQUIRE(accepted_cancel->cancel_benchmark.run_id() ==
                       "11111111-1111-1111-1111-111111111111");
+}
+
+void benchmark_stop_is_a_terminal_session_action() {
+  AuthorizedQuicTicketStore store;
+  auto authorization = grant("benchmark-stop-ticket");
+  authorization.selected_video.reset();
+  authorization.benchmark_plan = start_benchmark(2).start_benchmark();
+  BEACON_TEST_REQUIRE(store.authorize(std::move(authorization)));
+  QuicSessionProtocol protocol(store);
+  protocol.set_maximum_datagram_bytes(1200);
+  BEACON_TEST_REQUIRE(protocol
+                          .receive(QuicPeerStreamRole::session,
+                                   frame(authenticate("benchmark-stop-ticket")),
+                                   1'000)
+                          .accepted_authentication.has_value());
+  BEACON_TEST_REQUIRE(
+      accepted_action<AcceptedStartBenchmark>(protocol.receive(
+          QuicPeerStreamRole::session, frame(start_benchmark(2)), 1'001)) !=
+      nullptr);
+
+  const auto stopped = protocol.receive(
+      QuicPeerStreamRole::session, frame(stop_session(3)), 1'002);
+
+  BEACON_TEST_REQUIRE(
+      stopped.connection_disposition ==
+      ServerConnectionDisposition::session_complete);
+  BEACON_TEST_REQUIRE(accepted_action<AcceptedStopSession>(stopped) != nullptr);
 }
 
 void benchmark_start_must_match_the_worker_authorized_plan() {
@@ -632,7 +667,7 @@ void benchmark_start_must_match_the_worker_authorized_plan() {
       ->set_packet_count(9);
   auto rejected =
       protocol.receive(QuicPeerStreamRole::session, frame(modified), 1'001);
-  BEACON_TEST_REQUIRE(rejected.close_connection);
+  BEACON_TEST_REQUIRE(protocol_failed(rejected));
   BEACON_TEST_REQUIRE(accepted_action<AcceptedStartBenchmark>(rejected) ==
                       nullptr);
 }
@@ -743,17 +778,15 @@ void oversized_partial_authentication_is_wiped_before_buffer_reuse() {
   QuicSessionProtocol protocol(store, observe_protocol_wipe, &observation);
   const std::array partial_auth{std::byte{0x01}, std::byte{0x7f},
                                 std::byte{0x55}};
-  BEACON_TEST_REQUIRE(
-      !protocol.receive(QuicPeerStreamRole::session, partial_auth, 1'000)
-           .close_connection);
+  BEACON_TEST_REQUIRE(kept_open(protocol.receive(
+      QuicPeerStreamRole::session, partial_auth, 1'000)));
 
   const std::vector oversized(
       static_cast<std::size_t>(beacon::stream::maximum_stream_message_bytes) +
           5U,
       std::byte{0x33});
-  BEACON_TEST_REQUIRE(
-      protocol.receive(QuicPeerStreamRole::session, oversized, 1'000)
-          .close_connection);
+  BEACON_TEST_REQUIRE(protocol_failed(protocol.receive(
+      QuicPeerStreamRole::session, oversized, 1'000)));
   BEACON_TEST_REQUIRE(observation.nonempty_wipes == 1);
   BEACON_TEST_REQUIRE(observation.all_zero);
 }
@@ -764,16 +797,14 @@ void malformed_authentication_is_wiped_before_logical_clear() {
   QuicSessionProtocol protocol(store, observe_protocol_wipe, &observation);
   const std::array malformed_length{std::byte{0x00}, std::byte{0x00},
                                     std::byte{0x00}, std::byte{0x00}};
-  BEACON_TEST_REQUIRE(
-      protocol.receive(QuicPeerStreamRole::session, malformed_length, 1'000)
-          .close_connection);
+  BEACON_TEST_REQUIRE(protocol_failed(protocol.receive(
+      QuicPeerStreamRole::session, malformed_length, 1'000)));
 
   const std::array malformed_frame{std::byte{0x00}, std::byte{0x00},
                                    std::byte{0x00}, std::byte{0x01},
                                    std::byte{0xff}};
-  BEACON_TEST_REQUIRE(
-      protocol.receive(QuicPeerStreamRole::session, malformed_frame, 1'000)
-          .close_connection);
+  BEACON_TEST_REQUIRE(protocol_failed(protocol.receive(
+      QuicPeerStreamRole::session, malformed_frame, 1'000)));
   BEACON_TEST_REQUIRE(observation.nonempty_wipes == 2);
   BEACON_TEST_REQUIRE(observation.all_zero);
 }
@@ -786,16 +817,14 @@ void unauthenticated_data_and_oversized_frames_fail_closed() {
   input.set_session_id("session-a");
   input.set_sequence(1);
   input.mutable_input_batch();
-  BEACON_TEST_REQUIRE(
-      protocol.receive(QuicPeerStreamRole::input, frame(input), 1'000)
-          .close_connection);
+  BEACON_TEST_REQUIRE(protocol_failed(protocol.receive(
+      QuicPeerStreamRole::input, frame(input), 1'000)));
 
   protocol.reset();
   const std::array<std::byte, 4> oversized{std::byte{0}, std::byte{0x10},
                                            std::byte{0}, std::byte{1}};
-  BEACON_TEST_REQUIRE(
-      protocol.receive(QuicPeerStreamRole::session, oversized, 1'000)
-          .close_connection);
+  BEACON_TEST_REQUIRE(protocol_failed(protocol.receive(
+      QuicPeerStreamRole::session, oversized, 1'000)));
 }
 
 } // namespace
@@ -812,6 +841,7 @@ int main() {
     stop_session_clears_active_state_before_another_idr_request();
     coalesced_session_actions_preserve_protocol_order();
     benchmark_start_and_cancel_are_typed_for_the_authenticated_generation();
+    benchmark_stop_is_a_terminal_session_action();
     benchmark_start_must_match_the_worker_authorized_plan();
     reset_and_fresh_authentication_allocate_a_new_generation();
     stale_old_connection_receive_does_not_touch_current_protocol_state();
