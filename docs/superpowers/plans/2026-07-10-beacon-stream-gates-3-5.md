@@ -499,7 +499,7 @@ this task did not inspect or alter that shared runtime.
   removal and physical-primary restore.
 - [x] Prove Worker crash reports failure without stranding display ownership and allows an
   explicit/reconnect-driven Worker restart.
-- [ ] Commit: `feat: complete Beacon stream session transaction`
+- [x] Commit: `feat: complete Beacon stream session transaction`
 
 ### Task 20: Gate 5 Full Dynamic Acceptance
 

@@ -809,10 +809,7 @@ public static class ClientEndpoints
             string clientId,
             InMemoryClientStore clients,
             InMemorySessionStore sessions,
-            DisplayLeaseManager leases,
-            IStreamingBackend streaming,
-            ISessionOwnershipTracker ownership,
-            StreamTicketProvisioningService ticketProvisioning,
+            StreamSessionReconnectService reconnectService,
             BeaconServerIdentity serverIdentity,
             CancellationToken cancellationToken) =>
         {
@@ -830,100 +827,30 @@ public static class ClientEndpoints
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
-            StreamingSessionState? streamingSession = await streaming.GetSessionAsync(
-                plan.SessionId,
-                cancellationToken);
-            bool restartRequired = !IsActiveRuntime(streamingSession);
-            if (restartRequired)
-            {
-                SessionOwnershipSnapshot? ownershipSnapshot = await ownership.GetSnapshotAsync(
-                    plan.SessionId,
-                    cancellationToken);
-                if (ownershipSnapshot is null)
-                {
-                    return Results.Problem(
-                        $"Stream session '{plan.SessionId}' has no active streaming runtime or launched-session ownership.",
-                        statusCode: StatusCodes.Status503ServiceUnavailable);
-                }
-
-                StreamingPreflightResult preflight = await streaming.CheckReadinessAsync(
-                    plan,
-                    cancellationToken);
-                if (!preflight.Success)
-                {
-                    return Results.Problem(
-                        preflight.Error ?? "Streaming runtime preflight failed.",
-                        statusCode: StatusCodes.Status503ServiceUnavailable);
-                }
-            }
-
-            DisplayLeaseResult leaseResult = await leases.PrepareLeaseAsync(profile, cancellationToken);
-            if (!leaseResult.Success || leaseResult.Lease is null)
-            {
-                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
-            }
-
-            if (restartRequired)
-            {
-                StreamingStartResult restarted = await streaming.StartAsync(plan, cancellationToken);
-                if (!restarted.Success || !IsActiveRuntime(restarted.Session))
-                {
-                    return Results.Problem(
-                        restarted.Error ?? $"Stream session '{plan.SessionId}' restart did not publish an active runtime.",
-                        statusCode: StatusCodes.Status503ServiceUnavailable);
-                }
-
-                streamingSession = restarted.Session;
-            }
-            StreamingSessionState activeStreamingSession = streamingSession!;
-
-            StreamTicketProvisioningResult ticketResult = await ticketProvisioning.ProvisionAsync(
+            StreamSessionReconnectResult reconnect = await reconnectService.ReconnectAsync(
                 clientId,
-                plan.SessionId,
-                plan.Revision,
+                profile,
+                plan,
                 cancellationToken);
-            if (!ticketResult.Success || ticketResult.Ticket is null)
+            if (!reconnect.Success
+                || reconnect.Lease is null
+                || reconnect.Stream is null
+                || reconnect.Ticket is null)
             {
-                string detail = ticketResult.Error ?? "Reconnect ticket provisioning failed.";
-                if (restartRequired)
-                {
-                    detail += await StopReconnectRuntimeAsync(
-                        streaming,
-                        plan.SessionId,
-                        activeStreamingSession.RuntimeGeneration,
-                        "fresh ticket provisioning failure");
-                }
                 return Results.Problem(
-                    detail,
+                    reconnect.Error ?? "Reconnect transaction failed.",
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
-            IssuedStreamTicket replacement = ticketResult.Ticket;
-            StreamingSessionState? confirmedStreamingSession = await streaming.GetSessionAsync(
-                plan.SessionId,
-                cancellationToken);
-            if (!IsSameActiveRuntime(activeStreamingSession, confirmedStreamingSession))
-            {
-                StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
-                    clientId,
-                    plan.SessionId,
-                    cancellationToken);
-                string revocationStatus = revoked.Success
-                    ? "Reconnect ticket revoked."
-                    : $"Reconnect ticket revocation failed: {revoked.Error}";
-                return Results.Problem(
-                    $"Stream session '{plan.SessionId}' changed while provisioning reconnect ticket. " +
-                    revocationStatus,
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
+
             return Results.Ok(new
             {
                 clientId,
-                displayId = leaseResult.Lease.DisplayId,
+                displayId = reconnect.Lease.DisplayId,
                 state = "reconnected",
                 connection = CreateConnectionGrant(
                     plan,
-                    confirmedStreamingSession!,
-                    replacement,
+                    reconnect.Stream,
+                    reconnect.Ticket,
                     serverIdentity),
             });
         });
@@ -1108,42 +1035,11 @@ public static class ClientEndpoints
                 FramesPerSecondDenominator: 1,
                 DynamicRange: plan.Display.HdrMode));
 
-    private static bool IsSameActiveRuntime(
-        StreamingSessionState expected,
-        StreamingSessionState? actual) =>
-        actual is not null
-        && IsActiveRuntime(actual)
-        && string.Equals(actual.SessionId, expected.SessionId, StringComparison.Ordinal)
-        && actual.ActiveListenerPort == expected.ActiveListenerPort
-        && actual.RuntimeGeneration == expected.RuntimeGeneration;
-
     private static bool IsActiveRuntime(StreamingSessionState? session) =>
         session is not null
         && string.Equals(session.State, "running", StringComparison.Ordinal)
         && session.ActiveListenerPort is > 0 and <= 65_535
         && session.RuntimeGeneration != Guid.Empty;
-
-    private static async Task<string> StopReconnectRuntimeAsync(
-        IStreamingBackend streaming,
-        string sessionId,
-        Guid runtimeGeneration,
-        string reason)
-    {
-        try
-        {
-            StreamingStopResult stopped = await streaming.StopRuntimeAsync(
-                sessionId,
-                runtimeGeneration,
-                CancellationToken.None);
-            return stopped.Success
-                ? $" Restarted streaming runtime stopped after {reason}."
-                : $" Restarted streaming runtime stop failed after {reason}: {stopped.Error}.";
-        }
-        catch (Exception error)
-        {
-            return $" Restarted streaming runtime stop failed after {reason} ({error.GetType().Name}).";
-        }
-    }
 
     private sealed record ConnectionGrant(
         int ProtocolVersion,

@@ -51,6 +51,8 @@ public sealed class BeaconServiceRegistrationTests
         Assert.Contains("press", inputHealth.SupportedKeyboardActions);
         Assert.IsType<InMemoryClientProfileRepository>(provider.GetRequiredService<IClientProfileRepository>());
         Assert.IsType<ClientCredentialService>(provider.GetRequiredService<ClientCredentialService>());
+        Assert.NotNull(provider.GetRequiredService<StreamSessionLaunchService>());
+        Assert.NotNull(provider.GetRequiredService<StreamSessionReconnectService>());
     }
 
     [Fact]

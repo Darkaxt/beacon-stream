@@ -104,6 +104,7 @@ public static class BeaconServiceRegistration
         services.AddSingleton<StreamTicketProvisioningService>();
         services.AddSingleton<BenchmarkRuntimeOrchestrator>();
         services.AddSingleton<StreamSessionLaunchService>();
+        services.AddSingleton<StreamSessionReconnectService>();
         services.AddSingleton<InMemoryDiagnosticEventJournal>();
         services.AddSingleton<IDiagnosticEventSink>(sp =>
             sp.GetRequiredService<InMemoryDiagnosticEventJournal>());

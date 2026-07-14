@@ -40,6 +40,10 @@ used during this validation.
   actions, callback faults, and disconnect faults passed.
 - `scripts/test-stream-worker-integration.ps1`: real Beacon Worker IPC/QUIC lifecycle and
   startup-exit isolation passed.
+- Post-sync refactor extracted reconnect ownership, Worker restart, ticket, and ABA handling
+  into `StreamSessionReconnectService`; the complete validation matrix above passed again.
+- Git-tracked first-party runtime, test, native source, contract, script, and CI paths contain
+  no Apollo, Sunshine, GameStream, Moonlight, or Vibepollo references.
 
 ## Remaining Dynamic Evidence
 
