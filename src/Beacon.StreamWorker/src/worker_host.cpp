@@ -60,12 +60,14 @@ WorkerHost::WorkerHost(std::vector<std::byte> worker_instance_id,
                        std::uint32_t process_id,
                        IWorkerMediaTransport& transport,
                        AuthorizedQuicTicketStore& authorized_tickets,
-                       video::IWorkerVideoPipeline& video_pipeline)
+                       video::IWorkerVideoPipeline& video_pipeline,
+                       video::ProductionVideoCapabilities video_capabilities)
     : worker_instance_id_(std::move(worker_instance_id)),
       process_id_(process_id),
       transport_(transport),
       authorized_tickets_(authorized_tickets),
-      video_pipeline_(video_pipeline) {}
+      video_pipeline_(video_pipeline),
+      video_capabilities_(video_capabilities) {}
 
 v1::WorkerIpcEnvelope WorkerHost::hello() const {
   v1::WorkerIpcEnvelope envelope;
@@ -73,6 +75,31 @@ v1::WorkerIpcEnvelope WorkerHost::hello() const {
   auto* message = envelope.mutable_worker_hello();
   message->set_worker_instance_id(bytes_to_string(worker_instance_id_));
   message->set_process_id(process_id_);
+  return envelope;
+}
+
+v1::WorkerIpcEnvelope WorkerHost::capabilities() const {
+  v1::WorkerIpcEnvelope envelope;
+  envelope.set_protocol_version(worker_protocol_version);
+  auto* message = envelope.mutable_worker_capabilities();
+  message->set_worker_instance_id(bytes_to_string(worker_instance_id_));
+  message->add_video_codecs(v1::WORKER_VIDEO_CODEC_H264);
+  message->add_video_encoders(v1::WORKER_VIDEO_ENCODER_NVENC);
+  message->add_capture_methods(
+      v1::WORKER_CAPTURE_METHOD_WINDOWS_GRAPHICS_CAPTURE);
+  message->set_quic_datagrams(true);
+  message->set_maximum_sessions(1);
+  message->set_maximum_frames_per_second(120);
+  message->set_hdr10(false);
+  message->set_video_available(video_capabilities_.available);
+  if (!video_capabilities_.available) {
+    const auto boundary = video_capabilities_.unavailable_boundary ==
+                                  video::ProductionVideoCapabilityBoundary::capture
+                              ? v1::DIAGNOSTIC_BOUNDARY_CAPTURE
+                              : v1::DIAGNOSTIC_BOUNDARY_ENCODER;
+    message->set_video_unavailable_boundary(boundary);
+    message->set_video_unavailable_code(video_capabilities_.unavailable_code);
+  }
   return envelope;
 }
 
@@ -163,7 +190,6 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare(
   if (streaming_) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_STATE);
   }
-
   auto video_plan = worker_video_plan_from(request);
   if (!video_plan) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);

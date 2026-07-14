@@ -173,6 +173,27 @@ public sealed class ArchitectureRecoveryBoundaryTests
     }
 
     [Fact]
+    public void ProductionWorkerCapabilitiesComeFromTheIdentityBoundHandshake()
+    {
+        string root = FindRepositoryRoot();
+        string backend = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.Platform.Windows/Streaming/StreamWorkerStreamingBackend.cs"));
+        string client = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.Platform.Windows/Streaming/StreamWorkerNamedPipeClient.cs"));
+        string workerMain = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.StreamWorker/src/main.cpp"));
+
+        Assert.DoesNotContain("Encoders: [\"fake\"]", backend, StringComparison.Ordinal);
+        Assert.DoesNotContain("CaptureMethods: [\"fake\"]", backend, StringComparison.Ordinal);
+        Assert.Contains("WorkerCapabilities", client, StringComparison.Ordinal);
+        Assert.Contains("WorkerInstanceId.Equals(workerInstanceId)", client, StringComparison.Ordinal);
+        Assert.Contains("host.capabilities()", workerMain, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CompatibilityGuardUsesOneTrackedDefinitionManifest()
     {
         string root = FindRepositoryRoot();

@@ -1170,12 +1170,18 @@ int run_worker_process_probe(
 
   beacon::worker::NamedPipeChannel channel(pipe.release());
   worker_v1::WorkerIpcEnvelope hello;
+  worker_v1::WorkerIpcEnvelope capabilities;
   worker_v1::WorkerIpcEnvelope ready;
   if (channel.read(hello) != beacon::worker::FrameDecodeStatus::success ||
+      channel.read(capabilities) != beacon::worker::FrameDecodeStatus::success ||
       channel.read(ready) != beacon::worker::FrameDecodeStatus::success ||
       hello.body_case() != worker_v1::WorkerIpcEnvelope::kWorkerHello ||
+      capabilities.body_case() !=
+          worker_v1::WorkerIpcEnvelope::kWorkerCapabilities ||
       ready.body_case() != worker_v1::WorkerIpcEnvelope::kWorkerReady ||
       hello.worker_hello().worker_instance_id().empty() ||
+      hello.worker_hello().worker_instance_id() !=
+          capabilities.worker_capabilities().worker_instance_id() ||
       hello.worker_hello().worker_instance_id() !=
           ready.worker_ready().worker_instance_id()) {
     return 86;

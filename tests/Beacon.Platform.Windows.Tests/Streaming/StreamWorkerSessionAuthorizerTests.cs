@@ -8,6 +8,22 @@ namespace Beacon.Platform.Windows.Tests.Streaming;
 
 public sealed class StreamWorkerSessionAuthorizerTests
 {
+    private static WorkerCapabilities AvailableCapabilities()
+    {
+        var capabilities = new WorkerCapabilities
+        {
+            WorkerInstanceId = Google.Protobuf.ByteString.CopyFrom(new byte[] { 1, 2, 3 }),
+            QuicDatagrams = true,
+            MaximumSessions = 1,
+            MaximumFramesPerSecond = 120,
+            VideoAvailable = true
+        };
+        capabilities.VideoCodecs.Add(WorkerVideoCodec.H264);
+        capabilities.VideoEncoders.Add(WorkerVideoEncoder.Nvenc);
+        capabilities.CaptureMethods.Add(WorkerCaptureMethod.WindowsGraphicsCapture);
+        return capabilities;
+    }
+
     [Fact]
     public async Task AuthorizationUsesTheCapturedRuntimeGeneration()
     {
@@ -78,6 +94,8 @@ public sealed class StreamWorkerSessionAuthorizerTests
         public bool IsReady { get; private set; } = true;
 
         public ReadOnlyMemory<byte> WorkerInstanceId => instanceId;
+
+        public WorkerCapabilities Capabilities { get; } = AvailableCapabilities();
 
         public ChannelReader<StreamWorkerEvent> Events => events.Reader;
 

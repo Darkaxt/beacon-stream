@@ -14,6 +14,7 @@ add_library(
     src/video/media_packetizer.cpp
     src/video/media_rate_controller.cpp
     src/video/nvenc_h264_encoder.cpp
+    src/video/production_video_capabilities.cpp
     src/video/production_video_generation.cpp
     src/video/quic_media_rate_adapter.cpp
     src/video/video_media_session.cpp

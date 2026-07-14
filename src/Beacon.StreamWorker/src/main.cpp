@@ -2,6 +2,7 @@
 #include "beacon/worker/outbound_queue.h"
 #include "beacon/worker/quic_listener.h"
 #include "beacon/worker/video/production_video_generation.h"
+#include "beacon/worker/video/production_video_capabilities.h"
 #include "beacon/worker/video/worker_video_pipeline.h"
 #include "beacon/worker/worker_events.h"
 #include "beacon/worker/worker_host.h"
@@ -99,8 +100,9 @@ int wmain(int argument_count, wchar_t** arguments) {
         });
     beacon::worker::WorkerHost host(
         std::move(instance_id), GetCurrentProcessId(), transport, tickets,
-        *video_pipeline);
-    if (outbound.enqueue({host.hello(), host.ready()}) !=
+        *video_pipeline,
+        beacon::worker::video::probe_windows_production_video_capabilities());
+    if (outbound.enqueue({host.hello(), host.capabilities(), host.ready()}) !=
         beacon::worker::WorkerOutboundEnqueueResult::accepted) {
       return 3;
     }

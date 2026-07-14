@@ -26,6 +26,8 @@ public interface IStreamWorkerHost
 
     ReadOnlyMemory<byte> WorkerInstanceId { get; }
 
+    WorkerCapabilities Capabilities { get; }
+
     ChannelReader<StreamWorkerEvent> Events { get; }
 
     long CurrentProcessGeneration { get; }
@@ -101,6 +103,9 @@ public sealed class StreamWorkerProcessHost :
 
     public ReadOnlyMemory<byte> WorkerInstanceId =>
         Volatile.Read(ref activeWorker)?.Client?.WorkerInstanceId ?? ReadOnlyMemory<byte>.Empty;
+
+    public WorkerCapabilities Capabilities =>
+        Volatile.Read(ref activeWorker)?.Client?.Capabilities ?? new WorkerCapabilities();
 
     public ChannelReader<StreamWorkerEvent> Events => eventBuffer.Reader;
 

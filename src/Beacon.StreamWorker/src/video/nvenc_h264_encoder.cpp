@@ -1090,6 +1090,31 @@ NvencH264Failure classify_nvenc_runtime_preflight(
   return NvencH264Failure::none;
 }
 
+NvencH264Failure probe_windows_nvenc_runtime() noexcept {
+  HMODULE library = LoadLibraryExW(L"nvEncodeAPI64.dll", nullptr,
+                                   LOAD_LIBRARY_SEARCH_SYSTEM32);
+  if (library == nullptr) {
+    return NvencH264Failure::runtime_unavailable;
+  }
+
+  const auto max_supported_version =
+      load_function<NvencGetMaxSupportedVersion>(
+          library, "NvEncodeAPIGetMaxSupportedVersion");
+  const auto create_instance = load_function<NvencCreateInstance>(
+      library, "NvEncodeAPICreateInstance");
+  std::uint32_t max_version{};
+  const bool entry_points_available =
+      max_supported_version != nullptr && create_instance != nullptr;
+  if (entry_points_available &&
+      max_supported_version(&max_version) != NV_ENC_SUCCESS) {
+    max_version = 0;
+  }
+  const auto result = classify_nvenc_runtime_preflight(
+      true, entry_points_available, max_version);
+  FreeLibrary(library);
+  return result;
+}
+
 NvencH264Failure validate_nvenc_h264_capabilities(
     const NvencH264ApiCapabilities& capabilities,
     const NvencH264Plan& plan) noexcept {

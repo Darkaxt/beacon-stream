@@ -29,6 +29,16 @@ enum WorkerVideoCodec {
   WORKER_VIDEO_CODEC_H264 = 1;
 }
 
+enum WorkerVideoEncoder {
+  WORKER_VIDEO_ENCODER_UNSPECIFIED = 0;
+  WORKER_VIDEO_ENCODER_NVENC = 1;
+}
+
+enum WorkerCaptureMethod {
+  WORKER_CAPTURE_METHOD_UNSPECIFIED = 0;
+  WORKER_CAPTURE_METHOD_WINDOWS_GRAPHICS_CAPTURE = 1;
+}
+
 enum WorkerDynamicRange {
   WORKER_DYNAMIC_RANGE_UNSPECIFIED = 0;
   WORKER_DYNAMIC_RANGE_SDR = 1;
@@ -132,6 +142,15 @@ message WorkerCapabilities {
   repeated WorkerVideoCodec video_codecs = 1;
   bool quic_datagrams = 2;
   uint32 maximum_sessions = 3;
+  bytes worker_instance_id = 4;
+  repeated WorkerVideoEncoder video_encoders = 5;
+  repeated WorkerCaptureMethod capture_methods = 6;
+  uint32 maximum_frames_per_second = 7;
+  uint32 maximum_bitrate_kbps = 8;
+  bool hdr10 = 9;
+  bool video_available = 10;
+  DiagnosticBoundary video_unavailable_boundary = 11;
+  uint32 video_unavailable_code = 12;
 }
 
 message WorkerHealth {

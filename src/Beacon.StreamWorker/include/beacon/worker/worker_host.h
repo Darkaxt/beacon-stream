@@ -2,6 +2,7 @@
 
 #include "beacon/stream/transport.h"
 #include "beacon/worker/quic_listener.h"
+#include "beacon/worker/video/production_video_capabilities.h"
 #include "beacon/worker/video/worker_video_pipeline.h"
 #include "worker_ipc.pb.h"
 
@@ -21,9 +22,11 @@ class WorkerHost {
              std::uint32_t process_id,
              IWorkerMediaTransport& transport,
              AuthorizedQuicTicketStore& authorized_tickets,
-             video::IWorkerVideoPipeline& video_pipeline);
+             video::IWorkerVideoPipeline& video_pipeline,
+             video::ProductionVideoCapabilities video_capabilities);
 
   [[nodiscard]] v1::WorkerIpcEnvelope hello() const;
+  [[nodiscard]] v1::WorkerIpcEnvelope capabilities() const;
   [[nodiscard]] v1::WorkerIpcEnvelope ready() const;
   [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> dispatch(
       const v1::WorkerIpcEnvelope& request);
@@ -62,6 +65,7 @@ class WorkerHost {
   IWorkerMediaTransport& transport_;
   AuthorizedQuicTicketStore& authorized_tickets_;
   video::IWorkerVideoPipeline& video_pipeline_;
+  video::ProductionVideoCapabilities video_capabilities_;
   bool prepared_{};
   bool benchmark_prepared_{};
   bool streaming_{};

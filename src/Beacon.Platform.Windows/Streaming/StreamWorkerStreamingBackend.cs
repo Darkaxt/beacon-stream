@@ -75,13 +75,23 @@ public sealed class StreamWorkerStreamingBackend :
         try
         {
             await host.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
+            WorkerCapabilities workerCapabilities = host.Capabilities;
+            byte[] workerInstanceId = host.WorkerInstanceId.ToArray();
+            bool controlReady = host.IsReady
+                && workerInstanceId.Length != 0
+                && workerCapabilities.WorkerInstanceId.Span.SequenceEqual(workerInstanceId);
+            bool ready = controlReady && workerCapabilities.VideoAvailable;
             return new StreamingBackendHealth(
-                Ready: host.IsReady,
-                State: host.IsReady ? "ready" : "unavailable",
-                Diagnostic: host.IsReady ? "Beacon StreamWorker ready." : "Beacon StreamWorker unavailable.",
-                Capabilities: Capabilities(),
+                Ready: ready,
+                State: ready ? "ready" : "unavailable",
+                Diagnostic: ready
+                    ? "Beacon StreamWorker ready."
+                    : controlReady
+                        ? VideoUnavailableError(workerCapabilities)
+                        : "Beacon StreamWorker unavailable.",
+                Capabilities: Capabilities(workerCapabilities),
                 ActiveSessions: GetSessions().Count(session => session.State == "running"),
-                Diagnostics: []);
+                Diagnostics: ready ? [] : VideoDiagnostics(workerCapabilities));
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
@@ -89,7 +99,7 @@ public sealed class StreamWorkerStreamingBackend :
                 Ready: false,
                 State: "unavailable",
                 Diagnostic: "Beacon StreamWorker failed readiness verification.",
-                Capabilities: Capabilities(),
+                Capabilities: Capabilities(host.Capabilities),
                 ActiveSessions: GetSessions().Count(session => session.State == "running"),
                 Diagnostics: [error.GetType().Name]);
         }
@@ -112,9 +122,21 @@ public sealed class StreamWorkerStreamingBackend :
         try
         {
             await host.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
-            return host.IsReady
-                ? StreamingPreflightResult.Ok()
-                : StreamingPreflightResult.Fail("Beacon StreamWorker is not ready.");
+            WorkerCapabilities capabilities = host.Capabilities;
+            long processGeneration = host.CurrentProcessGeneration;
+            byte[] workerInstanceId = host.WorkerInstanceId.ToArray();
+            if (!host.IsReady
+                || workerInstanceId.Length == 0
+                || !capabilities.WorkerInstanceId.Span.SequenceEqual(workerInstanceId)
+                || !host.IsCurrentProcessGeneration(processGeneration))
+            {
+                return StreamingPreflightResult.Fail("Beacon StreamWorker is not ready.");
+            }
+            if (!capabilities.VideoAvailable)
+            {
+                return StreamingPreflightResult.Fail(VideoUnavailableError(capabilities));
+            }
+            return StreamingPreflightResult.Ok();
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
@@ -155,13 +177,19 @@ public sealed class StreamWorkerStreamingBackend :
         CancellationToken cancellationToken)
     {
         await host.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
+        WorkerCapabilities capabilities = host.Capabilities;
         long processGeneration = host.CurrentProcessGeneration;
         byte[] workerInstanceId = host.WorkerInstanceId.ToArray();
         if (!host.IsReady
             || workerInstanceId.Length == 0
+            || !capabilities.WorkerInstanceId.Span.SequenceEqual(workerInstanceId)
             || !host.IsCurrentProcessGeneration(processGeneration))
         {
             return StreamingStartResult.Fail("Beacon StreamWorker runtime identity is unavailable.");
+        }
+        if (!capabilities.VideoAvailable)
+        {
+            return StreamingStartResult.Fail(VideoUnavailableError(capabilities));
         }
         lock (runtimeGate)
         {
@@ -952,13 +980,26 @@ public sealed class StreamWorkerStreamingBackend :
         && completion.WorkerCompletion.Succeeded
         && completion.WorkerCompletion.ErrorCode == WorkerErrorCode.None;
 
-    private static StreamingCapabilities Capabilities() => new(
-        Codecs: ["h264"],
-        Encoders: ["fake"],
-        CaptureMethods: ["fake"],
-        MaxFps: 120,
-        MaxBitrateMbps: null,
-        Hdr10: false);
+    private static StreamingCapabilities Capabilities(WorkerCapabilities value) => new(
+        Codecs: value.VideoCodecs.Contains(WorkerVideoCodec.H264) ? ["h264"] : [],
+        Encoders: value.VideoEncoders.Contains(WorkerVideoEncoder.Nvenc) ? ["nvenc"] : [],
+        CaptureMethods: value.CaptureMethods.Contains(WorkerCaptureMethod.WindowsGraphicsCapture)
+            ? ["wgc"]
+            : [],
+        MaxFps: checked((int)value.MaximumFramesPerSecond),
+        MaxBitrateMbps: value.MaximumBitrateKbps == 0
+            ? null
+            : checked((int)Math.Ceiling(value.MaximumBitrateKbps / 1000d)),
+        Hdr10: value.Hdr10);
+
+    private static string VideoUnavailableError(WorkerCapabilities value) =>
+        $"Beacon StreamWorker production video is unavailable " +
+        $"({value.VideoUnavailableBoundary.ToString().ToLowerInvariant()}:{value.VideoUnavailableCode}).";
+
+    private static IReadOnlyList<string> VideoDiagnostics(WorkerCapabilities value) =>
+        value.VideoAvailable || value.VideoUnavailableCode == 0
+            ? []
+            : [$"{value.VideoUnavailableBoundary.ToString().ToLowerInvariant()}:{value.VideoUnavailableCode}"];
 
     private static string? ValidatePlan(SessionPlan plan)
     {

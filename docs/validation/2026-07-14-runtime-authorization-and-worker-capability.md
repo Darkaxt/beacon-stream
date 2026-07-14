@@ -27,6 +27,13 @@ without introducing a synthetic encoder or alternate media route.
   events.
 - `HostedRunnerVideoExceptionIsExplicitAndNarrow` failed while CI treated every
   host as production-video capable.
+- `IdentityBoundCapabilitiesAreRequiredBeforeReady` failed because the managed
+  pipe client expected `ready` immediately after `hello` and rejected the
+  Worker's capability envelope.
+- `ProductionHealthNeverAdvertisesFakeCaptureOrEncoding` failed while the
+  production backend still hard-coded `fake` capture and encoder capabilities.
+- The native WorkerHost capability regression did not compile because the
+  Worker had no typed capability message.
 
 ## Implemented Boundary
 
@@ -40,6 +47,21 @@ without introducing a synthetic encoder or alternate media route.
 - Revocation is sent only to the issuing generation. If that generation has
   retired, revocation is complete without contacting its replacement.
 - `IStreamWorkerHost` exposes one generation-bound command method.
+- Worker startup is an identity-bound `hello -> capabilities -> ready`
+  handshake. The capability message reports H.264, NVENC, Windows Graphics
+  Capture, QUIC datagrams, maximum FPS, HDR state, and typed capture/encoder
+  unavailability.
+- The Worker probes for a hardware NVIDIA adapter and a compatible NVENC
+  runtime/API without creating or changing a display. Per-session capture and
+  encoder startup remain authoritative for target-specific failures.
+- The managed client fails closed on missing, malformed, or foreign-instance
+  capabilities. A replacement Worker cannot inherit its predecessor's
+  capability identity.
+- Production health maps only Worker-reported `h264`, `nvenc`, and `wgc`
+  capabilities. It never advertises the fake test backend.
+- Video-unavailable Workers remain usable for the Beacon network benchmark,
+  but streaming health and preflight fail with the exact typed boundary and
+  native code.
 - The native process probe consumes Worker failure state, diagnostic, and
   disconnect events, requests graceful Worker shutdown, and reports the exact
   boundary and native code.
@@ -63,9 +85,12 @@ larger runners:
 - `scripts/test-stream-worker-integration.ps1`
 - Client Lab lint, unit tests, Playwright lint, and lifecycle test
 
-Results: the managed build completed with zero warnings and zero errors; 518
+Results: the managed build completed with zero warnings and zero errors; 527
 managed tests passed; all four Gate 3 fixture markers passed; 23 native CTest
 tests passed; Client Lab passed 16 unit tests and one Playwright lifecycle test.
+The clean Android static matrix passed unit tests and built debug, release, and
+debug-instrumentation APKs with both `x86_64` and `arm64-v8a` native StreamCore
+artifacts.
 
 The production-capable local host produced:
 
@@ -80,7 +105,8 @@ The `CAPTURE 2` line is the intentional nonexistent-display diagnostic proof;
 it is not accepted as production-video success.
 
 No Android device or emulator command, display-topology mutation, display
-driver operation, or external streaming installation was used by this slice.
+driver operation, or external streaming process, service, file, API,
+configuration, or installation was queried or changed by this slice.
 
 ## Sync Evidence
 

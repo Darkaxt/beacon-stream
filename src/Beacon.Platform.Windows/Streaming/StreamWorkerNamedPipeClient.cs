@@ -28,6 +28,7 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
     private Task? receiveLoop;
     private Exception? terminalError;
     private byte[] workerInstanceId = [];
+    private WorkerCapabilities capabilities = new();
     private long nextRequestId;
     private int initialized;
     private int disposed;
@@ -83,6 +84,8 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
 
     public ReadOnlyMemory<byte> WorkerInstanceId => workerInstanceId;
 
+    public WorkerCapabilities Capabilities => capabilities.Clone();
+
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
@@ -103,6 +106,18 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
             }
             workerInstanceId = hello.WorkerHello.WorkerInstanceId.ToByteArray();
 
+            WorkerIpcEnvelope capabilityEnvelope =
+                await ReadEnvelopeOrProcessExitAsync(cancellationToken).ConfigureAwait(false);
+            ProtocolVersion.EnsureSupported(capabilityEnvelope.ProtocolVersion);
+            if (capabilityEnvelope.BodyCase != WorkerIpcEnvelope.BodyOneofCase.WorkerCapabilities
+                || !ValidCapabilities(
+                    capabilityEnvelope.WorkerCapabilities,
+                    hello.WorkerHello.WorkerInstanceId))
+            {
+                throw new StreamWorkerProtocolException("StreamWorker capabilities are invalid.");
+            }
+            capabilities = capabilityEnvelope.WorkerCapabilities.Clone();
+
             WorkerIpcEnvelope ready = await ReadEnvelopeOrProcessExitAsync(cancellationToken).ConfigureAwait(false);
             ProtocolVersion.EnsureSupported(ready.ProtocolVersion);
             if (ready.BodyCase != WorkerIpcEnvelope.BodyOneofCase.WorkerReady
@@ -116,9 +131,34 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
         }
         catch
         {
+            capabilities = new WorkerCapabilities();
+            workerInstanceId = [];
             Volatile.Write(ref initialized, 0);
             throw;
         }
+    }
+
+    private static bool ValidCapabilities(
+        WorkerCapabilities value,
+        ByteString workerInstanceId)
+    {
+        bool validVideoState = value.VideoAvailable
+            ? value.VideoUnavailableBoundary == DiagnosticBoundary.Unspecified
+                && value.VideoUnavailableCode == 0
+            : value.VideoUnavailableBoundary is DiagnosticBoundary.Capture or DiagnosticBoundary.Encoder
+                && value.VideoUnavailableCode != 0;
+        return value.WorkerInstanceId.Equals(workerInstanceId)
+            && value.VideoCodecs.Count == 1
+            && value.VideoCodecs[0] == WorkerVideoCodec.H264
+            && value.VideoEncoders.Count == 1
+            && value.VideoEncoders[0] == WorkerVideoEncoder.Nvenc
+            && value.CaptureMethods.Count == 1
+            && value.CaptureMethods[0] == WorkerCaptureMethod.WindowsGraphicsCapture
+            && value.QuicDatagrams
+            && value.MaximumSessions == 1
+            && value.MaximumFramesPerSecond == 120
+            && !value.Hdr10
+            && validVideoState;
     }
 
     public async Task<StreamWorkerCommandResponse> SendAsync(

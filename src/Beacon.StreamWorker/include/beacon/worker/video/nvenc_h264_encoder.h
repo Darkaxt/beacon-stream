@@ -211,6 +211,8 @@ nvenc_h264_native_contract() noexcept;
     bool runtime_loaded, bool entry_points_available,
     std::uint32_t max_supported_api_version) noexcept;
 
+[[nodiscard]] NvencH264Failure probe_windows_nvenc_runtime() noexcept;
+
 [[nodiscard]] NvencH264Failure validate_nvenc_h264_capabilities(
     const NvencH264ApiCapabilities& capabilities,
     const NvencH264Plan& plan) noexcept;

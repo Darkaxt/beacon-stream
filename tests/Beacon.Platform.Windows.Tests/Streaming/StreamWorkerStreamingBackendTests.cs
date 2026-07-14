@@ -14,6 +14,22 @@ namespace Beacon.Platform.Windows.Tests.Streaming;
 
 public sealed class StreamWorkerStreamingBackendTests
 {
+    private static WorkerCapabilities AvailableCapabilities()
+    {
+        var capabilities = new WorkerCapabilities
+        {
+            WorkerInstanceId = Google.Protobuf.ByteString.CopyFrom(new byte[] { 1, 2, 3 }),
+            QuicDatagrams = true,
+            MaximumSessions = 1,
+            MaximumFramesPerSecond = 120,
+            VideoAvailable = true
+        };
+        capabilities.VideoCodecs.Add(WorkerVideoCodec.H264);
+        capabilities.VideoEncoders.Add(WorkerVideoEncoder.Nvenc);
+        capabilities.CaptureMethods.Add(WorkerCaptureMethod.WindowsGraphicsCapture);
+        return capabilities;
+    }
+
     [Fact]
     public async Task WorkerExitBetweenPrepareAndStartDoesNotCreateOrUseReplacement()
     {
@@ -351,6 +367,40 @@ public sealed class StreamWorkerStreamingBackendTests
     }
 
     [Fact]
+    public async Task NetworkBenchmarkRemainsAvailableWhenProductionVideoIsUnavailable()
+    {
+        var host = new RecordingStreamWorkerHost();
+        host.Capabilities.VideoAvailable = false;
+        host.Capabilities.VideoUnavailableBoundary = DiagnosticBoundary.Capture;
+        host.Capabilities.VideoUnavailableCode = 5;
+        var backend = new StreamWorkerStreamingBackend(host);
+        IBenchmarkRuntime benchmarkRuntime = backend;
+        var plan = new BenchmarkRuntimePlan(
+            Guid.Parse("cf46ab44-9650-41cf-8e59-909b4fb3b591"),
+            new ClientId("z-fold-7"),
+            BenchmarkTrigger.Manual,
+            new BenchmarkTransportPlan(16, 4096, 16, 1000, 250_000));
+        host.StartMediaEvents[0].SessionId = plan.SessionId;
+
+        BenchmarkRuntimeStartResult start = await benchmarkRuntime.StartAsync(
+            plan,
+            CancellationToken.None);
+        BenchmarkRuntimeStopResult stop = await benchmarkRuntime.StopAsync(
+            plan.SessionId,
+            CancellationToken.None);
+
+        Assert.True(start.Success, start.Error);
+        Assert.True(stop.Success, stop.Error);
+        Assert.Equal(
+            [
+                WorkerIpcEnvelope.BodyOneofCase.PrepareBenchmark,
+                WorkerIpcEnvelope.BodyOneofCase.StartMedia,
+                WorkerIpcEnvelope.BodyOneofCase.StopMedia
+            ],
+            host.Commands.Select(command => command.BodyCase));
+    }
+
+    [Fact]
     public async Task BenchmarkRuntimeAcceptsOnlyItsBoundBenchmarkEvents()
     {
         var host = new RecordingStreamWorkerHost();
@@ -616,6 +666,58 @@ public sealed class StreamWorkerStreamingBackendTests
         Assert.DoesNotContain("23", health.Diagnostic, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ProductionHealthNeverAdvertisesFakeCaptureOrEncoding()
+    {
+        var backend = new StreamWorkerStreamingBackend(new RecordingStreamWorkerHost());
+
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.Equal(["nvenc"], health.Capabilities.Encoders);
+        Assert.Equal(["wgc"], health.Capabilities.CaptureMethods);
+        Assert.DoesNotContain("fake", health.Capabilities.Encoders);
+        Assert.DoesNotContain("fake", health.Capabilities.CaptureMethods);
+    }
+
+    [Fact]
+    public async Task UnavailableProductionVideoFailsStreamingHealthAndPreflightWithTypedDiagnostic()
+    {
+        var host = new RecordingStreamWorkerHost();
+        host.Capabilities.VideoAvailable = false;
+        host.Capabilities.VideoUnavailableBoundary = DiagnosticBoundary.Encoder;
+        host.Capabilities.VideoUnavailableCode = 7;
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+        StreamingPreflightResult preflight = await backend.CheckReadinessAsync(
+            CreatePlan(),
+            CancellationToken.None);
+
+        Assert.False(health.Ready);
+        Assert.Equal("Beacon StreamWorker production video is unavailable (encoder:7).", health.Diagnostic);
+        Assert.Equal(["encoder:7"], health.Diagnostics);
+        Assert.False(preflight.Success);
+        Assert.Equal(health.Diagnostic, preflight.Error);
+        Assert.Empty(host.Commands);
+    }
+
+    [Fact]
+    public async Task CapabilitiesFromAnotherWorkerCannotAuthorizePreflight()
+    {
+        var host = new RecordingStreamWorkerHost();
+        host.Capabilities.WorkerInstanceId = Google.Protobuf.ByteString.CopyFrom(
+            new byte[] { 9, 9, 9 });
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        StreamingPreflightResult preflight = await backend.CheckReadinessAsync(
+            CreatePlan(),
+            CancellationToken.None);
+
+        Assert.False(preflight.Success);
+        Assert.Equal("Beacon StreamWorker is not ready.", preflight.Error);
+        Assert.Empty(host.Commands);
+    }
+
     private static SessionPlan CreatePlan() => new(
         "Z Fold 7",
         new ClientId("z-fold-7"),
@@ -674,6 +776,8 @@ public sealed class StreamWorkerStreamingBackendTests
         public bool IsReady { get; private set; } = true;
 
         public ReadOnlyMemory<byte> WorkerInstanceId => workerInstanceId;
+
+        public WorkerCapabilities Capabilities { get; } = AvailableCapabilities();
 
         public ChannelReader<StreamWorkerEvent> Events => events.Reader;
 
@@ -735,6 +839,8 @@ public sealed class StreamWorkerStreamingBackendTests
         public void ReplaceWorker(byte[] replacementWorkerInstanceId)
         {
             workerInstanceId = replacementWorkerInstanceId;
+            Capabilities.WorkerInstanceId = Google.Protobuf.ByteString.CopyFrom(
+                replacementWorkerInstanceId);
             CurrentProcessGeneration++;
             IsReady = true;
         }

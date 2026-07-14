@@ -559,7 +559,11 @@ Runtime-authorization evidence (2026-07-14): Core and Server ticket ownership ar
 neutral, ticket authorization and revocation are pinned to the issuing runtime generation, and
 the unpinned Worker command overload is gone. Worker process diagnostics now distinguish an
 unsupported hosted-runner GPU from production-video regressions without adding a synthetic or
-alternate media route. Evidence:
+alternate media route. Worker startup now includes an identity-bound typed capability envelope;
+production health maps only Worker-reported H.264/NVENC/WGC support, video-unavailable Workers
+remain available for network benchmarking, and fake capability claims are confined to fake-host
+tests. The complete local matrix passes 527 managed tests, 23 native tests, Client Lab,
+Playwright, Android static builds, and the real H.264 Worker process proof. Evidence:
 `docs/validation/2026-07-14-runtime-authorization-and-worker-capability.md`.
 
 ## Deferred Until Gate 5 Passes

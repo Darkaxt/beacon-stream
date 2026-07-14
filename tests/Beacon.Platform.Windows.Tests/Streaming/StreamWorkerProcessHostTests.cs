@@ -21,6 +21,7 @@ public sealed class StreamWorkerProcessHostTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(streams.Worker, Hello(checked((uint)launch.Process.Id), 1));
+            await WriteAsync(streams.Worker, Capabilities(1));
             await WriteAsync(streams.Worker, Ready(1));
             WorkerIpcEnvelope command = await ReadAsync(streams.Worker);
             for (int sequence = 1; sequence <= 3; sequence++)
@@ -110,6 +111,7 @@ public sealed class StreamWorkerProcessHostTests
             await WriteAsync(streams.Worker, Hello(processId, failure == "version" ? 2u : 1u));
             if (failure == "ready")
             {
+                await WriteAsync(streams.Worker, Capabilities(version: 1));
                 WorkerIpcEnvelope ready = Ready(version: 1);
                 ready.WorkerReady.WorkerInstanceId = ByteString.CopyFrom(new byte[] { 9, 9, 9 });
                 await WriteAsync(streams.Worker, ready);
@@ -139,6 +141,7 @@ public sealed class StreamWorkerProcessHostTests
         Task replacementWorker = Task.Run(async () =>
         {
             await WriteAsync(streams.Worker, Hello(checked((uint)replacement.Process.Id), 1));
+            await WriteAsync(streams.Worker, Capabilities(1));
             await WriteAsync(streams.Worker, Ready(1));
         });
         var host = new StreamWorkerProcessHost(
@@ -159,6 +162,8 @@ public sealed class StreamWorkerProcessHostTests
             Assert.Equal(2, events.CurrentProcessGeneration);
             Assert.True(events.IsCurrentProcessGeneration(2));
             Assert.True(host.IsReady);
+            Assert.True(events.Capabilities.VideoAvailable);
+            Assert.Equal(WorkerVideoEncoder.Nvenc, Assert.Single(events.Capabilities.VideoEncoders));
             await replacementWorker;
         }
         finally
@@ -177,6 +182,7 @@ public sealed class StreamWorkerProcessHostTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(streams.Worker, Hello(checked((uint)launch.Process.Id), 1));
+            await WriteAsync(streams.Worker, Capabilities(1));
             await WriteAsync(streams.Worker, Ready(1));
         });
         var factory = new QueueLaunchFactory(launch);
@@ -217,6 +223,7 @@ public sealed class StreamWorkerProcessHostTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(streams.Worker, Hello(checked((uint)launch.Process.Id), 1));
+            await WriteAsync(streams.Worker, Capabilities(1));
             await WriteAsync(streams.Worker, Ready(1));
             WorkerIpcEnvelope shutdown = await ReadAsync(streams.Worker);
             Assert.Equal(WorkerIpcEnvelope.BodyOneofCase.ShutdownWorker, shutdown.BodyCase);
@@ -256,6 +263,7 @@ public sealed class StreamWorkerProcessHostTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(streams.Worker, Hello(checked((uint)launch.Process.Id), 1));
+            await WriteAsync(streams.Worker, Capabilities(1));
             await WriteAsync(streams.Worker, Ready(1));
             WorkerIpcEnvelope shutdown = await ReadAsync(streams.Worker);
             await WriteAsync(streams.Worker, new WorkerIpcEnvelope
@@ -330,6 +338,7 @@ public sealed class StreamWorkerProcessHostTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(streams.Worker, Hello(checked((uint)launch.Process.Id), 1));
+            await WriteAsync(streams.Worker, Capabilities(1));
             await WriteAsync(streams.Worker, Ready(1));
             WorkerIpcEnvelope prepare = await ReadAsync(streams.Worker);
             await WriteAsync(streams.Worker, new WorkerIpcEnvelope
@@ -635,6 +644,27 @@ public sealed class StreamWorkerProcessHostTests
         }
     };
 
+    private static WorkerIpcEnvelope Capabilities(uint version)
+    {
+        var envelope = new WorkerIpcEnvelope
+        {
+            ProtocolVersion = version,
+            WorkerCapabilities = new WorkerCapabilities
+            {
+                WorkerInstanceId = ByteString.CopyFrom(new byte[] { 1, 2, 3 }),
+                QuicDatagrams = true,
+                MaximumSessions = 1,
+                MaximumFramesPerSecond = 120,
+                VideoAvailable = true
+            }
+        };
+        envelope.WorkerCapabilities.VideoCodecs.Add(WorkerVideoCodec.H264);
+        envelope.WorkerCapabilities.VideoEncoders.Add(WorkerVideoEncoder.Nvenc);
+        envelope.WorkerCapabilities.CaptureMethods.Add(
+            WorkerCaptureMethod.WindowsGraphicsCapture);
+        return envelope;
+    }
+
     private static async Task WriteAsync(Stream stream, WorkerIpcEnvelope envelope)
     {
         await stream.WriteAsync(ProtobufLengthFrameCodec.Encode(envelope));
@@ -667,6 +697,7 @@ public sealed class StreamWorkerProcessHostTests
     private static Task RunGracefulShutdownWorkerAsync(Stream stream, TestLaunch launch) => Task.Run(async () =>
     {
         await WriteAsync(stream, Hello(checked((uint)launch.Process.Id), 1));
+        await WriteAsync(stream, Capabilities(1));
         await WriteAsync(stream, Ready(1));
         WorkerIpcEnvelope shutdown = await ReadAsync(stream);
         await WriteAsync(stream, Completion(shutdown));

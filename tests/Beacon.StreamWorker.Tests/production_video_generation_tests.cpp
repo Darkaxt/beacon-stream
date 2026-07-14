@@ -1,5 +1,6 @@
 #include "beacon/stream/media_datagram.h"
 #include "beacon/worker/video/production_video_generation.h"
+#include "beacon/worker/video/production_video_capabilities.h"
 
 #include "../Beacon.StreamProtocol.Tests/test_failure.h"
 
@@ -413,6 +414,34 @@ void conversion_failure_is_typed_and_disconnects_only_the_active_client() {
   fixture.generation->stop();
 }
 
+void production_capability_failures_are_boundary_specific() {
+  const auto missing_adapter = video::classify_production_video_capabilities(
+      false, video::NvencH264Failure::none);
+  BEACON_TEST_REQUIRE(!missing_adapter.available);
+  BEACON_TEST_REQUIRE(
+      missing_adapter.unavailable_boundary ==
+      video::ProductionVideoCapabilityBoundary::capture);
+  BEACON_TEST_REQUIRE(
+      missing_adapter.unavailable_code ==
+      static_cast<std::uint32_t>(
+          capture::WgcCaptureFailure::nvidia_adapter_missing));
+
+  const auto missing_runtime = video::classify_production_video_capabilities(
+      true, video::NvencH264Failure::runtime_unavailable);
+  BEACON_TEST_REQUIRE(!missing_runtime.available);
+  BEACON_TEST_REQUIRE(
+      missing_runtime.unavailable_boundary ==
+      video::ProductionVideoCapabilityBoundary::encoder);
+  BEACON_TEST_REQUIRE(
+      missing_runtime.unavailable_code ==
+      static_cast<std::uint32_t>(video::NvencH264Failure::runtime_unavailable));
+
+  const auto available = video::classify_production_video_capabilities(
+      true, video::NvencH264Failure::none);
+  BEACON_TEST_REQUIRE(available.available);
+  BEACON_TEST_REQUIRE(available.unavailable_code == 0);
+}
+
 } // namespace
 
 int main() {
@@ -420,5 +449,6 @@ int main() {
     one_captured_frame_reaches_the_generation_bound_transport();
     feedback_applies_server_bounded_bitrate_and_forces_the_next_idr();
     conversion_failure_is_typed_and_disconnects_only_the_active_client();
+    production_capability_failures_are_boundary_specific();
   });
 }

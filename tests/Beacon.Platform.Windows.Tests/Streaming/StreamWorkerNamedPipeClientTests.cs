@@ -13,6 +13,95 @@ namespace Beacon.Platform.Windows.Tests.Streaming;
 public sealed class StreamWorkerNamedPipeClientTests
 {
     [Fact]
+    public async Task IdentityBoundCapabilitiesAreRequiredBeforeReady()
+    {
+        await using PipePair pipes = await PipePair.CreateAsync();
+        var processExit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task worker = Task.Run(async () =>
+        {
+            await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
+            await WriteAsync(pipes.Worker, Ready(1));
+        });
+        await using var client = new StreamWorkerNamedPipeClient(pipes.Service, processExit.Task, 42);
+
+        await client.InitializeAsync(CancellationToken.None);
+
+        Assert.True(client.IsReady);
+        Assert.True(client.Capabilities.VideoAvailable);
+        Assert.Equal(WorkerVideoEncoder.Nvenc, Assert.Single(client.Capabilities.VideoEncoders));
+        await worker;
+    }
+
+    [Fact]
+    public async Task ForeignCapabilityIdentityFailsTheHandshake()
+    {
+        await using PipePair pipes = await PipePair.CreateAsync();
+        var processExit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task worker = Task.Run(async () =>
+        {
+            await WriteAsync(pipes.Worker, Hello(42, 1));
+            WorkerIpcEnvelope capabilities = Capabilities(1);
+            capabilities.WorkerCapabilities.WorkerInstanceId = ByteString.CopyFrom(new byte[] { 9, 9, 9 });
+            await WriteAsync(pipes.Worker, capabilities);
+        });
+        await using var client = new StreamWorkerNamedPipeClient(pipes.Service, processExit.Task, 42);
+
+        StreamWorkerProtocolException error = await Assert.ThrowsAsync<StreamWorkerProtocolException>(
+            () => client.InitializeAsync(CancellationToken.None));
+
+        Assert.Equal("StreamWorker capabilities are invalid.", error.Message);
+        Assert.False(client.IsReady);
+        await worker;
+    }
+
+    [Fact]
+    public async Task UnavailableVideoRequiresAndPreservesTypedDiagnostic()
+    {
+        await using PipePair pipes = await PipePair.CreateAsync();
+        var processExit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task worker = Task.Run(async () =>
+        {
+            await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(
+                pipes.Worker,
+                Capabilities(
+                    1,
+                    videoAvailable: false,
+                    unavailableBoundary: DiagnosticBoundary.Encoder,
+                    unavailableCode: 7));
+            await WriteAsync(pipes.Worker, Ready(1));
+        });
+        await using var client = new StreamWorkerNamedPipeClient(pipes.Service, processExit.Task, 42);
+
+        await client.InitializeAsync(CancellationToken.None);
+
+        Assert.False(client.Capabilities.VideoAvailable);
+        Assert.Equal(DiagnosticBoundary.Encoder, client.Capabilities.VideoUnavailableBoundary);
+        Assert.Equal(7u, client.Capabilities.VideoUnavailableCode);
+        await worker;
+    }
+
+    [Fact]
+    public async Task UnavailableVideoWithoutTypedDiagnosticFailsTheHandshake()
+    {
+        await using PipePair pipes = await PipePair.CreateAsync();
+        var processExit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task worker = Task.Run(async () =>
+        {
+            await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1, videoAvailable: false));
+        });
+        await using var client = new StreamWorkerNamedPipeClient(pipes.Service, processExit.Task, 42);
+
+        await Assert.ThrowsAsync<StreamWorkerProtocolException>(
+            () => client.InitializeAsync(CancellationToken.None));
+
+        Assert.False(client.IsReady);
+        await worker;
+    }
+
+    [Fact]
     public async Task ZeroIdConnectionObservedDiagnosticUsesNeutralMetadataEvent()
     {
         await using PipePair pipes = await PipePair.CreateAsync();
@@ -21,6 +110,7 @@ public sealed class StreamWorkerNamedPipeClientTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
             await WriteAsync(pipes.Worker, Ready(1));
             await WriteAsync(pipes.Worker, new WorkerIpcEnvelope
             {
@@ -59,6 +149,7 @@ public sealed class StreamWorkerNamedPipeClientTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
             await WriteAsync(pipes.Worker, Ready(1));
             await WriteAsync(pipes.Worker, ConnectionDiagnostic(DiagnosticCode.ConnectionConfigured, 17));
             await WriteAsync(pipes.Worker, ConnectionDiagnostic(DiagnosticCode.TransportConnected, 17));
@@ -103,6 +194,7 @@ public sealed class StreamWorkerNamedPipeClientTests
         Task<Task> worker = Task.Run(async () =>
         {
             await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
             await WriteAsync(pipes.Worker, Ready(1));
             _ = await ReadAsync(pipes.Worker);
             await WriteAsync(pipes.Worker, InputEventEnvelope());
@@ -139,6 +231,7 @@ public sealed class StreamWorkerNamedPipeClientTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
             await WriteAsync(pipes.Worker, Ready(1));
             await WriteAsync(pipes.Worker, new WorkerIpcEnvelope
             {
@@ -222,6 +315,7 @@ public sealed class StreamWorkerNamedPipeClientTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
             await WriteAsync(pipes.Worker, Ready(1));
             await WriteAsync(pipes.Worker, InputEventEnvelope());
         });
@@ -261,6 +355,7 @@ public sealed class StreamWorkerNamedPipeClientTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
             await WriteAsync(pipes.Worker, Ready(1));
             WorkerIpcEnvelope request = await ReadAsync(pipes.Worker);
             WorkerIpcEnvelope correlated = InputEventEnvelope();
@@ -290,6 +385,7 @@ public sealed class StreamWorkerNamedPipeClientTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
             await WriteAsync(pipes.Worker, Ready(1));
             WorkerIpcEnvelope invalid;
             if (malformed)
@@ -327,6 +423,7 @@ public sealed class StreamWorkerNamedPipeClientTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
             await WriteAsync(pipes.Worker, Ready(1));
             await WriteAsync(pipes.Worker, InputEventEnvelope());
             await WriteAsync(pipes.Worker, InputEventEnvelope());
@@ -348,6 +445,7 @@ public sealed class StreamWorkerNamedPipeClientTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(pipes.Worker, Hello(processId: 42, version: 1));
+            await WriteAsync(pipes.Worker, Capabilities(version: 1));
             await WriteAsync(pipes.Worker, Ready(version: 1));
         });
         await using var client = new StreamWorkerNamedPipeClient(pipes.Service, processExit.Task, expectedProcessId: 42);
@@ -400,6 +498,7 @@ public sealed class StreamWorkerNamedPipeClientTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
             await WriteAsync(pipes.Worker, Ready(1));
             WorkerIpcEnvelope first = await ReadAsync(pipes.Worker);
             WorkerIpcEnvelope second = await ReadAsync(pipes.Worker);
@@ -431,6 +530,7 @@ public sealed class StreamWorkerNamedPipeClientTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
             await WriteAsync(pipes.Worker, Ready(1));
             WorkerIpcEnvelope request = await ReadAsync(pipes.Worker);
             WorkerIpcEnvelope completion = Completion(request, succeeded: true);
@@ -456,6 +556,7 @@ public sealed class StreamWorkerNamedPipeClientTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
             await WriteAsync(pipes.Worker, Ready(1));
             _ = await ReadAsync(pipes.Worker);
             byte[] oversized = new byte[sizeof(uint)];
@@ -484,6 +585,7 @@ public sealed class StreamWorkerNamedPipeClientTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
             await WriteAsync(pipes.Worker, Ready(1));
             _ = await ReadAsync(pipes.Worker);
             processExit.SetResult(23);
@@ -514,6 +616,7 @@ public sealed class StreamWorkerNamedPipeClientTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
             await WriteAsync(pipes.Worker, Ready(1));
             byte[] oversized = new byte[sizeof(uint)];
             BinaryPrimitives.WriteUInt32BigEndian(
@@ -565,6 +668,33 @@ public sealed class StreamWorkerNamedPipeClientTests
         {
             WorkerInstanceId = ByteString.CopyFrom(new byte[] { 1, 2, 3 }),
         };
+        return envelope;
+    }
+
+    private static WorkerIpcEnvelope Capabilities(
+        uint version,
+        bool videoAvailable = true,
+        DiagnosticBoundary unavailableBoundary = DiagnosticBoundary.Unspecified,
+        uint unavailableCode = 0)
+    {
+        var envelope = new WorkerIpcEnvelope
+        {
+            ProtocolVersion = version,
+            WorkerCapabilities = new WorkerCapabilities
+            {
+                WorkerInstanceId = ByteString.CopyFrom(new byte[] { 1, 2, 3 }),
+                QuicDatagrams = true,
+                MaximumSessions = 1,
+                MaximumFramesPerSecond = 120,
+                VideoAvailable = videoAvailable,
+                VideoUnavailableBoundary = unavailableBoundary,
+                VideoUnavailableCode = unavailableCode
+            }
+        };
+        envelope.WorkerCapabilities.VideoCodecs.Add(WorkerVideoCodec.H264);
+        envelope.WorkerCapabilities.VideoEncoders.Add(WorkerVideoEncoder.Nvenc);
+        envelope.WorkerCapabilities.CaptureMethods.Add(
+            WorkerCaptureMethod.WindowsGraphicsCapture);
         return envelope;
     }
 
