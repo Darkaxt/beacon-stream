@@ -47,15 +47,21 @@ public final class AndroidDeviceBenchmarkInstrumentationTest {
         if (failure.get() != null) {
             throw new AssertionError("Android device benchmark failed.", failure.get());
         }
-        assertNotNull(evidence.get());
-        assertEquals(1, evidence.get().decoderSamples().size());
-        assertEquals(2, evidence.get().powerSamples().size());
+        assertNotNull("Android device benchmark returned no evidence.", evidence.get());
+        assertEquals("Unexpected decoder evidence: " + evidence.get().decoderSamples(),
+            1, evidence.get().decoderSamples().size());
+        assertEquals("Unexpected power evidence: " + evidence.get().powerSamples(),
+            2, evidence.get().powerSamples().size());
         String decoder = evidence.get().decoderSamples().get(0).toJson().toString();
         System.out.println("BEACON_HARDWARE_EVIDENCE " + decoder);
-        assertTrue(decoder.contains("\"configured\":true"));
-        assertTrue(decoder.contains("\"p95PresentationLatencyMs\":"));
-        assertTrue(decoder.contains("\"droppedFrames\":"));
-        assertTrue(decoder.contains("\"outputErrors\":0"));
+        assertTrue("Decoder was not configured: " + decoder,
+            decoder.contains("\"configured\":true"));
+        assertTrue("Presentation latency is missing: " + decoder,
+            decoder.contains("\"p95PresentationLatencyMs\":"));
+        assertTrue("Dropped-frame evidence is missing: " + decoder,
+            decoder.contains("\"droppedFrames\":"));
+        assertTrue("Decoder reported output errors: " + decoder,
+            decoder.contains("\"outputErrors\":0"));
     }
 
     private static BeaconBenchmarkHardwarePlan plan() {
