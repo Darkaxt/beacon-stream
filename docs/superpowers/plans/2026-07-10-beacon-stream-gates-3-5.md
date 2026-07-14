@@ -528,8 +528,8 @@ Create separate audited plans, in this order, for:
 - Service-to-Worker readiness and state are typed, private, and event-driven.
 - Worker-to-StreamCore traffic is authenticated, encrypted, congestion controlled, and
   Beacon-owned.
-- Emulator displays moving H.264 SDR from the planned virtual display with Apollo and
-  Sunshine stopped.
+- Emulator displays moving H.264 SDR from the planned virtual display while dependency and
+  runtime tracing prove Beacon does not access or control any Apollo or Sunshine installation.
 - Reconnect uses a fresh ticket without destroying application/display ownership.
 - Explicit stop and ownership cleanup restore verified physical-primary state.
 - No alternate transport, backend, capture fallback, media route, or compatibility artifact
