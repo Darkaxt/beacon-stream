@@ -116,6 +116,18 @@ void frame_flow_rejects_early_duplicate_and_out_of_order_events() {
                       HostedEmulatorFrameFlowError::rendering_incomplete);
 }
 
+void frame_flow_accepts_stop_while_the_final_feedback_is_in_flight() {
+  HostedEmulatorFrameFlow flow{3};
+
+  BEACON_TEST_REQUIRE(flow.start().next_access_unit_index == 0);
+  BEACON_TEST_REQUIRE(flow.rendered(1).next_access_unit_index == 1);
+  BEACON_TEST_REQUIRE(flow.rendered(2).next_access_unit_index == 2);
+  BEACON_TEST_REQUIRE(flow.sent_frames() == 3);
+  BEACON_TEST_REQUIRE(flow.rendered_feedback() == 2);
+  BEACON_TEST_REQUIRE(flow.stop() == HostedEmulatorFrameFlowError::none);
+  BEACON_TEST_REQUIRE(flow.rendered(3).rendering_complete);
+}
+
 } // namespace
 
 int main() {
@@ -124,5 +136,6 @@ int main() {
     every_identity_component_is_validated_before_consumption();
     frame_flow_releases_exactly_one_unit_per_rendered_feedback();
     frame_flow_rejects_early_duplicate_and_out_of_order_events();
+    frame_flow_accepts_stop_while_the_final_feedback_is_in_flight();
   });
 }

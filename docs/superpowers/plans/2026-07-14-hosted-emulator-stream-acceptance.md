@@ -286,7 +286,7 @@ git push origin codex/beacon-production-benchmarks
 - Create: `src/Beacon.Android/app/src/androidTest/java/dev/beacon/android/SurfaceFrameEvidence.java`
 - Modify: `src/Beacon.Android/app/src/main/java/dev/beacon/android/BeaconActivity.java`
 
-- [ ] **Step 1: Write the failing hosted-stream instrumentation test**
+- [x] **Step 1: Write the failing hosted-stream instrumentation test**
 
 Add one method named `rendersChangingH264FramesThroughProductionStreamCore`. The general device
 suite skips it unless `hostedStreamEndpointPort` and `hostedStreamPublicKeyFingerprint` are
@@ -308,7 +308,7 @@ Run:
 Expected: compilation fails because the activity does not expose its stream `SurfaceView` and
 `SurfaceFrameEvidence` does not exist.
 
-- [ ] **Step 2: Add the narrow instrumentation hook and evidence collector**
+- [x] **Step 2: Add the narrow instrumentation hook and evidence collector**
 
 Retain the actual `SurfaceView` created by `touchSurface()` in a field and expose only this
 package-private method:
@@ -331,7 +331,7 @@ assertTrue(core.callbackExecutorShutdown());
 assertTrue(activity.isDestroyed());
 ```
 
-- [ ] **Step 3: Compile all Android variants**
+- [x] **Step 3: Compile all Android variants**
 
 Run:
 
@@ -342,7 +342,7 @@ Run:
 Expected: debug and release JVM suites, both APKs, and the instrumentation APK pass locally
 without launching local ADB.
 
-- [ ] **Step 4: Commit and push instrumentation**
+- [x] **Step 4: Commit and push instrumentation**
 
 ```powershell
 git add src/Beacon.Android/app/src/main src/Beacon.Android/app/src/androidTest

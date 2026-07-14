@@ -81,6 +81,7 @@ public final class BeaconActivity extends Activity {
     private TextView decoderDebugOverlay;
     private TextView controllerOverlayMarker;
     private View touchSurfaceView;
+    private SurfaceView videoSurfaceView;
     private AndroidSurfaceViewProvider videoSurfaceProvider;
     private TextView status;
 
@@ -267,11 +268,11 @@ public final class BeaconActivity extends Activity {
             LinearLayout.LayoutParams.MATCH_PARENT,
             surfaceHeight));
         surface.setBackgroundColor(uiState.surfaceColor());
-        SurfaceView video = new SurfaceView(this);
-        surface.addView(video, new FrameLayout.LayoutParams(
+        videoSurfaceView = new SurfaceView(this);
+        surface.addView(videoSurfaceView, new FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT));
-        videoSurfaceProvider = new AndroidSurfaceViewProvider(video);
+        videoSurfaceProvider = new AndroidSurfaceViewProvider(videoSurfaceView);
         surface.setOnTouchListener((view, event) -> {
             BeaconApiClient.InputBatch batch = mapTouchEvent(event, view.getWidth(), view.getHeight());
             if (batch == null) {
@@ -623,6 +624,10 @@ public final class BeaconActivity extends Activity {
 
     AndroidSurfaceViewProvider videoSurfaceProviderForInstrumentation() {
         return videoSurfaceProvider;
+    }
+
+    SurfaceView videoSurfaceViewForInstrumentation() {
+        return videoSurfaceView;
     }
 
     private BeaconApiClient.ProfilePatch readPatch() {

@@ -155,7 +155,7 @@ HostedEmulatorFrameFlowError HostedEmulatorFrameFlow::stop() noexcept {
   if (!started_) {
     return HostedEmulatorFrameFlowError::not_started;
   }
-  if (sent_frames_ != frame_count_ || rendered_feedback_ != frame_count_) {
+  if (sent_frames_ != frame_count_) {
     return HostedEmulatorFrameFlowError::rendering_incomplete;
   }
   return HostedEmulatorFrameFlowError::none;
@@ -585,7 +585,8 @@ private:
                     protocol_failed = true;
                   } else {
                     stopped_ = true;
-                    stop_accepted = true;
+                    stop_accepted = flow_.rendered_feedback() ==
+                                    config_.access_units.size();
                   }
                 } else {
                   set_failure_locked(
@@ -608,6 +609,9 @@ private:
             protocol_failed = true;
           } else if (rendered.next_access_unit_index.has_value()) {
             next_access_unit = rendered.next_access_unit_index;
+          }
+          if (rendered.rendering_complete && stopped_) {
+            stop_accepted = true;
           }
         }
         if (output.close_connection) {
