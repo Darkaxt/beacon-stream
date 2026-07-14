@@ -75,3 +75,30 @@ Android native execution, instrumentation, and the real emulator benchmark remai
 another task currently owns the shared ADB/emulator state. This validation issued no ADB command.
 It also made no display-topology or virtual-display change and did not access or control any
 external streaming installation.
+
+## Refactor Validation
+
+Implementation sync: `ede312f` (`feat: benchmark Beacon network and hardware path`).
+
+The post-sync ownership audit consolidated the process harness without changing the production
+protocol:
+
+- one benchmark-plan fixture now populates both Worker preparation and the client start message;
+- framed session replies are consumed by one client-owned state machine rather than directly in
+  the MsQuic callback;
+- video and benchmark process modes share one strict Worker transport-diagnostic collector;
+- benchmark result acceptance is owned by `ClientState`; and
+- all command-line modes share one fingerprint decoder.
+
+Repeated results after the refactor:
+
+- format and warning-as-error build passed; 509 .NET tests passed;
+- Windows native build passed; 23/23 CTests passed;
+- production Worker video and benchmark process probes passed;
+- architecture absence, secret fixtures, Kestrel parser fixtures, and `git diff --check` passed;
+  and
+- the forbidden runtime/test reference scan remained empty.
+
+The refactor touched only the Windows native acceptance probe and this evidence document. The
+successful Android 118-task/298-test build and Client Lab results from the implementation sync
+therefore remain current for the unchanged client code.
