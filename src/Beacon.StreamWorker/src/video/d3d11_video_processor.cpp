@@ -138,13 +138,21 @@ class WindowsD3d11VideoProcessorPlatform final
         reset();
         return D3d11VideoProcessorFailure::unsupported_color_conversion;
       }
+      const auto conversion = d3d11_sdr_video_conversion_query();
       BOOL conversion_supported{};
-      if (FAILED(enumerator1->CheckVideoProcessorFormatConversion(
-              input_format, input_color_space, output_format,
-              output_color_space, &conversion_supported)) ||
-          conversion_supported == FALSE) {
+      const HRESULT conversion_result =
+          enumerator1->CheckVideoProcessorFormatConversion(
+              static_cast<DXGI_FORMAT>(conversion.input_format),
+              static_cast<DXGI_COLOR_SPACE_TYPE>(conversion.input_color_space),
+              static_cast<DXGI_FORMAT>(conversion.output_format),
+              static_cast<DXGI_COLOR_SPACE_TYPE>(conversion.output_color_space),
+              &conversion_supported);
+      const auto conversion_failure = classify_d3d11_video_conversion_query(
+          static_cast<std::int32_t>(conversion_result),
+          conversion_supported != FALSE, device_removed());
+      if (conversion_failure != D3d11VideoProcessorFailure::none) {
         reset();
-        return D3d11VideoProcessorFailure::unsupported_color_conversion;
+        return conversion_failure;
       }
 
       D3D11_VIDEO_PROCESSOR_CAPS capabilities{};
@@ -168,11 +176,12 @@ class WindowsD3d11VideoProcessorPlatform final
     }
   }
 
-  [[nodiscard]] std::shared_ptr<capture::D3d11Texture>
+  [[nodiscard]] D3d11VideoProcessorTextureResult
   create_output_texture() noexcept override {
     try {
       if (!device_ || !processor_) {
-        return {};
+        return {.failure =
+                    D3d11VideoProcessorFailure::processor_creation_failed};
       }
       D3D11_TEXTURE2D_DESC description{};
       description.Width = configuration_.output_width;
@@ -184,13 +193,21 @@ class WindowsD3d11VideoProcessorPlatform final
       description.Usage = D3D11_USAGE_DEFAULT;
       description.BindFlags = D3D11_BIND_RENDER_TARGET;
       winrt::com_ptr<ID3D11Texture2D> texture;
-      if (FAILED(
-              device_->CreateTexture2D(&description, nullptr, texture.put()))) {
-        return {};
+      const HRESULT result =
+          device_->CreateTexture2D(&description, nullptr, texture.put());
+      if (FAILED(result)) {
+        return {.failure =
+                    device_removed()
+                        ? D3d11VideoProcessorFailure::device_lost
+                        : D3d11VideoProcessorFailure::output_creation_failed};
       }
-      return std::make_shared<WindowsD3d11Texture>(std::move(texture));
+      return {.texture =
+                  std::make_shared<WindowsD3d11Texture>(std::move(texture))};
     } catch (...) {
-      return {};
+      return {.failure =
+                  device_removed()
+                      ? D3d11VideoProcessorFailure::device_lost
+                      : D3d11VideoProcessorFailure::output_creation_failed};
     }
   }
 
@@ -247,11 +264,14 @@ class WindowsD3d11VideoProcessorPlatform final
       const RECT target{0, 0, static_cast<LONG>(configuration_.output_width),
                         static_cast<LONG>(configuration_.output_height)};
       D3D11_VIDEO_COLOR background{};
-      background.RGBA.A = 1.0F;
+      background.YCbCr.Y = 16.0F / 255.0F;
+      background.YCbCr.Cb = 128.0F / 255.0F;
+      background.YCbCr.Cr = 128.0F / 255.0F;
+      background.YCbCr.A = 1.0F;
       video_context_->VideoProcessorSetOutputTargetRect(processor_.get(), TRUE,
                                                         &target);
-      video_context_->VideoProcessorSetOutputBackgroundColor(
-          processor_.get(), FALSE, &background);
+      video_context_->VideoProcessorSetOutputBackgroundColor(processor_.get(),
+                                                             TRUE, &background);
       video_context_->VideoProcessorSetStreamFrameFormat(
           processor_.get(), 0, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE);
       video_context_->VideoProcessorSetStreamAutoProcessingMode(
@@ -372,9 +392,17 @@ std::optional<ConvertedD3d11Frame> D3d11VideoProcessor::convert(
   if (available != output_pool_.end()) {
     output = *available;
   } else if (output_pool_.size() < output_pool_capacity) {
-    output = platform_->create_output_texture();
-    if (!output || output->native_texture() == nullptr) {
-      failure_ = D3d11VideoProcessorFailure::output_creation_failed;
+    auto created = platform_->create_output_texture();
+    failure_ = created.failure;
+    output = std::move(created.texture);
+    if (failure_ != D3d11VideoProcessorFailure::none || !output ||
+        output->native_texture() == nullptr) {
+      if (failure_ == D3d11VideoProcessorFailure::none) {
+        failure_ = D3d11VideoProcessorFailure::output_creation_failed;
+      }
+      if (failure_ == D3d11VideoProcessorFailure::device_lost) {
+        discard_gpu_state();
+      }
       return std::nullopt;
     }
     output_pool_.push_back(output);
@@ -443,6 +471,27 @@ std::optional<D3d11VideoProcessorLayout> calculate_video_processor_layout(
                       .right = left + scaled_width,
                       .bottom = top + scaled_height},
   };
+}
+
+D3d11VideoProcessorNativeConversionQuery
+d3d11_sdr_video_conversion_query() noexcept {
+  return {
+      .input_format = static_cast<std::uint32_t>(input_format),
+      .input_color_space = static_cast<std::uint32_t>(input_color_space),
+      .output_format = static_cast<std::uint32_t>(output_format),
+      .output_color_space = static_cast<std::uint32_t>(output_color_space),
+  };
+}
+
+D3d11VideoProcessorFailure classify_d3d11_video_conversion_query(
+    std::int32_t status, bool supported, bool removed) noexcept {
+  if (removed) {
+    return D3d11VideoProcessorFailure::device_lost;
+  }
+  if (status < 0 || !supported) {
+    return D3d11VideoProcessorFailure::unsupported_color_conversion;
+  }
+  return D3d11VideoProcessorFailure::none;
 }
 
 std::unique_ptr<ID3d11VideoProcessorPlatform>

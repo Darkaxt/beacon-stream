@@ -26,7 +26,7 @@ using beacon::worker::video::D3d11VideoProcessorPlan;
 constexpr std::uint32_t input_width = 1280;
 constexpr std::uint32_t input_height = 720;
 constexpr std::uint32_t output_width = 640;
-constexpr std::uint32_t output_height = 360;
+constexpr std::uint32_t output_height = 400;
 constexpr int sample_tolerance = 5;
 
 struct RgbColor {
@@ -213,6 +213,23 @@ bool validate_nv12(ID3D11Device& device, ID3D11DeviceContext& context,
             within_tolerance(actual_u, expected[index].u) &&
             within_tolerance(actual_v, expected[index].v);
   }
+  const std::uint32_t background_x = output_width / 2U;
+  const std::uint32_t background_y = 10;
+  const std::uint8_t background_luma =
+      bytes[static_cast<std::size_t>(background_y) * mapped.RowPitch +
+            background_x];
+  const std::uint8_t background_u =
+      uv_plane[static_cast<std::size_t>(background_y / 2U) * mapped.RowPitch +
+               background_x];
+  const std::uint8_t background_v =
+      uv_plane[static_cast<std::size_t>(background_y / 2U) * mapped.RowPitch +
+               background_x + 1U];
+  std::cout << "letterbox_yuv=" << static_cast<int>(background_luma) << ','
+            << static_cast<int>(background_u) << ','
+            << static_cast<int>(background_v) << '\n';
+  valid = valid && within_tolerance(background_luma, 16) &&
+          within_tolerance(background_u, 128) &&
+          within_tolerance(background_v, 128);
   context.Unmap(staging.get(), 0);
   return valid;
 }

@@ -110,10 +110,13 @@ SDR uses BT.709 limited-range metadata for the first vertical slice. HDR convers
 claimed from this path. A later HDR gate must prove WGC float capture, P010 conversion,
 encoder metadata, protocol metadata, decoder, and panel presentation together.
 
-Observed evidence on 2026-07-14: deterministic 1280x720 BGRA color bars scaled to 640x360
-NV12 on `NVIDIA GeForce RTX 4090 Laptop GPU` with exact expected YUV samples, and real WGC
+Observed evidence on 2026-07-14: deterministic 1280x720 BGRA color bars scaled to a 640x400
+NV12 canvas on `NVIDIA GeForce RTX 4090 Laptop GPU` with exact expected YUV and limited-black
+letterbox samples, and real WGC
 2560x1600 frames produced changing NV12 hashes with increasing QPC timestamps on the same
 capture device. The production video directory contains no CPU mapping/copy or shader route.
+The exact command and observed samples are retained in
+`docs/validation/2026-07-14-d3d11-video-processor.md`.
 
 ## H.264 Encoder First
 

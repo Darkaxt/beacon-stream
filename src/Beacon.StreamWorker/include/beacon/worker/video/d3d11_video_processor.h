@@ -74,6 +74,18 @@ enum class D3d11VideoProcessorFailure {
   device_lost,
 };
 
+struct D3d11VideoProcessorTextureResult {
+  std::shared_ptr<capture::D3d11Texture> texture;
+  D3d11VideoProcessorFailure failure{D3d11VideoProcessorFailure::none};
+};
+
+struct D3d11VideoProcessorNativeConversionQuery {
+  std::uint32_t input_format{};
+  std::uint32_t input_color_space{};
+  std::uint32_t output_format{};
+  std::uint32_t output_color_space{};
+};
+
 struct ConvertedD3d11Frame {
   std::shared_ptr<capture::D3d11Texture> texture;
   std::uint32_t width{};
@@ -93,7 +105,7 @@ class ID3d11VideoProcessorPlatform {
   [[nodiscard]] virtual D3d11VideoProcessorFailure configure(
       const capture::D3d11Texture& input,
       const D3d11VideoProcessorConfiguration& configuration) noexcept = 0;
-  [[nodiscard]] virtual std::shared_ptr<capture::D3d11Texture>
+  [[nodiscard]] virtual D3d11VideoProcessorTextureResult
   create_output_texture() noexcept = 0;
   [[nodiscard]] virtual D3d11VideoProcessorFailure blit(
       const capture::D3d11Texture& input, capture::D3d11Texture& output,
@@ -137,6 +149,12 @@ calculate_video_processor_layout(std::uint32_t input_width,
                                  std::uint32_t input_height,
                                  std::uint32_t output_width,
                                  std::uint32_t output_height) noexcept;
+
+[[nodiscard]] D3d11VideoProcessorNativeConversionQuery
+d3d11_sdr_video_conversion_query() noexcept;
+
+[[nodiscard]] D3d11VideoProcessorFailure classify_d3d11_video_conversion_query(
+    std::int32_t status, bool supported, bool device_removed) noexcept;
 
 [[nodiscard]] std::unique_ptr<ID3d11VideoProcessorPlatform>
 create_windows_d3d11_video_processor_platform();

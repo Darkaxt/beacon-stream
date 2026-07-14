@@ -2,6 +2,9 @@
 
 #include "../Beacon.StreamProtocol.Tests/test_failure.h"
 
+#include <Windows.h>
+#include <d3d11_1.h>
+
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -11,11 +14,14 @@ namespace {
 using beacon::worker::capture::CapturedD3d11Frame;
 using beacon::worker::capture::D3d11Texture;
 using beacon::worker::video::calculate_video_processor_layout;
+using beacon::worker::video::classify_d3d11_video_conversion_query;
+using beacon::worker::video::d3d11_sdr_video_conversion_query;
 using beacon::worker::video::D3d11VideoProcessor;
 using beacon::worker::video::D3d11VideoProcessorConfiguration;
 using beacon::worker::video::D3d11VideoProcessorFailure;
 using beacon::worker::video::D3d11VideoProcessorLayout;
 using beacon::worker::video::D3d11VideoProcessorPlan;
+using beacon::worker::video::D3d11VideoProcessorTextureResult;
 using beacon::worker::video::ID3d11VideoProcessorPlatform;
 using beacon::worker::video::VideoColorMatrix;
 using beacon::worker::video::VideoPixelFormat;
@@ -38,7 +44,7 @@ class FakePlatform final : public ID3d11VideoProcessorPlatform {
   void* identity{reinterpret_cast<void*>(0x1000)};
   D3d11VideoProcessorFailure configure_result{D3d11VideoProcessorFailure::none};
   D3d11VideoProcessorFailure blit_result{D3d11VideoProcessorFailure::none};
-  bool output_creation_succeeds{true};
+  D3d11VideoProcessorFailure create_result{D3d11VideoProcessorFailure::none};
   int identity_count{};
   int configure_count{};
   int create_count{};
@@ -60,14 +66,16 @@ class FakePlatform final : public ID3d11VideoProcessorPlatform {
     return configure_result;
   }
 
-  [[nodiscard]] std::shared_ptr<D3d11Texture> create_output_texture() noexcept
-      override {
+  [[nodiscard]] D3d11VideoProcessorTextureResult
+  create_output_texture() noexcept override {
     ++create_count;
-    if (!output_creation_succeeds) {
-      return {};
+    if (create_result != D3d11VideoProcessorFailure::none) {
+      return {.failure = create_result};
     }
-    return std::make_shared<FakeTexture>(reinterpret_cast<void*>(
-        static_cast<std::uintptr_t>(0x2000 + create_count)));
+    return {
+        .texture = std::make_shared<FakeTexture>(reinterpret_cast<void*>(
+            static_cast<std::uintptr_t>(0x2000 + create_count))),
+    };
   }
 
   [[nodiscard]] D3d11VideoProcessorFailure blit(
@@ -132,6 +140,32 @@ void layout_preserves_the_full_source_and_centers_the_destination() {
   BEACON_TEST_REQUIRE(chroma_aligned.has_value());
   BEACON_TEST_REQUIRE(chroma_aligned->destination.left == 0);
   BEACON_TEST_REQUIRE(chroma_aligned->destination.right == 1000);
+}
+
+void exact_native_capability_query_and_results_are_fixed() {
+  const auto query = d3d11_sdr_video_conversion_query();
+  BEACON_TEST_REQUIRE(query.input_format ==
+                      static_cast<std::uint32_t>(DXGI_FORMAT_B8G8R8A8_UNORM));
+  BEACON_TEST_REQUIRE(
+      query.input_color_space ==
+      static_cast<std::uint32_t>(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709));
+  BEACON_TEST_REQUIRE(query.output_format ==
+                      static_cast<std::uint32_t>(DXGI_FORMAT_NV12));
+  BEACON_TEST_REQUIRE(
+      query.output_color_space ==
+      static_cast<std::uint32_t>(DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709));
+  BEACON_TEST_REQUIRE(classify_d3d11_video_conversion_query(
+                          static_cast<std::int32_t>(S_OK), true, false) ==
+                      D3d11VideoProcessorFailure::none);
+  BEACON_TEST_REQUIRE(classify_d3d11_video_conversion_query(
+                          static_cast<std::int32_t>(S_OK), false, false) ==
+                      D3d11VideoProcessorFailure::unsupported_color_conversion);
+  BEACON_TEST_REQUIRE(classify_d3d11_video_conversion_query(
+                          static_cast<std::int32_t>(E_FAIL), false, false) ==
+                      D3d11VideoProcessorFailure::unsupported_color_conversion);
+  BEACON_TEST_REQUIRE(classify_d3d11_video_conversion_query(
+                          static_cast<std::int32_t>(E_FAIL), false, true) ==
+                      D3d11VideoProcessorFailure::device_lost);
 }
 
 void invalid_dimensions_fail_before_touching_the_platform() {
@@ -276,11 +310,30 @@ void device_loss_discards_cached_gpu_state_and_reconfigures_on_retry() {
   BEACON_TEST_REQUIRE(observed->create_count == 2);
 }
 
+void device_loss_during_output_creation_discards_cached_gpu_state() {
+  auto platform = std::make_unique<FakePlatform>();
+  auto* observed = platform.get();
+  platform->create_result = D3d11VideoProcessorFailure::device_lost;
+  D3d11VideoProcessor processor{std::move(platform)};
+
+  BEACON_TEST_REQUIRE(!processor.convert(frame(), plan()).has_value());
+  BEACON_TEST_REQUIRE(processor.failure() ==
+                      D3d11VideoProcessorFailure::device_lost);
+  BEACON_TEST_REQUIRE(observed->reset_count == 1);
+
+  observed->create_result = D3d11VideoProcessorFailure::none;
+  const auto retried = processor.convert(frame(), plan());
+  BEACON_TEST_REQUIRE(retried.has_value());
+  BEACON_TEST_REQUIRE(observed->configure_count == 2);
+  BEACON_TEST_REQUIRE(observed->create_count == 2);
+}
+
 }  // namespace
 
 int main() {
   return beacon::stream::testing::run_tests([] {
     layout_preserves_the_full_source_and_centers_the_destination();
+    exact_native_capability_query_and_results_are_fixed();
     invalid_dimensions_fail_before_touching_the_platform();
     first_conversion_requests_the_exact_sdr_nv12_contract();
     released_output_textures_are_reused_without_reconfiguration();
@@ -288,5 +341,6 @@ int main() {
     device_or_configuration_changes_reset_the_cached_processor();
     unsupported_capability_failure_is_preserved_without_blitting();
     device_loss_discards_cached_gpu_state_and_reconfigures_on_retry();
+    device_loss_during_output_creation_discards_cached_gpu_state();
   });
 }

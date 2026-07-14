@@ -401,13 +401,18 @@ probe repeated the same physical-only 2560x1600@240 result.
 - [x] Commit: `feat: convert Beacon frames on D3D11`
 
 Validation (2026-07-14): the clean Windows native build completed all 382 steps and all 17
-CTests pass. The NVIDIA integration probe converted deterministic 1280x720 BGRA bars to
-640x360 NV12; sampled YUV values exactly matched BT.709 limited-range expectations within
+CTests pass. The NVIDIA integration probe converted deterministic 1280x720 BGRA bars to a
+640x400 NV12 canvas; sampled YUV values and the limited-black letterbox exactly matched
+BT.709 limited-range expectations within
 the declared tolerance of five. The moving-window WGC probe converted two real 2560x1600
 frames on `NVIDIA GeForce RTX 4090 Laptop GPU` to distinct NV12 hashes with increasing QPC
 timestamps. All 486 managed tests and the 25 focused architecture/documentation tests pass;
 formatting and prohibited-route/fallback scans are clean. Neither probe creates, configures,
 queries, or controls an Apollo runtime or display lifecycle.
+
+The repeatable command and captured output are tracked in
+`docs/validation/2026-07-14-d3d11-video-processor.md`; the entry point is
+`scripts/test-d3d11-video-processor.ps1`.
 
 ### Task 16: Encode H.264 With Native NVENC
 
