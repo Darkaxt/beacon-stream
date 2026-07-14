@@ -26,29 +26,3 @@ public sealed record SudoVdaDriverLeaseSessionSnapshot(
     bool HeartbeatActive,
     bool Healthy,
     string Diagnostic);
-
-internal sealed class NoOpWindowsDisplayLeaseSession : IWindowsDisplayLeaseSession
-{
-    public static NoOpWindowsDisplayLeaseSession Instance { get; } = new();
-
-    public SudoVdaDriverLeaseSessionSnapshot Snapshot { get; } = new(
-        LeaseCount: 0,
-        WatchdogTimeoutSeconds: null,
-        HeartbeatActive: false,
-        Healthy: true,
-        Diagnostic: "No Windows driver lease session is attached.");
-
-    public Task<SudoVdaDriverLeaseHoldResult> HoldAsync(
-        string displayId,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(SudoVdaDriverLeaseHoldResult.Held());
-    }
-
-    public Task ReleaseAsync(string displayId, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return Task.CompletedTask;
-    }
-}

@@ -20,7 +20,7 @@ public sealed class SudoVdaDriverLeaseSessionTests
     }
 
     [Fact]
-    public async Task FirstLeaseOpensDriverPingsImmediatelyAndUsesHalfWatchdogCadence()
+    public async Task FirstLeaseOpensDriverPingsImmediatelyAndReservesOneDriverTickOfMargin()
     {
         var connection = new FakeSudoVdaDriverConnection(timeoutSeconds: 3);
         var factory = new FakeSudoVdaDriverConnectionFactory(connection);
@@ -36,7 +36,7 @@ public sealed class SudoVdaDriverLeaseSessionTests
         Assert.Equal(1, factory.OpenCount);
         Assert.Equal(1, connection.WatchdogQueryCount);
         Assert.Equal(1, connection.PingCount);
-        Assert.Equal(TimeSpan.FromSeconds(1.5), scheduler.Interval);
+        Assert.Equal(TimeSpan.FromSeconds(1), scheduler.Interval);
         Assert.Equal(1, scheduler.ScheduleCount);
         Assert.Equal(1, session.Snapshot.LeaseCount);
         Assert.True(session.Snapshot.HeartbeatActive);
@@ -152,6 +152,25 @@ public sealed class SudoVdaDriverLeaseSessionTests
     }
 
     [Fact]
+    public async Task OneSecondWatchdogFailsHoldBecauseNoHeartbeatCanBeatImmediateDriverTick()
+    {
+        var connection = new FakeSudoVdaDriverConnection(timeoutSeconds: 1);
+        var factory = new FakeSudoVdaDriverConnectionFactory(connection);
+        var scheduler = new ManualSudoVdaHeartbeatScheduler();
+        await using var session = new SudoVdaDriverLeaseSession(factory, scheduler);
+
+        SudoVdaDriverLeaseHoldResult result = await session.HoldAsync(
+            "client-one",
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("one second", result.Error ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.True(connection.Disposed);
+        Assert.Equal(0, scheduler.ScheduleCount);
+        Assert.False(session.Snapshot.Healthy);
+    }
+
+    [Fact]
     public async Task DriverOpenExceptionBecomesFailedHoldDiagnostic()
     {
         var factory = new FakeSudoVdaDriverConnectionFactory
@@ -168,7 +187,27 @@ public sealed class SudoVdaDriverLeaseSessionTests
         Assert.False(result.Success);
         Assert.Contains("native open exploded", result.Error ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, session.Snapshot.LeaseCount);
+        Assert.False(session.Snapshot.Healthy);
         Assert.Equal(0, scheduler.ScheduleCount);
+    }
+
+    [Fact]
+    public async Task NativePingExceptionFaultsHealthWithoutEscapingOrRemovingLease()
+    {
+        var connection = new FakeSudoVdaDriverConnection(timeoutSeconds: 3);
+        var factory = new FakeSudoVdaDriverConnectionFactory(connection);
+        factory.OpenResults.Enqueue(SudoVdaDriverConnectionOpenResult.Fail("driver unavailable"));
+        var scheduler = new ManualSudoVdaHeartbeatScheduler();
+        await using var session = new SudoVdaDriverLeaseSession(factory, scheduler);
+        await session.HoldAsync("client-one", CancellationToken.None);
+        connection.PingException = new InvalidOperationException("native ping exploded");
+
+        await scheduler.TickAsync();
+
+        Assert.Equal(1, session.Snapshot.LeaseCount);
+        Assert.False(session.Snapshot.Healthy);
+        Assert.Contains("native ping exploded", session.Snapshot.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, connection.RemoveCount);
     }
 
     private sealed class FakeSudoVdaDriverConnectionFactory(params FakeSudoVdaDriverConnection[] connections)
@@ -211,6 +250,8 @@ public sealed class SudoVdaDriverLeaseSessionTests
 
         public int RemoveCount { get; private set; }
 
+        public Exception? PingException { get; set; }
+
         public bool Disposed { get; private set; }
 
         public SudoVdaWatchdogQueryResult QueryWatchdog()
@@ -222,6 +263,11 @@ public sealed class SudoVdaDriverLeaseSessionTests
         public SudoVdaDriverOperationResult Ping()
         {
             PingCount++;
+            if (PingException is not null)
+            {
+                throw PingException;
+            }
+
             return PingResults.TryDequeue(out SudoVdaDriverOperationResult? result)
                 ? result
                 : SudoVdaDriverOperationResult.Ok();

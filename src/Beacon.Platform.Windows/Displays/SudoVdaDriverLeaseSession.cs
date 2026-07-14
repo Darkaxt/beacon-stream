@@ -38,7 +38,7 @@ internal sealed class SudoVdaDriverLeaseSession(
                     SudoVdaDriverConnectionOpenResult openResult = OpenHealthyConnection();
                     if (!openResult.Success || openResult.Connection is null)
                     {
-                        SetSnapshot(IdleSnapshot(openResult.Error ?? "Unable to open SudoVDA driver session."));
+                        SetUnhealthySnapshot(openResult.Error ?? "Unable to open SudoVDA driver session.");
                         return SudoVdaDriverLeaseHoldResult.Fail(Snapshot.Diagnostic);
                     }
 
@@ -196,7 +196,14 @@ internal sealed class SudoVdaDriverLeaseSession(
                 "A disabled watchdog does not require a heartbeat interval.");
         }
 
-        return TimeSpan.FromTicks(TimeSpan.FromSeconds(watchdogTimeoutSeconds).Ticks / 2);
+        if (watchdogTimeoutSeconds == 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(watchdogTimeoutSeconds),
+                "A one second watchdog can expire on the driver's first timer tick.");
+        }
+
+        return TimeSpan.FromSeconds((watchdogTimeoutSeconds - 1) / 2d);
     }
 
     private async ValueTask HeartbeatAsync(CancellationToken cancellationToken)
@@ -211,7 +218,17 @@ internal sealed class SudoVdaDriverLeaseSession(
 
             if (connection is not null)
             {
-                SudoVdaDriverOperationResult pingResult = connection.Ping();
+                SudoVdaDriverOperationResult pingResult;
+                try
+                {
+                    pingResult = connection.Ping();
+                }
+                catch (Exception ex)
+                {
+                    pingResult = SudoVdaDriverOperationResult.Fail(
+                        $"Native SudoVDA heartbeat failed: {ex.Message}");
+                }
+
                 if (pingResult.Success)
                 {
                     SetHealthySnapshot(
@@ -220,7 +237,16 @@ internal sealed class SudoVdaDriverLeaseSession(
                     return;
                 }
 
-                connection.Dispose();
+                try
+                {
+                    connection.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    pingResult = SudoVdaDriverOperationResult.Fail(
+                        $"{pingResult.Error}; stale driver connection disposal failed: {ex.Message}");
+                }
+
                 connection = null;
                 SudoVdaDriverConnectionOpenResult recoveryResult = OpenHealthyConnection();
                 if (recoveryResult.Success && recoveryResult.Connection is not null)
@@ -275,6 +301,13 @@ internal sealed class SudoVdaDriverLeaseSession(
                 openedConnection.Dispose();
                 return SudoVdaDriverConnectionOpenResult.Fail(
                     watchdogResult.Error ?? "Unable to query SudoVDA watchdog state.");
+            }
+
+            if (watchdogResult.State.TimeoutSeconds == 1)
+            {
+                openedConnection.Dispose();
+                return SudoVdaDriverConnectionOpenResult.Fail(
+                    "SudoVDA reports a one second watchdog, which can expire on the driver's first timer tick and cannot safely preserve a Beacon display lease.");
             }
 
             SudoVdaDriverOperationResult pingResult = openedConnection.Ping();

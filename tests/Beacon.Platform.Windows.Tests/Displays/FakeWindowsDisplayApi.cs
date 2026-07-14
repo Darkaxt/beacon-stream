@@ -2,7 +2,7 @@ using Beacon.Platform.Windows.Displays;
 
 namespace Beacon.Platform.Windows.Tests.Displays;
 
-internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi
+internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi, IWindowsDisplayLeaseSession
 {
     public bool DriverReady { get; set; } = true;
 
@@ -35,6 +35,17 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi
     public List<string> RemovedDisplays { get; } = [];
 
     public int TopologyQueryCount { get; private set; }
+
+    public List<string> HeldDisplayIds { get; } = [];
+
+    public List<string> ReleasedDisplayIds { get; } = [];
+
+    public SudoVdaDriverLeaseSessionSnapshot Snapshot => new(
+        LeaseCount: HeldDisplayIds.Count - ReleasedDisplayIds.Count,
+        WatchdogTimeoutSeconds: 3,
+        HeartbeatActive: HeldDisplayIds.Count > ReleasedDisplayIds.Count,
+        Healthy: true,
+        Diagnostic: "Fake SudoVDA driver lease session is healthy.");
 
     public static FakeWindowsDisplayApi ReadyWithGoodTopology()
     {
@@ -127,4 +138,28 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi
 
     public Task<DisplayHdrCapability> QueryHdrCapabilityAsync(string displayId, CancellationToken cancellationToken) =>
         Task.FromResult(HdrCapability);
+
+    public Task<SudoVdaDriverLeaseHoldResult> HoldAsync(
+        string displayId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        bool acquired = !HeldDisplayIds.Contains(displayId, StringComparer.OrdinalIgnoreCase);
+        if (acquired)
+        {
+            HeldDisplayIds.Add(displayId);
+        }
+
+        return Task.FromResult(
+            acquired
+                ? SudoVdaDriverLeaseHoldResult.Held()
+                : SudoVdaDriverLeaseHoldResult.AlreadyHeld());
+    }
+
+    public Task ReleaseAsync(string displayId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ReleasedDisplayIds.Add(displayId);
+        return Task.CompletedTask;
+    }
 }

@@ -376,6 +376,14 @@ currently loaded `0s` watchdog, sent an immediate heartbeat, released the hold, 
 machine physical-only, non-mirrored, and primary at 2560x1600@240. No Apollo process, service,
 configuration, or driver-device lifecycle action was used.
 
+Refactor validation (2026-07-14): composition now fails closed without a real driver lease
+session; native heartbeat exceptions become health faults without escaping or changing lease
+ownership; successful display removal completes hold release despite caller cancellation; the
+heartbeat cadence reserves one driver timer tick; and an unsafe one-second watchdog fails
+readiness. The full solution passes all 486 tests, formatting is clean, the prohibited-route
+and Apollo/global-driver configuration scans are empty, and the real driver-session/topology
+probe repeated the same physical-only 2560x1600@240 result.
+
 ### Task 15: Convert And Scale On D3D11
 
 **Files:**

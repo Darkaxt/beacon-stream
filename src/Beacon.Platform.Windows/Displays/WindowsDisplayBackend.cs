@@ -11,7 +11,9 @@ public sealed class WindowsDisplayBackend : IDisplayBackend
     public WindowsDisplayBackend(IWindowsDisplayApi api)
         : this(
             api,
-            api as IWindowsDisplayLeaseSession ?? NoOpWindowsDisplayLeaseSession.Instance)
+            api as IWindowsDisplayLeaseSession ?? throw new ArgumentException(
+                "The Windows display API must provide a SudoVDA driver lease session.",
+                nameof(api)))
     {
     }
 
@@ -364,7 +366,7 @@ public sealed class WindowsDisplayBackend : IDisplayBackend
             return DisplayRemoveResult.Fail(result.Error ?? $"Virtual display {displayId} removal failed.");
         }
 
-        await driverLeaseSession.ReleaseAsync(displayId, cancellationToken);
+        await driverLeaseSession.ReleaseAsync(displayId, CancellationToken.None);
         return DisplayRemoveResult.Ok();
     }
 

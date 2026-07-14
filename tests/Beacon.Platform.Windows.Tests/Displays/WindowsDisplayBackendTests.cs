@@ -6,6 +6,16 @@ namespace Beacon.Platform.Windows.Tests.Displays;
 public sealed class WindowsDisplayBackendTests
 {
     [Fact]
+    public void ConstructorRejectsDisplayApiWithoutDriverLeaseSession()
+    {
+        var api = new DriverlessWindowsDisplayApi();
+
+        ArgumentException error = Assert.Throws<ArgumentException>(() => new WindowsDisplayBackend(api));
+
+        Assert.Contains("lease session", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task PrepareVirtualDisplayAsync_HoldsDriverSessionForSuccessfulLease()
     {
         var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
@@ -83,6 +93,23 @@ public sealed class WindowsDisplayBackendTests
         DisplayRemoveResult result = await backend.RemoveVirtualDisplayAsync(
             "client-z-fold-7",
             CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal("client-z-fold-7", Assert.Single(session.ReleasedDisplayIds));
+    }
+
+    [Fact]
+    public async Task RemoveVirtualDisplayAsync_AfterNativeSuccessCompletesDriverReleaseDespiteCallerCancellation()
+    {
+        var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
+        var session = new FakeWindowsDisplayLeaseSession();
+        var backend = new WindowsDisplayBackend(api, session);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        DisplayRemoveResult result = await backend.RemoveVirtualDisplayAsync(
+            "client-z-fold-7",
+            cancellation.Token);
 
         Assert.True(result.Success, result.Error);
         Assert.Equal("client-z-fold-7", Assert.Single(session.ReleasedDisplayIds));
@@ -595,4 +622,34 @@ internal sealed class FakeWindowsDisplayLeaseSession : IWindowsDisplayLeaseSessi
         ReleasedDisplayIds.Add(displayId);
         return Task.CompletedTask;
     }
+}
+
+internal sealed class DriverlessWindowsDisplayApi : IWindowsDisplayApi
+{
+    public DisplayDriverStatus GetDriverStatus() => throw new NotSupportedException();
+
+    public Task<DisplayApiResult> CreateVirtualDisplayAsync(
+        string displayId,
+        int width,
+        int height,
+        int refreshHz,
+        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    public Task<DisplayTopologySnapshot> QueryTopologyAsync(CancellationToken cancellationToken) =>
+        throw new NotSupportedException();
+
+    public Task<DisplayApiResult> SetVirtualPrimaryAsync(
+        string displayId,
+        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    public Task<DisplayApiResult> RestorePhysicalPrimaryAsync(CancellationToken cancellationToken) =>
+        throw new NotSupportedException();
+
+    public Task<DisplayApiResult> RemoveVirtualDisplayAsync(
+        string displayId,
+        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    public Task<DisplayHdrCapability> QueryHdrCapabilityAsync(
+        string displayId,
+        CancellationToken cancellationToken) => throw new NotSupportedException();
 }
