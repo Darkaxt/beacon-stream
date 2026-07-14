@@ -2,10 +2,12 @@
 
 #include "beacon/stream/transport.h"
 #include "beacon/worker/quic_listener.h"
+#include "beacon/worker/video/worker_video_pipeline.h"
 #include "worker_ipc.pb.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -18,7 +20,8 @@ class WorkerHost {
   WorkerHost(std::vector<std::byte> worker_instance_id,
              std::uint32_t process_id,
              IWorkerMediaTransport& transport,
-             AuthorizedQuicTicketStore& authorized_tickets);
+             AuthorizedQuicTicketStore& authorized_tickets,
+             video::IWorkerVideoPipeline& video_pipeline);
 
   [[nodiscard]] v1::WorkerIpcEnvelope hello() const;
   [[nodiscard]] v1::WorkerIpcEnvelope ready() const;
@@ -49,6 +52,8 @@ class WorkerHost {
       const v1::WorkerIpcEnvelope& request);
   [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> stop_media(
       const v1::WorkerIpcEnvelope& request);
+  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> request_idr(
+      const v1::WorkerIpcEnvelope& request);
   [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> shutdown(
       const v1::WorkerIpcEnvelope& request);
 
@@ -56,11 +61,13 @@ class WorkerHost {
   std::uint32_t process_id_{};
   IWorkerMediaTransport& transport_;
   AuthorizedQuicTicketStore& authorized_tickets_;
+  video::IWorkerVideoPipeline& video_pipeline_;
   bool prepared_{};
   bool benchmark_prepared_{};
   bool streaming_{};
   bool shutdown_requested_{};
   std::string session_id_;
+  std::optional<video::WorkerVideoPlan> prepared_video_plan_;
   stream::v1::StartBenchmark benchmark_plan_;
 };
 

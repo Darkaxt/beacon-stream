@@ -1,6 +1,8 @@
 #include "beacon/worker/worker_host.h"
 
 #include <array>
+#include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -16,16 +18,54 @@ std::string bytes_to_string(const std::vector<std::byte>& bytes) {
   return result;
 }
 
+std::optional<std::uint32_t> bitrate_bps(std::uint32_t bitrate_kbps) {
+  constexpr std::uint32_t bits_per_kilobit{1'000};
+  if (bitrate_kbps == 0 ||
+      bitrate_kbps >
+          std::numeric_limits<std::uint32_t>::max() / bits_per_kilobit) {
+    return std::nullopt;
+  }
+  return bitrate_kbps * bits_per_kilobit;
+}
+
+std::optional<video::WorkerVideoPlan>
+worker_video_plan_from(const v1::WorkerIpcEnvelope& request) {
+  const auto& source = request.prepare_session();
+  const auto minimum = bitrate_bps(source.minimum_bitrate_kbps());
+  const auto initial = bitrate_bps(source.initial_bitrate_kbps());
+  const auto maximum = bitrate_bps(source.maximum_bitrate_kbps());
+  if (!minimum || !initial || !maximum || *minimum > *initial ||
+      *initial > *maximum) {
+    return std::nullopt;
+  }
+  video::WorkerVideoPlan plan{
+      .session_id = request.session_id(),
+      .display_device_name = std::wstring(source.display_device_name().begin(),
+                                          source.display_device_name().end()),
+      .width = source.width(),
+      .height = source.height(),
+      .frame_rate_numerator = source.frames_per_second_numerator(),
+      .frame_rate_denominator = source.frames_per_second_denominator(),
+      .minimum_bitrate_bps = *minimum,
+      .initial_bitrate_bps = *initial,
+      .maximum_bitrate_bps = *maximum,
+  };
+  return video::valid_worker_video_plan(plan) ? std::optional{std::move(plan)}
+                                              : std::nullopt;
+}
+
 }  // namespace
 
 WorkerHost::WorkerHost(std::vector<std::byte> worker_instance_id,
                        std::uint32_t process_id,
                        IWorkerMediaTransport& transport,
-                       AuthorizedQuicTicketStore& authorized_tickets)
+                       AuthorizedQuicTicketStore& authorized_tickets,
+                       video::IWorkerVideoPipeline& video_pipeline)
     : worker_instance_id_(std::move(worker_instance_id)),
       process_id_(process_id),
       transport_(transport),
-      authorized_tickets_(authorized_tickets) {}
+      authorized_tickets_(authorized_tickets),
+      video_pipeline_(video_pipeline) {}
 
 v1::WorkerIpcEnvelope WorkerHost::hello() const {
   v1::WorkerIpcEnvelope envelope;
@@ -70,7 +110,7 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::dispatch(
     case v1::WorkerIpcEnvelope::kStopMedia:
       return stop_media(request);
     case v1::WorkerIpcEnvelope::kRequestIdr:
-      return {completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
+      return request_idr(request);
     case v1::WorkerIpcEnvelope::kShutdownWorker:
       return shutdown(request);
     default:
@@ -124,10 +164,23 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare(
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_STATE);
   }
 
+  auto video_plan = worker_video_plan_from(request);
+  if (!video_plan) {
+    return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);
+  }
+  try {
+    if (!video_pipeline_.prepare(*video_plan)) {
+      return reject(request, v1::WORKER_ERROR_CODE_OPERATION_FAILED);
+    }
+  } catch (...) {
+    return reject(request, v1::WORKER_ERROR_CODE_OPERATION_FAILED);
+  }
+
   prepared_ = true;
   benchmark_prepared_ = false;
   benchmark_plan_.Clear();
   session_id_ = request.session_id();
+  prepared_video_plan_ = std::move(video_plan);
   auto state = response_envelope(request);
   state.mutable_session_state_changed()->set_state(v1::WORKER_SESSION_STATE_PREPARED);
   state.mutable_session_state_changed()->set_error_code(v1::WORKER_ERROR_CODE_NONE);
@@ -148,6 +201,8 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare_benchmark(
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);
   }
 
+  video_pipeline_.reset();
+  prepared_video_plan_.reset();
   prepared_ = true;
   benchmark_prepared_ = true;
   benchmark_plan_ = plan;
@@ -164,7 +219,8 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare_benchmark(
 std::vector<v1::WorkerIpcEnvelope> WorkerHost::authorize_ticket(
     const v1::WorkerIpcEnvelope& request) {
   const auto& ticket = request.authorize_ticket();
-  if (request.session_id().empty() || ticket.ticket_hash().size() != 32 ||
+  if (!prepared_ || request.session_id() != session_id_ ||
+      request.session_id().empty() || ticket.ticket_hash().size() != 32 ||
       ticket.client_id().empty() || ticket.plan_revision() == 0 ||
       ticket.expires_at_unix_ms() == 0 ||
       ticket.worker_instance_id() != bytes_to_string(worker_instance_id_)) {
@@ -175,17 +231,20 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::authorize_ticket(
   for (std::size_t index = 0; index < hash.size(); ++index) {
     hash[index] = static_cast<std::byte>(ticket.ticket_hash()[index]);
   }
-  if (!authorized_tickets_.authorize({
+  AuthorizedQuicTicket authorization{
           .hash = hash,
           .client_id = ticket.client_id(),
           .session_id = request.session_id(),
           .plan_revision = ticket.plan_revision(),
           .expires_at_unix_ms = ticket.expires_at_unix_ms(),
-          .benchmark_plan = benchmark_prepared_ &&
-                                    request.session_id() == session_id_
-                                ? std::optional{benchmark_plan_}
-                                : std::nullopt,
-      })) {
+      };
+  if (benchmark_prepared_) {
+    authorization.benchmark_plan = benchmark_plan_;
+  } else if (prepared_video_plan_) {
+    authorization.selected_video =
+        video::selected_video_from_plan(*prepared_video_plan_);
+  }
+  if (!authorized_tickets_.authorize(std::move(authorization))) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_STATE);
   }
   return {completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
@@ -239,19 +298,39 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::stop_media(
   if (!streaming_ || request.session_id() != session_id_) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_STATE);
   }
+  video_pipeline_.reset();
   transport_.close_connection();
   streaming_ = false;
   prepared_ = false;
   benchmark_prepared_ = false;
   benchmark_plan_.Clear();
+  prepared_video_plan_.reset();
   auto state = response_envelope(request);
   state.mutable_session_state_changed()->set_state(v1::WORKER_SESSION_STATE_STOPPED);
   state.mutable_session_state_changed()->set_error_code(v1::WORKER_ERROR_CODE_NONE);
   return {std::move(state), completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }
 
+std::vector<v1::WorkerIpcEnvelope> WorkerHost::request_idr(
+    const v1::WorkerIpcEnvelope& request) {
+  if (!streaming_ || benchmark_prepared_ || !prepared_video_plan_ ||
+      request.session_id() != session_id_ ||
+      request.request_idr().reason() == v1::IDR_REASON_UNSPECIFIED) {
+    return reject(request, v1::WORKER_ERROR_CODE_INVALID_STATE);
+  }
+  try {
+    if (!video_pipeline_.request_idr()) {
+      return reject(request, v1::WORKER_ERROR_CODE_OPERATION_FAILED);
+    }
+  } catch (...) {
+    return reject(request, v1::WORKER_ERROR_CODE_OPERATION_FAILED);
+  }
+  return {completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
+}
+
 std::vector<v1::WorkerIpcEnvelope> WorkerHost::shutdown(
     const v1::WorkerIpcEnvelope& request) {
+  video_pipeline_.reset();
   if (streaming_) {
     transport_.close_connection();
   }
@@ -260,6 +339,7 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::shutdown(
   prepared_ = false;
   benchmark_prepared_ = false;
   benchmark_plan_.Clear();
+  prepared_video_plan_.reset();
   shutdown_requested_ = true;
   return {completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }

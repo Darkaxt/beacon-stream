@@ -1,5 +1,7 @@
 #include "beacon/worker/worker_events.h"
 
+#include <utility>
+
 namespace beacon::worker {
 namespace {
 
@@ -107,6 +109,36 @@ v1::WorkerIpcEnvelope make_media_evidence_event(
   body->set_presentation_time_us(presentation_time_us);
   body->set_datagram_bytes(datagram_bytes);
   return event;
+}
+
+std::vector<v1::WorkerIpcEnvelope> make_video_pipeline_failure_events(
+    const video::VideoPipelineFailureEvent &failure) {
+  auto state = event_envelope(failure.session_id);
+  state.mutable_session_state_changed()->set_state(
+      v1::WORKER_SESSION_STATE_FAILED);
+  state.mutable_session_state_changed()->set_error_code(
+      v1::WORKER_ERROR_CODE_OPERATION_FAILED);
+
+  auto diagnostic = event_envelope(failure.session_id);
+  auto *body = diagnostic.mutable_worker_diagnostic();
+  body->set_severity(v1::DIAGNOSTIC_SEVERITY_ERROR);
+  switch (failure.boundary) {
+  case video::VideoPipelineFailureBoundary::capture:
+    body->set_boundary(v1::DIAGNOSTIC_BOUNDARY_CAPTURE);
+    break;
+  case video::VideoPipelineFailureBoundary::transport:
+    body->set_boundary(v1::DIAGNOSTIC_BOUNDARY_TRANSPORT);
+    break;
+  case video::VideoPipelineFailureBoundary::video_processor:
+  case video::VideoPipelineFailureBoundary::encoder:
+  case video::VideoPipelineFailureBoundary::media_session:
+    body->set_boundary(v1::DIAGNOSTIC_BOUNDARY_ENCODER);
+    break;
+  }
+  body->set_code(v1::DIAGNOSTIC_CODE_OPERATION_FAILED);
+  body->set_platform_error_code(failure.native_code);
+  body->set_numeric_value(failure.session_generation);
+  return {std::move(state), std::move(diagnostic)};
 }
 
 } // namespace beacon::worker

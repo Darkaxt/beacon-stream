@@ -22,6 +22,7 @@ struct AuthorizedQuicTicket {
   std::string session_id;
   std::uint64_t plan_revision{};
   std::uint64_t expires_at_unix_ms{};
+  std::optional<stream::v1::SelectedVideoMode> selected_video;
   std::optional<stream::v1::StartBenchmark> benchmark_plan;
 };
 
@@ -37,6 +38,7 @@ enum class QuicTicketConsumeResult {
 
 struct QuicTicketConsumeOutcome {
   QuicTicketConsumeResult result{QuicTicketConsumeResult::unknown};
+  std::optional<stream::v1::SelectedVideoMode> selected_video;
   std::optional<stream::v1::StartBenchmark> benchmark_plan;
 };
 

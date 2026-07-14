@@ -124,6 +124,7 @@ private:
   std::uint64_t next_generation_{};
   std::uint64_t active_connection_generation_{};
   std::string benchmark_run_id_;
+  std::optional<stream::v1::SelectedVideoMode> authorized_video_plan_;
   std::optional<stream::v1::StartBenchmark> authorized_benchmark_plan_;
   SecureClearObserver session_wipe_observer_{};
   void *session_wipe_context_{};

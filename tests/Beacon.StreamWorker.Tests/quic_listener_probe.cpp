@@ -1,6 +1,5 @@
 #include "beacon/worker/named_pipe_channel.h"
 #include "beacon/worker/quic_listener.h"
-#include "beacon/worker/synthetic_media_source.h"
 
 #include "beacon/stream/media_datagram.h"
 
@@ -18,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cwchar>
 #include <filesystem>
 #include <limits>
 #include <memory>
@@ -261,7 +261,9 @@ struct ClientState {
   bool failed{};
   bool certificate_seen{};
   bool send_data_after_auth{true};
-  std::uint64_t expected_marker_sequence{1};
+  bool exercise_ordered_actions{true};
+  std::uint32_t video_width{2560};
+  std::uint32_t video_height{1600};
   stream_v1::SessionErrorCode authentication_error{
       stream_v1::SESSION_ERROR_CODE_UNSPECIFIED};
   std::string raw_ticket{kRawTicket};
@@ -286,8 +288,8 @@ struct ClientState {
     control.set_sequence(2);
     auto *video = control.mutable_start_session()->mutable_selected_video();
     video->set_codec(stream_v1::VIDEO_CODEC_H264);
-    video->set_width(2560);
-    video->set_height(1600);
+    video->set_width(video_width);
+    video->set_height(video_height);
     video->set_frames_per_second_numerator(120);
     video->set_frames_per_second_denominator(1);
     video->set_dynamic_range(stream_v1::DYNAMIC_RANGE_SDR);
@@ -329,9 +331,11 @@ struct ClientState {
       session_actions.insert(session_actions.end(), action.begin(),
                              action.end());
     };
-    append_action(stop);
-    append_action(restart);
-    append_action(request_idr);
+    if (exercise_ordered_actions) {
+      append_action(stop);
+      append_action(restart);
+      append_action(request_idr);
+    }
 
     return send(session_stream, std::move(session_actions),
                 QUIC_SEND_FLAG_NONE) &&
@@ -339,6 +343,18 @@ struct ClientState {
            send(feedback_stream, frame(feedback), QUIC_SEND_FLAG_FIN);
   }
 };
+
+stream_v1::SelectedVideoMode selected_video(std::uint32_t width = 2560,
+                                            std::uint32_t height = 1600) {
+  stream_v1::SelectedVideoMode video;
+  video.set_codec(stream_v1::VIDEO_CODEC_H264);
+  video.set_width(width);
+  video.set_height(height);
+  video.set_frames_per_second_numerator(120);
+  video.set_frames_per_second_denominator(1);
+  video.set_dynamic_range(stream_v1::DYNAMIC_RANGE_SDR);
+  return video;
+}
 
 QUIC_STATUS QUIC_API stream_callback(HQUIC stream, void *context,
                                      QUIC_STREAM_EVENT *event) {
@@ -444,18 +460,22 @@ QUIC_STATUS QUIC_API connection_callback(HQUIC connection, void *context,
     const auto &buffer = *event->DATAGRAM_RECEIVED.Buffer;
     const auto parsed = beacon::stream::parse_media_datagram(
         {reinterpret_cast<const std::byte *>(buffer.Buffer), buffer.Length});
-    constexpr auto expected_payload =
-        beacon::worker::synthetic_access_unit_marker_bytes;
     std::lock_guard lock{state.mutex};
-    const bool startup_marker =
+    const auto flags = static_cast<std::uint16_t>(parsed.header.flags);
+    const bool valid_h264 =
         parsed.error == beacon::stream::MediaDatagramError::none &&
-        parsed.header.sequence == state.expected_marker_sequence &&
-        parsed.header.presentation_time_us == 1'000'000 &&
-        parsed.header.chunk_count == 1 &&
-        parsed.header.flags ==
-            (beacon::stream::MediaDatagramFlags::idr |
-             beacon::stream::MediaDatagramFlags::end_of_access_unit) &&
-        std::ranges::equal(parsed.payload, expected_payload);
+        parsed.header.media_kind == beacon::stream::MediaKind::video &&
+        parsed.header.sequence != 0 &&
+        parsed.header.presentation_time_us != 0 &&
+        parsed.header.frame_bytes != 0 && !parsed.payload.empty();
+    const bool startup_h264 =
+        valid_h264 &&
+        (state.datagram_received ||
+         ((flags & static_cast<std::uint16_t>(
+                       beacon::stream::MediaDatagramFlags::idr)) != 0 &&
+          (flags & static_cast<std::uint16_t>(
+                       beacon::stream::MediaDatagramFlags::codec_configuration)) !=
+              0));
     const bool additional_media =
         parsed.error == beacon::stream::MediaDatagramError::none &&
         parsed.header.sequence == kAdditionalMediaSequence &&
@@ -465,10 +485,10 @@ QUIC_STATUS QUIC_API connection_callback(HQUIC connection, void *context,
         parsed.header.flags ==
             beacon::stream::MediaDatagramFlags::end_of_access_unit &&
         parsed.payload.size() == 1 && parsed.payload[0] == std::byte{0x42};
-    state.datagram_received = state.datagram_received || startup_marker;
+    state.datagram_received = state.datagram_received || startup_h264;
     state.additional_datagram_received =
         state.additional_datagram_received || additional_media;
-    state.failed = state.failed || (!startup_marker && !additional_media);
+    state.failed = state.failed || (!startup_h264 && !additional_media);
     state.changed.notify_all();
     break;
   }
@@ -682,7 +702,7 @@ bool collect_stream_events(beacon::worker::NamedPipeChannel &channel,
     case worker_v1::WorkerIpcEnvelope::kMediaEvidence:
       media = event.media_evidence().session_generation() == 1 &&
               event.media_evidence().sequence() == 1 &&
-              event.media_evidence().presentation_time_us() == 1'000'000 &&
+              event.media_evidence().presentation_time_us() > 0 &&
               event.media_evidence().datagram_bytes() > 0;
       break;
     default:
@@ -716,7 +736,20 @@ bool collect_disconnect_event(
 
 int run_worker_process_probe(const std::wstring &worker_path,
                              const std::wstring &identity_path,
-                             const beacon::worker::TicketHash &fingerprint) {
+                             const beacon::worker::TicketHash &fingerprint,
+                             const std::wstring &display_device_name,
+                             std::uint32_t width, std::uint32_t height) {
+  std::string display_device;
+  display_device.reserve(display_device_name.size());
+  for (const wchar_t value : display_device_name) {
+    if (value < 0 || value > 0x7f) {
+      return 79;
+    }
+    display_device.push_back(static_cast<char>(value));
+  }
+  if (display_device.empty() || width == 0 || height == 0) {
+    return 79;
+  }
   const auto pipe_name = L"\\\\.\\pipe\\beacon-worker-process-probe-" +
                          std::to_wstring(GetCurrentProcessId()) + L"-" +
                          std::to_wstring(GetTickCount64());
@@ -787,7 +820,25 @@ int run_worker_process_probe(const std::wstring &worker_path,
 
   std::vector<worker_v1::WorkerIpcEnvelope> events;
   std::vector<worker_v1::WorkerIpcEnvelope> responses;
-  auto authorize = worker_command(1, "session-a");
+  auto prepare = worker_command(1, "session-a");
+  auto *plan = prepare.mutable_prepare_session();
+  plan->set_display_target("display-a");
+  plan->set_display_device_name(display_device);
+  plan->set_video_codec(worker_v1::WORKER_VIDEO_CODEC_H264);
+  plan->set_width(width);
+  plan->set_height(height);
+  plan->set_frames_per_second_numerator(120);
+  plan->set_frames_per_second_denominator(1);
+  plan->set_dynamic_range(worker_v1::WORKER_DYNAMIC_RANGE_SDR);
+  plan->set_minimum_bitrate_kbps(8'000);
+  plan->set_initial_bitrate_kbps(24'000);
+  plan->set_maximum_bitrate_kbps(40'000);
+  if (!exchange_worker_command(channel, prepare, responses, events)) {
+    return 88;
+  }
+
+  responses.clear();
+  auto authorize = worker_command(2, "session-a");
   const auto ticket_hash = beacon::worker::hash_stream_ticket(
       {reinterpret_cast<const std::byte *>(kRawTicket.data()),
        kRawTicket.size()});
@@ -800,21 +851,6 @@ int run_worker_process_probe(const std::wstring &worker_path,
   ticket->set_worker_instance_id(hello.worker_hello().worker_instance_id());
   if (!exchange_worker_command(channel, authorize, responses, events)) {
     return 87;
-  }
-
-  responses.clear();
-  auto prepare = worker_command(2, "session-a");
-  auto *plan = prepare.mutable_prepare_session();
-  plan->set_display_target("display-a");
-  plan->set_display_device_name("\\\\.\\DISPLAY7");
-  plan->set_video_codec(worker_v1::WORKER_VIDEO_CODEC_H264);
-  plan->set_width(2560);
-  plan->set_height(1600);
-  plan->set_frames_per_second_numerator(120);
-  plan->set_frames_per_second_denominator(1);
-  plan->set_dynamic_range(worker_v1::WORKER_DYNAMIC_RANGE_SDR);
-  if (!exchange_worker_command(channel, prepare, responses, events)) {
-    return 88;
   }
 
   responses.clear();
@@ -840,6 +876,9 @@ int run_worker_process_probe(const std::wstring &worker_path,
 
   ClientState client;
   client.expected_fingerprint = fingerprint;
+  client.exercise_ordered_actions = false;
+  client.video_width = width;
+  client.video_height = height;
   if (!start_client(
           client,
           static_cast<std::uint16_t>(
@@ -881,7 +920,7 @@ int run_worker_process_probe(const std::wstring &worker_path,
     return 96;
   }
   std::printf("BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK "
-              "ACCESS_UNIT_MARKER "
+              "REAL_H264_ACCESS_UNIT "
               "DISCONNECT SHUTDOWN\n");
   return 0;
 }
@@ -903,6 +942,7 @@ bool callback_fault_is_contained(const std::wstring &identity_path,
         .plan_revision = 8,
         .expires_at_unix_ms = std::numeric_limits<std::uint64_t>::max(),
     };
+    ticket.selected_video = selected_video();
     if (!tickets.authorize(std::move(ticket))) {
       return false;
     }
@@ -930,6 +970,35 @@ bool callback_fault_is_contained(const std::wstring &identity_path,
   if (!start_client(client, listener.local_port())) {
     stop_client(client);
     return false;
+  }
+  const bool requires_datagram =
+      target ==
+          beacon::worker::QuicListenerFaultPoint::datagram_context_allocation ||
+      target == beacon::worker::QuicListenerFaultPoint::
+                    datagram_final_state_telemetry;
+  if (requires_datagram) {
+    {
+      std::unique_lock lock{client.mutex};
+      client.changed.wait(lock, [&client] {
+        return client.authenticated || client.failed ||
+               client.connection_closed;
+      });
+      if (!client.authenticated || client.failed) {
+        lock.unlock();
+        stop_client(client);
+        listener.close_connection();
+        listener.shutdown();
+        return false;
+      }
+    }
+    if (!listener.wait_until_media_ready()) {
+      stop_client(client);
+      listener.close_connection();
+      listener.shutdown();
+      return false;
+    }
+    static_cast<void>(
+        listener.send_for_generation(additional_media_packet(), 1));
   }
   {
     std::unique_lock lock{client.mutex};
@@ -960,6 +1029,7 @@ bool disconnect_callback_fault_is_contained(
       .plan_revision = 8,
       .expires_at_unix_ms = std::numeric_limits<std::uint64_t>::max(),
   };
+  ticket.selected_video = selected_video();
   if (!tickets.authorize(std::move(ticket))) {
     return false;
   }
@@ -1011,9 +1081,12 @@ bool disconnect_callback_fault_is_contained(
 } // namespace
 
 int wmain(int argument_count, wchar_t **arguments) {
-  if (argument_count == 7 && std::wstring_view(arguments[1]) == L"--worker" &&
+  if (argument_count == 13 && std::wstring_view(arguments[1]) == L"--worker" &&
       std::wstring_view(arguments[3]) == L"--identity" &&
-      std::wstring_view(arguments[5]) == L"--fingerprint") {
+      std::wstring_view(arguments[5]) == L"--fingerprint" &&
+      std::wstring_view(arguments[7]) == L"--display" &&
+      std::wstring_view(arguments[9]) == L"--width" &&
+      std::wstring_view(arguments[11]) == L"--height") {
     beacon::worker::TicketHash fingerprint{};
     const std::wstring_view wide_fingerprint{arguments[6]};
     std::string fingerprint_text;
@@ -1027,7 +1100,12 @@ int wmain(int argument_count, wchar_t **arguments) {
     if (!decode_fingerprint(fingerprint_text, fingerprint)) {
       return 66;
     }
-    return run_worker_process_probe(arguments[2], arguments[4], fingerprint);
+    const auto width =
+        static_cast<std::uint32_t>(std::wcstoul(arguments[10], nullptr, 10));
+    const auto height =
+        static_cast<std::uint32_t>(std::wcstoul(arguments[12], nullptr, 10));
+    return run_worker_process_probe(arguments[2], arguments[4], fingerprint,
+                                    arguments[8], width, height);
   }
   if (argument_count != 4)
     return 64;
@@ -1130,6 +1208,7 @@ int wmain(int argument_count, wchar_t **arguments) {
       .plan_revision = 8,
       .expires_at_unix_ms = std::numeric_limits<std::uint64_t>::max(),
   };
+  ticket.selected_video = selected_video();
   if (!tickets.authorize(std::move(ticket)))
     return 1;
 
@@ -1170,13 +1249,6 @@ int wmain(int argument_count, wchar_t **arguments) {
   }
   if (!listener.wait_until_media_ready())
     return 6;
-  {
-    std::unique_lock lock{client.mutex};
-    client.changed.wait(
-        lock, [&client] { return client.datagram_received || client.failed; });
-    if (client.failed)
-      return 9;
-  }
   auto additional_packet = additional_media_packet();
   if (additional_packet.payload.empty() ||
       listener.send_for_generation(std::move(additional_packet), 1) !=
@@ -1231,9 +1303,8 @@ int wmain(int argument_count, wchar_t **arguments) {
                    event.feedback_received().feedback().sequence() != 1;
           case beacon::worker::v1::WorkerIpcEnvelope::kMediaEvidence:
             return event.media_evidence().session_generation() != 1 ||
-                   (event.media_evidence().sequence() != 1 &&
-                    event.media_evidence().sequence() !=
-                        kAdditionalMediaSequence);
+                   event.media_evidence().sequence() !=
+                       kAdditionalMediaSequence;
           default:
             return false;
           }
@@ -1298,7 +1369,7 @@ int wmain(int argument_count, wchar_t **arguments) {
           const auto *outcome =
               std::get_if<beacon::worker::QuicDatagramOutcome>(&event);
           return outcome != nullptr && outcome->session_generation == 1 &&
-                 outcome->access_unit_sequence == 1 &&
+                 outcome->access_unit_sequence == kAdditionalMediaSequence &&
                  outcome->kind ==
                      beacon::worker::QuicDatagramOutcomeKind::acknowledged &&
                  outcome->smoothed_rtt_us > 0 &&
@@ -1399,12 +1470,12 @@ int wmain(int argument_count, wchar_t **arguments) {
       .plan_revision = 8,
       .expires_at_unix_ms = std::numeric_limits<std::uint64_t>::max(),
   };
+  fresh_ticket.selected_video = selected_video();
   if (!tickets.authorize(std::move(fresh_ticket)))
     return 19;
   ClientState fresh_client;
   fresh_client.expected_fingerprint = expected_fingerprint;
   fresh_client.raw_ticket = fresh_raw_ticket;
-  fresh_client.expected_marker_sequence = 2;
   if (!start_client(fresh_client, listener.local_port()))
     return 20;
   {
@@ -1413,11 +1484,20 @@ int wmain(int argument_count, wchar_t **arguments) {
       return fresh_client.failed || fresh_client.authenticated ||
              fresh_client.connection_closed;
     });
-    fresh_client.changed.wait(lock, [&fresh_client] {
-      return fresh_client.datagram_received || fresh_client.failed;
-    });
     if (fresh_client.failed || !fresh_client.authenticated ||
-        !fresh_client.datagram_received || !fresh_client.certificate_seen)
+        !fresh_client.certificate_seen)
+      return 21;
+  }
+  if (!listener.wait_until_media_ready() ||
+      listener.send_for_generation(additional_media_packet(), 2) !=
+          beacon::stream::TransportSendResult::accepted)
+    return 21;
+  {
+    std::unique_lock lock{fresh_client.mutex};
+    fresh_client.changed.wait(lock, [&fresh_client] {
+      return fresh_client.additional_datagram_received || fresh_client.failed;
+    });
+    if (fresh_client.failed || !fresh_client.additional_datagram_received)
       return 21;
   }
   stop_client(fresh_client, 77);
@@ -1459,7 +1539,7 @@ int wmain(int argument_count, wchar_t **arguments) {
             beacon::worker::v1::DIAGNOSTIC_CODE_TRANSPORT_CONNECTED, 1) ||
         media_evidence !=
             std::vector<std::pair<std::uint64_t, std::uint64_t>>{
-                {1, 1}, {1, 77}, {2, 2}} ||
+                {1, 77}, {2, 77}} ||
         worker_events.empty() ||
         worker_events.back().body_case() !=
             beacon::worker::v1::WorkerIpcEnvelope::kTransportDisconnected ||

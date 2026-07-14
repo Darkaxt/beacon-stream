@@ -532,6 +532,9 @@ public sealed class StreamWorkerProcessHostTests
         var authorizer = new StreamWorkerSessionAuthorizer(host);
         StreamWorkerAuthorizationContext authorizationContext =
             await authorizer.GetContextAsync(CancellationToken.None);
+        StreamWorkerCommandResponse prepare = await host.SendAsync(
+            Prepare("integration-session"),
+            CancellationToken.None);
         StreamWorkerAuthorizationResult authorization = await authorizer.AuthorizeAsync(
             new StreamWorkerAuthorization(
                 "integration-session",
@@ -545,9 +548,6 @@ public sealed class StreamWorkerProcessHostTests
             new StreamWorkerRevocation(
                 "integration-session",
                 Enumerable.Repeat((byte)0x5a, 32).ToArray()),
-            CancellationToken.None);
-        StreamWorkerCommandResponse prepare = await host.SendAsync(
-            Prepare("integration-session"),
             CancellationToken.None);
         StreamWorkerCommandResponse start = await host.SendAsync(
             new WorkerIpcEnvelope

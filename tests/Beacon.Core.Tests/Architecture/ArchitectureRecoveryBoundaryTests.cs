@@ -245,6 +245,19 @@ public sealed class ArchitectureRecoveryBoundaryTests
         Assert.Empty(violations);
     }
 
+    [Fact]
+    public void ProductionQuicListenerDoesNotInjectSyntheticMedia()
+    {
+        string root = FindRepositoryRoot();
+        string listener = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.StreamWorker/src/quic_listener.cpp"));
+
+        Assert.DoesNotContain("SyntheticMediaSource", listener, StringComparison.Ordinal);
+        Assert.DoesNotContain("emit_access_unit_marker", listener, StringComparison.Ordinal);
+        Assert.DoesNotContain("synthetic_media_source_", listener, StringComparison.Ordinal);
+    }
+
     private static async Task<IReadOnlyList<string>> EnumerateTrackedSourceFilesAsync(string root)
     {
         var startInfo = new ProcessStartInfo("git")

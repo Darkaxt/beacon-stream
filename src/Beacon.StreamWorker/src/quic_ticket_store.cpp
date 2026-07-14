@@ -53,7 +53,8 @@ TicketHash hash_stream_ticket(std::span<const std::byte> ticket) {
 
 bool AuthorizedQuicTicketStore::authorize(AuthorizedQuicTicket ticket) {
   if (ticket.client_id.empty() || ticket.session_id.empty() ||
-      ticket.plan_revision == 0 || ticket.expires_at_unix_ms == 0) {
+      ticket.plan_revision == 0 || ticket.expires_at_unix_ms == 0 ||
+      ticket.selected_video.has_value() == ticket.benchmark_plan.has_value()) {
     return false;
   }
 
@@ -116,6 +117,7 @@ QuicTicketConsumeOutcome AuthorizedQuicTicketStore::consume_authorized(
 
   found->consumed = true;
   return {.result = QuicTicketConsumeResult::accepted,
+          .selected_video = found->ticket.selected_video,
           .benchmark_plan = found->ticket.benchmark_plan};
 }
 

@@ -23,6 +23,14 @@ $nativeProbe = Join-Path $repositoryRoot `
 if (-not (Test-Path -LiteralPath $nativeProbe -PathType Leaf)) {
     throw "Beacon native Worker process probe was not found at '$nativeProbe'."
 }
+Add-Type -AssemblyName System.Windows.Forms
+$primaryScreen = [System.Windows.Forms.Screen]::PrimaryScreen
+if ($null -eq $primaryScreen) {
+    throw 'No primary Windows display is available for the production capture probe.'
+}
+$displayDevice = $primaryScreen.DeviceName
+$displayWidth = $primaryScreen.Bounds.Width
+$displayHeight = $primaryScreen.Bounds.Height
 try {
     $key = [Security.Cryptography.RSA]::Create(3072)
     try {
@@ -66,10 +74,13 @@ try {
     $nativeOutput = & $nativeProbe `
         --worker $WorkerPath `
         --identity $identityPath `
-        --fingerprint $fingerprint
+        --fingerprint $fingerprint `
+        --display $displayDevice `
+        --width $displayWidth `
+        --height $displayHeight
     $nativeExitCode = $LASTEXITCODE
     if ($nativeExitCode -ne 0 -or
-        $nativeOutput -notmatch '^BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK ACCESS_UNIT_MARKER DISCONNECT SHUTDOWN$') {
+        $nativeOutput -notmatch '^BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK REAL_H264_ACCESS_UNIT DISCONNECT SHUTDOWN$') {
         throw "Native Worker IPC/QUIC integration failed with exit code ${nativeExitCode}: $nativeOutput"
     }
     Write-Host $nativeOutput
@@ -77,7 +88,10 @@ try {
     $startupExitOutput = & $nativeProbe `
         --worker $nativeProbe `
         --identity $identityPath `
-        --fingerprint $fingerprint
+        --fingerprint $fingerprint `
+        --display $displayDevice `
+        --width $displayWidth `
+        --height $displayHeight
     $startupExitCode = $LASTEXITCODE
     if ($startupExitCode -ne 97 -or
         $startupExitOutput -notmatch '^BEACON_WORKER_STARTUP_EXIT 64$') {

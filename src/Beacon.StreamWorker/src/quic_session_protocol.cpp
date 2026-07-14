@@ -93,6 +93,17 @@ bool benchmark_plans_equal(const stream_v1::StartBenchmark &left,
          rounds_equal(left.datagram_round(), right.datagram_round());
 }
 
+bool video_modes_equal(const stream_v1::SelectedVideoMode &left,
+                       const stream_v1::SelectedVideoMode &right) noexcept {
+  return left.codec() == right.codec() && left.width() == right.width() &&
+         left.height() == right.height() &&
+         left.frames_per_second_numerator() ==
+             right.frames_per_second_numerator() &&
+         left.frames_per_second_denominator() ==
+             right.frames_per_second_denominator() &&
+         left.dynamic_range() == right.dynamic_range();
+}
+
 } // namespace
 
 QuicPeerStreamRole classify_peer_stream(std::uint64_t stream_id) noexcept {
@@ -230,6 +241,7 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
             output.session_replies.push_back(std::move(reply_frame));
             authenticated_ = result->accepted();
             if (authenticated_) {
+              authorized_video_plan_ = std::move(consumed.selected_video);
               authorized_benchmark_plan_ = std::move(consumed.benchmark_plan);
               session_id_ = message.session_id();
               last_session_sequence_ = message.sequence();
@@ -255,7 +267,11 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
                  body == stream_v1::SessionStreamEnvelope::kStopSession ||
                  body == stream_v1::SessionStreamEnvelope::kRequestIdr);
         if (valid && body == stream_v1::SessionStreamEnvelope::kStartSession) {
-          valid = !started_ && !authorized_benchmark_plan_.has_value();
+          valid = !started_ && authorized_video_plan_.has_value() &&
+                  !authorized_benchmark_plan_.has_value() &&
+                  message.start_session().has_selected_video() &&
+                  video_modes_equal(message.start_session().selected_video(),
+                                    *authorized_video_plan_);
         } else if (valid &&
                    body == stream_v1::SessionStreamEnvelope::kStartBenchmark) {
           valid = !started_ && authorized_benchmark_plan_.has_value() &&
@@ -407,6 +423,7 @@ void QuicSessionProtocol::reset() noexcept {
   clear_stream_bytes();
   session_id_.clear();
   benchmark_run_id_.clear();
+  authorized_video_plan_.reset();
   authorized_benchmark_plan_.reset();
   maximum_datagram_bytes_ = 0;
   last_session_sequence_ = 0;

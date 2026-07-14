@@ -1,10 +1,12 @@
 #pragma once
 
+#include "beacon/worker/video/production_video_generation.h"
 #include "stream_control.pb.h"
 #include "worker_ipc.pb.h"
 
 #include <cstdint>
 #include <string_view>
+#include <vector>
 
 namespace beacon::worker {
 
@@ -31,5 +33,8 @@ make_transport_connected_event(std::uint64_t connection_generation);
     std::string_view session_id, std::uint64_t session_generation,
     std::uint64_t sequence, std::uint64_t presentation_time_us,
     std::uint32_t datagram_bytes);
+[[nodiscard]] std::vector<v1::WorkerIpcEnvelope>
+make_video_pipeline_failure_events(
+    const video::VideoPipelineFailureEvent &failure);
 
 } // namespace beacon::worker

@@ -5,7 +5,6 @@
 #include "beacon/worker/benchmark_source.h"
 #include "beacon/worker/quic_session_protocol.h"
 #include "beacon/worker/secure_bytes.h"
-#include "beacon/worker/synthetic_media_source.h"
 #include "beacon/worker/worker_events.h"
 
 #include <Windows.h>
@@ -30,7 +29,6 @@ namespace {
 
 constexpr std::string_view kBeaconAlpn{"beacon-stream/1"};
 constexpr std::size_t kMaximumIdentityBytes{1024U * 1024U};
-constexpr std::uint64_t kSyntheticPresentationTimeUs{1'000'000};
 
 void write_u32(std::span<std::byte, 4> bytes, std::uint32_t value) noexcept {
   for (std::size_t index = 0; index < bytes.size(); ++index) {
@@ -243,6 +241,24 @@ public:
       }
       std::lock_guard lock{mutex_};
       closing_ = false;
+    } catch (...) {
+    }
+  }
+
+  void request_active_disconnect() noexcept {
+    try {
+      HQUIC connection = nullptr;
+      {
+        std::lock_guard lock{mutex_};
+        if (connection_ == nullptr || closing_) {
+          return;
+        }
+        connection = connection_;
+        ++active_api_calls_;
+      }
+      ActiveApiCallGuard active_call{this};
+      api_->ConnectionShutdown(connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE,
+                               4);
     } catch (...) {
     }
   }
@@ -747,8 +763,6 @@ private:
     }
 
     QuicSessionProtocolOutput output;
-    std::optional<QuicSessionProtocolOutput::AcceptedStartSession>
-        accepted_start;
     std::optional<QuicSessionProtocolOutput::AcceptedStartBenchmark>
         accepted_benchmark;
     {
@@ -789,14 +803,12 @@ private:
               using Action = std::remove_cvref_t<decltype(accepted)>;
               if constexpr (std::is_same_v<Action, QuicSessionProtocolOutput::
                                                        AcceptedStartSession>) {
-                accepted_start = accepted;
                 accepted_benchmark.reset();
                 append_pending_media_event(accepted);
               } else if constexpr (std::is_same_v<Action,
                                                   QuicSessionProtocolOutput::
                                                       AcceptedStartBenchmark>) {
                 accepted_benchmark = accepted;
-                accepted_start.reset();
               } else if constexpr (std::is_same_v<
                                        Action, QuicSessionProtocolOutput::
                                                    AcceptedCancelBenchmark>) {
@@ -805,7 +817,6 @@ private:
               } else if constexpr (std::is_same_v<Action,
                                                   QuicSessionProtocolOutput::
                                                       AcceptedStopSession>) {
-                accepted_start.reset();
                 append_pending_media_event(accepted);
               } else if constexpr (std::is_same_v<Action,
                                                   QuicSessionProtocolOutput::
@@ -853,24 +864,6 @@ private:
         (output.close_connection && output.session_replies.empty())) {
       api_->ConnectionShutdown(connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE,
                                3);
-    }
-    if (accepted_start) {
-      std::uint64_t marker_sequence = 0;
-      {
-        std::lock_guard lock{mutex_};
-        marker_sequence = next_marker_sequence_;
-        if (marker_sequence == 0) {
-          return;
-        }
-        ++next_marker_sequence_;
-      }
-      auto packets = synthetic_media_source_.emit_access_unit_marker(
-          marker_sequence, kSyntheticPresentationTimeUs,
-          accepted_start->maximum_datagram_bytes);
-      if (!packets.empty()) {
-        static_cast<void>(send_for_generation(
-            std::move(packets.front()), accepted_start->session_generation));
-      }
     }
     if (accepted_benchmark &&
         !start_benchmark_traffic(stream, *accepted_benchmark)) {
@@ -1504,7 +1497,6 @@ private:
   std::wstring identity_path_;
   QuicSessionProtocol protocol_;
   QuicListenerFaultInjector fault_injector_;
-  SyntheticMediaSource synthetic_media_source_;
   BenchmarkSource benchmark_source_;
   mutable std::mutex mutex_;
   std::condition_variable changed_;
@@ -1531,7 +1523,6 @@ private:
   std::vector<std::byte> pending_session_bytes_;
   std::string current_session_id_;
   std::uint64_t current_generation_{};
-  std::uint64_t next_marker_sequence_{1};
   std::string benchmark_run_id_;
   std::string benchmark_session_id_;
   std::uint64_t next_benchmark_server_sequence_{2};
@@ -1622,6 +1613,10 @@ void QuicListener::set_media_event_sink(MediaEventSink sink) {
 bool QuicListener::open_connection() { return impl_->open_connection(); }
 
 void QuicListener::close_connection() noexcept { impl_->close_connection(); }
+
+void QuicListener::request_active_disconnect() noexcept {
+  impl_->request_active_disconnect();
+}
 
 stream::TransportSendResult
 QuicListener::send_for_generation(stream::TransportPacket packet,

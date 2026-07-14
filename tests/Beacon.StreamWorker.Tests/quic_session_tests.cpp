@@ -8,7 +8,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <variant>
 #include <vector>
@@ -45,14 +47,27 @@ std::span<const std::byte> bytes(std::string_view value) {
   return {reinterpret_cast<const std::byte *>(value.data()), value.size()};
 }
 
+stream_v1::SelectedVideoMode selected_video() {
+  stream_v1::SelectedVideoMode video;
+  video.set_codec(stream_v1::VIDEO_CODEC_H264);
+  video.set_width(2560);
+  video.set_height(1600);
+  video.set_frames_per_second_numerator(120);
+  video.set_frames_per_second_denominator(1);
+  video.set_dynamic_range(stream_v1::DYNAMIC_RANGE_SDR);
+  return video;
+}
+
 AuthorizedQuicTicket grant(std::string_view raw_ticket) {
-  return {
+  AuthorizedQuicTicket ticket{
       .hash = beacon::worker::hash_stream_ticket(bytes(raw_ticket)),
       .client_id = "z-fold-7",
       .session_id = "session-a",
       .plan_revision = 8,
       .expires_at_unix_ms = 2'000,
   };
+  ticket.selected_video = selected_video();
+  return ticket;
 }
 
 template <typename Message>
@@ -204,6 +219,23 @@ void revocation_and_duplicate_authorization_are_deterministic() {
   BEACON_TEST_REQUIRE(store.consume(bytes("raw-ticket-c"), "z-fold-7",
                                     "session-a", 8,
                                     1'000) == QuicTicketConsumeResult::unknown);
+}
+
+void tickets_authorize_exactly_one_prepared_operation() {
+  AuthorizedQuicTicketStore store;
+
+  auto missing_operation = grant("missing-operation");
+  missing_operation.selected_video.reset();
+  BEACON_TEST_REQUIRE(!store.authorize(std::move(missing_operation)));
+
+  auto ambiguous_operation = grant("ambiguous-operation");
+  ambiguous_operation.benchmark_plan = start_benchmark(2).start_benchmark();
+  BEACON_TEST_REQUIRE(!store.authorize(std::move(ambiguous_operation)));
+
+  auto benchmark_operation = grant("benchmark-operation");
+  benchmark_operation.selected_video.reset();
+  benchmark_operation.benchmark_plan = start_benchmark(2).start_benchmark();
+  BEACON_TEST_REQUIRE(store.authorize(std::move(benchmark_operation)));
 }
 
 void stream_ids_have_one_unambiguous_role() {
@@ -406,6 +438,43 @@ void start_session_is_typed_once_per_authenticated_generation() {
                       nullptr);
 }
 
+void start_session_must_match_every_authorized_video_field() {
+  using Mutation = std::function<void(stream_v1::SelectedVideoMode&)>;
+  const std::vector<std::pair<std::string, Mutation>> mismatches{
+      {"codec", [](auto& video) { video.set_codec(stream_v1::VIDEO_CODEC_HEVC); }},
+      {"width", [](auto& video) { video.set_width(2561); }},
+      {"height", [](auto& video) { video.set_height(1601); }},
+      {"fps-numerator",
+       [](auto& video) { video.set_frames_per_second_numerator(60); }},
+      {"fps-denominator",
+       [](auto& video) { video.set_frames_per_second_denominator(2); }},
+      {"dynamic-range",
+       [](auto& video) { video.set_dynamic_range(stream_v1::DYNAMIC_RANGE_HDR10); }},
+  };
+
+  for (const auto& [name, mutate] : mismatches) {
+    AuthorizedQuicTicketStore store;
+    const auto raw_ticket = "mismatched-video-" + name;
+    BEACON_TEST_REQUIRE(store.authorize(grant(raw_ticket)));
+    QuicSessionProtocol protocol(store);
+    protocol.set_maximum_datagram_bytes(1232);
+    BEACON_TEST_REQUIRE(
+        protocol
+            .receive(QuicPeerStreamRole::session,
+                     frame(authenticate(raw_ticket)), 1'000)
+            .accepted_authentication.has_value());
+    auto start = start_session(2);
+    mutate(*start.mutable_start_session()->mutable_selected_video());
+
+    const auto rejected = protocol.receive(
+        QuicPeerStreamRole::session, frame(start), 1'001);
+
+    BEACON_TEST_REQUIRE(rejected.close_connection);
+    BEACON_TEST_REQUIRE(
+        accepted_action<AcceptedStartSession>(rejected) == nullptr);
+  }
+}
+
 void stop_session_clears_active_state_before_another_idr_request() {
   AuthorizedQuicTicketStore store;
   BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-stop")));
@@ -479,6 +548,7 @@ void coalesced_session_actions_preserve_protocol_order() {
 void benchmark_start_and_cancel_are_typed_for_the_authenticated_generation() {
   AuthorizedQuicTicketStore store;
   auto authorization = grant("benchmark-ticket");
+  authorization.selected_video.reset();
   authorization.benchmark_plan = start_benchmark(2).start_benchmark();
   BEACON_TEST_REQUIRE(store.authorize(std::move(authorization)));
   QuicSessionProtocol protocol(store);
@@ -519,6 +589,7 @@ void benchmark_start_and_cancel_are_typed_for_the_authenticated_generation() {
 void benchmark_start_must_match_the_worker_authorized_plan() {
   AuthorizedQuicTicketStore store;
   auto authorization = grant("modified-benchmark-ticket");
+  authorization.selected_video.reset();
   authorization.benchmark_plan = start_benchmark(2).start_benchmark();
   BEACON_TEST_REQUIRE(store.authorize(std::move(authorization)));
   QuicSessionProtocol protocol(store);
@@ -708,12 +779,14 @@ int main() {
     ticket_is_consumed_once_without_retaining_the_raw_secret();
     ticket_identity_and_security_expiry_are_validated_before_consumption();
     revocation_and_duplicate_authorization_are_deterministic();
+    tickets_authorize_exactly_one_prepared_operation();
     stream_ids_have_one_unambiguous_role();
     fragmented_authentication_consumes_ticket_and_returns_negotiated_limit();
     replay_and_version_mismatch_return_typed_rejections();
     authenticated_streams_are_routed_independently();
     idr_requests_require_an_active_media_session_and_typed_reason();
     start_session_is_typed_once_per_authenticated_generation();
+    start_session_must_match_every_authorized_video_field();
     stop_session_clears_active_state_before_another_idr_request();
     coalesced_session_actions_preserve_protocol_order();
     benchmark_start_and_cancel_are_typed_for_the_authenticated_generation();

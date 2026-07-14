@@ -1,6 +1,9 @@
 #include "beacon/worker/named_pipe_channel.h"
 #include "beacon/worker/outbound_queue.h"
 #include "beacon/worker/quic_listener.h"
+#include "beacon/worker/video/production_video_generation.h"
+#include "beacon/worker/video/worker_video_pipeline.h"
+#include "beacon/worker/worker_events.h"
 #include "beacon/worker/worker_host.h"
 
 #include <Windows.h>
@@ -52,22 +55,42 @@ int wmain(int argument_count, wchar_t** arguments) {
     };
     beacon::worker::AuthorizedQuicTicketStore tickets;
     beacon::worker::QuicListener transport(arguments[4], tickets);
-    transport.set_event_sink(
+    const auto enqueue_async =
         [&channel, &outbound, &record_failure](
-            beacon::worker::v1::WorkerIpcEnvelope event) {
+            std::vector<beacon::worker::v1::WorkerIpcEnvelope> events) {
           try {
-            if (outbound.enqueue({std::move(event)}) ==
+            if (outbound.enqueue(std::move(events)) ==
                 beacon::worker::WorkerOutboundEnqueueResult::accepted) {
-              return;
+              return true;
             }
           } catch (...) {
           }
           record_failure(5);
           outbound.close();
           channel.cancel_pending_io();
+          return false;
+        };
+    transport.set_event_sink(
+        [&enqueue_async](beacon::worker::v1::WorkerIpcEnvelope event) {
+          std::vector<beacon::worker::v1::WorkerIpcEnvelope> events;
+          events.push_back(std::move(event));
+          static_cast<void>(enqueue_async(std::move(events)));
+        });
+    beacon::worker::video::ProductionVideoGenerationFactory generation_factory(
+        transport,
+        [&enqueue_async](beacon::worker::video::VideoPipelineFailureEvent failure) {
+          static_cast<void>(enqueue_async(
+              beacon::worker::make_video_pipeline_failure_events(failure)));
+        });
+    beacon::worker::video::WorkerVideoPipeline video_pipeline(
+        generation_factory);
+    transport.set_media_event_sink(
+        [&video_pipeline](beacon::worker::QuicMediaEvent event) {
+          video_pipeline.handle_media_event(event);
         });
     beacon::worker::WorkerHost host(
-        std::move(instance_id), GetCurrentProcessId(), transport, tickets);
+        std::move(instance_id), GetCurrentProcessId(), transport, tickets,
+        video_pipeline);
     if (outbound.enqueue({host.hello(), host.ready()}) !=
         beacon::worker::WorkerOutboundEnqueueResult::accepted) {
       return 3;
@@ -80,6 +103,7 @@ int wmain(int argument_count, wchar_t** arguments) {
           if (channel.read(request) !=
               beacon::worker::FrameDecodeStatus::success) {
             record_failure(4);
+            video_pipeline.reset();
             transport.shutdown();
             outbound.close();
             channel.cancel_pending_io();
@@ -94,6 +118,7 @@ int wmain(int argument_count, wchar_t** arguments) {
           if (enqueue_result !=
               beacon::worker::WorkerOutboundEnqueueResult::accepted) {
             record_failure(5);
+            video_pipeline.reset();
             transport.shutdown();
             outbound.close();
             channel.cancel_pending_io();
@@ -105,6 +130,7 @@ int wmain(int argument_count, wchar_t** arguments) {
         }
       } catch (...) {
         record_failure(6);
+        video_pipeline.reset();
         transport.shutdown();
         outbound.close();
         channel.cancel_pending_io();
@@ -121,6 +147,7 @@ int wmain(int argument_count, wchar_t** arguments) {
       }
       if (write_failed) {
         record_failure(5);
+        video_pipeline.reset();
         transport.shutdown();
         outbound.close();
         channel.cancel_pending_io();
@@ -133,6 +160,7 @@ int wmain(int argument_count, wchar_t** arguments) {
     }
     channel.cancel_pending_io();
     command_reader.join();
+    video_pipeline.reset();
     return process_result.load(std::memory_order_acquire);
   } catch (...) {
     return 6;

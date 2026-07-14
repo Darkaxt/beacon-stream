@@ -28,6 +28,7 @@ public:
   [[nodiscard]] virtual std::uint16_t local_port() const noexcept = 0;
   [[nodiscard]] virtual bool open_connection() = 0;
   virtual void close_connection() noexcept = 0;
+  virtual void request_active_disconnect() noexcept = 0;
   virtual void shutdown() noexcept = 0;
 };
 
@@ -128,6 +129,7 @@ public:
   void set_media_event_sink(MediaEventSink sink);
   [[nodiscard]] bool open_connection() override;
   void close_connection() noexcept override;
+  void request_active_disconnect() noexcept override;
   [[nodiscard]] stream::TransportSendResult
   send_for_generation(stream::TransportPacket packet,
                       std::uint64_t session_generation) override;
