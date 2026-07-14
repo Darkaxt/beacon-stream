@@ -280,6 +280,15 @@ PY
   printf 'BEACON_HOSTED_BENCHMARK_SNAPSHOT_OK %s\n' "${phase}"
 }
 
+emit_transport_diagnostics() {
+  printf '%s\n' '--- Beacon StreamCore transport diagnostics ---' >&2
+  "${adb_command}" -s "${serial}" logcat -d -s BeaconStreamCore:I '*:S' >&2 || true
+  printf '%s\n' '--- Beacon hosted Worker snapshot ---' >&2
+  "${curl_command}" --fail --silent --show-error --insecure \
+    "${local_server_url}/hosted-benchmark-worker/snapshot" >&2 || true
+  printf '\n' >&2
+}
+
 run_instrumentation() {
   local method="$1"
   shift
@@ -291,6 +300,7 @@ run_instrumentation() {
       -e class "${test_class}#${method}" \
       "${test_runner}" > "${output_file}" 2>&1; then
     cat "${output_file}" >&2
+    emit_transport_diagnostics
     echo "Hosted benchmark instrumentation '${method}' failed." >&2
     return 1
   fi

@@ -64,6 +64,11 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
             elif [[ "${arguments}" == *"exec-in"* ]]; then
               cat > "${BEACON_FAKE_CREDENTIAL_CAPTURE}"
             elif [[ "${arguments}" == *"am instrument"* ]]; then
+              if [[ "${BEACON_FAKE_INSTRUMENTATION_FAILURE:-}" == "network" &&
+                    "${arguments}" == *"#gate4NetworkAndHardwareBenchmark"* ]]; then
+                printf 'instrumentation transport failure\n' >&2
+                exit 1
+              fi
               if [[ "${arguments}" == *"#gate4NetworkAndHardwareBenchmark"* ]]; then
                 printf 'BEACON_GATE4_NATIVE_NETWORK_COMPLETE\n'
                 printf 'BEACON_GATE4_REAL_HARDWARE_CAPABILITY_REJECTED\n'
@@ -76,6 +81,8 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
                 printf 'BEACON_GATE4_CERTIFIED_PREFLIGHT_COMPLETE\n'
               fi
               printf 'OK (1 test)\n'
+            elif [[ "${arguments}" == *"logcat -d -s BeaconStreamCore:I"* ]]; then
+              printf 'BEACON_STREAMCORE_TRANSPORT shutdown generation=1 value=1234\n'
             fi
         """)
         self.curl = self._script("curl", """
@@ -155,6 +162,18 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertNotIn("BEACON_HOSTED_EMULATOR_BENCHMARKS_OK", result.stdout + result.stderr)
         self.assertTrue(self.server_stopped.exists())
+
+    def test_runner_emits_scoped_transport_diagnostics_on_instrumentation_failure(self):
+        result = self._run({"BEACON_FAKE_INSTRUMENTATION_FAILURE": "network"})
+
+        self.assertNotEqual(0, result.returncode)
+        combined = result.stdout + result.stderr
+        self.assertIn(
+            "BEACON_STREAMCORE_TRANSPORT shutdown generation=1 value=1234",
+            combined,
+        )
+        calls = self.call_log.read_text(encoding="utf-8")
+        self.assertIn("logcat -d -s BeaconStreamCore:I", calls)
 
     def test_gate4_instrumentation_uses_pinned_https_and_typed_markers(self):
         source = (REPOSITORY_ROOT / "src" / "Beacon.Android" / "app" / "src" /
