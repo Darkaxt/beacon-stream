@@ -2,9 +2,8 @@
 
 #include "beacon/stream/media_datagram.h"
 #include "beacon/stream/msquic_transport.h"
+#include "beacon/stream/secure_bytes.h"
 #include "beacon/worker/benchmark_source.h"
-#include "beacon/worker/quic_session_protocol.h"
-#include "beacon/worker/secure_bytes.h"
 #include "beacon/worker/worker_events.h"
 
 #include <Windows.h>
@@ -40,7 +39,7 @@ void write_u32(std::span<std::byte, 4> bytes, std::uint32_t value) noexcept {
 template <typename Message>
 std::vector<std::byte> frame_session_message(const Message &message) {
   const auto size = message.ByteSizeLong();
-  if (size == 0 || size > maximum_stream_message_bytes ||
+  if (size == 0 || size > stream::maximum_stream_message_bytes ||
       size > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
     return {};
   }
@@ -443,7 +442,7 @@ private:
     Impl *owner{};
     HQUIC connection{};
     HQUIC stream{};
-    QuicPeerStreamRole role{QuicPeerStreamRole::invalid};
+    stream::QuicPeerStreamRole role{stream::QuicPeerStreamRole::invalid};
     std::uint64_t connection_generation{};
   };
 
@@ -474,7 +473,8 @@ private:
 
   bool start_benchmark_traffic(
       HQUIC stream,
-      const QuicSessionProtocolOutput::AcceptedStartBenchmark &accepted) {
+      const stream::ServerSessionProtocolOutput::AcceptedStartBenchmark
+          &accepted) {
     const auto &start = accepted.start_benchmark;
     std::array<std::byte, 16> run_token{};
     std::transform(start.run_token().begin(), start.run_token().end(),
@@ -594,7 +594,7 @@ private:
   }
 
   void clear_pending_session_bytes() noexcept {
-    secure_clear_bytes(pending_session_bytes_);
+    stream::secure_clear_bytes(pending_session_bytes_);
   }
 
   void record_listener_callback_exception(HQUIC connection) noexcept {
@@ -724,7 +724,7 @@ private:
   }
 
   void process_stream_bytes(HQUIC connection, HQUIC stream,
-                            QuicPeerStreamRole role,
+                            stream::QuicPeerStreamRole role,
                             std::uint64_t connection_generation,
                             std::vector<std::byte> bytes) {
     bool pending_invalid = false;
@@ -732,15 +732,16 @@ private:
       std::lock_guard lock{mutex_};
       if (connection_ != connection || connection_generation == 0 ||
           connection_generation != current_connection_generation_) {
-        if (role == QuicPeerStreamRole::session) {
-          secure_clear_bytes(bytes);
+        if (role == stream::QuicPeerStreamRole::session) {
+          stream::secure_clear_bytes(bytes);
         }
         return;
       }
-      if (role == QuicPeerStreamRole::session && !protocol_.authenticated() &&
+      if (role == stream::QuicPeerStreamRole::session &&
+          !protocol_.authenticated() &&
           !transport_state_.datagram_send_enabled()) {
         constexpr std::size_t maximum_pending =
-            maximum_stream_message_bytes + 4U;
+            stream::maximum_stream_message_bytes + 4U;
         if (bytes.size() > maximum_pending ||
             pending_session_bytes_.size() > maximum_pending - bytes.size()) {
           pending_session_invalid_ = true;
@@ -749,7 +750,7 @@ private:
           pending_session_bytes_.insert(pending_session_bytes_.end(),
                                         bytes.begin(), bytes.end());
         }
-        secure_clear_bytes(bytes);
+        stream::secure_clear_bytes(bytes);
         if (!pending_session_invalid_) {
           return;
         }
@@ -762,15 +763,16 @@ private:
       return;
     }
 
-    QuicSessionProtocolOutput output;
-    std::optional<QuicSessionProtocolOutput::AcceptedStartBenchmark>
+    stream::ServerSessionProtocolOutput output;
+    std::optional<
+        stream::ServerSessionProtocolOutput::AcceptedStartBenchmark>
         accepted_benchmark;
     {
       std::lock_guard lock{mutex_};
       if (connection_ != connection ||
           connection_generation != current_connection_generation_) {
-        if (role == QuicPeerStreamRole::session) {
-          secure_clear_bytes(bytes);
+        if (role == stream::QuicPeerStreamRole::session) {
+          stream::secure_clear_bytes(bytes);
         }
         return;
       }
@@ -801,26 +803,32 @@ private:
         std::visit(
             [&](const auto &accepted) {
               using Action = std::remove_cvref_t<decltype(accepted)>;
-              if constexpr (std::is_same_v<Action, QuicSessionProtocolOutput::
-                                                       AcceptedStartSession>) {
+              if constexpr (
+                  std::is_same_v<
+                      Action, stream::ServerSessionProtocolOutput::
+                                  AcceptedStartSession>) {
                 accepted_benchmark.reset();
                 append_pending_media_event(accepted);
-              } else if constexpr (std::is_same_v<Action,
-                                                  QuicSessionProtocolOutput::
-                                                      AcceptedStartBenchmark>) {
+              } else if constexpr (
+                  std::is_same_v<
+                      Action, stream::ServerSessionProtocolOutput::
+                                  AcceptedStartBenchmark>) {
                 accepted_benchmark = accepted;
-              } else if constexpr (std::is_same_v<
-                                       Action, QuicSessionProtocolOutput::
-                                                   AcceptedCancelBenchmark>) {
+              } else if constexpr (
+                  std::is_same_v<
+                      Action, stream::ServerSessionProtocolOutput::
+                                  AcceptedCancelBenchmark>) {
                 accepted_benchmark.reset();
                 benchmark_source_.cancel();
-              } else if constexpr (std::is_same_v<Action,
-                                                  QuicSessionProtocolOutput::
-                                                      AcceptedStopSession>) {
+              } else if constexpr (
+                  std::is_same_v<
+                      Action, stream::ServerSessionProtocolOutput::
+                                  AcceptedStopSession>) {
                 append_pending_media_event(accepted);
-              } else if constexpr (std::is_same_v<Action,
-                                                  QuicSessionProtocolOutput::
-                                                      AcceptedIdrRequest>) {
+              } else if constexpr (
+                  std::is_same_v<
+                      Action, stream::ServerSessionProtocolOutput::
+                                  AcceptedIdrRequest>) {
                 append_pending_media_event(accepted);
               }
             },
@@ -842,7 +850,7 @@ private:
         }
         received_packets_.push_back(std::move(packet));
       }
-      if (role == QuicPeerStreamRole::session) {
+      if (role == stream::QuicPeerStreamRole::session) {
         std::fill(bytes.begin(), bytes.end(), std::byte{});
       }
     }
@@ -1160,7 +1168,7 @@ private:
         self.changed_.notify_all();
         if (!pending.empty() && session_stream != nullptr) {
           self.process_stream_bytes(connection, session_stream,
-                                    QuicPeerStreamRole::session,
+                                    stream::QuicPeerStreamRole::session,
                                     connection_generation, std::move(pending));
         }
         break;
@@ -1172,12 +1180,12 @@ private:
             event->PEER_STREAM_STARTED.Stream, QUIC_PARAM_STREAM_ID,
             &stream_id_size, &stream_id);
         const auto role = QUIC_SUCCEEDED(status)
-                              ? classify_peer_stream(stream_id)
-                              : QuicPeerStreamRole::invalid;
-        bool accepted = role != QuicPeerStreamRole::invalid;
+                              ? stream::classify_peer_stream(stream_id)
+                              : stream::QuicPeerStreamRole::invalid;
+        bool accepted = role != stream::QuicPeerStreamRole::invalid;
         {
           std::lock_guard lock{self.mutex_};
-          if (role == QuicPeerStreamRole::session) {
+          if (role == stream::QuicPeerStreamRole::session) {
             accepted = accepted && self.session_stream_ == nullptr;
             if (accepted) {
               self.session_stream_ = event->PEER_STREAM_STARTED.Stream;
@@ -1495,7 +1503,7 @@ private:
   }
 
   std::wstring identity_path_;
-  QuicSessionProtocol protocol_;
+  stream::ServerSessionProtocol protocol_;
   QuicListenerFaultInjector fault_injector_;
   BenchmarkSource benchmark_source_;
   mutable std::mutex mutex_;

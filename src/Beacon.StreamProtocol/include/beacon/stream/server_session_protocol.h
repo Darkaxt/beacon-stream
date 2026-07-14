@@ -1,8 +1,8 @@
 #pragma once
 
+#include "beacon/stream/secure_bytes.h"
+#include "beacon/stream/stream_ticket_authorizer.h"
 #include "beacon/stream/transport.h"
-#include "beacon/worker/quic_ticket_store.h"
-#include "beacon/worker/secure_bytes.h"
 #include "stream_control.pb.h"
 
 #include <cstddef>
@@ -13,7 +13,7 @@
 #include <variant>
 #include <vector>
 
-namespace beacon::worker {
+namespace beacon::stream {
 
 inline constexpr std::uint32_t maximum_stream_message_bytes = 1024U * 1024U;
 
@@ -24,7 +24,7 @@ enum class QuicPeerStreamRole {
   invalid,
 };
 
-struct QuicSessionProtocolOutput {
+struct ServerSessionProtocolOutput {
   struct AcceptedAuthentication {
     std::string session_id;
     std::uint64_t session_generation{};
@@ -78,7 +78,7 @@ struct QuicSessionProtocolOutput {
   bool close_connection{};
   bool stale_callback{};
   std::vector<std::vector<std::byte>> session_replies;
-  std::vector<stream::TransportPacket> packets;
+  std::vector<TransportPacket> packets;
   std::optional<AcceptedAuthentication> accepted_authentication;
   std::vector<AcceptedSessionAction> accepted_session_actions;
   std::vector<ParsedInput> inputs;
@@ -88,20 +88,20 @@ struct QuicSessionProtocolOutput {
 [[nodiscard]] QuicPeerStreamRole
 classify_peer_stream(std::uint64_t stream_id) noexcept;
 
-class QuicSessionProtocol {
+class ServerSessionProtocol {
 public:
-  explicit QuicSessionProtocol(
-      AuthorizedQuicTicketStore &authorized_tickets,
+  explicit ServerSessionProtocol(
+      IStreamTicketAuthorizer &ticket_authorizer,
       SecureClearObserver session_wipe_observer = nullptr,
       void *session_wipe_context = nullptr);
-  ~QuicSessionProtocol();
+  ~ServerSessionProtocol();
 
   void set_maximum_datagram_bytes(std::uint16_t value) noexcept;
   void begin_connection(std::uint64_t connection_generation);
-  [[nodiscard]] QuicSessionProtocolOutput
+  [[nodiscard]] ServerSessionProtocolOutput
   receive(std::uint64_t connection_generation, QuicPeerStreamRole role,
           std::span<const std::byte> bytes, std::uint64_t now_unix_ms);
-  [[nodiscard]] QuicSessionProtocolOutput
+  [[nodiscard]] ServerSessionProtocolOutput
   receive(QuicPeerStreamRole role, std::span<const std::byte> bytes,
           std::uint64_t now_unix_ms);
   [[nodiscard]] bool authenticated() const noexcept;
@@ -111,7 +111,7 @@ private:
   void clear_stream_bytes() noexcept;
   void consume_session_prefix(std::size_t bytes) noexcept;
 
-  AuthorizedQuicTicketStore &authorized_tickets_;
+  IStreamTicketAuthorizer &ticket_authorizer_;
   std::vector<std::byte> session_bytes_;
   std::vector<std::byte> input_bytes_;
   std::vector<std::byte> feedback_bytes_;
@@ -132,4 +132,4 @@ private:
   bool started_{};
 };
 
-} // namespace beacon::worker
+} // namespace beacon::stream

@@ -82,7 +82,7 @@ private:
                             std::uint64_t session_generation,
                             std::uint16_t maximum_datagram_bytes) noexcept;
   void start_generation(
-      const QuicSessionProtocolOutput::AcceptedStartSession &start);
+      const stream::ServerSessionProtocolOutput::AcceptedStartSession &start);
   void stop_generation(std::uint64_t session_generation) noexcept;
   void forward_generation_event(const QuicMediaEvent &event,
                                 std::uint64_t session_generation);

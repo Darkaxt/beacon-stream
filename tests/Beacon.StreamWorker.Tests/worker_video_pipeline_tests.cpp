@@ -113,7 +113,7 @@ stream_v1::SelectedVideoMode selected_video() {
 }
 
 beacon::worker::QuicMediaEvent start_event(std::uint64_t generation) {
-  beacon::worker::QuicSessionProtocolOutput::AcceptedStartSession start{
+  beacon::stream::ServerSessionProtocolOutput::AcceptedStartSession start{
       .session_id = "session-a",
       .session_generation = generation,
       .maximum_datagram_bytes = 1232,
@@ -123,7 +123,7 @@ beacon::worker::QuicMediaEvent start_event(std::uint64_t generation) {
 }
 
 beacon::worker::QuicMediaEvent feedback_event(std::uint64_t generation) {
-  beacon::worker::QuicSessionProtocolOutput::ParsedFeedback feedback{
+  beacon::stream::ServerSessionProtocolOutput::ParsedFeedback feedback{
       .session_generation = generation,
   };
   feedback.feedback.set_protocol_version(1);
@@ -151,7 +151,7 @@ void authenticated_start_creates_only_the_exact_planned_generation() {
   BEACON_TEST_REQUIRE(pipeline.prepare(plan()));
 
   auto mismatched = std::get<
-      beacon::worker::QuicSessionProtocolOutput::AcceptedStartSession>(
+      beacon::stream::ServerSessionProtocolOutput::AcceptedStartSession>(
       start_event(1));
   mismatched.start_session.mutable_selected_video()->set_height(1440);
   pipeline.handle_media_event(beacon::worker::QuicMediaEvent{mismatched});
@@ -214,7 +214,7 @@ void explicit_stop_and_reset_release_resources_exactly_once() {
   pipeline.handle_media_event(start_event(4));
   auto active = factory.generations[0];
 
-  beacon::worker::QuicSessionProtocolOutput::AcceptedStopSession stop{
+  beacon::stream::ServerSessionProtocolOutput::AcceptedStopSession stop{
       .session_generation = 4,
   };
   stop.stop_session.set_reason(stream_v1::SESSION_STOP_REASON_CLIENT_REQUEST);

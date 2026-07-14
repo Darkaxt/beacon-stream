@@ -442,7 +442,8 @@ struct ClientState {
           (std::to_integer<std::uint32_t>(session_bytes[1]) << 16U) |
           (std::to_integer<std::uint32_t>(session_bytes[2]) << 8U) |
           std::to_integer<std::uint32_t>(session_bytes[3]);
-      if (size == 0 || size > beacon::worker::maximum_stream_message_bytes) {
+      if (size == 0 ||
+          size > beacon::stream::maximum_stream_message_bytes) {
         return false;
       }
       if (session_bytes.size() < 4U + size) {
@@ -1739,15 +1740,15 @@ int wmain(int argument_count, wchar_t **arguments) {
     std::vector<MediaAction> media_actions;
     for (const auto &event : media_events) {
       if (std::holds_alternative<
-              beacon::worker::QuicSessionProtocolOutput::AcceptedStartSession>(
+              beacon::stream::ServerSessionProtocolOutput::AcceptedStartSession>(
               event)) {
         media_actions.push_back(MediaAction::start);
       } else if (std::holds_alternative<
-                     beacon::worker::QuicSessionProtocolOutput::
+                     beacon::stream::ServerSessionProtocolOutput::
                          AcceptedStopSession>(event)) {
         media_actions.push_back(MediaAction::stop);
       } else if (std::holds_alternative<
-                     beacon::worker::QuicSessionProtocolOutput::
+                     beacon::stream::ServerSessionProtocolOutput::
                          AcceptedIdrRequest>(event)) {
         media_actions.push_back(MediaAction::idr);
       }
@@ -1755,7 +1756,8 @@ int wmain(int argument_count, wchar_t **arguments) {
     const bool media_feedback =
         std::ranges::any_of(media_events, [](const auto &event) {
           return std::holds_alternative<
-              beacon::worker::QuicSessionProtocolOutput::ParsedFeedback>(event);
+              beacon::stream::ServerSessionProtocolOutput::ParsedFeedback>(
+                  event);
         });
     const std::vector expected_actions{MediaAction::start, MediaAction::stop,
                                        MediaAction::start, MediaAction::idr};

@@ -39,17 +39,19 @@ media_rate_evidence_from(const QuicMediaEvent &event,
               .smoothed_rtt_us = value.smoothed_rtt_us,
               .congestion_window_bytes = value.congestion_window_bytes,
           };
-        } else if constexpr (std::is_same_v<Event, QuicSessionProtocolOutput::
-                                                       AcceptedIdrRequest>) {
+        } else if constexpr (
+            std::is_same_v<
+                Event,
+                stream::ServerSessionProtocolOutput::AcceptedIdrRequest>) {
           return MediaRateEvidence{
               .kind = MediaRateEvidenceKind::reliable_idr_request,
               .session_generation = value.session_generation,
               .evidence_sequence = evidence_sequence,
               .frame_sequence = value.request.last_complete_sequence(),
           };
-        } else if constexpr (std::is_same_v<
-                                 Event,
-                                 QuicSessionProtocolOutput::ParsedFeedback>) {
+        } else if constexpr (
+            std::is_same_v<
+                Event, stream::ServerSessionProtocolOutput::ParsedFeedback>) {
           const auto &feedback = value.feedback;
           if (feedback.has_rendered_frame()) {
             return MediaRateEvidence{

@@ -1,9 +1,9 @@
 #pragma once
 
 #include "beacon/stream/msquic_transport.h"
+#include "beacon/stream/server_session_protocol.h"
 #include "beacon/stream/transport.h"
 #include "beacon/worker/media_datagram_transport.h"
-#include "beacon/worker/quic_session_protocol.h"
 #include "beacon/worker/quic_ticket_store.h"
 #include "worker_ipc.pb.h"
 
@@ -51,11 +51,11 @@ struct QuicTransportDisconnected {
 };
 
 using QuicMediaEvent =
-    std::variant<QuicSessionProtocolOutput::AcceptedStartSession,
-                 QuicSessionProtocolOutput::AcceptedStopSession,
-                 QuicSessionProtocolOutput::AcceptedIdrRequest,
-                 QuicSessionProtocolOutput::ParsedFeedback, QuicDatagramOutcome,
-                 QuicTransportDisconnected>;
+    std::variant<stream::ServerSessionProtocolOutput::AcceptedStartSession,
+                 stream::ServerSessionProtocolOutput::AcceptedStopSession,
+                 stream::ServerSessionProtocolOutput::AcceptedIdrRequest,
+                 stream::ServerSessionProtocolOutput::ParsedFeedback,
+                 QuicDatagramOutcome, QuicTransportDisconnected>;
 
 enum class QuicListenerFailure {
   none,

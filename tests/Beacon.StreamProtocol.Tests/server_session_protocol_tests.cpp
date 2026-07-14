@@ -1,28 +1,27 @@
-#include "beacon/worker/quic_listener.h"
-#include "beacon/worker/quic_session_protocol.h"
-#include "beacon/worker/secure_bytes.h"
+#include "beacon/stream/server_session_protocol.h"
+#include "beacon/stream/secure_bytes.h"
 
-#include "../Beacon.StreamProtocol.Tests/test_failure.h"
+#include "test_failure.h"
 #include "stream_control.pb.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
 namespace {
 
-using beacon::worker::AuthorizedQuicTicket;
-using beacon::worker::AuthorizedQuicTicketStore;
-using beacon::worker::QuicPeerStreamRole;
-using beacon::worker::QuicSessionProtocol;
-using beacon::worker::QuicSessionProtocolOutput;
-using beacon::worker::QuicTicketConsumeResult;
+using beacon::stream::QuicPeerStreamRole;
+using QuicSessionProtocol = beacon::stream::ServerSessionProtocol;
+using QuicSessionProtocolOutput = beacon::stream::ServerSessionProtocolOutput;
 namespace stream_v1 = beacon::stream::v1;
 
 using AcceptedCancelBenchmark =
@@ -58,17 +57,111 @@ stream_v1::SelectedVideoMode selected_video() {
   return video;
 }
 
-AuthorizedQuicTicket grant(std::string_view raw_ticket) {
-  AuthorizedQuicTicket ticket{
-      .hash = beacon::worker::hash_stream_ticket(bytes(raw_ticket)),
+struct TestAuthorizedTicket {
+  std::string raw_ticket;
+  std::string client_id;
+  std::string session_id;
+  std::uint64_t plan_revision{};
+  std::uint64_t expires_at_unix_ms{};
+  std::optional<stream_v1::SelectedVideoMode> selected_video;
+  std::optional<stream_v1::StartBenchmark> benchmark_plan;
+};
+
+TestAuthorizedTicket grant(std::string_view raw_ticket) {
+  TestAuthorizedTicket ticket{
+      .raw_ticket = std::string{raw_ticket},
       .client_id = "z-fold-7",
       .session_id = "session-a",
       .plan_revision = 8,
       .expires_at_unix_ms = 2'000,
+      .selected_video = selected_video(),
+      .benchmark_plan = std::nullopt,
   };
-  ticket.selected_video = selected_video();
   return ticket;
 }
+
+class RecordingAuthorizer final
+    : public beacon::stream::IStreamTicketAuthorizer {
+public:
+  bool authorize(TestAuthorizedTicket ticket) {
+    if (ticket.client_id.empty() || ticket.session_id.empty() ||
+        ticket.plan_revision == 0 || ticket.expires_at_unix_ms == 0 ||
+        ticket.selected_video.has_value() == ticket.benchmark_plan.has_value()) {
+      return false;
+    }
+    const auto duplicate =
+        std::ranges::find_if(records_, [&ticket](const Record &record) {
+          return record.ticket.raw_ticket == ticket.raw_ticket;
+        });
+    if (duplicate != records_.end()) {
+      return false;
+    }
+    records_.push_back({.ticket = std::move(ticket)});
+    return true;
+  }
+
+  beacon::stream::StreamTicketAuthorization authorize(
+      std::span<const std::byte> ticket, std::string_view client_id,
+      std::string_view session_id, std::uint64_t plan_revision,
+      std::uint64_t now_unix_ms) override {
+    ++calls;
+    const auto found = std::ranges::find_if(records_, [ticket](const Record &record) {
+      return std::ranges::equal(ticket, bytes(record.ticket.raw_ticket));
+    });
+    if (found == records_.end()) {
+      return {.result =
+                  beacon::stream::StreamTicketAuthorizationResult::unknown,
+              .selected_video = std::nullopt,
+              .benchmark_plan = std::nullopt};
+    }
+    if (found->consumed) {
+      return {.result =
+                  beacon::stream::StreamTicketAuthorizationResult::replayed,
+              .selected_video = std::nullopt,
+              .benchmark_plan = std::nullopt};
+    }
+    if (found->ticket.client_id != client_id) {
+      return {.result = beacon::stream::StreamTicketAuthorizationResult::
+                            client_mismatch,
+              .selected_video = std::nullopt,
+              .benchmark_plan = std::nullopt};
+    }
+    if (found->ticket.session_id != session_id) {
+      return {.result = beacon::stream::StreamTicketAuthorizationResult::
+                            session_mismatch,
+              .selected_video = std::nullopt,
+              .benchmark_plan = std::nullopt};
+    }
+    if (found->ticket.plan_revision != plan_revision) {
+      return {.result =
+                  beacon::stream::StreamTicketAuthorizationResult::plan_mismatch,
+              .selected_video = std::nullopt,
+              .benchmark_plan = std::nullopt};
+    }
+    if (now_unix_ms > found->ticket.expires_at_unix_ms) {
+      return {.result =
+                  beacon::stream::StreamTicketAuthorizationResult::expired,
+              .selected_video = std::nullopt,
+              .benchmark_plan = std::nullopt};
+    }
+    found->consumed = true;
+    return {.result = beacon::stream::StreamTicketAuthorizationResult::accepted,
+            .selected_video = found->ticket.selected_video,
+            .benchmark_plan = found->ticket.benchmark_plan};
+  }
+
+  std::size_t calls{};
+
+private:
+  struct Record {
+    TestAuthorizedTicket ticket;
+    bool consumed{};
+  };
+
+  std::vector<Record> records_;
+};
+
+using AuthorizedQuicTicketStore = RecordingAuthorizer;
 
 template <typename Message>
 std::vector<std::byte> frame(const Message &message) {
@@ -162,7 +255,7 @@ stream_v1::SessionStreamEnvelope cancel_benchmark(std::uint64_t sequence) {
 }
 
 stream_v1::SessionStreamEnvelope
-reply_from(const beacon::worker::QuicSessionProtocolOutput &output) {
+reply_from(const QuicSessionProtocolOutput &output) {
   BEACON_TEST_REQUIRE(output.session_replies.size() == 1);
   stream_v1::SessionStreamEnvelope reply;
   BEACON_TEST_REQUIRE(reply.ParseFromArray(
@@ -171,83 +264,16 @@ reply_from(const beacon::worker::QuicSessionProtocolOutput &output) {
   return reply;
 }
 
-void ticket_is_consumed_once_without_retaining_the_raw_secret() {
-  AuthorizedQuicTicketStore store;
-  BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-a")));
-
-  BEACON_TEST_REQUIRE(
-      store.consume(bytes("raw-ticket-a"), "z-fold-7", "session-a", 8, 1'000) ==
-      QuicTicketConsumeResult::accepted);
-  BEACON_TEST_REQUIRE(
-      store.consume(bytes("raw-ticket-a"), "z-fold-7", "session-a", 8, 1'000) ==
-      QuicTicketConsumeResult::replayed);
-  BEACON_TEST_REQUIRE(store.consume(bytes("another-ticket"), "z-fold-7",
-                                    "session-a", 8,
-                                    1'000) == QuicTicketConsumeResult::unknown);
-}
-
-void ticket_identity_and_security_expiry_are_validated_before_consumption() {
-  AuthorizedQuicTicketStore store;
-  BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-b")));
-
-  BEACON_TEST_REQUIRE(store.consume(bytes("raw-ticket-b"), "wrong-client",
-                                    "session-a", 8, 1'000) ==
-                      QuicTicketConsumeResult::client_mismatch);
-  BEACON_TEST_REQUIRE(store.consume(bytes("raw-ticket-b"), "z-fold-7",
-                                    "wrong-session", 8, 1'000) ==
-                      QuicTicketConsumeResult::session_mismatch);
-  BEACON_TEST_REQUIRE(
-      store.consume(bytes("raw-ticket-b"), "z-fold-7", "session-a", 9, 1'000) ==
-      QuicTicketConsumeResult::plan_mismatch);
-  BEACON_TEST_REQUIRE(store.consume(bytes("raw-ticket-b"), "z-fold-7",
-                                    "session-a", 8,
-                                    2'001) == QuicTicketConsumeResult::expired);
-  BEACON_TEST_REQUIRE(
-      store.consume(bytes("raw-ticket-b"), "z-fold-7", "session-a", 8, 1'000) ==
-      QuicTicketConsumeResult::accepted);
-}
-
-void revocation_and_duplicate_authorization_are_deterministic() {
-  AuthorizedQuicTicketStore store;
-  auto ticket = grant("raw-ticket-c");
-  BEACON_TEST_REQUIRE(store.authorize(ticket));
-  BEACON_TEST_REQUIRE(!store.authorize(ticket));
-  BEACON_TEST_REQUIRE(store.size() == 1);
-
-  store.revoke(ticket.hash);
-  BEACON_TEST_REQUIRE(store.size() == 0);
-  BEACON_TEST_REQUIRE(store.consume(bytes("raw-ticket-c"), "z-fold-7",
-                                    "session-a", 8,
-                                    1'000) == QuicTicketConsumeResult::unknown);
-}
-
-void tickets_authorize_exactly_one_prepared_operation() {
-  AuthorizedQuicTicketStore store;
-
-  auto missing_operation = grant("missing-operation");
-  missing_operation.selected_video.reset();
-  BEACON_TEST_REQUIRE(!store.authorize(std::move(missing_operation)));
-
-  auto ambiguous_operation = grant("ambiguous-operation");
-  ambiguous_operation.benchmark_plan = start_benchmark(2).start_benchmark();
-  BEACON_TEST_REQUIRE(!store.authorize(std::move(ambiguous_operation)));
-
-  auto benchmark_operation = grant("benchmark-operation");
-  benchmark_operation.selected_video.reset();
-  benchmark_operation.benchmark_plan = start_benchmark(2).start_benchmark();
-  BEACON_TEST_REQUIRE(store.authorize(std::move(benchmark_operation)));
-}
-
 void stream_ids_have_one_unambiguous_role() {
-  BEACON_TEST_REQUIRE(beacon::worker::classify_peer_stream(0) ==
+  BEACON_TEST_REQUIRE(beacon::stream::classify_peer_stream(0) ==
                       QuicPeerStreamRole::session);
-  BEACON_TEST_REQUIRE(beacon::worker::classify_peer_stream(2) ==
+  BEACON_TEST_REQUIRE(beacon::stream::classify_peer_stream(2) ==
                       QuicPeerStreamRole::input);
-  BEACON_TEST_REQUIRE(beacon::worker::classify_peer_stream(6) ==
+  BEACON_TEST_REQUIRE(beacon::stream::classify_peer_stream(6) ==
                       QuicPeerStreamRole::feedback);
-  BEACON_TEST_REQUIRE(beacon::worker::classify_peer_stream(4) ==
+  BEACON_TEST_REQUIRE(beacon::stream::classify_peer_stream(4) ==
                       QuicPeerStreamRole::invalid);
-  BEACON_TEST_REQUIRE(beacon::worker::classify_peer_stream(10) ==
+  BEACON_TEST_REQUIRE(beacon::stream::classify_peer_stream(10) ==
                       QuicPeerStreamRole::invalid);
 }
 
@@ -533,15 +559,15 @@ void coalesced_session_actions_preserve_protocol_order() {
   BEACON_TEST_REQUIRE(output.accepted_session_actions.size() == 3);
   BEACON_TEST_REQUIRE(
       std::holds_alternative<
-          beacon::worker::QuicSessionProtocolOutput::AcceptedStartSession>(
+          QuicSessionProtocolOutput::AcceptedStartSession>(
           output.accepted_session_actions[0]));
   BEACON_TEST_REQUIRE(
       std::holds_alternative<
-          beacon::worker::QuicSessionProtocolOutput::AcceptedIdrRequest>(
+          QuicSessionProtocolOutput::AcceptedIdrRequest>(
           output.accepted_session_actions[1]));
   BEACON_TEST_REQUIRE(
       std::holds_alternative<
-          beacon::worker::QuicSessionProtocolOutput::AcceptedStopSession>(
+          QuicSessionProtocolOutput::AcceptedStopSession>(
           output.accepted_session_actions[2]));
 }
 
@@ -687,7 +713,7 @@ void secure_clear_observes_zeroes_before_pending_bytes_are_released() {
         });
   };
 
-  beacon::worker::secure_clear_bytes(pending, observer, &observed);
+  beacon::stream::secure_clear_bytes(pending, observer, &observed);
 
   BEACON_TEST_REQUIRE(observed);
   BEACON_TEST_REQUIRE(pending.empty());
@@ -722,7 +748,7 @@ void oversized_partial_authentication_is_wiped_before_buffer_reuse() {
            .close_connection);
 
   const std::vector oversized(
-      static_cast<std::size_t>(beacon::worker::maximum_stream_message_bytes) +
+      static_cast<std::size_t>(beacon::stream::maximum_stream_message_bytes) +
           5U,
       std::byte{0x33});
   BEACON_TEST_REQUIRE(
@@ -776,10 +802,6 @@ void unauthenticated_data_and_oversized_frames_fail_closed() {
 
 int main() {
   return beacon::stream::testing::run_tests([] {
-    ticket_is_consumed_once_without_retaining_the_raw_secret();
-    ticket_identity_and_security_expiry_are_validated_before_consumption();
-    revocation_and_duplicate_authorization_are_deterministic();
-    tickets_authorize_exactly_one_prepared_operation();
     stream_ids_have_one_unambiguous_role();
     fragmented_authentication_consumes_ticket_and_returns_negotiated_limit();
     replay_and_version_mismatch_return_typed_rejections();

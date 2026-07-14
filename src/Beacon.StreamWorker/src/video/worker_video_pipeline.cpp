@@ -65,18 +65,22 @@ void WorkerVideoPipeline::handle_media_event(const QuicMediaEvent &event) {
         using Event = std::remove_cvref_t<decltype(value)>;
         if constexpr (std::is_same_v<
                           Event,
-                          QuicSessionProtocolOutput::AcceptedStartSession>) {
+                          stream::ServerSessionProtocolOutput::
+                              AcceptedStartSession>) {
           start_generation(value);
         } else if constexpr (
             std::is_same_v<Event,
-                           QuicSessionProtocolOutput::AcceptedStopSession> ||
+                           stream::ServerSessionProtocolOutput::
+                               AcceptedStopSession> ||
             std::is_same_v<Event, QuicTransportDisconnected>) {
           stop_generation(value.session_generation);
         } else if constexpr (
             std::is_same_v<Event,
-                           QuicSessionProtocolOutput::AcceptedIdrRequest> ||
+                           stream::ServerSessionProtocolOutput::
+                               AcceptedIdrRequest> ||
             std::is_same_v<Event,
-                           QuicSessionProtocolOutput::ParsedFeedback> ||
+                           stream::ServerSessionProtocolOutput::
+                               ParsedFeedback> ||
             std::is_same_v<Event, QuicDatagramOutcome>) {
           forward_generation_event(event, value.session_generation);
         }
@@ -142,7 +146,7 @@ WorkerVideoPipeline::create_started_generation(
 }
 
 void WorkerVideoPipeline::start_generation(
-    const QuicSessionProtocolOutput::AcceptedStartSession &start) {
+    const stream::ServerSessionProtocolOutput::AcceptedStartSession &start) {
   WorkerVideoPlan plan;
   {
     std::lock_guard lock{mutex_};

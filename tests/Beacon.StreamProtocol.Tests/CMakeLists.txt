@@ -31,6 +31,13 @@ add_executable(BeaconFrameAssemblerTests frame_assembler_tests.cpp)
 target_link_libraries(BeaconFrameAssemblerTests PRIVATE Beacon::StreamProtocol)
 add_test(NAME BeaconStreamProtocol.FrameAssembler COMMAND BeaconFrameAssemblerTests)
 
+add_executable(
+  BeaconServerSessionProtocolTests
+  server_session_protocol_tests.cpp
+)
+target_link_libraries(BeaconServerSessionProtocolTests PRIVATE Beacon::StreamProtocol)
+add_test(NAME BeaconStreamProtocol.ServerSession COMMAND BeaconServerSessionProtocolTests)
+
 if(ANDROID)
   add_executable(
     BeaconAndroidStreamCoreTests

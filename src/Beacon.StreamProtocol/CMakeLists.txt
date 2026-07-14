@@ -5,6 +5,8 @@ add_library(
     src/frame_assembler.cpp
     src/media_datagram.cpp
     src/msquic_transport.cpp
+    src/secure_bytes.cpp
+    src/server_session_protocol.cpp
     src/session.cpp
 )
 
@@ -15,6 +17,8 @@ target_include_directories(
 )
 
 add_library(Beacon::StreamProtocol ALIAS BeaconStreamProtocol)
+
+target_link_libraries(BeaconStreamProtocol PUBLIC Beacon::StreamContracts)
 
 if(MSVC)
   target_compile_options(BeaconStreamProtocol PUBLIC /W4 /WX /permissive-)

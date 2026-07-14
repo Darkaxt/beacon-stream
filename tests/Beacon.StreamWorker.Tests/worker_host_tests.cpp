@@ -400,7 +400,7 @@ void ticket_authorization_is_hash_only_and_worker_bound() {
   ticket->set_worker_instance_id("\x01\x02");
 
   const auto accepted = host.dispatch(authorize);
-  const auto consumed = tickets.consume_authorized(
+  const auto consumed = tickets.authorize(
       {reinterpret_cast<const std::byte *>(raw_ticket.data()), raw_ticket.size()},
       "z-fold-7", "session-a", 8, 1'000);
   auto revoke = command(26, "session-a");
@@ -412,7 +412,8 @@ void ticket_authorization_is_hash_only_and_worker_bound() {
 
   BEACON_TEST_REQUIRE(completion(accepted).worker_completion().succeeded());
   BEACON_TEST_REQUIRE(consumed.result ==
-                      beacon::worker::QuicTicketConsumeResult::accepted);
+                      beacon::stream::StreamTicketAuthorizationResult::
+                          accepted);
   BEACON_TEST_REQUIRE(consumed.selected_video.has_value());
   BEACON_TEST_REQUIRE(consumed.selected_video->width() == 2560);
   BEACON_TEST_REQUIRE(consumed.selected_video->height() == 1600);

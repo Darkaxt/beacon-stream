@@ -16,6 +16,7 @@ $tests = @(
     'BeaconFakeTransportTests',
     'BeaconSessionTests',
     'BeaconFrameAssemblerTests',
+    'BeaconServerSessionProtocolTests',
     'BeaconMsQuicTransportTests',
     'BeaconAndroidStreamCoreTests',
     'BeaconAndroidBenchmarkCollectorTests',

@@ -32,7 +32,7 @@ void transport_outcomes_preserve_generation_and_congestion_facts() {
 }
 
 void reliable_idr_preserves_the_client_recovery_cursor() {
-  beacon::worker::QuicSessionProtocolOutput::AcceptedIdrRequest request{
+  beacon::stream::ServerSessionProtocolOutput::AcceptedIdrRequest request{
       .session_generation = 8,
   };
   request.request.set_reason(stream_v1::IDR_REQUEST_REASON_FRAME_EVICTED);
@@ -49,7 +49,7 @@ void reliable_idr_preserves_the_client_recovery_cursor() {
 }
 
 void client_feedback_maps_only_rate_and_recovery_facts() {
-  beacon::worker::QuicSessionProtocolOutput::ParsedFeedback queue{
+  beacon::stream::ServerSessionProtocolOutput::ParsedFeedback queue{
       .session_generation = 9,
   };
   queue.feedback.mutable_queue_depth()->set_queued_access_units(3);
@@ -62,7 +62,7 @@ void client_feedback_maps_only_rate_and_recovery_facts() {
   BEACON_TEST_REQUIRE(queue_evidence->queued_access_units == 3);
   BEACON_TEST_REQUIRE(queue_evidence->dropped_access_units == 2);
 
-  beacon::worker::QuicSessionProtocolOutput::ParsedFeedback loss{
+  beacon::stream::ServerSessionProtocolOutput::ParsedFeedback loss{
       .session_generation = 9,
   };
   loss.feedback.mutable_datagram_loss()->set_frame_sequence(22);
@@ -76,7 +76,7 @@ void client_feedback_maps_only_rate_and_recovery_facts() {
   BEACON_TEST_REQUIRE(loss_evidence->frame_sequence == 22);
   BEACON_TEST_REQUIRE(loss_evidence->missing_chunk_count == 2);
 
-  beacon::worker::QuicSessionProtocolOutput::ParsedFeedback rendered{
+  beacon::stream::ServerSessionProtocolOutput::ParsedFeedback rendered{
       .session_generation = 9,
   };
   rendered.feedback.mutable_rendered_frame()->set_frame_sequence(23);
@@ -90,7 +90,7 @@ void client_feedback_maps_only_rate_and_recovery_facts() {
   BEACON_TEST_REQUIRE(rendered_evidence->presentation_time_us == 100);
   BEACON_TEST_REQUIRE(rendered_evidence->rendered_at_us == 104);
 
-  beacon::worker::QuicSessionProtocolOutput::ParsedFeedback decoder{
+  beacon::stream::ServerSessionProtocolOutput::ParsedFeedback decoder{
       .session_generation = 9,
   };
   decoder.feedback.mutable_decoder()->set_state(
@@ -108,7 +108,7 @@ void client_feedback_maps_only_rate_and_recovery_facts() {
 }
 
 void lifecycle_and_invalid_sequence_events_do_not_invent_rate_evidence() {
-  beacon::worker::QuicSessionProtocolOutput::AcceptedStopSession stop{
+  beacon::stream::ServerSessionProtocolOutput::AcceptedStopSession stop{
       .session_generation = 1,
   };
   stop.stop_session.set_reason(stream_v1::SESSION_STOP_REASON_CLIENT_REQUEST);

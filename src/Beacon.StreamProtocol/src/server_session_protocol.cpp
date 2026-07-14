@@ -1,4 +1,4 @@
-#include "beacon/worker/quic_session_protocol.h"
+#include "beacon/stream/server_session_protocol.h"
 
 #include "stream_control.pb.h"
 
@@ -7,7 +7,7 @@
 #include <limits>
 #include <utility>
 
-namespace beacon::worker {
+namespace beacon::stream {
 namespace {
 
 namespace stream_v1 = beacon::stream::v1;
@@ -43,18 +43,19 @@ std::vector<std::byte> frame(const Message &message) {
   return result;
 }
 
-stream_v1::SessionErrorCode error_for(QuicTicketConsumeResult result) noexcept {
+stream_v1::SessionErrorCode
+error_for(StreamTicketAuthorizationResult result) noexcept {
   switch (result) {
-  case QuicTicketConsumeResult::accepted:
+  case StreamTicketAuthorizationResult::accepted:
     return stream_v1::SESSION_ERROR_CODE_NONE;
-  case QuicTicketConsumeResult::replayed:
+  case StreamTicketAuthorizationResult::replayed:
     return stream_v1::SESSION_ERROR_CODE_TICKET_REPLAYED;
-  case QuicTicketConsumeResult::plan_mismatch:
+  case StreamTicketAuthorizationResult::plan_mismatch:
     return stream_v1::SESSION_ERROR_CODE_PLAN_MISMATCH;
-  case QuicTicketConsumeResult::unknown:
-  case QuicTicketConsumeResult::client_mismatch:
-  case QuicTicketConsumeResult::session_mismatch:
-  case QuicTicketConsumeResult::expired:
+  case StreamTicketAuthorizationResult::unknown:
+  case StreamTicketAuthorizationResult::client_mismatch:
+  case StreamTicketAuthorizationResult::session_mismatch:
+  case StreamTicketAuthorizationResult::expired:
     return stream_v1::SESSION_ERROR_CODE_AUTHENTICATION_FAILED;
   }
   return stream_v1::SESSION_ERROR_CODE_AUTHENTICATION_FAILED;
@@ -119,43 +120,43 @@ QuicPeerStreamRole classify_peer_stream(std::uint64_t stream_id) noexcept {
   }
 }
 
-QuicSessionProtocol::QuicSessionProtocol(
-    AuthorizedQuicTicketStore &authorized_tickets,
+ServerSessionProtocol::ServerSessionProtocol(
+    IStreamTicketAuthorizer &ticket_authorizer,
     SecureClearObserver session_wipe_observer, void *session_wipe_context)
-    : authorized_tickets_(authorized_tickets),
+    : ticket_authorizer_(ticket_authorizer),
       session_wipe_observer_(session_wipe_observer),
       session_wipe_context_(session_wipe_context) {}
 
-QuicSessionProtocol::~QuicSessionProtocol() { reset(); }
+ServerSessionProtocol::~ServerSessionProtocol() { reset(); }
 
-void QuicSessionProtocol::set_maximum_datagram_bytes(
+void ServerSessionProtocol::set_maximum_datagram_bytes(
     std::uint16_t value) noexcept {
   maximum_datagram_bytes_ = value;
 }
 
-void QuicSessionProtocol::begin_connection(
+void ServerSessionProtocol::begin_connection(
     std::uint64_t connection_generation) {
   reset();
   active_connection_generation_ = connection_generation;
 }
 
-QuicSessionProtocolOutput QuicSessionProtocol::receive(
+ServerSessionProtocolOutput ServerSessionProtocol::receive(
     std::uint64_t connection_generation, QuicPeerStreamRole role,
     std::span<const std::byte> bytes, std::uint64_t now_unix_ms) {
   if (connection_generation == 0 ||
       connection_generation != active_connection_generation_) {
-    QuicSessionProtocolOutput output;
+    ServerSessionProtocolOutput output;
     output.stale_callback = true;
     return output;
   }
   return receive(role, bytes, now_unix_ms);
 }
 
-QuicSessionProtocolOutput
-QuicSessionProtocol::receive(QuicPeerStreamRole role,
-                             std::span<const std::byte> bytes,
-                             std::uint64_t now_unix_ms) {
-  QuicSessionProtocolOutput output;
+ServerSessionProtocolOutput
+ServerSessionProtocol::receive(QuicPeerStreamRole role,
+                               std::span<const std::byte> bytes,
+                               std::uint64_t now_unix_ms) {
+  ServerSessionProtocolOutput output;
   std::vector<std::byte> *buffered = nullptr;
   switch (role) {
   case QuicPeerStreamRole::session:
@@ -215,10 +216,10 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
           reply.set_session_id(message.session_id());
           reply.set_sequence(message.sequence());
           auto *result = reply.mutable_session_authenticated();
-          QuicTicketConsumeOutcome consumed;
+          StreamTicketAuthorization consumed;
           auto *auth = message.mutable_authenticate_session();
           if (message.protocol_version() == 1) {
-            consumed = authorized_tickets_.consume_authorized(
+            consumed = ticket_authorizer_.authorize(
                 {reinterpret_cast<const std::byte *>(
                      auth->stream_ticket().data()),
                  auth->stream_ticket().size()},
@@ -247,7 +248,7 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
               last_session_sequence_ = message.sequence();
               current_generation_ = ++next_generation_;
               output.accepted_authentication =
-                  QuicSessionProtocolOutput::AcceptedAuthentication{
+                  ServerSessionProtocolOutput::AcceptedAuthentication{
                       .session_id = session_id_,
                       .session_generation = current_generation_,
                       .maximum_datagram_bytes = maximum_datagram_bytes_};
@@ -299,7 +300,7 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
           if (body == stream_v1::SessionStreamEnvelope::kStartSession) {
             started_ = true;
             output.accepted_session_actions.emplace_back(
-                QuicSessionProtocolOutput::AcceptedStartSession{
+                ServerSessionProtocolOutput::AcceptedStartSession{
                     .session_id = session_id_,
                     .session_generation = current_generation_,
                     .maximum_datagram_bytes = maximum_datagram_bytes_,
@@ -309,7 +310,7 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
             started_ = true;
             benchmark_run_id_ = message.start_benchmark().run_id();
             output.accepted_session_actions.emplace_back(
-                QuicSessionProtocolOutput::AcceptedStartBenchmark{
+                ServerSessionProtocolOutput::AcceptedStartBenchmark{
                     .session_id = session_id_,
                     .session_generation = current_generation_,
                     .maximum_datagram_bytes = maximum_datagram_bytes_,
@@ -317,24 +318,24 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
           } else if (body ==
                      stream_v1::SessionStreamEnvelope::kCancelBenchmark) {
             output.accepted_session_actions.emplace_back(
-                QuicSessionProtocolOutput::AcceptedCancelBenchmark{
+                ServerSessionProtocolOutput::AcceptedCancelBenchmark{
                     .session_generation = current_generation_,
                     .cancel_benchmark = message.cancel_benchmark()});
             benchmark_run_id_.clear();
             started_ = false;
           } else if (body == stream_v1::SessionStreamEnvelope::kStopSession) {
             output.accepted_session_actions.emplace_back(
-                QuicSessionProtocolOutput::AcceptedStopSession{
+                ServerSessionProtocolOutput::AcceptedStopSession{
                     .session_generation = current_generation_,
                     .stop_session = message.stop_session()});
             started_ = false;
           } else if (body == stream_v1::SessionStreamEnvelope::kRequestIdr) {
             output.accepted_session_actions.emplace_back(
-                QuicSessionProtocolOutput::AcceptedIdrRequest{
+                ServerSessionProtocolOutput::AcceptedIdrRequest{
                     .session_generation = current_generation_,
                     .request = message.request_idr()});
           }
-          output.packets.push_back({.channel = stream::StreamChannel::session,
+          output.packets.push_back({.channel = StreamChannel::session,
                                     .sequence = message.sequence(),
                                     .payload = std::vector<std::byte>(
                                         payload.begin(), payload.end())});
@@ -353,7 +354,7 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
         last_input_sequence_ = message.sequence();
         output.inputs.push_back(
             {.session_generation = current_generation_, .input = message});
-        output.packets.push_back({.channel = stream::StreamChannel::input,
+        output.packets.push_back({.channel = StreamChannel::input,
                                   .sequence = message.sequence(),
                                   .payload = std::vector<std::byte>(
                                       payload.begin(), payload.end())});
@@ -372,7 +373,7 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
         last_feedback_sequence_ = message.sequence();
         output.feedback.push_back(
             {.session_generation = current_generation_, .feedback = message});
-        output.packets.push_back({.channel = stream::StreamChannel::feedback,
+        output.packets.push_back({.channel = StreamChannel::feedback,
                                   .sequence = message.sequence(),
                                   .payload = std::vector<std::byte>(
                                       payload.begin(), payload.end())});
@@ -396,18 +397,19 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
   return output;
 }
 
-bool QuicSessionProtocol::authenticated() const noexcept {
+bool ServerSessionProtocol::authenticated() const noexcept {
   return authenticated_;
 }
 
-void QuicSessionProtocol::clear_stream_bytes() noexcept {
+void ServerSessionProtocol::clear_stream_bytes() noexcept {
   secure_clear_bytes(session_bytes_, session_wipe_observer_,
                      session_wipe_context_);
   secure_clear_bytes(input_bytes_);
   secure_clear_bytes(feedback_bytes_);
 }
 
-void QuicSessionProtocol::consume_session_prefix(std::size_t bytes) noexcept {
+void ServerSessionProtocol::consume_session_prefix(
+    std::size_t bytes) noexcept {
   const auto remaining = session_bytes_.size() - bytes;
   if (remaining != 0) {
     std::memmove(session_bytes_.data(), session_bytes_.data() + bytes,
@@ -419,7 +421,7 @@ void QuicSessionProtocol::consume_session_prefix(std::size_t bytes) noexcept {
   session_bytes_.resize(remaining);
 }
 
-void QuicSessionProtocol::reset() noexcept {
+void ServerSessionProtocol::reset() noexcept {
   clear_stream_bytes();
   session_id_.clear();
   benchmark_run_id_.clear();
@@ -435,4 +437,4 @@ void QuicSessionProtocol::reset() noexcept {
   started_ = false;
 }
 
-} // namespace beacon::worker
+} // namespace beacon::stream

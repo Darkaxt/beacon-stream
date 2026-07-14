@@ -36,7 +36,7 @@
 - Delete: `src/Beacon.StreamWorker/src/secure_bytes.cpp`
 - Delete: `tests/Beacon.StreamWorker.Tests/quic_session_tests.cpp`
 
-- [ ] **Step 1: Write the platform-neutral protocol tests**
+- [x] **Step 1: Write the platform-neutral protocol tests**
 
 Move every session parsing, exact plan binding, generation, replay, stale callback, input,
 feedback, framing, and wipe assertion from `quic_session_tests.cpp` into
@@ -61,7 +61,7 @@ public:
 Create focused Worker tests that retain SHA-256 hashing, authorization, replay, revoke, expiry,
 and constant-time hash comparison coverage for `AuthorizedQuicTicketStore`.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -72,7 +72,7 @@ Run:
 Expected: compilation fails because `IStreamTicketAuthorizer`, `ServerSessionProtocol`, and the
 shared secure-byte functions do not exist.
 
-- [ ] **Step 3: Implement the shared authorization contract and state machine**
+- [x] **Step 3: Implement the shared authorization contract and state machine**
 
 Define the contract in `stream_ticket_authorizer.h`:
 
@@ -112,7 +112,7 @@ to `beacon::stream`; use `SecureZeroMemory` on Windows and a volatile byte loop 
 while preserving Windows BCrypt hashing. Update every Worker consumer directly; do not leave
 aliases or compatibility headers.
 
-- [ ] **Step 4: Run focused and full native tests**
+- [x] **Step 4: Run focused and full native tests**
 
 Run:
 
@@ -124,7 +124,7 @@ Run:
 Expected: all Windows CTests pass and every Android native test target cross-compiles; the
 server protocol tests execute on Windows and are included in the hosted emulator native suite.
 
-- [ ] **Step 5: Commit and push the protocol extraction**
+- [x] **Step 5: Commit and push the protocol extraction**
 
 ```powershell
 git add src/Beacon.StreamProtocol src/Beacon.StreamWorker tests/Beacon.StreamProtocol.Tests tests/Beacon.StreamWorker.Tests

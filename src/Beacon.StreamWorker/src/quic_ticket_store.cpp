@@ -77,16 +77,7 @@ void AuthorizedQuicTicketStore::revoke(std::span<const std::byte> hash) {
   });
 }
 
-QuicTicketConsumeResult AuthorizedQuicTicketStore::consume(
-    std::span<const std::byte> raw_ticket, std::string_view client_id,
-    std::string_view session_id, std::uint64_t plan_revision,
-    std::uint64_t now_unix_ms) {
-  return consume_authorized(raw_ticket, client_id, session_id, plan_revision,
-                            now_unix_ms)
-      .result;
-}
-
-QuicTicketConsumeOutcome AuthorizedQuicTicketStore::consume_authorized(
+stream::StreamTicketAuthorization AuthorizedQuicTicketStore::authorize(
     std::span<const std::byte> raw_ticket, std::string_view client_id,
     std::string_view session_id, std::uint64_t plan_revision,
     std::uint64_t now_unix_ms) {
@@ -97,26 +88,29 @@ QuicTicketConsumeOutcome AuthorizedQuicTicketStore::consume_authorized(
         return hashes_equal(record.ticket.hash, hash);
       });
   if (found == records_.end()) {
-    return {.result = QuicTicketConsumeResult::unknown};
+    return {.result = stream::StreamTicketAuthorizationResult::unknown};
   }
   if (found->consumed) {
-    return {.result = QuicTicketConsumeResult::replayed};
+    return {.result = stream::StreamTicketAuthorizationResult::replayed};
   }
   if (found->ticket.client_id != client_id) {
-    return {.result = QuicTicketConsumeResult::client_mismatch};
+    return {.result =
+                stream::StreamTicketAuthorizationResult::client_mismatch};
   }
   if (found->ticket.session_id != session_id) {
-    return {.result = QuicTicketConsumeResult::session_mismatch};
+    return {.result =
+                stream::StreamTicketAuthorizationResult::session_mismatch};
   }
   if (found->ticket.plan_revision != plan_revision) {
-    return {.result = QuicTicketConsumeResult::plan_mismatch};
+    return {.result =
+                stream::StreamTicketAuthorizationResult::plan_mismatch};
   }
   if (now_unix_ms > found->ticket.expires_at_unix_ms) {
-    return {.result = QuicTicketConsumeResult::expired};
+    return {.result = stream::StreamTicketAuthorizationResult::expired};
   }
 
   found->consumed = true;
-  return {.result = QuicTicketConsumeResult::accepted,
+  return {.result = stream::StreamTicketAuthorizationResult::accepted,
           .selected_video = found->ticket.selected_video,
           .benchmark_plan = found->ticket.benchmark_plan};
 }
