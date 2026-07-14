@@ -25,7 +25,7 @@ final class AndroidAssetBenchmarkVectorRepository implements BenchmarkVectorRepo
     public byte[] load(String vectorId) {
         String fileName;
         if (H264_720P60_VECTOR.equals(vectorId) || H264_360P30_VECTOR.equals(vectorId)) {
-            fileName = vectorId + ".h264";
+            fileName = vectorId + ".bau";
         } else {
             throw new IllegalArgumentException(
                 "Benchmark vector '" + vectorId + "' is not packaged by this APK.");

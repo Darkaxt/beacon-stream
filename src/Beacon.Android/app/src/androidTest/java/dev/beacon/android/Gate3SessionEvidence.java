@@ -10,6 +10,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
@@ -78,7 +79,7 @@ final class Gate3SessionEvidence implements BeaconStreamCore.EncodedFrameSink {
     @Override
     public void onFrame(BeaconStreamCore.EncodedFrame frame) {
         long count = receivedFrameCount.incrementAndGet();
-        if (!Arrays.equals(MarkerBytes, frame.bytes)) {
+        if (!matches(MarkerBytes, frame.bytes)) {
             failure.compareAndSet(null,
                 new AssertionError("Expected the Gate 3 non-decodable marker bytes."));
         }
@@ -93,6 +94,15 @@ final class Gate3SessionEvidence implements BeaconStreamCore.EncodedFrameSink {
         markerSequence = frame.sequence;
         transportConnected = true;
         markerReceived.countDown();
+    }
+
+    private static boolean matches(byte[] expected, ByteBuffer actual) {
+        ByteBuffer copy = actual.asReadOnlyBuffer();
+        if (copy.remaining() != expected.length) return false;
+        for (byte value : expected) {
+            if (copy.get() != value) return false;
+        }
+        return true;
     }
 
     void recordFeedbackSent() {

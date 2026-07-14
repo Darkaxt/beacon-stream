@@ -13,9 +13,11 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
+import android.view.SurfaceView;
 import android.widget.TextView;
 
 import java.io.IOException;
@@ -77,7 +79,8 @@ public final class BeaconActivity extends Activity {
     private EditText thermalState;
     private TextView decoderDebugOverlay;
     private TextView controllerOverlayMarker;
-    private TextView touchSurfaceView;
+    private View touchSurfaceView;
+    private AndroidSurfaceViewProvider videoSurfaceProvider;
     private TextView status;
 
     @Override
@@ -105,6 +108,9 @@ public final class BeaconActivity extends Activity {
         }
         if (modelSession != null) {
             modelSession.close();
+        }
+        if (videoSurfaceProvider != null) {
+            videoSurfaceProvider.close();
         }
 
         executor.shutdown();
@@ -252,11 +258,15 @@ public final class BeaconActivity extends Activity {
     }
 
     private View touchSurface() {
-        TextView surface = text("Touch input surface", uiState.bodyTextSizeSp(), false);
+        FrameLayout surface = new FrameLayout(this);
         touchSurfaceView = surface;
-        surface.setGravity(Gravity.CENTER);
-        surface.setMinHeight(uiState.touchSurfaceMinHeightPx());
+        surface.setMinimumHeight(uiState.touchSurfaceMinHeightPx());
         surface.setBackgroundColor(uiState.surfaceColor());
+        SurfaceView video = new SurfaceView(this);
+        surface.addView(video, new FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT));
+        videoSurfaceProvider = new AndroidSurfaceViewProvider(video);
         surface.setOnTouchListener((view, event) -> {
             BeaconApiClient.InputBatch batch = mapTouchEvent(event, view.getWidth(), view.getHeight());
             if (batch == null) {
@@ -584,7 +594,10 @@ public final class BeaconActivity extends Activity {
         return new BeaconViewModel(
             config.clientId(),
             config.serverUrl(),
-            new BeaconApiClient(this, config));
+            new BeaconApiClient(this, config),
+            failureObserver -> new BeaconVideoSession(
+                videoSurfaceProvider,
+                failureObserver));
     }
 
     BeaconViewModel createOwnedModelForInstrumentation() {
@@ -595,6 +608,10 @@ public final class BeaconActivity extends Activity {
 
     boolean workerExecutorShutdown() {
         return executor.isShutdown();
+    }
+
+    AndroidSurfaceViewProvider videoSurfaceProviderForInstrumentation() {
+        return videoSurfaceProvider;
     }
 
     private BeaconApiClient.ProfilePatch readPatch() {

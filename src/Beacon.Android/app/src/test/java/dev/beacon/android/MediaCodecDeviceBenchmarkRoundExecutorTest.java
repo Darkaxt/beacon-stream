@@ -4,8 +4,9 @@ import com.google.gson.JsonParser;
 
 import org.junit.Test;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -26,11 +27,13 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
         executor.start(round(), observer);
         EncodedVideoSample first = codec.sampleProvider.nextSample();
         EncodedVideoSample second = codec.sampleProvider.nextSample();
-        codec.observer.onInputQueued(first.presentationTimeUs(), 1_000_000);
-        codec.observer.onInputQueued(second.presentationTimeUs(), 11_000_000);
-        codec.observer.onOutputReleased(first.presentationTimeUs(), 6_000_000, true);
+        codec.observer.onInputQueued(first.sequence(), first.presentationTimeUs(), 1_000_000);
+        codec.observer.onInputQueued(second.sequence(), second.presentationTimeUs(), 11_000_000);
+        codec.observer.onOutputReleased(
+            first.sequence(), first.presentationTimeUs(), 6_000_000, true);
         surfaces.observer.onFramePresented(first.presentationTimeUs(), 10_000_000);
-        codec.observer.onOutputReleased(second.presentationTimeUs(), 16_000_000, true);
+        codec.observer.onOutputReleased(
+            second.sequence(), second.presentationTimeUs(), 16_000_000, true);
         surfaces.presentOnClose(second.presentationTimeUs(), 20_000_000);
         codec.observer.onEndOfStream();
 
@@ -60,11 +63,13 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
         executor.start(round(), observer);
         EncodedVideoSample first = codec.sampleProvider.nextSample();
         EncodedVideoSample second = codec.sampleProvider.nextSample();
-        codec.observer.onInputQueued(first.presentationTimeUs(), 1_000_000);
-        codec.observer.onInputQueued(second.presentationTimeUs(), 11_000_000);
-        codec.observer.onOutputReleased(first.presentationTimeUs(), 6_000_000, true);
+        codec.observer.onInputQueued(first.sequence(), first.presentationTimeUs(), 1_000_000);
+        codec.observer.onInputQueued(second.sequence(), second.presentationTimeUs(), 11_000_000);
+        codec.observer.onOutputReleased(
+            first.sequence(), first.presentationTimeUs(), 6_000_000, true);
         surfaces.observer.onFramePresented(first.presentationTimeUs(), 10_000_000);
-        codec.observer.onOutputReleased(second.presentationTimeUs(), 16_000_000, true);
+        codec.observer.onOutputReleased(
+            second.sequence(), second.presentationTimeUs(), 16_000_000, true);
         codec.observer.onEndOfStream();
 
         assertTrue(observer.sample.toJson().toString().contains("\"droppedFrames\":1"));
@@ -124,8 +129,9 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
 
         executor.start(round(), observer);
         EncodedVideoSample first = codec.sampleProvider.nextSample();
-        codec.observer.onInputQueued(first.presentationTimeUs(), 1_000_000);
-        codec.observer.onOutputReleased(first.presentationTimeUs(), 6_000_000, true);
+        codec.observer.onInputQueued(first.sequence(), first.presentationTimeUs(), 1_000_000);
+        codec.observer.onOutputReleased(
+            first.sequence(), first.presentationTimeUs(), 6_000_000, true);
         surfaces.observer.onFramePresented(first.presentationTimeUs(), 10_000_000);
         codec.observer.onEndOfStream();
 
@@ -143,11 +149,20 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
     }
 
     private static byte[] twoFrameVector() {
-        return new byte[] {
+        byte[] first = new byte[] {
             0, 0, 0, 1, 0x67, 1,
-            0, 0, 0, 1, 0x65, 2,
-            0, 0, 0, 1, 0x41, 3
+            0, 0, 0, 1, 0x65, 2
         };
+        byte[] second = new byte[] { 0, 0, 0, 1, 0x41, 3 };
+        byte[] magic = "BEACONAU1\n".getBytes(StandardCharsets.US_ASCII);
+        ByteBuffer result = ByteBuffer.allocate(
+            magic.length + Integer.BYTES * 3 + first.length + second.length)
+            .order(ByteOrder.LITTLE_ENDIAN);
+        result.put(magic);
+        result.putInt(2);
+        result.putInt(first.length).put(first);
+        result.putInt(second.length).put(second);
+        return result.array();
     }
 
     private static final class RecordingCodec implements EncodedVideoCodec {

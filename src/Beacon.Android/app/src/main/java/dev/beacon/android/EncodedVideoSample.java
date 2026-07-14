@@ -1,17 +1,33 @@
 package dev.beacon.android;
 
-import java.util.Arrays;
+import java.nio.ByteBuffer;
 
 public final class EncodedVideoSample {
-    private static final EncodedVideoSample EndOfStream = new EncodedVideoSample(new byte[0], 0, true);
+    private static final EncodedVideoSample EndOfStream = new EncodedVideoSample(
+        ByteBuffer.allocateDirect(0), 0, 0, false, false, true);
 
-    private final byte[] data;
+    private final ByteBuffer data;
     private final long presentationTimeUs;
+    private final long sequence;
+    private final boolean idr;
+    private final boolean codecConfiguration;
     private final boolean endOfStream;
 
-    private EncodedVideoSample(byte[] data, long presentationTimeUs, boolean endOfStream) {
-        this.data = data == null ? new byte[0] : Arrays.copyOf(data, data.length);
+    private EncodedVideoSample(
+        ByteBuffer data,
+        long presentationTimeUs,
+        long sequence,
+        boolean idr,
+        boolean codecConfiguration,
+        boolean endOfStream) {
+        if (data == null || !data.isDirect()) {
+            throw new IllegalArgumentException("Encoded video sample requires a direct buffer.");
+        }
+        this.data = data.asReadOnlyBuffer().slice().asReadOnlyBuffer();
         this.presentationTimeUs = presentationTimeUs;
+        this.sequence = sequence;
+        this.idr = idr;
+        this.codecConfiguration = codecConfiguration;
         this.endOfStream = endOfStream;
     }
 
@@ -19,8 +35,29 @@ public final class EncodedVideoSample {
         if (data == null || data.length == 0) {
             throw new IllegalArgumentException("Encoded video sample data is required.");
         }
+        ByteBuffer direct = ByteBuffer.allocateDirect(data.length);
+        direct.put(data);
+        direct.flip();
+        return data(direct, presentationTimeUs, 0, false, false);
+    }
 
-        return new EncodedVideoSample(data, presentationTimeUs, false);
+    static EncodedVideoSample data(
+        ByteBuffer data,
+        long presentationTimeUs,
+        long sequence,
+        boolean idr,
+        boolean codecConfiguration) {
+        if (data == null || !data.hasRemaining()) {
+            throw new IllegalArgumentException("Encoded video sample data is required.");
+        }
+
+        return new EncodedVideoSample(
+            data,
+            presentationTimeUs,
+            sequence,
+            idr,
+            codecConfiguration,
+            false);
     }
 
     public static EncodedVideoSample eos() {
@@ -28,11 +65,30 @@ public final class EncodedVideoSample {
     }
 
     public byte[] data() {
-        return Arrays.copyOf(data, data.length);
+        ByteBuffer source = data.asReadOnlyBuffer();
+        byte[] copy = new byte[source.remaining()];
+        source.get(copy);
+        return copy;
+    }
+
+    ByteBuffer dataBuffer() {
+        return data.asReadOnlyBuffer();
     }
 
     public long presentationTimeUs() {
         return presentationTimeUs;
+    }
+
+    public long sequence() {
+        return sequence;
+    }
+
+    public boolean idr() {
+        return idr;
+    }
+
+    public boolean codecConfiguration() {
+        return codecConfiguration;
     }
 
     public boolean endOfStream() {

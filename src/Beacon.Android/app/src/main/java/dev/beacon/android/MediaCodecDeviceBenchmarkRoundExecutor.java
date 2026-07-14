@@ -38,9 +38,9 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
             throw new IllegalArgumentException("Decoder benchmark round and observer are required.");
         }
 
-        RepeatingAnnexBVideoSampleProvider vectorSamples;
+        RepeatingAccessUnitVideoSampleProvider vectorSamples;
         try {
-            vectorSamples = new RepeatingAnnexBVideoSampleProvider(
+            vectorSamples = new RepeatingAccessUnitVideoSampleProvider(
                 vectors.load(round.vectorId()),
                 round.targetFps(),
                 round.repetitionCount());
@@ -124,13 +124,17 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
         }
 
         @Override
-        public synchronized void onInputQueued(long presentationTimeUs, long queuedAtNs) {
+        public synchronized void onInputQueued(
+            long frameSequence,
+            long presentationTimeUs,
+            long queuedAtNs) {
             if (finished) return;
             measurements.recordInput(presentationTimeUs, queuedAtNs);
         }
 
         @Override
         public void onOutputReleased(
+            long frameSequence,
             long presentationTimeUs,
             long releasedAtNs,
             boolean rendered) {
@@ -139,6 +143,12 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
                 measurements.recordOutput(presentationTimeUs, releasedAtNs, rendered);
             }
         }
+
+        @Override
+        public void onFrameRendered(
+            long frameSequence,
+            long presentationTimeUs,
+            long renderedAtNs) { }
 
         @Override
         public void onFramePresented(long presentationTimeUs, long presentedAtNs) {

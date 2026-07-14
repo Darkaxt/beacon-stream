@@ -112,6 +112,7 @@ struct EncodedFrame {
   std::uint64_t presentation_time_us{};
   std::uint64_t sequence{};
   bool idr{};
+  bool codec_configuration{};
 };
 
 class Transport {
@@ -147,6 +148,10 @@ class StreamCore {
                         std::uint64_t received_at_us);
   bool send_input(const stream::v1::InputBatch &input);
   bool send_feedback(const stream::v1::QueueDepthFeedback &feedback);
+  bool send_feedback(const stream::v1::DecoderFeedback &feedback);
+  bool send_feedback(const stream::v1::RenderedFrameFeedback &feedback);
+  bool request_idr(stream::v1::IdrRequestReason reason,
+                   std::uint64_t last_complete_sequence);
   void on_connection_lost();
   void stop() noexcept;
   void release() noexcept;

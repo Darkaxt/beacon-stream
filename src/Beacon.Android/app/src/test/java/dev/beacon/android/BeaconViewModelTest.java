@@ -3,6 +3,7 @@ package dev.beacon.android;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -113,6 +114,61 @@ public final class BeaconViewModelTest {
             Arrays.asList((byte) 4, (byte) 5, (byte) 6)), bindings.ticketSnapshots);
         assertTrue(allZero(bindings.ticketReferences.get(0)));
         assertTrue(allZero(bindings.ticketReferences.get(1)));
+        model.close();
+    }
+
+    @Test
+    public void videoGrantBindsTheBeaconPipelineAndRoutesCompleteAccessUnits() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(200, grantBody());
+        RecordingBenchmarkCoreFactory coreFactory = new RecordingBenchmarkCoreFactory();
+        RecordingVideoSession video = new RecordingVideoSession();
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7",
+            "https://server",
+            service,
+            coreFactory,
+            failureObserver -> video);
+
+        model.launch(BeaconApiClient.GameSelection.byGameId("steam:1"));
+        coreFactory.bindings.callbacks.onFrame(
+            directBuffer(1, 2, 3), 4, 5, coreFactory.bindings.generation, true, true);
+        model.stopStream();
+        model.close();
+
+        assertEquals(1, video.startCount);
+        assertEquals(1, video.frameCount);
+        assertEquals(1, video.stopCount);
+        assertEquals(1, video.closeCount);
+        assertEquals(1, video.generation);
+        assertEquals("h264", video.video.codec());
+        assertEquals(1280, video.video.width());
+        assertEquals(720, video.video.height());
+        assertEquals(60, video.video.framesPerSecondNumerator());
+    }
+
+    @Test
+    public void videoStartFailureStopsTheStartedNativeGeneration() {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(200, grantBody());
+        RecordingBenchmarkCoreFactory coreFactory = new RecordingBenchmarkCoreFactory();
+        RecordingVideoSession video = new RecordingVideoSession();
+        video.startFailure = new IllegalStateException("decoder rejected grant");
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7",
+            "https://server",
+            service,
+            coreFactory,
+            failureObserver -> video);
+
+        IllegalStateException failure = assertThrows(
+            IllegalStateException.class,
+            () -> model.launch(BeaconApiClient.GameSelection.byGameId("steam:1")));
+
+        assertEquals("decoder rejected grant", failure.getMessage());
+        assertEquals(1, coreFactory.bindings.startCount);
+        assertEquals(1, coreFactory.bindings.stopCount);
+        assertEquals(1, video.stopCount);
         model.close();
     }
 
@@ -470,6 +526,38 @@ public final class BeaconViewModelTest {
             if (value != 0) return false;
         }
         return true;
+    }
+
+    private static ByteBuffer directBuffer(int... values) {
+        ByteBuffer result = ByteBuffer.allocateDirect(values.length);
+        for (int value : values) result.put((byte) value);
+        result.flip();
+        return result;
+    }
+
+    private static final class RecordingVideoSession implements BeaconViewModel.VideoSession {
+        private long generation;
+        private BeaconStreamSession.SelectedVideo video;
+        private int startCount;
+        private int frameCount;
+        private int stopCount;
+        private int closeCount;
+        private RuntimeException startFailure;
+
+        @Override
+        public void start(
+            BeaconStreamCore streamCore,
+            long generation,
+            BeaconStreamSession.SelectedVideo video) {
+            this.generation = generation;
+            this.video = video;
+            startCount++;
+            if (startFailure != null) throw startFailure;
+        }
+
+        @Override public void onFrame(BeaconStreamCore.EncodedFrame frame) { frameCount++; }
+        @Override public void stop() { stopCount++; }
+        @Override public void close() { closeCount++; }
     }
 
     private static final class RecordingCoreBindings implements BeaconStreamCore.Bindings {

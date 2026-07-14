@@ -283,10 +283,15 @@ bool StreamCore::receive_datagram(std::span<const std::byte> bytes,
   last_complete_sequence_ = frame.sequence;
   const bool idr = (static_cast<std::uint16_t>(frame.flags) &
                     static_cast<std::uint16_t>(stream::MediaDatagramFlags::idr)) != 0;
+  const bool codec_configuration =
+      (static_cast<std::uint16_t>(frame.flags) &
+       static_cast<std::uint16_t>(
+           stream::MediaDatagramFlags::codec_configuration)) != 0;
   sink_.frame({.bytes = std::move(frame.bytes),
                .presentation_time_us = frame.presentation_time_us,
                .sequence = frame.sequence,
-               .idr = idr});
+               .idr = idr,
+               .codec_configuration = codec_configuration});
   return true;
 }
 
@@ -322,13 +327,23 @@ bool StreamCore::drain_assembler_events() {
 }
 
 bool StreamCore::send_request_idr() {
+  return request_idr(stream_v1::IDR_REQUEST_REASON_FRAME_EVICTED,
+                     last_complete_sequence_);
+}
+
+bool StreamCore::request_idr(stream_v1::IdrRequestReason reason,
+                             std::uint64_t last_complete_sequence) {
+  if (state_ != State::streaming ||
+      reason == stream_v1::IDR_REQUEST_REASON_UNSPECIFIED) {
+    return false;
+  }
   stream_v1::SessionStreamEnvelope envelope;
   envelope.set_protocol_version(1);
   envelope.set_session_id(grant_.session_id);
   envelope.set_sequence(++session_sequence_);
   auto *request = envelope.mutable_request_idr();
-  request->set_reason(stream_v1::IDR_REQUEST_REASON_FRAME_EVICTED);
-  request->set_last_complete_sequence(last_complete_sequence_);
+  request->set_reason(reason);
+  request->set_last_complete_sequence(last_complete_sequence);
   if (!transport_.send(StreamRole::session, frame_message(envelope))) {
     fail();
     return false;
@@ -357,6 +372,32 @@ bool StreamCore::send_feedback(const stream_v1::QueueDepthFeedback &feedback) {
   envelope.set_session_id(grant_.session_id);
   envelope.set_sequence(++feedback_sequence_);
   envelope.mutable_queue_depth()->CopyFrom(feedback);
+  return transport_.send(StreamRole::feedback, frame_message(envelope));
+}
+
+bool StreamCore::send_feedback(const stream_v1::DecoderFeedback &feedback) {
+  if (state_ != State::streaming ||
+      feedback.state() == stream_v1::DECODER_STATE_UNSPECIFIED) {
+    return false;
+  }
+  stream_v1::FeedbackStreamEnvelope envelope;
+  envelope.set_protocol_version(1);
+  envelope.set_session_id(grant_.session_id);
+  envelope.set_sequence(++feedback_sequence_);
+  envelope.mutable_decoder()->CopyFrom(feedback);
+  return transport_.send(StreamRole::feedback, frame_message(envelope));
+}
+
+bool StreamCore::send_feedback(
+    const stream_v1::RenderedFrameFeedback &feedback) {
+  if (state_ != State::streaming || feedback.frame_sequence() == 0) {
+    return false;
+  }
+  stream_v1::FeedbackStreamEnvelope envelope;
+  envelope.set_protocol_version(1);
+  envelope.set_session_id(grant_.session_id);
+  envelope.set_sequence(++feedback_sequence_);
+  envelope.mutable_rendered_frame()->CopyFrom(feedback);
   return transport_.send(StreamRole::feedback, frame_message(envelope));
 }
 

@@ -1,6 +1,6 @@
 package dev.beacon.android;
 
-import java.util.Arrays;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -101,8 +101,19 @@ public final class BeaconStreamCore implements AutoCloseable {
         this.benchmarkObserver = benchmarkObserver;
         this.handle = bindings.create(new NativeCallbacks() {
             @Override public void onFrame(
-                byte[] bytes, long presentationTimeUs, long sequence, long generation) {
-                dispatchFrame(bytes, presentationTimeUs, sequence, generation);
+                ByteBuffer bytes,
+                long presentationTimeUs,
+                long sequence,
+                long generation,
+                boolean idr,
+                boolean codecConfiguration) {
+                dispatchFrame(
+                    bytes,
+                    presentationTimeUs,
+                    sequence,
+                    generation,
+                    idr,
+                    codecConfiguration);
             }
 
             @Override public void onConnectionLost(long generation) {
@@ -152,7 +163,7 @@ public final class BeaconStreamCore implements AutoCloseable {
         }
     }
 
-    public void start(BeaconStreamSession session) {
+    public long start(BeaconStreamSession session) {
         if (session == null) {
             throw new IllegalArgumentException("Beacon connection grant is required.");
         }
@@ -163,7 +174,7 @@ public final class BeaconStreamCore implements AutoCloseable {
             awaitQuiescentLocked();
             requireOpen();
             if (session == activeGrant && session.ticketConsumed()) {
-                return;
+                return activeGeneration;
             }
             generation = nextGeneration++;
             if (generation <= 0) {
@@ -198,6 +209,7 @@ public final class BeaconStreamCore implements AutoCloseable {
                 notifyAll();
             }
         }
+        return generation;
     }
 
     public void sendInput(BeaconApiClient.InputBatch input) {
@@ -210,6 +222,67 @@ public final class BeaconStreamCore implements AutoCloseable {
         } finally {
             endNativeCall();
         }
+    }
+
+    public void sendQueueDepthFeedback(
+        long generation,
+        int queuedAccessUnits,
+        long droppedAccessUnits) {
+        if (generation <= 0 || queuedAccessUnits < 0 || droppedAccessUnits < 0) {
+            throw new IllegalArgumentException("Queue-depth feedback values are invalid.");
+        }
+        sendFeedback(
+            generation,
+            () -> bindings.sendQueueDepthFeedback(
+                handle, generation, queuedAccessUnits, droppedAccessUnits),
+            true);
+    }
+
+    public void sendDecoderFeedback(
+        long generation,
+        DecoderState state,
+        int platformErrorCode) {
+        if (generation <= 0 || state == null || platformErrorCode < 0) {
+            throw new IllegalArgumentException("Decoder feedback values are invalid.");
+        }
+        sendFeedback(
+            generation,
+            () -> bindings.sendDecoderFeedback(
+                handle, generation, state, platformErrorCode),
+            false);
+    }
+
+    public void sendRenderedFrameFeedback(
+        long generation,
+        long frameSequence,
+        long presentationTimeUs,
+        long renderedAtUs) {
+        if (generation <= 0 || frameSequence <= 0 ||
+            presentationTimeUs < 0 || renderedAtUs < 0) {
+            throw new IllegalArgumentException("Rendered-frame feedback values are invalid.");
+        }
+        sendFeedback(
+            generation,
+            () -> bindings.sendRenderedFrameFeedback(
+                handle,
+                generation,
+                frameSequence,
+                presentationTimeUs,
+                renderedAtUs),
+            false);
+    }
+
+    public void requestDecoderIdr(
+        long generation,
+        long lastCompleteSequence) {
+        if (generation <= 0 || lastCompleteSequence < 0) {
+            throw new IllegalArgumentException("Decoder IDR request values are invalid.");
+        }
+        sendFeedback(
+            generation,
+            () -> bindings.requestDecoderIdr(
+                handle, generation, lastCompleteSequence),
+            false);
     }
 
     public void replaceSurface(Object surface) {
@@ -343,8 +416,12 @@ public final class BeaconStreamCore implements AutoCloseable {
     }
 
     private void dispatchFrame(
-        byte[] bytes, long presentationTimeUs, long sequence, long generation) {
-        final byte[] copy = Arrays.copyOf(bytes, bytes.length);
+        ByteBuffer bytes,
+        long presentationTimeUs,
+        long sequence,
+        long generation,
+        boolean idr,
+        boolean codecConfiguration) {
         synchronized (this) {
             long expectedGeneration = startingGeneration != 0
                 ? startingGeneration : activeGeneration;
@@ -352,30 +429,17 @@ public final class BeaconStreamCore implements AutoCloseable {
                 generation != expectedGeneration) {
                 return;
             }
-            callbackExecutor.execute(() -> {
-                synchronized (BeaconStreamCore.this) {
-                    if (!open || stopped || generation != activeGeneration) {
-                        return;
-                    }
-                }
-                IN_SINK_CALLBACK.set(true);
-                try {
-                    sink.onFrame(new EncodedFrame(copy, presentationTimeUs, sequence));
-                } finally {
-                    IN_SINK_CALLBACK.remove();
-                }
-                if (beginNativeCallIfOpen(generation)) {
-                    try {
-                        bindings.sendQueueDepthFeedback(handle, generation, 0, 0);
-                        feedbackObserver.onQueueDepthFeedbackSent();
-                    } catch (RuntimeException | Error error) {
-                        reportFailure("feedback");
-                        throw error;
-                    } finally {
-                        endNativeCall();
-                    }
-                }
-            });
+        }
+        IN_SINK_CALLBACK.set(true);
+        try {
+            sink.onFrame(new EncodedFrame(
+                bytes,
+                presentationTimeUs,
+                sequence,
+                idr,
+                codecConfiguration));
+        } finally {
+            IN_SINK_CALLBACK.remove();
         }
     }
 
@@ -452,6 +516,21 @@ public final class BeaconStreamCore implements AutoCloseable {
         }
     }
 
+    private void sendFeedback(
+        long generation,
+        Runnable sender,
+        boolean notifyQueueObserver) {
+        if (!beginNativeCallIfOpen(generation)) return;
+        try {
+            sender.run();
+            if (notifyQueueObserver) feedbackObserver.onQueueDepthFeedbackSent();
+        } catch (RuntimeException | Error failure) {
+            reportFailure("feedback");
+        } finally {
+            endNativeCall();
+        }
+    }
+
     private void awaitLifecycleIdleLocked() {
         boolean interrupted = false;
         while (lifecycleBusy) {
@@ -506,15 +585,43 @@ public final class BeaconStreamCore implements AutoCloseable {
         void onFrame(EncodedFrame frame);
     }
 
+    public enum DecoderState {
+        READY(1),
+        AWAITING_IDR(2),
+        FAILED(3);
+
+        final int nativeValue;
+
+        DecoderState(int nativeValue) {
+            this.nativeValue = nativeValue;
+        }
+    }
+
     public static final class EncodedFrame {
-        public final byte[] bytes;
+        public final ByteBuffer bytes;
         public final long presentationTimeUs;
         public final long sequence;
+        public final boolean idr;
+        public final boolean codecConfiguration;
 
-        EncodedFrame(byte[] bytes, long presentationTimeUs, long sequence) {
-            this.bytes = bytes;
+        EncodedFrame(
+            ByteBuffer bytes,
+            long presentationTimeUs,
+            long sequence,
+            boolean idr,
+            boolean codecConfiguration) {
+            if (bytes == null || !bytes.isDirect()) {
+                throw new IllegalArgumentException("Encoded frame requires a direct buffer.");
+            }
+            this.bytes = readOnlySlice(bytes);
             this.presentationTimeUs = presentationTimeUs;
             this.sequence = sequence;
+            this.idr = idr;
+            this.codecConfiguration = codecConfiguration;
+        }
+
+        private static ByteBuffer readOnlySlice(ByteBuffer source) {
+            return source.asReadOnlyBuffer().slice().asReadOnlyBuffer();
         }
     }
 
@@ -555,7 +662,13 @@ public final class BeaconStreamCore implements AutoCloseable {
     }
 
     interface NativeCallbacks {
-        void onFrame(byte[] bytes, long presentationTimeUs, long sequence, long generation);
+        void onFrame(
+            ByteBuffer bytes,
+            long presentationTimeUs,
+            long sequence,
+            long generation,
+            boolean idr,
+            boolean codecConfiguration);
         void onConnectionLost(long generation);
         default void onBenchmarkCompleted(
             double sustainableThroughputMbps,
@@ -587,6 +700,21 @@ public final class BeaconStreamCore implements AutoCloseable {
         default void sendQueueDepthFeedback(
             long handle, long generation, int queuedAccessUnits,
             long droppedAccessUnits) { }
+        default void sendDecoderFeedback(
+            long handle,
+            long generation,
+            DecoderState state,
+            int platformErrorCode) { }
+        default void sendRenderedFrameFeedback(
+            long handle,
+            long generation,
+            long frameSequence,
+            long presentationTimeUs,
+            long renderedAtUs) { }
+        default void requestDecoderIdr(
+            long handle,
+            long generation,
+            long lastCompleteSequence) { }
         void replaceSurface(long handle, Object surface);
         void stop(long handle);
         void release(long handle);
@@ -606,6 +734,33 @@ public final class BeaconStreamCore implements AutoCloseable {
             nativeSendQueueDepthFeedback(
                 handle, generation, queuedAccessUnits, droppedAccessUnits);
         }
+        @Override public void sendDecoderFeedback(
+            long handle,
+            long generation,
+            DecoderState state,
+            int platformErrorCode) {
+            nativeSendDecoderFeedback(
+                handle, generation, state.nativeValue, platformErrorCode);
+        }
+        @Override public void sendRenderedFrameFeedback(
+            long handle,
+            long generation,
+            long frameSequence,
+            long presentationTimeUs,
+            long renderedAtUs) {
+            nativeSendRenderedFrameFeedback(
+                handle,
+                generation,
+                frameSequence,
+                presentationTimeUs,
+                renderedAtUs);
+        }
+        @Override public void requestDecoderIdr(
+            long handle,
+            long generation,
+            long lastCompleteSequence) {
+            nativeRequestDecoderIdr(handle, generation, lastCompleteSequence);
+        }
         @Override public void replaceSurface(long handle, Object surface) { nativeReplaceSurface(handle, surface); }
         @Override public void stop(long handle) { nativeStop(handle); }
         @Override public void release(long handle) { nativeRelease(handle); }
@@ -617,6 +772,16 @@ public final class BeaconStreamCore implements AutoCloseable {
     private static native void nativeSendQueueDepthFeedback(
         long handle, long generation, int queuedAccessUnits,
         long droppedAccessUnits);
+    private static native void nativeSendDecoderFeedback(
+        long handle, long generation, int state, int platformErrorCode);
+    private static native void nativeSendRenderedFrameFeedback(
+        long handle,
+        long generation,
+        long frameSequence,
+        long presentationTimeUs,
+        long renderedAtUs);
+    private static native void nativeRequestDecoderIdr(
+        long handle, long generation, long lastCompleteSequence);
     private static native void nativeReplaceSurface(long handle, Object surface);
     private static native void nativeStop(long handle);
     private static native void nativeRelease(long handle);

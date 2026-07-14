@@ -21,6 +21,7 @@ import org.junit.runner.RunWith;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -57,12 +58,12 @@ public final class BeaconStreamCoreInstrumentationTest {
         }, executor);
         core.start(session("instrumented-frame"));
 
-        bindings.callbacks.onFrame(new byte[] { 1 }, 2, 1, 1);
+        bindings.callbacks.onFrame(directBuffer(1), 2, 1, 1, false, false);
         delivered.await();
         assertEquals("beacon-device-frame", callbackThread.get());
         assertNotEquals(Thread.currentThread().getName(), callbackThread.get());
         core.close();
-        bindings.callbacks.onFrame(new byte[] { 2 }, 3, 2, 1);
+        bindings.callbacks.onFrame(directBuffer(2), 3, 2, 1, false, false);
         assertEquals(1, frames.get());
     }
 
@@ -101,9 +102,9 @@ public final class BeaconStreamCoreInstrumentationTest {
             },
             Executors.newSingleThreadExecutor());
         core.start(session("instrumented-drain"));
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
+        bindings.callbacks.onFrame(directBuffer(1), 1, 1, 1, false, false);
         sinkEntered.await();
-        bindings.callbacks.onFrame(new byte[] { 2 }, 2, 2, 1);
+        bindings.callbacks.onFrame(directBuffer(2), 2, 2, 1, false, false);
         Thread closer = new Thread(() -> {
             closeStarted.countDown();
             core.close();
@@ -180,7 +181,12 @@ public final class BeaconStreamCoreInstrumentationTest {
         CountDownLatch callbackEntered = new CountDownLatch(1);
         BeaconStreamCore.NativeCallbacks callbacks = new BeaconStreamCore.NativeCallbacks() {
             @Override public void onFrame(
-                byte[] bytes, long presentationTimeUs, long sequence, long generation) {
+                ByteBuffer bytes,
+                long presentationTimeUs,
+                long sequence,
+                long generation,
+                boolean idr,
+                boolean codecConfiguration) {
                 callbackEntered.countDown();
                 throw new IllegalStateException("instrumented callback failure");
             }
@@ -205,7 +211,12 @@ public final class BeaconStreamCoreInstrumentationTest {
         CountDownLatch callbackEntered = new CountDownLatch(1);
         BeaconStreamCore.NativeCallbacks callbacks = new BeaconStreamCore.NativeCallbacks() {
             @Override public void onFrame(
-                byte[] bytes, long presentationTimeUs, long sequence, long generation) { }
+                ByteBuffer bytes,
+                long presentationTimeUs,
+                long sequence,
+                long generation,
+                boolean idr,
+                boolean codecConfiguration) { }
 
             @Override public void onConnectionLost(long generation) { }
 
@@ -814,6 +825,13 @@ public final class BeaconStreamCoreInstrumentationTest {
             "https://beacon.example",
             "client",
             "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"" + sessionId + "\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"}}}");
+    }
+
+    private static ByteBuffer directBuffer(int... values) {
+        ByteBuffer buffer = ByteBuffer.allocateDirect(values.length);
+        for (int value : values) buffer.put((byte) value);
+        buffer.flip();
+        return buffer;
     }
 
     private static final class RecordingBindings implements BeaconStreamCore.Bindings {

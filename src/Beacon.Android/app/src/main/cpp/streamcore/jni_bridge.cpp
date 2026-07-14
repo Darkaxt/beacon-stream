@@ -18,6 +18,8 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -202,7 +204,9 @@ class JniStreamSession final : public MsQuicClientCallbacks,
           environment, environment->GetObjectClass(callbacks),
           "Native callback class is unavailable.");
       frame_method_ = require_jni_ref(
-          environment, environment->GetMethodID(type, "onFrame", "([BJJJ)V"),
+          environment,
+          environment->GetMethodID(
+              type, "onFrame", "(Ljava/nio/ByteBuffer;JJJZZ)V"),
           "Native frame callback is unavailable.");
       loss_method_ = require_jni_ref(
           environment,
@@ -214,7 +218,24 @@ class JniStreamSession final : public MsQuicClientCallbacks,
               type, "onBenchmarkCompleted", "(D[J[I[J[J[I[ZJ)V"),
           "Native benchmark callback is unavailable.");
       environment->DeleteLocalRef(type);
+
+      jclass local_byte_buffer_class = require_jni_ref(
+          environment, environment->FindClass("java/nio/ByteBuffer"),
+          "ByteBuffer class is unavailable.");
+      byte_buffer_class_ = static_cast<jclass>(require_jni_ref(
+          environment, environment->NewGlobalRef(local_byte_buffer_class),
+          "Could not retain ByteBuffer class."));
+      environment->DeleteLocalRef(local_byte_buffer_class);
+      allocate_direct_method_ = require_jni_ref(
+          environment,
+          environment->GetStaticMethodID(
+              byte_buffer_class_, "allocateDirect", "(I)Ljava/nio/ByteBuffer;"),
+          "ByteBuffer.allocateDirect is unavailable.");
     } catch (...) {
+      if (byte_buffer_class_ != nullptr) {
+        environment->DeleteGlobalRef(byte_buffer_class_);
+        byte_buffer_class_ = nullptr;
+      }
       environment->DeleteGlobalRef(callbacks_);
       callbacks_ = nullptr;
       throw;
@@ -232,6 +253,10 @@ class JniStreamSession final : public MsQuicClientCallbacks,
     if (environment != nullptr && callbacks_ != nullptr) {
       environment->DeleteGlobalRef(callbacks_);
       callbacks_ = nullptr;
+    }
+    if (environment != nullptr && byte_buffer_class_ != nullptr) {
+      environment->DeleteGlobalRef(byte_buffer_class_);
+      byte_buffer_class_ = nullptr;
     }
     if (attached) java_vm->DetachCurrentThread();
   }
@@ -260,6 +285,30 @@ class JniStreamSession final : public MsQuicClientCallbacks,
     std::lock_guard lock(mutex_);
     return !closed_ && lifecycle_.is_current(generation) &&
            core_.send_feedback(feedback);
+  }
+
+  bool send_feedback(std::uint64_t generation,
+                     const stream::v1::DecoderFeedback &feedback) {
+    std::lock_guard lock(mutex_);
+    return !closed_ && lifecycle_.is_current(generation) &&
+           core_.send_feedback(feedback);
+  }
+
+  bool send_feedback(
+      std::uint64_t generation,
+      const stream::v1::RenderedFrameFeedback &feedback) {
+    std::lock_guard lock(mutex_);
+    return !closed_ && lifecycle_.is_current(generation) &&
+           core_.send_feedback(feedback);
+  }
+
+  bool request_decoder_idr(std::uint64_t generation,
+                           std::uint64_t last_complete_sequence) {
+    std::lock_guard lock(mutex_);
+    return !closed_ && lifecycle_.is_current(generation) &&
+           core_.request_idr(
+               stream::v1::IDR_REQUEST_REASON_DECODER_RESET,
+               last_complete_sequence);
   }
 
   void replace_surface(JNIEnv *environment, jobject surface) {
@@ -453,22 +502,36 @@ class JniStreamSession final : public MsQuicClientCallbacks,
       if (java_vm->AttachCurrentThread(&environment, nullptr) != JNI_OK) return;
       attached = true;
     }
-    jbyteArray bytes = environment->NewByteArray(static_cast<jsize>(frame.bytes.size()));
+    if (frame.bytes.size() >
+        static_cast<std::size_t>(std::numeric_limits<jint>::max())) {
+      if (attached) java_vm->DetachCurrentThread();
+      return;
+    }
+    jobject bytes = environment->CallStaticObjectMethod(
+        byte_buffer_class_, allocate_direct_method_,
+        static_cast<jint>(frame.bytes.size()));
     if (bytes == nullptr || environment->ExceptionCheck()) {
       clear_callback_exception(environment);
       if (attached) java_vm->DetachCurrentThread();
       return;
     }
     if (!frame.bytes.empty()) {
-      environment->SetByteArrayRegion(
-          bytes, 0, static_cast<jsize>(frame.bytes.size()),
-          reinterpret_cast<const jbyte *>(frame.bytes.data()));
+      void *destination = environment->GetDirectBufferAddress(bytes);
+      if (destination == nullptr || environment->ExceptionCheck()) {
+        clear_callback_exception(environment);
+        environment->DeleteLocalRef(bytes);
+        if (attached) java_vm->DetachCurrentThread();
+        return;
+      }
+      std::memcpy(destination, frame.bytes.data(), frame.bytes.size());
     }
     if (!environment->ExceptionCheck()) {
       environment->CallVoidMethod(callbacks_, frame_method_, bytes,
                                   static_cast<jlong>(frame.presentation_time_us),
                                   static_cast<jlong>(frame.sequence),
-                                  static_cast<jlong>(generation));
+                                  static_cast<jlong>(generation),
+                                  static_cast<jboolean>(frame.idr),
+                                  static_cast<jboolean>(frame.codec_configuration));
     }
     clear_callback_exception(environment);
     environment->DeleteLocalRef(bytes);
@@ -568,9 +631,11 @@ class JniStreamSession final : public MsQuicClientCallbacks,
 
   std::mutex mutex_;
   jobject callbacks_{};
+  jclass byte_buffer_class_{};
   jmethodID frame_method_{};
   jmethodID loss_method_{};
   jmethodID benchmark_method_{};
+  jmethodID allocate_direct_method_{};
   std::uint64_t handle_{};
   MsQuicClient transport_;
   StreamCore core_;
@@ -934,6 +999,109 @@ Java_dev_beacon_android_BeaconStreamCore_nativeSendQueueDepthFeedback(
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_dev_beacon_android_BeaconStreamCore_nativeSendDecoderFeedback(
+    JNIEnv *environment, jclass, jlong handle, jlong generation,
+    jint state, jint platform_error_code) {
+  auto session = sessions().find_active(static_cast<std::uint64_t>(handle));
+  if (!session) return;
+  try {
+    if (generation <= 0 || platform_error_code < 0 || state < 1 || state > 3) {
+      throw std::invalid_argument("Decoder feedback values must be valid.");
+    }
+    beacon::stream::v1::DecoderFeedback feedback;
+    feedback.set_state(
+        static_cast<beacon::stream::v1::DecoderState>(state));
+    feedback.set_platform_error_code(
+        static_cast<std::uint32_t>(platform_error_code));
+    if (!session->send_feedback(
+            static_cast<std::uint64_t>(generation), feedback)) {
+      beacon::android::streamcore::throw_java(
+          environment, "java/lang/IllegalStateException",
+          "Beacon StreamCore is not streaming.");
+    }
+  } catch (const std::bad_alloc &) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/OutOfMemoryError",
+        "Could not allocate Beacon decoder feedback.");
+  } catch (const std::exception &error) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/IllegalArgumentException", error.what());
+  } catch (...) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/RuntimeException",
+        "Unexpected Beacon native decoder-feedback failure.");
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_beacon_android_BeaconStreamCore_nativeSendRenderedFrameFeedback(
+    JNIEnv *environment, jclass, jlong handle, jlong generation,
+    jlong frame_sequence, jlong presentation_time_us, jlong rendered_at_us) {
+  auto session = sessions().find_active(static_cast<std::uint64_t>(handle));
+  if (!session) return;
+  try {
+    if (generation <= 0 || frame_sequence <= 0 ||
+        presentation_time_us < 0 || rendered_at_us < 0) {
+      throw std::invalid_argument(
+          "Rendered-frame feedback values must be valid.");
+    }
+    beacon::stream::v1::RenderedFrameFeedback feedback;
+    feedback.set_frame_sequence(static_cast<std::uint64_t>(frame_sequence));
+    feedback.set_presentation_time_us(
+        static_cast<std::uint64_t>(presentation_time_us));
+    feedback.set_rendered_at_us(static_cast<std::uint64_t>(rendered_at_us));
+    if (!session->send_feedback(
+            static_cast<std::uint64_t>(generation), feedback)) {
+      beacon::android::streamcore::throw_java(
+          environment, "java/lang/IllegalStateException",
+          "Beacon StreamCore is not streaming.");
+    }
+  } catch (const std::bad_alloc &) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/OutOfMemoryError",
+        "Could not allocate Beacon rendered-frame feedback.");
+  } catch (const std::exception &error) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/IllegalArgumentException", error.what());
+  } catch (...) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/RuntimeException",
+        "Unexpected Beacon native rendered-frame feedback failure.");
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_beacon_android_BeaconStreamCore_nativeRequestDecoderIdr(
+    JNIEnv *environment, jclass, jlong handle, jlong generation,
+    jlong last_complete_sequence) {
+  auto session = sessions().find_active(static_cast<std::uint64_t>(handle));
+  if (!session) return;
+  try {
+    if (generation <= 0 || last_complete_sequence < 0) {
+      throw std::invalid_argument("Decoder IDR request values must be valid.");
+    }
+    if (!session->request_decoder_idr(
+            static_cast<std::uint64_t>(generation),
+            static_cast<std::uint64_t>(last_complete_sequence))) {
+      beacon::android::streamcore::throw_java(
+          environment, "java/lang/IllegalStateException",
+          "Beacon StreamCore is not streaming.");
+    }
+  } catch (const std::bad_alloc &) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/OutOfMemoryError",
+        "Could not allocate Beacon decoder IDR request.");
+  } catch (const std::exception &error) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/IllegalArgumentException", error.what());
+  } catch (...) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/RuntimeException",
+        "Unexpected Beacon native decoder IDR request failure.");
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_dev_beacon_android_BeaconStreamCore_nativeReplaceSurface(
     JNIEnv *environment, jclass, jlong handle, jobject surface) {
   auto session = sessions().find_active(static_cast<std::uint64_t>(handle));
@@ -1007,7 +1175,9 @@ Java_dev_beacon_android_BeaconStreamCore_nativeTestEmitFrame(
     session->frame({.bytes = std::move(copied),
                     .presentation_time_us =
                         static_cast<std::uint64_t>(presentation_time_us),
-                    .sequence = 1});
+                    .sequence = 1,
+                    .idr = true,
+                    .codec_configuration = true});
   } catch (const beacon::android::streamcore::PendingJniException &) {
     return;
   } catch (const std::bad_alloc &) {

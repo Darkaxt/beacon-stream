@@ -1,13 +1,17 @@
 package dev.beacon.android;
 
 import android.media.MediaCodec;
+import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.os.Build;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.view.Surface;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Locale;
+import java.util.OptionalLong;
 
 public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory {
     @Override
@@ -38,6 +42,7 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
         private final MediaCodec codec;
         private final String mimeType;
         private QueueingCallback callback;
+        private HandlerThread callbackThread;
 
         AndroidMediaCodec(MediaCodec codec, String mimeType) {
             this.codec = codec;
@@ -67,10 +72,16 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
             }
 
             callback = new QueueingCallback(sampleProvider, observer);
-            codec.setCallback(callback);
+            callbackThread = new HandlerThread("beacon-mediacodec-callback");
+            callbackThread.start();
+            Handler callbackHandler = new Handler(callbackThread.getLooper());
+            codec.setCallback(callback, callbackHandler);
+            codec.setOnFrameRenderedListener(callback, callbackHandler);
             MediaFormat format = MediaFormat.createVideoFormat(mimeType, request.width(), request.height());
             format.setInteger(MediaFormat.KEY_FRAME_RATE, request.fps());
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (MediaCodecLowLatencyPolicy.shouldEnable(
+                Build.VERSION.SDK_INT,
+                decoderSupportsLowLatency())) {
                 format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
             }
             if (sampleProvider.maxSampleBytes() > 0) {
@@ -81,6 +92,18 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
             codec.configure(format, androidSurface, null, 0);
         }
 
+        private boolean decoderSupportsLowLatency() {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false;
+            try {
+                MediaCodecInfo.CodecCapabilities capabilities =
+                    codec.getCodecInfo().getCapabilitiesForType(mimeType);
+                return capabilities.isFeatureSupported(
+                    MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency);
+            } catch (RuntimeException unavailable) {
+                return false;
+            }
+        }
+
         @Override
         public void start() {
             codec.start();
@@ -88,28 +111,40 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
 
         @Override
         public void stop() {
-            closeCallback();
-            codec.stop();
+            try {
+                codec.stop();
+            } finally {
+                closeCallback();
+            }
         }
 
         @Override
         public void release() {
-            closeCallback();
-            codec.release();
+            try {
+                codec.release();
+            } finally {
+                closeCallback();
+            }
         }
 
         private void closeCallback() {
             QueueingCallback owned = callback;
             callback = null;
             if (owned != null) owned.close();
+            HandlerThread ownedThread = callbackThread;
+            callbackThread = null;
+            if (ownedThread != null) ownedThread.quitSafely();
         }
 
         private static final class QueueingCallback extends MediaCodec.Callback
-            implements AutoCloseable {
+            implements MediaCodec.OnFrameRenderedListener, AutoCloseable {
             private final EncodedVideoSampleProvider sampleProvider;
             private final EncodedVideoCodecObserver observer;
             private final SerialInputBufferFeeder feeder = SerialInputBufferFeeder.system();
-            private boolean inputEnded;
+            private final EncodedFramePresentationTracker presentationTracker =
+                new EncodedFramePresentationTracker();
+            private volatile boolean inputEnded;
+            private volatile boolean closed;
 
             QueueingCallback(
                 EncodedVideoSampleProvider sampleProvider,
@@ -120,15 +155,16 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
 
             @Override
             public void onInputBufferAvailable(MediaCodec codec, int index) {
+                if (closed) return;
                 try {
                     feeder.submit(() -> queueAvailableInput(codec, index));
                 } catch (RuntimeException failure) {
-                    observer.onError(failure);
+                    if (!closed) observer.onError(failure);
                 }
             }
 
             private void queueAvailableInput(MediaCodec codec, int index) {
-                if (inputEnded) return;
+                if (inputEnded || closed) return;
                 try {
                     EncodedVideoSample sample = sampleProvider.nextSample();
                     if (sample.endOfStream()) {
@@ -143,43 +179,100 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
                     }
 
                     ByteBuffer inputBuffer = codec.getInputBuffer(index);
-                    byte[] data = sample.data();
-                    if (inputBuffer == null || data.length > inputBuffer.capacity()) {
+                    ByteBuffer data = sample.dataBuffer();
+                    int dataLength = data.remaining();
+                    if (inputBuffer == null || dataLength > inputBuffer.capacity()) {
                         throw new IllegalStateException(
                             "MediaCodec input buffer cannot hold the benchmark access unit.");
                     }
 
                     inputBuffer.clear();
                     inputBuffer.put(data);
-                    codec.queueInputBuffer(index, 0, data.length, sample.presentationTimeUs(), 0);
-                    observer.onInputQueued(sample.presentationTimeUs(), System.nanoTime());
+                    presentationTracker.track(
+                        sample.sequence(),
+                        sample.presentationTimeUs());
+                    try {
+                        codec.queueInputBuffer(
+                            index,
+                            0,
+                            dataLength,
+                            sample.presentationTimeUs(),
+                            0);
+                    } catch (RuntimeException failure) {
+                        presentationTracker.discard(
+                            sample.sequence(),
+                            sample.presentationTimeUs());
+                        throw failure;
+                    }
+                    observer.onInputQueued(
+                        sample.sequence(),
+                        sample.presentationTimeUs(),
+                        System.nanoTime());
                 } catch (RuntimeException failure) {
-                    observer.onError(failure);
+                    if (!closed) observer.onError(failure);
                     inputEnded = true;
                 }
             }
 
             @Override
             public void onOutputBufferAvailable(MediaCodec codec, int index, MediaCodec.BufferInfo info) {
-                boolean endOfStream =
-                    (info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
-                boolean rendered = info.size > 0 &&
-                    (info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0;
-                codec.releaseOutputBuffer(index, rendered);
-                if (rendered) {
-                    observer.onOutputReleased(
-                        info.presentationTimeUs,
-                        System.nanoTime(),
-                        true);
+                if (closed) return;
+                OptionalLong frameSequence = OptionalLong.empty();
+                try {
+                    boolean endOfStream =
+                        (info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
+                    boolean rendered = info.size > 0 &&
+                        (info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0;
+                    frameSequence = rendered
+                        ? presentationTracker.markOutputReleased(info.presentationTimeUs)
+                        : OptionalLong.empty();
+                    codec.releaseOutputBuffer(index, rendered);
+                    if (frameSequence.isPresent()) {
+                        observer.onOutputReleased(
+                            frameSequence.getAsLong(),
+                            info.presentationTimeUs,
+                            System.nanoTime(),
+                            true);
+                    } else {
+                        observer.onError(new IllegalStateException(
+                            "MediaCodec output has no queued Beacon frame identity."));
+                    }
+                    if (endOfStream) observer.onEndOfStream();
+                } catch (RuntimeException failure) {
+                    if (frameSequence.isPresent()) {
+                        presentationTracker.discard(
+                            frameSequence.getAsLong(),
+                            info.presentationTimeUs);
+                    }
+                    if (!closed) observer.onError(failure);
                 }
-                if (endOfStream) {
-                    observer.onEndOfStream();
+            }
+
+            @Override
+            public void onFrameRendered(
+                MediaCodec codec,
+                long presentationTimeUs,
+                long nanoTime) {
+                if (closed) return;
+                OptionalLong frameSequence = presentationTracker.takeRendered(
+                    presentationTimeUs);
+                if (frameSequence.isPresent()) {
+                    observer.onFrameRendered(
+                        frameSequence.getAsLong(),
+                        presentationTimeUs,
+                        nanoTime);
+                } else {
+                    observer.onError(new IllegalStateException(
+                        "Rendered MediaCodec frame has no queued Beacon frame identity."));
                 }
             }
 
             @Override
             public void onError(MediaCodec codec, MediaCodec.CodecException exception) {
-                observer.onError(exception);
+                if (closed) return;
+                observer.onError(new EncodedVideoCodecFailure(
+                    exception.getErrorCode(),
+                    exception));
             }
 
             @Override
@@ -188,7 +281,10 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
 
             @Override
             public void close() {
+                closed = true;
+                inputEnded = true;
                 feeder.close();
+                presentationTracker.clear();
             }
         }
     }
