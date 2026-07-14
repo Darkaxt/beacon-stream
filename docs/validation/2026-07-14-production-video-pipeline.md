@@ -62,6 +62,8 @@ No Apollo process, service, file, API, configuration, or installation was querie
 
 The ownership refactor was validated on 2026-07-14 with the same non-device matrix:
 
+Refactor sync: `81c02c3` (`refactor: harden Beacon video ownership`).
+
 - Generation creation and startup run outside the controller mutex. A condition-variable
   regression proves disconnect during in-flight startup abandons and stops that generation
   exactly once while preserving the reconnect plan.

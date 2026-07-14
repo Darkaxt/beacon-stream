@@ -171,7 +171,7 @@ before every behavioral fix and remove only code proven obsolete.
 
 Expected: the same static and dynamic evidence passes after refactoring.
 
-- [ ] **Step 5: Commit and push the refactor sync**
+- [x] **Step 5: Commit and push the refactor sync**
 
 Leave emulator acceptance open until the shared ADB runtime is available; do not substitute
 Apollo or another client path.
