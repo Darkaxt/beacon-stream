@@ -202,6 +202,7 @@ void hello_capabilities_and_ready_are_typed_and_instance_bound() {
 }
 
 void unavailable_video_is_reported_without_poisoning_worker() {
+  constexpr std::uint32_t encoder_unavailable_code{7};
   RecordingTransport transport;
   RecordingPipeline pipeline;
   AuthorizedQuicTicketStore tickets;
@@ -209,8 +210,7 @@ void unavailable_video_is_reported_without_poisoning_worker() {
       {std::byte{1}}, 42, transport, tickets, pipeline,
       {.available = false,
        .unavailable_boundary = video::ProductionVideoCapabilityBoundary::encoder,
-       .unavailable_code = static_cast<std::uint32_t>(
-           video::NvencH264Failure::runtime_unavailable)});
+       .unavailable_code = encoder_unavailable_code});
 
   const auto capabilities = host.capabilities().worker_capabilities();
 
@@ -219,8 +219,7 @@ void unavailable_video_is_reported_without_poisoning_worker() {
       capabilities.video_unavailable_boundary() ==
       beacon::worker::v1::DIAGNOSTIC_BOUNDARY_ENCODER);
   BEACON_TEST_REQUIRE(
-      capabilities.video_unavailable_code() ==
-      static_cast<std::uint32_t>(video::NvencH264Failure::runtime_unavailable));
+      capabilities.video_unavailable_code() == encoder_unavailable_code);
   BEACON_TEST_REQUIRE(pipeline.plans.empty());
   BEACON_TEST_REQUIRE(!host.shutdown_requested());
 }

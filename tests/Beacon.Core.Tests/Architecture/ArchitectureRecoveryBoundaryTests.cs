@@ -451,6 +451,45 @@ public sealed class ArchitectureRecoveryBoundaryTests
     }
 
     [Fact]
+    public void PortableWorkerCoreExcludesWindowsMediaAndControlPrimitives()
+    {
+        string root = FindRepositoryRoot();
+        string host = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.StreamWorker/include/beacon/worker/worker_host.h"));
+        string build = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.StreamWorker/CMakeLists.txt"));
+
+        Assert.Contains(
+            "beacon/worker/video/worker_video_capabilities.h",
+            host,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("production_video_capabilities.h", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("wgc_display_capture.h", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("nvenc_h264_encoder.h", host, StringComparison.Ordinal);
+
+        int portableStart = build.IndexOf(
+            "add_library(\n  BeaconStreamWorkerPortableCore",
+            StringComparison.Ordinal);
+        int windowsStart = build.IndexOf("if(WIN32)", StringComparison.Ordinal);
+        Assert.True(portableStart >= 0 && windowsStart > portableStart);
+        string portable = build[portableStart..windowsStart];
+        Assert.Contains("src/benchmark_source.cpp", portable, StringComparison.Ordinal);
+        Assert.Contains("src/quic_listener.cpp", portable, StringComparison.Ordinal);
+        Assert.Contains("src/worker_host.cpp", portable, StringComparison.Ordinal);
+        Assert.DoesNotContain("src/named_pipe_channel.cpp", portable, StringComparison.Ordinal);
+        Assert.DoesNotContain("src/capture/", portable, StringComparison.Ordinal);
+        Assert.DoesNotContain("src/video/d3d11", portable, StringComparison.Ordinal);
+        Assert.DoesNotContain("src/video/nvenc", portable, StringComparison.Ordinal);
+        Assert.DoesNotContain("src/video/production_video", portable, StringComparison.Ordinal);
+        Assert.Contains(
+            "Beacon::StreamWorkerPortableCore",
+            build[windowsStart..],
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ProductionWorkerCallbacksDoNotCaptureShorterLivedObjectsByReference()
     {
         string root = FindRepositoryRoot();

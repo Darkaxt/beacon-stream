@@ -29,16 +29,16 @@ authorizer while retaining fake host side effects and fake non-benchmark streami
 - Test: `tests/Beacon.Core.Tests/Architecture/ArchitectureRecoveryBoundaryTests.cs`
 - Test: `tests/Beacon.StreamWorker.Tests/worker_host_tests.cpp`
 
-- [ ] Add failing architecture tests proving `worker_host.h` no longer includes capture/NVENC
+- [x] Add failing architecture tests proving `worker_host.h` no longer includes capture/NVENC
   capability headers and that the portable target excludes every Windows capture/encode/pipe
   source.
-- [ ] Move only the capability value type and enum into the neutral header. Keep hardware probes
+- [x] Move only the capability value type and enum into the neutral header. Keep hardware probes
   and failure translation in the Windows production header/implementation.
-- [ ] Split CMake ownership into `BeaconStreamWorkerPortableCore` and the Windows-only
+- [x] Split CMake ownership into `BeaconStreamWorkerPortableCore` and the Windows-only
   `BeaconStreamWorkerCore`, preserving the existing public alias and executable output.
-- [ ] Add a Linux x64 native preset and select Schannel only on Windows, quictls elsewhere.
-- [ ] Run focused architecture tests and the full Windows native suite.
-- [ ] Commit and push the validated extraction.
+- [x] Add a Linux x64 native preset and select Schannel only on Windows, quictls elsewhere.
+- [x] Run focused architecture tests and the full Windows native suite.
+- [x] Commit and push the validated extraction.
 
 ### Task 2: Make The Production QUIC Listener Portable
 
@@ -148,4 +148,3 @@ authorizer while retaining fake host side effects and fake non-benchmark streami
   existing moving-frame acceptance, to pass again.
 - [ ] Update the parent gate plan only with evidence that is directly certified.
 - [ ] Commit and push the final Gate 4 certification record.
-

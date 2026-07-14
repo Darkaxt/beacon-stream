@@ -2,7 +2,7 @@
 
 #include "beacon/stream/transport.h"
 #include "beacon/worker/quic_listener.h"
-#include "beacon/worker/video/production_video_capabilities.h"
+#include "beacon/worker/video/worker_video_capabilities.h"
 #include "beacon/worker/video/worker_video_pipeline.h"
 #include "worker_ipc.pb.h"
 
