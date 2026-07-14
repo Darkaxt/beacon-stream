@@ -44,7 +44,8 @@ public sealed class ArchitectureRecoveryBoundaryTests
             new Regex("NvEncodeAPI|NV_ENC_[A-Z0-9_]", RegexOptions.CultureInvariant),
             [
                 "src/Beacon.StreamWorker",
-                "tests/Beacon.StreamWorker.Tests"
+                "tests/Beacon.StreamWorker.Tests",
+                "native/vendor/nv-codec-headers"
             ]),
         new(
             "Windows Graphics Capture",

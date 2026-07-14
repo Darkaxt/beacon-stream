@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace Beacon.Core.Tests.Architecture;
@@ -84,6 +85,33 @@ public sealed class NativeDependencyLockTests
             Assert.Equal(expected.License, actual.GetProperty("license").GetString());
             Assert.False(string.IsNullOrWhiteSpace(actual.GetProperty("path").GetString()));
         }
+    }
+
+    [Fact]
+    public void VendoredNvencHeaderMatchesPinnedAuditArtifact()
+    {
+        string root = FindRepositoryRoot();
+        string headerPath = Path.Combine(
+            root,
+            "native",
+            "vendor",
+            "nv-codec-headers",
+            "include",
+            "ffnvcodec",
+            "nvEncodeAPI.h");
+        string licensePath = Path.Combine(
+            root,
+            "native",
+            "vendor",
+            "nv-codec-headers",
+            "LICENSE.nvEncodeAPI.txt");
+
+        Assert.True(File.Exists(headerPath), "The pinned nvEncodeAPI.h must be vendored.");
+        Assert.True(File.Exists(licensePath), "The nvEncodeAPI.h license notice must be retained.");
+        string hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(headerPath)));
+        Assert.Equal("8776FDDCB8FEBC6AEC4D73989B1F21831EB30306BC583DA55B4BF0C14A1DC228", hash);
+        Assert.Contains("Copyright (c) 2010-2026 NVIDIA Corporation", File.ReadAllText(licensePath));
+        Assert.Contains("Permission is hereby granted, free of charge", File.ReadAllText(licensePath));
     }
 
     private static string FindRepositoryRoot()

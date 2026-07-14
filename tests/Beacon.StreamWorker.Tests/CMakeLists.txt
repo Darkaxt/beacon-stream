@@ -36,6 +36,24 @@ add_test(NAME BeaconStreamWorker.D3d11VideoProcessor COMMAND BeaconStreamWorkerD
 add_executable(BeaconStreamWorkerD3d11VideoProcessorProbe d3d11_video_processor_probe.cpp)
 target_link_libraries(BeaconStreamWorkerD3d11VideoProcessorProbe PRIVATE Beacon::StreamWorkerCore d3d11 dxgi)
 
+add_executable(BeaconStreamWorkerNvencH264EncoderTests nvenc_h264_encoder_tests.cpp)
+target_link_libraries(BeaconStreamWorkerNvencH264EncoderTests PRIVATE Beacon::StreamWorkerCore)
+target_include_directories(
+  BeaconStreamWorkerNvencH264EncoderTests
+  SYSTEM PRIVATE
+    "${CMAKE_SOURCE_DIR}/vendor/nv-codec-headers/include"
+)
+add_test(NAME BeaconStreamWorker.NvencH264Encoder COMMAND BeaconStreamWorkerNvencH264EncoderTests)
+
+add_executable(BeaconStreamWorkerNvencH264EncoderProbe nvenc_h264_encoder_probe.cpp)
+target_link_libraries(
+  BeaconStreamWorkerNvencH264EncoderProbe
+  PRIVATE
+    Beacon::StreamWorkerCore
+    d3d11
+    dxgi
+)
+
 add_executable(BeaconStreamWorkerQuicListenerProbe quic_listener_probe.cpp)
 target_link_libraries(BeaconStreamWorkerQuicListenerProbe PRIVATE Beacon::StreamWorkerCore)
 beacon_deploy_msquic(BeaconStreamWorkerQuicListenerProbe)

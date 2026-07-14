@@ -1,2 +1,3 @@
 * text=auto eol=lf
 *.h264 binary
+native/vendor/nv-codec-headers/include/ffnvcodec/nvEncodeAPI.h -whitespace

@@ -11,6 +11,7 @@ add_library(
     src/secure_bytes.cpp
     src/synthetic_media_source.cpp
     src/video/d3d11_video_processor.cpp
+    src/video/nvenc_h264_encoder.cpp
     src/worker_events.cpp
     src/worker_host.cpp
 )
@@ -19,6 +20,11 @@ target_include_directories(
   BeaconStreamWorkerCore
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_include_directories(
+  BeaconStreamWorkerCore
+  SYSTEM PRIVATE
+    "${CMAKE_SOURCE_DIR}/vendor/nv-codec-headers/include"
 )
 target_link_libraries(
   BeaconStreamWorkerCore

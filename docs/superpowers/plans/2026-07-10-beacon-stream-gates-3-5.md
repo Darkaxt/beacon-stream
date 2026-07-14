@@ -422,12 +422,12 @@ The repeatable command and captured output are tracked in
 - Vendor: pinned `nvEncodeAPI.h` plus license notice
 - Create: encoder unit/integration tests
 
-- [ ] Test DLL/API/capability preflight, D3D11 texture registration, low-latency no-B-frame
+- [x] Test DLL/API/capability preflight, D3D11 texture registration, low-latency no-B-frame
   configuration, SPS/PPS + IDR first frame, monotonic timestamps, forced IDR, bitrate
   reconfiguration, encode failure, and exact cleanup ordering.
-- [ ] Validate encoded Annex-B access units with a test decoder/probe only; that probe is a
+- [x] Validate encoded Annex-B access units with a test decoder/probe only; that probe is a
   test tool, not a production alternate route.
-- [ ] Commit: `feat: encode Beacon H264 with NVENC`
+- [x] Commit: `feat: encode Beacon H264 with NVENC`
 
 ### Task 17: Packetize Real Access Units And Apply Recovery
 
