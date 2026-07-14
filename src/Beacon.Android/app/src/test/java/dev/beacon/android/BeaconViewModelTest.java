@@ -173,6 +173,53 @@ public final class BeaconViewModelTest {
     }
 
     @Test
+    public void streamCoreCreationFailurePreservesCauseAndClearsCreationOwnership() {
+        RecordingVideoSession video = new RecordingVideoSession();
+        video.closeFailure = new IllegalStateException("video close failed");
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7",
+            "https://server",
+            new FakeService(),
+            (sink, failureObserver, benchmarkObserver) -> {
+                throw new IllegalStateException("core create failed");
+            },
+            failureObserver -> video);
+
+        IllegalStateException failure = assertThrows(
+            IllegalStateException.class,
+            model::ownedStreamCore);
+
+        assertEquals("core create failed", failure.getMessage());
+        assertEquals(1, failure.getSuppressed().length);
+        assertEquals("video close failed", failure.getSuppressed()[0].getMessage());
+        model.close();
+        assertEquals(1, video.closeCount);
+    }
+
+    @Test
+    public void closeReleasesNativeCoreEvenWhenVideoCleanupFails() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(200, grantBody());
+        RecordingBenchmarkCoreFactory coreFactory = new RecordingBenchmarkCoreFactory();
+        RecordingVideoSession video = new RecordingVideoSession();
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7",
+            "https://server",
+            service,
+            coreFactory,
+            failureObserver -> video);
+        model.launch(BeaconApiClient.GameSelection.byGameId("steam:1"));
+        video.closeFailure = new IllegalStateException("video close failed");
+
+        IllegalStateException failure = assertThrows(
+            IllegalStateException.class,
+            model::close);
+
+        assertEquals("video close failed", failure.getMessage());
+        assertEquals(1, coreFactory.bindings.releaseCount);
+    }
+
+    @Test
     public void sessionPreflightMustCompleteBeforeLaunch() throws Exception {
         FakeService service = new FakeService();
         service.benchmarkPrepare = new BeaconApiClient.BeaconResult(
@@ -543,6 +590,7 @@ public final class BeaconViewModelTest {
         private int stopCount;
         private int closeCount;
         private RuntimeException startFailure;
+        private RuntimeException closeFailure;
 
         @Override
         public void start(
@@ -557,7 +605,10 @@ public final class BeaconViewModelTest {
 
         @Override public void onFrame(BeaconStreamCore.EncodedFrame frame) { frameCount++; }
         @Override public void stop() { stopCount++; }
-        @Override public void close() { closeCount++; }
+        @Override public void close() {
+            closeCount++;
+            if (closeFailure != null) throw closeFailure;
+        }
     }
 
     private static final class RecordingCoreBindings implements BeaconStreamCore.Bindings {
@@ -661,6 +712,7 @@ public final class BeaconViewModelTest {
         private long generation;
         private int startCount;
         private int stopCount;
+        private int releaseCount;
         private final CountDownLatch started = new CountDownLatch(1);
 
         @Override public long create(BeaconStreamCore.NativeCallbacks callbacks) {
@@ -676,7 +728,7 @@ public final class BeaconViewModelTest {
         @Override public void sendInput(long handle, BeaconApiClient.InputBatch input) { }
         @Override public void replaceSurface(long handle, Object surface) { }
         @Override public void stop(long handle) { stopCount++; }
-        @Override public void release(long handle) { }
+        @Override public void release(long handle) { releaseCount++; }
     }
 
     private static final class RejectingCoreBindings implements BeaconStreamCore.Bindings {

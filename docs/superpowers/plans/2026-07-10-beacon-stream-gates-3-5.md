@@ -468,14 +468,18 @@ Evidence: `docs/validation/2026-07-14-media-packetization-recovery.md`.
 - Delete after replacement: Android and server `AnnexBAccessUnitSplitter` plus envelope code
 - Create: decoder unit/instrumentation tests
 
-- [ ] Test asynchronous MediaCodec configuration, low-latency capability gating, direct
+- [x] Test asynchronous MediaCodec configuration, low-latency capability gating, direct
   access-unit queue, codec-config/IDR start, PTS propagation, Surface lifecycle, bounded queue
   drop, awaiting-IDR recovery, decoder failure feedback, stop/reconnect, and release once.
-- [ ] Delete both old splitters only after tests prove StreamCore receives complete access
+- [x] Delete both old splitters only after tests prove StreamCore receives complete access
   units.
 - [ ] On emulator, require structured first-frame and moving-frame evidence; do not infer
   success only from an HTTP response or nonblank Surface.
-- [ ] Commit: `feat: render Beacon H264 in StreamCore`
+- [x] Commit: `feat: render Beacon H264 in StreamCore` (`1f64dd5`)
+
+Static evidence: `docs/validation/2026-07-14-android-mediacodec-streamcore.md`.
+Emulator and instrumentation execution remain open because another task currently owns ADB;
+this task did not inspect or alter that shared runtime.
 
 ### Task 19: Integrate Launch, Reconnect, Stop, And Restore Transaction
 

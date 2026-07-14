@@ -297,8 +297,14 @@ public final class BeaconViewModel implements AutoCloseable {
             ownedVideo = videoSession;
             videoSession = null;
         }
-        if (ownedVideo != null) ownedVideo.close();
-        if (owned != null) owned.close();
+        Throwable failure = null;
+        if (ownedVideo != null) {
+            failure = captureCleanupFailure(failure, ownedVideo::close);
+        }
+        if (owned != null) {
+            failure = captureCleanupFailure(failure, owned::close);
+        }
+        rethrowCleanupFailure(failure);
     }
 
     private void startGrant(String responseBody) {
@@ -387,7 +393,9 @@ public final class BeaconViewModel implements AutoCloseable {
                 notifyAll();
             }
         } catch (RuntimeException | Error error) {
-            if (createdVideo != null) createdVideo.close();
+            if (createdVideo != null) {
+                captureCleanupFailure(error, createdVideo::close);
+            }
             synchronized (this) {
                 creatingStreamCore = false;
                 notifyAll();
@@ -395,11 +403,29 @@ public final class BeaconViewModel implements AutoCloseable {
             throw error;
         }
         if (!accepted) {
-            if (createdVideo != null) createdVideo.close();
-            created.close();
-            throw new IllegalStateException("BeaconViewModel is closed.");
+            Throwable failure = new IllegalStateException("BeaconViewModel is closed.");
+            if (createdVideo != null) {
+                failure = captureCleanupFailure(failure, createdVideo::close);
+            }
+            failure = captureCleanupFailure(failure, created::close);
+            rethrowCleanupFailure(failure);
         }
         return created;
+    }
+
+    private static Throwable captureCleanupFailure(Throwable first, Runnable cleanup) {
+        try {
+            cleanup.run();
+        } catch (RuntimeException | Error failure) {
+            if (first == null) return failure;
+            if (first != failure) first.addSuppressed(failure);
+        }
+        return first;
+    }
+
+    private static void rethrowCleanupFailure(Throwable failure) {
+        if (failure instanceof RuntimeException runtimeFailure) throw runtimeFailure;
+        if (failure instanceof Error error) throw error;
     }
 
     BeaconStreamCore ownedStreamCore() {
