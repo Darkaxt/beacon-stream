@@ -45,6 +45,19 @@ add_executable(
 target_link_libraries(BeaconVideoMediaPacketizerTests PRIVATE Beacon::StreamProtocol)
 add_test(NAME BeaconStreamProtocol.VideoMediaPacketizer COMMAND BeaconVideoMediaPacketizerTests)
 
+add_executable(
+  BeaconAccessUnitVectorTests
+  access_unit_vector.cpp
+  access_unit_vector_tests.cpp
+)
+target_compile_definitions(
+  BeaconAccessUnitVectorTests
+  PRIVATE
+    BEACON_REPOSITORY_ROOT="${CMAKE_SOURCE_DIR}/.."
+)
+target_link_libraries(BeaconAccessUnitVectorTests PRIVATE Beacon::StreamProtocol)
+add_test(NAME BeaconStreamProtocol.AccessUnitVector COMMAND BeaconAccessUnitVectorTests)
+
 if(ANDROID)
   add_executable(
     BeaconAndroidStreamCoreTests
@@ -125,6 +138,40 @@ if(BEACON_WITH_MSQUIC)
       )
     endif()
   endfunction()
+
+  add_executable(
+    BeaconHostedEmulatorEndpointServerTests
+    hosted_emulator_endpoint_server.cpp
+    hosted_emulator_endpoint_server_tests.cpp
+  )
+  target_link_libraries(
+    BeaconHostedEmulatorEndpointServerTests
+    PRIVATE Beacon::StreamProtocol
+  )
+  if(WIN32)
+    target_link_libraries(
+      BeaconHostedEmulatorEndpointServerTests
+      PRIVATE ntdll
+    )
+  endif()
+  beacon_deploy_msquic(BeaconHostedEmulatorEndpointServerTests)
+  add_test(
+    NAME BeaconStreamProtocol.HostedEmulatorEndpointServer
+    COMMAND BeaconHostedEmulatorEndpointServerTests
+  )
+
+  if(ANDROID)
+    add_executable(
+      BeaconHostedEmulatorEndpoint
+      access_unit_vector.cpp
+      hosted_emulator_endpoint.cpp
+      hosted_emulator_endpoint_server.cpp
+    )
+    target_link_libraries(
+      BeaconHostedEmulatorEndpoint
+      PRIVATE Beacon::StreamProtocol
+    )
+  endif()
 
   add_executable(BeaconMsQuicApiTests msquic_api_tests.cpp)
   target_link_libraries(BeaconMsQuicApiTests PRIVATE Beacon::StreamProtocol)

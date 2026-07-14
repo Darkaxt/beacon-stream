@@ -221,7 +221,7 @@ git push origin codex/beacon-production-benchmarks
 - Modify: `tests/Beacon.StreamProtocol.Tests/CMakeLists.txt`
 - Modify: `scripts/test-native-android-protocol.sh`
 
-- [ ] **Step 1: Write failing BAU parser and endpoint contract tests**
+- [x] **Step 1: Write failing BAU parser and endpoint contract tests**
 
 Test `BEACONAU1\n`, little-endian frame count/lengths, truncation, trailing bytes, empty units,
 and the checked-in 640x360 vector's exact 30-unit count. Add a test authorizer asserting the
@@ -238,7 +238,7 @@ video: h264, 640x360, 30/1, sdr
 Run the Android native build. Expected: compile failure because the parser and endpoint server
 do not exist.
 
-- [ ] **Step 2: Implement the event-driven MsQuic endpoint**
+- [x] **Step 2: Implement the event-driven MsQuic endpoint**
 
 The endpoint accepts `--certificate`, `--private-key`, and `--vector`, listens on
 `127.0.0.1:0`, and prints `BEACON_HOSTED_ENDPOINT_READY <port>` only after
@@ -258,7 +258,7 @@ Every MsQuic callback publishes an event into one mutex/condition-variable state
 sleep, poll, or add a wall-clock timeout. A transport or protocol failure sets a typed terminal
 error, wakes the main thread, and exits nonzero.
 
-- [ ] **Step 3: Cross-build and run native protocol regression tests**
+- [x] **Step 3: Cross-build and run native protocol regression tests**
 
 Run:
 
@@ -271,7 +271,7 @@ Expected: the endpoint target cross-compiles for x86_64 Android, the BAU parser 
 Windows tests remain green. Add the parser test executable to
 `test-native-android-protocol.sh`; do not start the endpoint in this unit-test script.
 
-- [ ] **Step 4: Commit and push the endpoint**
+- [x] **Step 4: Commit and push the endpoint**
 
 ```powershell
 git add tests/Beacon.StreamProtocol.Tests scripts/test-native-android-protocol.sh
