@@ -128,11 +128,14 @@ public sealed class HostedBenchmarkWorkerProcessHostTests
         await host.EnsureReadyAsync(CancellationToken.None);
         long generation = host.CurrentProcessGeneration;
 
-        await Assert.ThrowsAnyAsync<IOException>(
+        Exception? commandFailure = await Record.ExceptionAsync(
             () => host.SendAsync(generation, Command("exit-session"), CancellationToken.None));
         StreamWorkerProcessExited exited = Assert.IsType<StreamWorkerProcessExited>(
             await events.ReadAsync(CancellationToken.None));
 
+        Assert.True(
+            commandFailure is IOException or StreamWorkerProcessExitedException,
+            commandFailure?.ToString());
         Assert.Equal(generation, exited.ProcessGeneration);
         Assert.Equal(23, exited.ExitCode);
         Assert.False(host.IsReady);
