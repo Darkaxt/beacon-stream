@@ -247,20 +247,6 @@ public:
     }
   }
 
-  stream::TransportSendResult send(stream::TransportPacket packet) {
-    try {
-      std::uint64_t session_generation = 0;
-      {
-        std::lock_guard lock{mutex_};
-        session_generation = current_generation_;
-      }
-      return send_for_generation(std::move(packet), session_generation);
-    } catch (...) {
-      record_callback_exception(nullptr, false);
-      return stream::TransportSendResult::connection_closed;
-    }
-  }
-
   stream::TransportSendResult
   send_for_generation(stream::TransportPacket packet,
                       std::uint64_t session_generation,
@@ -1636,10 +1622,6 @@ void QuicListener::set_media_event_sink(MediaEventSink sink) {
 bool QuicListener::open_connection() { return impl_->open_connection(); }
 
 void QuicListener::close_connection() noexcept { impl_->close_connection(); }
-
-stream::TransportSendResult QuicListener::send(stream::TransportPacket packet) {
-  return impl_->send(std::move(packet));
-}
 
 stream::TransportSendResult
 QuicListener::send_for_generation(stream::TransportPacket packet,

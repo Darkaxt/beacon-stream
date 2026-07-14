@@ -84,3 +84,16 @@ an emulator.
 
 Task 17 does not claim Android decode/presentation or the final captured-desktop session
 transaction. Those remain Tasks 18 and 19.
+
+## Post-Sync Boundary Audit
+
+The implementation sync is commit `7054ce4` (`feat: stream Beacon H264 access units`). The
+required refactor audit found that `IWorkerMediaTransport` still inherited the older generic
+`IStreamTransport`, which exposed a generation-free `send(packet)` method alongside the new
+generation-scoped API. WorkerHost never used that method.
+
+The refactor removes the generic inheritance and `QuicListener::send`. StreamWorker now exposes
+only listener lifecycle operations and `send_for_generation` for media. A compile-time assertion
+prevents the unsafe inheritance from returning, and a source scan verifies there is no
+generation-free Worker media-send implementation. The complete native, dynamic, managed, and
+static matrix above passes again after this change.

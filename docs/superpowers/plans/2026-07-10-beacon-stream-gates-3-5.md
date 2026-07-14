@@ -454,7 +454,7 @@ Evidence and the repeatable command are tracked in
   reduction, and recovery without media retransmission.
 - [x] Drive NVENC bitrate reconfiguration only from server-plan bounds plus typed QUIC/client
   evidence. Record every decision and input fact.
-- [ ] Commit: `feat: stream Beacon H264 access units`
+- [x] Commit: `feat: stream Beacon H264 access units` (`7054ce4`)
 
 Evidence: `docs/validation/2026-07-14-media-packetization-recovery.md`.
 

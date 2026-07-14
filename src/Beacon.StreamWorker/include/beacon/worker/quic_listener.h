@@ -19,12 +19,16 @@
 
 namespace beacon::worker {
 
-class IWorkerMediaTransport : public stream::IStreamTransport,
-                              public IMediaDatagramTransport {
+class IWorkerMediaTransport : public IMediaDatagramTransport {
 public:
+  virtual ~IWorkerMediaTransport() = default;
+
   [[nodiscard]] virtual bool configure_listener(std::string_view listen_address,
                                                 std::uint16_t listen_port) = 0;
   [[nodiscard]] virtual std::uint16_t local_port() const noexcept = 0;
+  [[nodiscard]] virtual bool open_connection() = 0;
+  virtual void close_connection() noexcept = 0;
+  virtual void shutdown() noexcept = 0;
 };
 
 enum class QuicDatagramOutcomeKind {
@@ -124,8 +128,6 @@ public:
   void set_media_event_sink(MediaEventSink sink);
   [[nodiscard]] bool open_connection() override;
   void close_connection() noexcept override;
-  [[nodiscard]] stream::TransportSendResult
-  send(stream::TransportPacket packet) override;
   [[nodiscard]] stream::TransportSendResult
   send_for_generation(stream::TransportPacket packet,
                       std::uint64_t session_generation) override;

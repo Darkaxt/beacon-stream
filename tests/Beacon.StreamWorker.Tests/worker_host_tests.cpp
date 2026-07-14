@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -17,6 +18,9 @@ using beacon::worker::IWorkerMediaTransport;
 using beacon::worker::WorkerHost;
 using beacon::worker::AuthorizedQuicTicketStore;
 using beacon::worker::v1::WorkerIpcEnvelope;
+
+static_assert(!std::is_base_of_v<beacon::stream::IStreamTransport,
+                                 IWorkerMediaTransport>);
 
 class RecordingTransport final : public IWorkerMediaTransport {
  public:
@@ -46,16 +50,12 @@ class RecordingTransport final : public IWorkerMediaTransport {
     }
   }
 
-  TransportSendResult send(TransportPacket packet) override {
-    packets.push_back(std::move(packet));
-    return TransportSendResult::accepted;
-  }
-
   TransportSendResult
   send_for_generation(TransportPacket packet,
                       std::uint64_t session_generation) override {
     generations.push_back(session_generation);
-    return send(std::move(packet));
+    packets.push_back(std::move(packet));
+    return TransportSendResult::accepted;
   }
 
   void shutdown() noexcept override {
