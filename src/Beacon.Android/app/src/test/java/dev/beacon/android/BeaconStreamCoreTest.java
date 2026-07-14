@@ -96,19 +96,22 @@ public final class BeaconStreamCoreTest {
     }
 
     @Test
-    public void frameSinkRunsInlineBeforeNativeCallbackReturnsAndStopsAfterClose() {
+    public void frameSinkUsesCallbackExecutorAndStopsAfterClose() throws Exception {
         RecordingBindings bindings = new RecordingBindings();
         ExecutorService executor = Executors.newSingleThreadExecutor(r -> new Thread(r, "beacon-frame"));
+        CountDownLatch delivered = new CountDownLatch(1);
         AtomicReference<String> callbackThread = new AtomicReference<>();
         AtomicInteger frames = new AtomicInteger();
         BeaconStreamCore core = new BeaconStreamCore(bindings, frame -> {
             callbackThread.set(Thread.currentThread().getName());
             frames.incrementAndGet();
+            delivered.countDown();
         }, executor);
         core.start(session("frame-callback"));
 
         bindings.callbacks.onFrame(directBuffer(1, 2, 3), 4, 1, 1, false, false);
-        assertEquals(Thread.currentThread().getName(), callbackThread.get());
+        delivered.await();
+        assertEquals("beacon-frame", callbackThread.get());
         assertEquals(1, frames.get());
 
         core.close();
@@ -349,10 +352,11 @@ public final class BeaconStreamCoreTest {
     }
 
     @Test
-    public void closeFromInlineFrameSinkIsRejectedWithoutReleasingTheCore() {
+    public void closeFromFrameSinkIsRejectedWithoutReleasingTheCore() throws Exception {
         RecordingBindings bindings = new RecordingBindings();
         AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
         AtomicReference<Throwable> failure = new AtomicReference<>();
+        CountDownLatch callbackCompleted = new CountDownLatch(1);
         BeaconStreamCore core = new BeaconStreamCore(
             bindings,
             frame -> {
@@ -360,12 +364,15 @@ public final class BeaconStreamCoreTest {
                     coreReference.get().close();
                 } catch (Throwable error) {
                     failure.set(error);
+                } finally {
+                    callbackCompleted.countDown();
                 }
             },
             Executors.newSingleThreadExecutor());
         coreReference.set(core);
         core.start(session("close-drain"));
         bindings.callbacks.onFrame(directBuffer(1), 1, 1, 1, false, false);
+        callbackCompleted.await();
 
         assertEquals(
             "BeaconStreamCore cannot close from its frame sink callback.",
@@ -376,16 +383,21 @@ public final class BeaconStreamCoreTest {
     }
 
     @Test
-    public void frameDeliveryDoesNotFabricateQueueDepthFeedback() {
+    public void frameDeliveryDoesNotFabricateQueueDepthFeedback() throws Exception {
         RecordingBindings bindings = new RecordingBindings();
         AtomicInteger order = new AtomicInteger();
+        CountDownLatch frameDelivered = new CountDownLatch(1);
         BeaconStreamCore core = new BeaconStreamCore(
             bindings,
-            frame -> assertEquals(1, order.incrementAndGet()),
+            frame -> {
+                assertEquals(1, order.incrementAndGet());
+                frameDelivered.countDown();
+            },
             Executors.newSingleThreadExecutor());
         core.start(session("feedback"));
         bindings.feedbackOrder = order;
         bindings.callbacks.onFrame(directBuffer(1), 1, 1, 1, false, false);
+        frameDelivered.await();
         assertEquals(-1, bindings.lastQueuedAccessUnits);
         assertEquals(-1, bindings.lastDroppedAccessUnits);
         assertEquals(1, order.get());
@@ -395,11 +407,15 @@ public final class BeaconStreamCoreTest {
     @Test
     public void feedbackObserverRunsAfterSuccessfulNativeFeedbackHandoff() throws Exception {
         RecordingBindings bindings = new RecordingBindings();
+        CountDownLatch frameDelivered = new CountDownLatch(1);
         CountDownLatch observerCalled = new CountDownLatch(1);
         AtomicInteger order = new AtomicInteger();
         BeaconStreamCore core = new BeaconStreamCore(
             bindings,
-            frame -> assertEquals(1, order.incrementAndGet()),
+            frame -> {
+                assertEquals(1, order.incrementAndGet());
+                frameDelivered.countDown();
+            },
             Executors.newSingleThreadExecutor(),
             () -> {
                 assertEquals(3, order.incrementAndGet());
@@ -409,6 +425,7 @@ public final class BeaconStreamCoreTest {
         core.start(session("feedback-observer"));
 
         bindings.callbacks.onFrame(directBuffer(1), 1, 1, 1, false, false);
+        frameDelivered.await();
         core.sendQueueDepthFeedback(1, 0, 0);
         observerCalled.await();
 

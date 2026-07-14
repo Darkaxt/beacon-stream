@@ -169,6 +169,7 @@ public final class BeaconViewModelTest {
         model.launch(BeaconApiClient.GameSelection.byGameId("steam:1"));
         coreFactory.bindings.callbacks.onFrame(
             directBuffer(1, 2, 3), 4, 5, coreFactory.bindings.generation, true, true);
+        video.frameReceived.await();
         model.stopStream();
         model.close();
 
@@ -625,6 +626,7 @@ public final class BeaconViewModelTest {
         private int frameCount;
         private int stopCount;
         private int closeCount;
+        private final CountDownLatch frameReceived = new CountDownLatch(1);
         private RuntimeException startFailure;
         private RuntimeException closeFailure;
 
@@ -639,7 +641,10 @@ public final class BeaconViewModelTest {
             if (startFailure != null) throw startFailure;
         }
 
-        @Override public void onFrame(BeaconStreamCore.EncodedFrame frame) { frameCount++; }
+        @Override public void onFrame(BeaconStreamCore.EncodedFrame frame) {
+            frameCount++;
+            frameReceived.countDown();
+        }
         @Override public void stop() { stopCount++; }
         @Override public void close() {
             closeCount++;

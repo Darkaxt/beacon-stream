@@ -8,6 +8,7 @@ import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -260,7 +261,11 @@ public final class BeaconActivity extends Activity {
     private View touchSurface() {
         FrameLayout surface = new FrameLayout(this);
         touchSurfaceView = surface;
-        surface.setMinimumHeight(uiState.touchSurfaceMinHeightPx());
+        int surfaceHeight = uiState.touchSurfaceMinHeightPx();
+        surface.setMinimumHeight(surfaceHeight);
+        surface.setLayoutParams(new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            surfaceHeight));
         surface.setBackgroundColor(uiState.surfaceColor());
         SurfaceView video = new SurfaceView(this);
         surface.addView(video, new FrameLayout.LayoutParams(
@@ -532,7 +537,13 @@ public final class BeaconActivity extends Activity {
 
         if (view == touchSurfaceView) {
             view.setBackgroundColor(uiState.surfaceColor());
-            view.setMinimumHeight(uiState.touchSurfaceMinHeightPx());
+            int surfaceHeight = uiState.touchSurfaceMinHeightPx();
+            view.setMinimumHeight(surfaceHeight);
+            ViewGroup.LayoutParams layout = view.getLayoutParams();
+            if (layout != null && layout.height != surfaceHeight) {
+                layout.height = surfaceHeight;
+                view.setLayoutParams(layout);
+            }
         }
 
         if (view instanceof TextView textView) {

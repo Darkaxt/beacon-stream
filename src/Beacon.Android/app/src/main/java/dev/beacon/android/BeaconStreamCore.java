@@ -422,6 +422,12 @@ public final class BeaconStreamCore implements AutoCloseable {
         long generation,
         boolean idr,
         boolean codecConfiguration) {
+        EncodedFrame frame = new EncodedFrame(
+            bytes,
+            presentationTimeUs,
+            sequence,
+            idr,
+            codecConfiguration);
         synchronized (this) {
             long expectedGeneration = startingGeneration != 0
                 ? startingGeneration : activeGeneration;
@@ -429,17 +435,19 @@ public final class BeaconStreamCore implements AutoCloseable {
                 generation != expectedGeneration) {
                 return;
             }
-        }
-        IN_SINK_CALLBACK.set(true);
-        try {
-            sink.onFrame(new EncodedFrame(
-                bytes,
-                presentationTimeUs,
-                sequence,
-                idr,
-                codecConfiguration));
-        } finally {
-            IN_SINK_CALLBACK.remove();
+            callbackExecutor.execute(() -> {
+                synchronized (BeaconStreamCore.this) {
+                    if (!open || stopped || generation != activeGeneration) {
+                        return;
+                    }
+                }
+                IN_SINK_CALLBACK.set(true);
+                try {
+                    sink.onFrame(frame);
+                } finally {
+                    IN_SINK_CALLBACK.remove();
+                }
+            });
         }
     }
 
