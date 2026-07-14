@@ -1,15 +1,16 @@
 #pragma once
 
 #include "beacon/stream/transport.h"
-#include "beacon/worker/quic_listener.h"
+#include "beacon/worker/quic_ticket_store.h"
 #include "beacon/worker/secure_bytes.h"
 #include "stream_control.pb.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
-#include <optional>
+#include <variant>
 #include <vector>
 
 namespace beacon::worker {
@@ -49,6 +50,21 @@ struct QuicSessionProtocolOutput {
     stream::v1::CancelBenchmark cancel_benchmark;
   };
 
+  struct AcceptedStopSession {
+    std::uint64_t session_generation{};
+    stream::v1::StopSession stop_session;
+  };
+
+  struct AcceptedIdrRequest {
+    std::uint64_t session_generation{};
+    stream::v1::RequestIdr request;
+  };
+
+  using AcceptedSessionAction =
+      std::variant<AcceptedStartSession, AcceptedStartBenchmark,
+                   AcceptedCancelBenchmark, AcceptedStopSession,
+                   AcceptedIdrRequest>;
+
   struct ParsedInput {
     std::uint64_t session_generation{};
     stream::v1::InputStreamEnvelope input;
@@ -64,9 +80,7 @@ struct QuicSessionProtocolOutput {
   std::vector<std::vector<std::byte>> session_replies;
   std::vector<stream::TransportPacket> packets;
   std::optional<AcceptedAuthentication> accepted_authentication;
-  std::optional<AcceptedStartSession> accepted_start_session;
-  std::optional<AcceptedStartBenchmark> accepted_start_benchmark;
-  std::optional<AcceptedCancelBenchmark> accepted_cancel_benchmark;
+  std::vector<AcceptedSessionAction> accepted_session_actions;
   std::vector<ParsedInput> inputs;
   std::vector<ParsedFeedback> feedback;
 };

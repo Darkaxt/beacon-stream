@@ -8,10 +8,15 @@ add_library(
     src/outbound_queue.cpp
     src/quic_listener.cpp
     src/quic_session_protocol.cpp
+    src/quic_ticket_store.cpp
     src/secure_bytes.cpp
     src/synthetic_media_source.cpp
     src/video/d3d11_video_processor.cpp
+    src/video/media_packetizer.cpp
+    src/video/media_rate_controller.cpp
     src/video/nvenc_h264_encoder.cpp
+    src/video/quic_media_rate_adapter.cpp
+    src/video/video_media_session.cpp
     src/worker_events.cpp
     src/worker_host.cpp
 )

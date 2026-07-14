@@ -51,6 +51,13 @@ class RecordingTransport final : public IWorkerMediaTransport {
     return TransportSendResult::accepted;
   }
 
+  TransportSendResult
+  send_for_generation(TransportPacket packet,
+                      std::uint64_t session_generation) override {
+    generations.push_back(session_generation);
+    return send(std::move(packet));
+  }
+
   void shutdown() noexcept override {
     close_connection();
     ++shutdown_count;
@@ -65,6 +72,7 @@ class RecordingTransport final : public IWorkerMediaTransport {
   std::size_t close_count{};
   std::size_t shutdown_count{};
   std::vector<TransportPacket> packets;
+  std::vector<std::uint64_t> generations;
 };
 
 const WorkerIpcEnvelope& completion(const std::vector<WorkerIpcEnvelope>& responses) {

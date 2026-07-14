@@ -449,12 +449,14 @@ Evidence and the repeatable command are tracked in
 - Modify: Worker media session and rate controller
 - Extend: StreamProtocol tests
 
-- [ ] Test packetization at negotiated `MaxSendLength`, complete reconstruction, SPS/PPS/IDR
+- [x] Test packetization at negotiated `MaxSendLength`, complete reconstruction, SPS/PPS/IDR
   flags, datagram loss notification, reliable IDR request, bitrate bounds, queue-pressure
   reduction, and recovery without media retransmission.
-- [ ] Drive NVENC bitrate reconfiguration only from server-plan bounds plus typed QUIC/client
+- [x] Drive NVENC bitrate reconfiguration only from server-plan bounds plus typed QUIC/client
   evidence. Record every decision and input fact.
 - [ ] Commit: `feat: stream Beacon H264 access units`
+
+Evidence: `docs/validation/2026-07-14-media-packetization-recovery.md`.
 
 ### Task 18: Decode And Present Through Android MediaCodec
 

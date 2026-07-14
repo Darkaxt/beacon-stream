@@ -717,11 +717,18 @@ NvencH264Encoder::NvencH264Encoder(std::unique_ptr<INvencH264Api> api,
                                    NvencH264Plan plan)
     : api_(std::move(api)), plan_(plan) {}
 
-NvencH264Encoder::~NvencH264Encoder() { shutdown_session(); }
+NvencH264Encoder::~NvencH264Encoder() {
+  std::lock_guard lock{operation_mutex_};
+  shutdown_session();
+}
 
 std::optional<EncodedH264AccessUnit> NvencH264Encoder::encode(
     const ConvertedD3d11Frame& frame, bool force_idr) noexcept {
+  std::lock_guard lock{operation_mutex_};
   failure_ = NvencH264Failure::none;
+  if (!claim_media_thread()) {
+    return std::nullopt;
+  }
   if (!valid_plan()) {
     failure_ = NvencH264Failure::invalid_plan;
     return std::nullopt;
@@ -878,7 +885,11 @@ std::optional<EncodedH264AccessUnit> NvencH264Encoder::encode(
 
 bool NvencH264Encoder::reconfigure_bitrate(
     std::uint32_t bitrate_bps) noexcept {
+  std::lock_guard lock{operation_mutex_};
   failure_ = NvencH264Failure::none;
+  if (!claim_media_thread()) {
+    return false;
+  }
   if (session_poisoned_) {
     failure_ = NvencH264Failure::session_poisoned;
     return false;
@@ -902,7 +913,13 @@ bool NvencH264Encoder::reconfigure_bitrate(
   return true;
 }
 
+std::uint32_t NvencH264Encoder::configured_bitrate_bps() const noexcept {
+  std::lock_guard lock{operation_mutex_};
+  return plan_.bitrate_bps;
+}
+
 NvencH264Failure NvencH264Encoder::failure() const noexcept {
+  std::lock_guard lock{operation_mutex_};
   return failure_;
 }
 
@@ -911,6 +928,19 @@ bool NvencH264Encoder::valid_plan() const noexcept {
          (plan_.width % 2U) == 0 && (plan_.height % 2U) == 0 &&
          plan_.frame_rate_numerator > 0 &&
          plan_.frame_rate_denominator > 0 && plan_.bitrate_bps > 0;
+}
+
+bool NvencH264Encoder::claim_media_thread() noexcept {
+  const auto current = std::this_thread::get_id();
+  if (!media_thread_.has_value()) {
+    media_thread_ = current;
+    return true;
+  }
+  if (*media_thread_ == current) {
+    return true;
+  }
+  failure_ = NvencH264Failure::thread_ownership_violation;
+  return false;
 }
 
 bool NvencH264Encoder::valid_frame(

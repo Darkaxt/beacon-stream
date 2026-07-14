@@ -1,11 +1,14 @@
 #pragma once
 
 #include "beacon/worker/video/d3d11_video_processor.h"
+#include "beacon/worker/video/media_rate_controller.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <thread>
 #include <vector>
 
 namespace beacon::worker::video {
@@ -15,6 +18,7 @@ enum class NvencH264Failure {
   invalid_plan,
   invalid_frame,
   timestamp_not_monotonic,
+  thread_ownership_violation,
   device_unavailable,
   device_lost,
   runtime_unavailable,
@@ -156,7 +160,7 @@ class INvencH264Api {
   virtual void unload() noexcept = 0;
 };
 
-class NvencH264Encoder final {
+class NvencH264Encoder final : public IVideoBitrateControl {
  public:
   NvencH264Encoder(std::unique_ptr<INvencH264Api> api,
                    NvencH264Plan plan);
@@ -168,11 +172,14 @@ class NvencH264Encoder final {
   [[nodiscard]] std::optional<EncodedH264AccessUnit> encode(
       const ConvertedD3d11Frame& frame, bool force_idr = false) noexcept;
   [[nodiscard]] bool reconfigure_bitrate(
-      std::uint32_t bitrate_bps) noexcept;
+      std::uint32_t bitrate_bps) noexcept override;
+  [[nodiscard]] std::uint32_t
+  configured_bitrate_bps() const noexcept override;
   [[nodiscard]] NvencH264Failure failure() const noexcept;
 
  private:
   [[nodiscard]] bool valid_plan() const noexcept;
+  [[nodiscard]] bool claim_media_thread() noexcept;
   [[nodiscard]] bool valid_frame(
       const ConvertedD3d11Frame& frame) const noexcept;
   [[nodiscard]] bool ensure_session(
@@ -185,10 +192,12 @@ class NvencH264Encoder final {
   void shutdown_session() noexcept;
 
   std::unique_ptr<INvencH264Api> api_;
+  mutable std::mutex operation_mutex_;
   NvencH264Plan plan_;
   void* device_{};
   std::uintptr_t output_bitstream_{};
   std::optional<std::int64_t> last_timestamp_;
+  std::optional<std::thread::id> media_thread_;
   bool session_open_{};
   bool session_poisoned_{};
   bool first_frame_{true};

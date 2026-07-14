@@ -84,8 +84,7 @@ bool benchmark_plans_equal(const stream_v1::StartBenchmark &left,
                                const stream_v1::BenchmarkRoundPlan &second) {
     return first.packet_count() == second.packet_count() &&
            first.payload_bytes() == second.payload_bytes() &&
-           first.measurement_interval_us() ==
-               second.measurement_interval_us();
+           first.measurement_interval_us() == second.measurement_interval_us();
   };
   return left.run_id() == right.run_id() &&
          left.schema_version() == right.schema_version() &&
@@ -231,8 +230,7 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
             output.session_replies.push_back(std::move(reply_frame));
             authenticated_ = result->accepted();
             if (authenticated_) {
-              authorized_benchmark_plan_ =
-                  std::move(consumed.benchmark_plan);
+              authorized_benchmark_plan_ = std::move(consumed.benchmark_plan);
               session_id_ = message.session_id();
               last_session_sequence_ = message.sequence();
               current_generation_ = ++next_generation_;
@@ -269,35 +267,56 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
                    body == stream_v1::SessionStreamEnvelope::kCancelBenchmark) {
           valid = started_ && !benchmark_run_id_.empty() &&
                   message.cancel_benchmark().run_id() == benchmark_run_id_;
+        } else if (valid &&
+                   body == stream_v1::SessionStreamEnvelope::kStopSession) {
+          valid = started_ && benchmark_run_id_.empty() &&
+                  message.stop_session().reason() !=
+                      stream_v1::SESSION_STOP_REASON_UNSPECIFIED;
+        } else if (valid &&
+                   body == stream_v1::SessionStreamEnvelope::kRequestIdr) {
+          valid = started_ && benchmark_run_id_.empty() &&
+                  message.request_idr().reason() !=
+                      stream_v1::IDR_REQUEST_REASON_UNSPECIFIED;
         }
         if (valid) {
           last_session_sequence_ = message.sequence();
           if (body == stream_v1::SessionStreamEnvelope::kStartSession) {
             started_ = true;
-            output.accepted_start_session =
+            output.accepted_session_actions.emplace_back(
                 QuicSessionProtocolOutput::AcceptedStartSession{
                     .session_id = session_id_,
                     .session_generation = current_generation_,
                     .maximum_datagram_bytes = maximum_datagram_bytes_,
-                    .start_session = message.start_session()};
+                    .start_session = message.start_session()});
           } else if (body ==
                      stream_v1::SessionStreamEnvelope::kStartBenchmark) {
             started_ = true;
             benchmark_run_id_ = message.start_benchmark().run_id();
-            output.accepted_start_benchmark =
+            output.accepted_session_actions.emplace_back(
                 QuicSessionProtocolOutput::AcceptedStartBenchmark{
                     .session_id = session_id_,
                     .session_generation = current_generation_,
                     .maximum_datagram_bytes = maximum_datagram_bytes_,
-                    .start_benchmark = message.start_benchmark()};
+                    .start_benchmark = message.start_benchmark()});
           } else if (body ==
                      stream_v1::SessionStreamEnvelope::kCancelBenchmark) {
-            output.accepted_cancel_benchmark =
+            output.accepted_session_actions.emplace_back(
                 QuicSessionProtocolOutput::AcceptedCancelBenchmark{
                     .session_generation = current_generation_,
-                    .cancel_benchmark = message.cancel_benchmark()};
+                    .cancel_benchmark = message.cancel_benchmark()});
             benchmark_run_id_.clear();
             started_ = false;
+          } else if (body == stream_v1::SessionStreamEnvelope::kStopSession) {
+            output.accepted_session_actions.emplace_back(
+                QuicSessionProtocolOutput::AcceptedStopSession{
+                    .session_generation = current_generation_,
+                    .stop_session = message.stop_session()});
+            started_ = false;
+          } else if (body == stream_v1::SessionStreamEnvelope::kRequestIdr) {
+            output.accepted_session_actions.emplace_back(
+                QuicSessionProtocolOutput::AcceptedIdrRequest{
+                    .session_generation = current_generation_,
+                    .request = message.request_idr()});
           }
           output.packets.push_back({.channel = stream::StreamChannel::session,
                                     .sequence = message.sequence(),
@@ -335,8 +354,8 @@ QuicSessionProtocol::receive(QuicPeerStreamRole role,
                   stream_v1::FeedbackStreamEnvelope::BODY_NOT_SET;
       if (valid) {
         last_feedback_sequence_ = message.sequence();
-        output.feedback.push_back({.session_generation = current_generation_,
-                                   .feedback = message});
+        output.feedback.push_back(
+            {.session_generation = current_generation_, .feedback = message});
         output.packets.push_back({.channel = stream::StreamChannel::feedback,
                                   .sequence = message.sequence(),
                                   .payload = std::vector<std::byte>(

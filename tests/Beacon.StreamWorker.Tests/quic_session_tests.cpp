@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -18,8 +19,27 @@ using beacon::worker::AuthorizedQuicTicket;
 using beacon::worker::AuthorizedQuicTicketStore;
 using beacon::worker::QuicPeerStreamRole;
 using beacon::worker::QuicSessionProtocol;
+using beacon::worker::QuicSessionProtocolOutput;
 using beacon::worker::QuicTicketConsumeResult;
 namespace stream_v1 = beacon::stream::v1;
+
+using AcceptedCancelBenchmark =
+    QuicSessionProtocolOutput::AcceptedCancelBenchmark;
+using AcceptedIdrRequest = QuicSessionProtocolOutput::AcceptedIdrRequest;
+using AcceptedStartBenchmark =
+    QuicSessionProtocolOutput::AcceptedStartBenchmark;
+using AcceptedStartSession = QuicSessionProtocolOutput::AcceptedStartSession;
+using AcceptedStopSession = QuicSessionProtocolOutput::AcceptedStopSession;
+
+template <typename Action>
+const Action *accepted_action(const QuicSessionProtocolOutput &output) {
+  for (const auto &action : output.accepted_session_actions) {
+    if (const auto *accepted = std::get_if<Action>(&action)) {
+      return accepted;
+    }
+  }
+  return nullptr;
+}
 
 std::span<const std::byte> bytes(std::string_view value) {
   return {reinterpret_cast<const std::byte *>(value.data()), value.size()};
@@ -75,6 +95,26 @@ stream_v1::SessionStreamEnvelope start_session(std::uint64_t sequence) {
   return message;
 }
 
+stream_v1::SessionStreamEnvelope stop_session(std::uint64_t sequence) {
+  stream_v1::SessionStreamEnvelope message;
+  message.set_protocol_version(1);
+  message.set_session_id("session-a");
+  message.set_sequence(sequence);
+  message.mutable_stop_session()->set_reason(
+      stream_v1::SESSION_STOP_REASON_CLIENT_REQUEST);
+  return message;
+}
+
+stream_v1::SessionStreamEnvelope request_idr(std::uint64_t sequence) {
+  stream_v1::SessionStreamEnvelope message;
+  message.set_protocol_version(1);
+  message.set_session_id("session-a");
+  message.set_sequence(sequence);
+  message.mutable_request_idr()->set_reason(
+      stream_v1::IDR_REQUEST_REASON_DATAGRAM_LOSS);
+  return message;
+}
+
 stream_v1::SessionStreamEnvelope start_benchmark(std::uint64_t sequence) {
   stream_v1::SessionStreamEnvelope message;
   message.set_protocol_version(1);
@@ -84,8 +124,7 @@ stream_v1::SessionStreamEnvelope start_benchmark(std::uint64_t sequence) {
   benchmark->set_run_id("11111111-1111-1111-1111-111111111111");
   benchmark->set_schema_version(3);
   benchmark->set_run_token(
-      "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f",
-      16);
+      "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f", 16);
   auto *reliable = benchmark->mutable_reliable_round();
   reliable->set_packet_count(4);
   reliable->set_payload_bytes(1024);
@@ -203,8 +242,8 @@ void fragmented_authentication_consumes_ticket_and_returns_negotiated_limit() {
   BEACON_TEST_REQUIRE(second.accepted_authentication->session_id ==
                       "session-a");
   BEACON_TEST_REQUIRE(second.accepted_authentication->session_generation == 1);
-  BEACON_TEST_REQUIRE(
-      second.accepted_authentication->maximum_datagram_bytes == 1232);
+  BEACON_TEST_REQUIRE(second.accepted_authentication->maximum_datagram_bytes ==
+                      1232);
 }
 
 void replay_and_version_mismatch_return_typed_rejections() {
@@ -244,11 +283,15 @@ void authenticated_streams_are_routed_independently() {
   BEACON_TEST_REQUIRE(
       !protocol.receive(QuicPeerStreamRole::session, auth, 1'000)
            .close_connection);
+  const auto started = protocol.receive(QuicPeerStreamRole::session,
+                                        frame(start_session(2)), 1'000);
+  BEACON_TEST_REQUIRE(accepted_action<AcceptedStartSession>(started) !=
+                      nullptr);
 
   stream_v1::SessionStreamEnvelope session;
   session.set_protocol_version(1);
   session.set_session_id("session-a");
-  session.set_sequence(2);
+  session.set_sequence(3);
   session.mutable_request_idr()->set_reason(
       stream_v1::IDR_REQUEST_REASON_DATAGRAM_LOSS);
   stream_v1::InputStreamEnvelope input;
@@ -272,6 +315,12 @@ void authenticated_streams_are_routed_independently() {
   BEACON_TEST_REQUIRE(session_output.packets.size() == 1);
   BEACON_TEST_REQUIRE(session_output.packets[0].channel ==
                       beacon::stream::StreamChannel::session);
+  const auto *accepted_idr =
+      accepted_action<AcceptedIdrRequest>(session_output);
+  BEACON_TEST_REQUIRE(accepted_idr != nullptr);
+  BEACON_TEST_REQUIRE(accepted_idr->session_generation == 1);
+  BEACON_TEST_REQUIRE(accepted_idr->request.reason() ==
+                      stream_v1::IDR_REQUEST_REASON_DATAGRAM_LOSS);
   BEACON_TEST_REQUIRE(input_output.packets.size() == 1);
   BEACON_TEST_REQUIRE(input_output.packets[0].channel ==
                       beacon::stream::StreamChannel::input);
@@ -280,14 +329,56 @@ void authenticated_streams_are_routed_independently() {
                       beacon::stream::StreamChannel::feedback);
   BEACON_TEST_REQUIRE(input_output.inputs.size() == 1);
   BEACON_TEST_REQUIRE(input_output.inputs[0].session_generation == 1);
-  BEACON_TEST_REQUIRE(
-      input_output.inputs[0].input.SerializeAsString() ==
-      input.SerializeAsString());
+  BEACON_TEST_REQUIRE(input_output.inputs[0].input.SerializeAsString() ==
+                      input.SerializeAsString());
   BEACON_TEST_REQUIRE(feedback_output.feedback.size() == 1);
   BEACON_TEST_REQUIRE(feedback_output.feedback[0].session_generation == 1);
   BEACON_TEST_REQUIRE(
       feedback_output.feedback[0].feedback.SerializeAsString() ==
       feedback.SerializeAsString());
+}
+
+void idr_requests_require_an_active_media_session_and_typed_reason() {
+  AuthorizedQuicTicketStore before_start_store;
+  BEACON_TEST_REQUIRE(
+      before_start_store.authorize(grant("raw-ticket-idr-before-start")));
+  QuicSessionProtocol before_start(before_start_store);
+  BEACON_TEST_REQUIRE(
+      !before_start
+           .receive(QuicPeerStreamRole::session,
+                    frame(authenticate("raw-ticket-idr-before-start")), 1'000)
+           .close_connection);
+  stream_v1::SessionStreamEnvelope premature;
+  premature.set_protocol_version(1);
+  premature.set_session_id("session-a");
+  premature.set_sequence(2);
+  premature.mutable_request_idr()->set_reason(
+      stream_v1::IDR_REQUEST_REASON_DATAGRAM_LOSS);
+  BEACON_TEST_REQUIRE(
+      before_start.receive(QuicPeerStreamRole::session, frame(premature), 1'000)
+          .close_connection);
+
+  AuthorizedQuicTicketStore unspecified_store;
+  BEACON_TEST_REQUIRE(
+      unspecified_store.authorize(grant("raw-ticket-idr-unspecified")));
+  QuicSessionProtocol unspecified(unspecified_store);
+  BEACON_TEST_REQUIRE(
+      !unspecified
+           .receive(QuicPeerStreamRole::session,
+                    frame(authenticate("raw-ticket-idr-unspecified")), 1'000)
+           .close_connection);
+  const auto started = unspecified.receive(QuicPeerStreamRole::session,
+                                           frame(start_session(2)), 1'000);
+  BEACON_TEST_REQUIRE(accepted_action<AcceptedStartSession>(started) !=
+                      nullptr);
+  stream_v1::SessionStreamEnvelope invalid;
+  invalid.set_protocol_version(1);
+  invalid.set_session_id("session-a");
+  invalid.set_sequence(3);
+  invalid.mutable_request_idr();
+  BEACON_TEST_REQUIRE(
+      unspecified.receive(QuicPeerStreamRole::session, frame(invalid), 1'000)
+          .close_connection);
 }
 
 void start_session_is_typed_once_per_authenticated_generation() {
@@ -296,24 +387,93 @@ void start_session_is_typed_once_per_authenticated_generation() {
   QuicSessionProtocol protocol(store);
   protocol.set_maximum_datagram_bytes(1232);
 
-  const auto auth = protocol.receive(
-      QuicPeerStreamRole::session, frame(authenticate("raw-ticket-start")),
-      1'000);
+  const auto auth =
+      protocol.receive(QuicPeerStreamRole::session,
+                       frame(authenticate("raw-ticket-start")), 1'000);
   const auto first = protocol.receive(QuicPeerStreamRole::session,
                                       frame(start_session(2)), 1'000);
   const auto duplicate = protocol.receive(QuicPeerStreamRole::session,
                                           frame(start_session(3)), 1'000);
 
   BEACON_TEST_REQUIRE(auth.accepted_authentication.has_value());
-  BEACON_TEST_REQUIRE(first.accepted_start_session.has_value());
+  const auto *accepted_start = accepted_action<AcceptedStartSession>(first);
+  BEACON_TEST_REQUIRE(accepted_start != nullptr);
+  BEACON_TEST_REQUIRE(accepted_start->session_generation == 1);
+  BEACON_TEST_REQUIRE(accepted_start->maximum_datagram_bytes == 1232);
+  BEACON_TEST_REQUIRE(accepted_start->start_session.SerializeAsString() ==
+                      start_session(2).start_session().SerializeAsString());
+  BEACON_TEST_REQUIRE(accepted_action<AcceptedStartSession>(duplicate) ==
+                      nullptr);
+}
+
+void stop_session_clears_active_state_before_another_idr_request() {
+  AuthorizedQuicTicketStore store;
+  BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-stop")));
+  QuicSessionProtocol protocol(store);
+  protocol.set_maximum_datagram_bytes(1232);
+  BEACON_TEST_REQUIRE(protocol
+                          .receive(QuicPeerStreamRole::session,
+                                   frame(authenticate("raw-ticket-stop")),
+                                   1'000)
+                          .accepted_authentication.has_value());
+  const auto started = protocol.receive(QuicPeerStreamRole::session,
+                                        frame(start_session(2)), 1'001);
+  BEACON_TEST_REQUIRE(accepted_action<AcceptedStartSession>(started) !=
+                      nullptr);
+
+  const auto stopped = protocol.receive(QuicPeerStreamRole::session,
+                                        frame(stop_session(3)), 1'002);
+  const auto *accepted_stop = accepted_action<AcceptedStopSession>(stopped);
+  BEACON_TEST_REQUIRE(accepted_stop != nullptr);
+  BEACON_TEST_REQUIRE(accepted_stop->session_generation == 1);
+  BEACON_TEST_REQUIRE(accepted_stop->stop_session.reason() ==
+                      stream_v1::SESSION_STOP_REASON_CLIENT_REQUEST);
+
+  stream_v1::SessionStreamEnvelope idr;
+  idr.set_protocol_version(1);
+  idr.set_session_id("session-a");
+  idr.set_sequence(4);
+  idr.mutable_request_idr()->set_reason(
+      stream_v1::IDR_REQUEST_REASON_DATAGRAM_LOSS);
   BEACON_TEST_REQUIRE(
-      first.accepted_start_session->session_generation == 1);
+      protocol.receive(QuicPeerStreamRole::session, frame(idr), 1'003)
+          .close_connection);
+}
+
+void coalesced_session_actions_preserve_protocol_order() {
+  AuthorizedQuicTicketStore store;
+  BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-coalesced")));
+  QuicSessionProtocol protocol(store);
+  protocol.set_maximum_datagram_bytes(1232);
+  BEACON_TEST_REQUIRE(protocol
+                          .receive(QuicPeerStreamRole::session,
+                                   frame(authenticate("raw-ticket-coalesced")),
+                                   1'000)
+                          .accepted_authentication.has_value());
+
+  auto bytes = frame(start_session(2));
+  const auto idr = frame(request_idr(3));
+  const auto stop = frame(stop_session(4));
+  bytes.insert(bytes.end(), idr.begin(), idr.end());
+  bytes.insert(bytes.end(), stop.begin(), stop.end());
+
+  const auto output =
+      protocol.receive(QuicPeerStreamRole::session, bytes, 1'001);
+
+  BEACON_TEST_REQUIRE(!output.close_connection);
+  BEACON_TEST_REQUIRE(output.accepted_session_actions.size() == 3);
   BEACON_TEST_REQUIRE(
-      first.accepted_start_session->maximum_datagram_bytes == 1232);
+      std::holds_alternative<
+          beacon::worker::QuicSessionProtocolOutput::AcceptedStartSession>(
+          output.accepted_session_actions[0]));
   BEACON_TEST_REQUIRE(
-      first.accepted_start_session->start_session.SerializeAsString() ==
-      start_session(2).start_session().SerializeAsString());
-  BEACON_TEST_REQUIRE(!duplicate.accepted_start_session.has_value());
+      std::holds_alternative<
+          beacon::worker::QuicSessionProtocolOutput::AcceptedIdrRequest>(
+          output.accepted_session_actions[1]));
+  BEACON_TEST_REQUIRE(
+      std::holds_alternative<
+          beacon::worker::QuicSessionProtocolOutput::AcceptedStopSession>(
+          output.accepted_session_actions[2]));
 }
 
 void benchmark_start_and_cancel_are_typed_for_the_authenticated_generation() {
@@ -324,33 +484,35 @@ void benchmark_start_and_cancel_are_typed_for_the_authenticated_generation() {
   QuicSessionProtocol protocol(store);
   protocol.set_maximum_datagram_bytes(1200);
 
-  auto authenticated = protocol.receive(
-      QuicPeerStreamRole::session, frame(authenticate("benchmark-ticket")),
-      1'000);
+  auto authenticated =
+      protocol.receive(QuicPeerStreamRole::session,
+                       frame(authenticate("benchmark-ticket")), 1'000);
   BEACON_TEST_REQUIRE(authenticated.accepted_authentication.has_value());
 
   auto started = protocol.receive(QuicPeerStreamRole::session,
                                   frame(start_benchmark(2)), 1'001);
   BEACON_TEST_REQUIRE(!started.close_connection);
-  BEACON_TEST_REQUIRE(started.accepted_start_benchmark.has_value());
-  BEACON_TEST_REQUIRE(started.accepted_start_benchmark->session_generation ==
-                      authenticated.accepted_authentication->session_generation);
-  BEACON_TEST_REQUIRE(started.accepted_start_benchmark->start_benchmark.run_id() ==
+  const auto *accepted_start = accepted_action<AcceptedStartBenchmark>(started);
+  BEACON_TEST_REQUIRE(accepted_start != nullptr);
+  BEACON_TEST_REQUIRE(
+      accepted_start->session_generation ==
+      authenticated.accepted_authentication->session_generation);
+  BEACON_TEST_REQUIRE(accepted_start->start_benchmark.run_id() ==
                       "11111111-1111-1111-1111-111111111111");
   BEACON_TEST_REQUIRE(
-      started.accepted_start_benchmark->start_benchmark.datagram_round()
-          .packet_count() == 8);
-  BEACON_TEST_REQUIRE(
-      started.accepted_start_benchmark->start_benchmark.run_token().size() ==
-      16);
+      accepted_start->start_benchmark.datagram_round().packet_count() == 8);
+  BEACON_TEST_REQUIRE(accepted_start->start_benchmark.run_token().size() == 16);
 
   auto canceled = protocol.receive(QuicPeerStreamRole::session,
                                    frame(cancel_benchmark(3)), 1'002);
   BEACON_TEST_REQUIRE(!canceled.close_connection);
-  BEACON_TEST_REQUIRE(canceled.accepted_cancel_benchmark.has_value());
-  BEACON_TEST_REQUIRE(canceled.accepted_cancel_benchmark->session_generation ==
-                      authenticated.accepted_authentication->session_generation);
-  BEACON_TEST_REQUIRE(canceled.accepted_cancel_benchmark->cancel_benchmark.run_id() ==
+  const auto *accepted_cancel =
+      accepted_action<AcceptedCancelBenchmark>(canceled);
+  BEACON_TEST_REQUIRE(accepted_cancel != nullptr);
+  BEACON_TEST_REQUIRE(
+      accepted_cancel->session_generation ==
+      authenticated.accepted_authentication->session_generation);
+  BEACON_TEST_REQUIRE(accepted_cancel->cancel_benchmark.run_id() ==
                       "11111111-1111-1111-1111-111111111111");
 }
 
@@ -361,20 +523,21 @@ void benchmark_start_must_match_the_worker_authorized_plan() {
   BEACON_TEST_REQUIRE(store.authorize(std::move(authorization)));
   QuicSessionProtocol protocol(store);
   protocol.set_maximum_datagram_bytes(1200);
-  BEACON_TEST_REQUIRE(protocol
-                          .receive(QuicPeerStreamRole::session,
-                                   frame(authenticate("modified-benchmark-ticket")),
-                                   1'000)
-                          .accepted_authentication.has_value());
+  BEACON_TEST_REQUIRE(
+      protocol
+          .receive(QuicPeerStreamRole::session,
+                   frame(authenticate("modified-benchmark-ticket")), 1'000)
+          .accepted_authentication.has_value());
 
   auto modified = start_benchmark(2);
   modified.mutable_start_benchmark()
       ->mutable_datagram_round()
       ->set_packet_count(9);
-  auto rejected = protocol.receive(QuicPeerStreamRole::session,
-                                   frame(modified), 1'001);
+  auto rejected =
+      protocol.receive(QuicPeerStreamRole::session, frame(modified), 1'001);
   BEACON_TEST_REQUIRE(rejected.close_connection);
-  BEACON_TEST_REQUIRE(!rejected.accepted_start_benchmark.has_value());
+  BEACON_TEST_REQUIRE(accepted_action<AcceptedStartBenchmark>(rejected) ==
+                      nullptr);
 }
 
 void reset_and_fresh_authentication_allocate_a_new_generation() {
@@ -384,14 +547,14 @@ void reset_and_fresh_authentication_allocate_a_new_generation() {
   QuicSessionProtocol protocol(store);
   protocol.set_maximum_datagram_bytes(1232);
 
-  const auto first = protocol.receive(
-      QuicPeerStreamRole::session,
-      frame(authenticate("raw-ticket-generation-a")), 1'000);
+  const auto first =
+      protocol.receive(QuicPeerStreamRole::session,
+                       frame(authenticate("raw-ticket-generation-a")), 1'000);
   protocol.reset();
   protocol.set_maximum_datagram_bytes(1232);
-  const auto second = protocol.receive(
-      QuicPeerStreamRole::session,
-      frame(authenticate("raw-ticket-generation-b")), 1'000);
+  const auto second =
+      protocol.receive(QuicPeerStreamRole::session,
+                       frame(authenticate("raw-ticket-generation-b")), 1'000);
 
   BEACON_TEST_REQUIRE(first.accepted_authentication->session_generation == 1);
   BEACON_TEST_REQUIRE(second.accepted_authentication->session_generation == 2);
@@ -422,8 +585,10 @@ void stale_old_connection_receive_does_not_touch_current_protocol_state() {
   stale_input.set_protocol_version(1);
   stale_input.set_session_id("session-a");
   stale_input.set_sequence(99);
-  stale_input.mutable_input_batch()->add_events()->mutable_keyboard()->set_scan_code(
-      31);
+  stale_input.mutable_input_batch()
+      ->add_events()
+      ->mutable_keyboard()
+      ->set_scan_code(31);
   const auto stale = protocol.receive(10, QuicPeerStreamRole::input,
                                       frame(stale_input), 1'000);
 
@@ -445,10 +610,10 @@ void secure_clear_observes_zeroes_before_pending_bytes_are_released() {
   const auto observer = [](std::span<const std::byte> bytes,
                            void *context) noexcept {
     auto &was_observed = *static_cast<bool *>(context);
-    was_observed = !bytes.empty() &&
-                   std::ranges::all_of(bytes, [](std::byte value) {
-                     return value == std::byte{};
-                   });
+    was_observed =
+        !bytes.empty() && std::ranges::all_of(bytes, [](std::byte value) {
+          return value == std::byte{};
+        });
   };
 
   beacon::worker::secure_clear_bytes(pending, observer, &observed);
@@ -470,9 +635,9 @@ void observe_protocol_wipe(std::span<const std::byte> bytes,
   }
   ++observation.nonempty_wipes;
   observation.all_zero =
-      observation.all_zero &&
-      std::ranges::all_of(bytes,
-                          [](std::byte value) { return value == std::byte{}; });
+      observation.all_zero && std::ranges::all_of(bytes, [](std::byte value) {
+        return value == std::byte{};
+      });
 }
 
 void oversized_partial_authentication_is_wiped_before_buffer_reuse() {
@@ -486,8 +651,7 @@ void oversized_partial_authentication_is_wiped_before_buffer_reuse() {
            .close_connection);
 
   const std::vector oversized(
-      static_cast<std::size_t>(
-          beacon::worker::maximum_stream_message_bytes) +
+      static_cast<std::size_t>(beacon::worker::maximum_stream_message_bytes) +
           5U,
       std::byte{0x33});
   BEACON_TEST_REQUIRE(
@@ -548,7 +712,10 @@ int main() {
     fragmented_authentication_consumes_ticket_and_returns_negotiated_limit();
     replay_and_version_mismatch_return_typed_rejections();
     authenticated_streams_are_routed_independently();
+    idr_requests_require_an_active_media_session_and_typed_reason();
     start_session_is_typed_once_per_authenticated_generation();
+    stop_session_clears_active_state_before_another_idr_request();
+    coalesced_session_actions_preserve_protocol_order();
     benchmark_start_and_cancel_are_typed_for_the_authenticated_generation();
     benchmark_start_must_match_the_worker_authorized_plan();
     reset_and_fresh_authentication_allocate_a_new_generation();

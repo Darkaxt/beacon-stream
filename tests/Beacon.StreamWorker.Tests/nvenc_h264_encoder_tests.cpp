@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -391,6 +392,27 @@ void timestamp_and_forced_idr_rules_are_enforced() {
   BEACON_TEST_REQUIRE(forced->has_pps);
   BEACON_TEST_REQUIRE(trace->submits[2].force_idr);
   BEACON_TEST_REQUIRE(trace->submits[2].output_parameter_sets);
+}
+
+void encode_and_reconfigure_are_owned_by_one_media_thread() {
+  auto trace = std::make_shared<FakeTrace>();
+  auto api = std::make_unique<FakeApi>(trace);
+  NvencH264Encoder encoder{std::move(api), plan()};
+  BEACON_TEST_REQUIRE(encoder.encode(frame()).has_value());
+  bool cross_thread_result = true;
+
+  std::thread other([&encoder, &cross_thread_result] {
+    cross_thread_result = encoder.reconfigure_bitrate(20'000'000);
+  });
+  other.join();
+
+  BEACON_TEST_REQUIRE(!cross_thread_result);
+  BEACON_TEST_REQUIRE(encoder.failure() ==
+                      NvencH264Failure::thread_ownership_violation);
+  BEACON_TEST_REQUIRE(trace->bitrates.empty());
+  BEACON_TEST_REQUIRE(encoder.reconfigure_bitrate(20'000'000));
+  BEACON_TEST_REQUIRE(trace->bitrates ==
+                      std::vector<std::uint32_t>{20'000'000});
 }
 
 void texture_registrations_are_released_after_each_frame() {
@@ -789,6 +811,7 @@ int main() {
     poisoned_native_open_is_not_retried();
     first_frame_opens_the_fixed_contract_and_emits_parameterized_idr();
     timestamp_and_forced_idr_rules_are_enforced();
+    encode_and_reconfigure_are_owned_by_one_media_thread();
     texture_registrations_are_released_after_each_frame();
     bitrate_reconfiguration_is_session_bound_and_typed();
     submit_failures_release_unaccepted_input();

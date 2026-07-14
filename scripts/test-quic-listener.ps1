@@ -55,7 +55,7 @@ try {
     $output = & $probe $identityPath $fingerprint $retryIdentityPath
     $probeExitCode = $LASTEXITCODE
     if ($probeExitCode -ne 0 -or
-        $output -notmatch '^BEACON_QUIC_LOOPBACK_OK 3 CERT_PIN_OK ALPN_VERSION_OK REPLAY_RECONNECT_OK CALLBACK_FAULTS_OK DISCONNECT_FAULTS_OK$') {
+        $output -notmatch '^BEACON_QUIC_LOOPBACK_OK 6 CERT_PIN_OK ALPN_VERSION_OK REPLAY_RECONNECT_OK MEDIA_RECOVERY_EVENTS_OK ORDERED_SESSION_ACTIONS_OK CALLBACK_FAULTS_OK DISCONNECT_FAULTS_OK$') {
         throw "Beacon QUIC listener probe failed with exit code ${probeExitCode}: $output"
     }
     Write-Host $output
