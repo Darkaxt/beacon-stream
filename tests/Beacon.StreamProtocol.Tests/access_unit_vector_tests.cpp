@@ -84,11 +84,8 @@ void malformed_containers_fail_with_typed_errors() {
                       AccessUnitVectorError::trailing_bytes);
 }
 
-void checked_in_640x360_vector_contains_thirty_complete_units() {
-  const auto path = std::filesystem::path{BEACON_REPOSITORY_ROOT} /
-                    "src/Beacon.Android/app/src/main/assets/benchmark-vectors/"
-                    "beacon-h264-high-8-640x360-30-v1.bau";
-
+void checked_in_640x360_vector_contains_thirty_complete_units(
+    const std::filesystem::path &path) {
   const auto loaded = load_access_unit_vector(path);
 
   BEACON_TEST_REQUIRE(loaded.error == AccessUnitVectorError::none);
@@ -99,10 +96,19 @@ void checked_in_640x360_vector_contains_thirty_complete_units() {
 
 } // namespace
 
-int main() {
-  return beacon::stream::testing::run_tests([] {
+int main(int argc, char **argv) {
+  if (argc > 2) {
+    return 64;
+  }
+  const auto vector_path = argc == 2
+                               ? std::filesystem::path{argv[1]}
+                               : std::filesystem::path{BEACON_REPOSITORY_ROOT} /
+                                     "src/Beacon.Android/app/src/main/assets/"
+                                     "benchmark-vectors/"
+                                     "beacon-h264-high-8-640x360-30-v1.bau";
+  return beacon::stream::testing::run_tests([&] {
     complete_units_parse_with_little_endian_lengths();
     malformed_containers_fail_with_typed_errors();
-    checked_in_640x360_vector_contains_thirty_complete_units();
+    checked_in_640x360_vector_contains_thirty_complete_units(vector_path);
   });
 }
