@@ -100,6 +100,54 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public async Task HostedWorkerConfigurationReplacesOnlyBenchmarkRuntimeAndAuthorization()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            $"beacon-hosted-worker-registration-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        string identityPath = Path.Combine(directory, "identity.pfx");
+        IConfiguration configuration = CreateConfiguration(
+            new KeyValuePair<string, string?>(
+                HostedBenchmarkWorkerOptions.ExecutablePathConfigurationKey,
+                typeof(TestHostProgram).Assembly.Location),
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.SecurityIdentityPathConfigurationKey,
+                identityPath),
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.SecurityTestHostConfigurationKey,
+                bool.TrueString));
+
+        try
+        {
+            var services = new ServiceCollection();
+            services.AddBeaconServices(
+                configuration,
+                environmentClientProfilesPath: null,
+                environmentStreamWorkerPath: null,
+                environmentBenchmarkEvidencePath: null);
+            services.UseBeaconFakeRuntime(configuration);
+            await using ServiceProvider provider = BuildServiceProvider(services);
+
+            Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+            Assert.IsType<HostedBenchmarkWorkerProcessHost>(provider.GetRequiredService<IStreamWorkerHost>());
+            Assert.IsType<StreamWorkerStreamingBackend>(provider.GetRequiredService<IBenchmarkRuntime>());
+            Assert.IsType<StreamWorkerSessionAuthorizer>(provider.GetRequiredService<IStreamSessionAuthorizer>());
+            Assert.Same(
+                provider.GetRequiredService<IBenchmarkRuntime>(),
+                provider.GetRequiredService<IStreamWorkerRuntimeEvents>());
+            Assert.Contains(provider.GetServices<IHostedService>(), service => service is StreamWorkerEventRelay);
+            Assert.Single(provider.GetServices<IStreamingBackend>());
+            Assert.IsType<HostedBenchmarkWorkerOptions>(
+                provider.GetRequiredService<HostedBenchmarkWorkerOptions>());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task LegacyModeConfigurationCannotReplaceProductionBoundaries()
     {
         await using ServiceProvider provider = BuildProvider(

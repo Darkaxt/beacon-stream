@@ -86,25 +86,26 @@ authorizer while retaining fake host side effects and fake non-benchmark streami
 - Create: `tests/Beacon.Server.TestHost/HostedBenchmarkWorkerOptions.cs`
 - Create: `tests/Beacon.Server.TestHost/HostedBenchmarkWorkerProcessHost.cs`
 - Create: `tests/Beacon.Server.TestHost/ReadWriteDuplexStream.cs`
+- Create: `tests/Beacon.Server.TestHost/FakeHostedBenchmarkWorkerProgram.cs`
 - Modify: `tests/Beacon.Server.TestHost/BeaconTestRuntimeServices.cs`
 - Modify: `tests/Beacon.Server.TestHost/Program.cs`
 - Test: `tests/Beacon.Server.Tests/HostedBenchmarkWorkerOptionsTests.cs`
 - Test: `tests/Beacon.Server.Tests/HostedBenchmarkWorkerProcessHostTests.cs`
 - Test: `tests/Beacon.Server.Tests/BeaconServiceRegistrationTests.cs`
 
-- [ ] Write failing tests for missing/executable/identity options, duplex stream directionality,
+- [x] Write failing tests for missing/executable/identity options, duplex stream directionality,
   handshake, command correlation, event publication, process generation, child exit, graceful
   shutdown, and disposal after a broken control channel.
-- [ ] Implement a lazy process owner with redirected binary stdin/stdout and bounded stderr
+- [x] Implement a lazy process owner with redirected binary stdin/stdout and bounded stderr
   diagnostics. Reuse `StreamWorkerNamedPipeClient` for framing and protocol validation.
-- [ ] Configure TestHost so the hosted path replaces only fake benchmark runtime and ticket
+- [x] Configure TestHost so the hosted path replaces only fake benchmark runtime and ticket
   authorization. Keep `FakeStreamingBackend` for non-benchmark sessions.
-- [ ] Register `StreamWorkerStreamingBackend` as `IBenchmarkRuntime` and
+- [x] Register `StreamWorkerStreamingBackend` as `IBenchmarkRuntime` and
   `StreamWorkerSessionAuthorizer` as `IStreamSessionAuthorizer`.
-- [ ] Add process-level integration tests using a deterministic fake Worker child without sleeps,
+- [x] Add process-level integration tests using a deterministic fake Worker child without sleeps,
   polling, fixed ports, or product timeouts.
-- [ ] Run focused managed tests, format, warning-as-error build, and the complete managed suite.
-- [ ] Commit and push the TestHost ownership slice.
+- [x] Run focused managed tests, format, warning-as-error build, and the complete managed suite.
+- [x] Commit and push the TestHost ownership slice.
 
 ### Task 5: Build Hosted Emulator Benchmark Acceptance
 

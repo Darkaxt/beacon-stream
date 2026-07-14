@@ -8,6 +8,7 @@ using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.Benchmarks;
 using Beacon.Server.Hosting;
+using Beacon.Server.Security;
 using Beacon.Server.State;
 using Beacon.Server.Streaming;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -16,7 +17,9 @@ namespace Beacon.Server.TestHost;
 
 public static class BeaconTestRuntimeServices
 {
-    public static IServiceCollection UseBeaconFakeRuntime(this IServiceCollection services)
+    public static IServiceCollection UseBeaconFakeRuntime(
+        this IServiceCollection services,
+        IConfiguration? configuration = null)
     {
         RemoveWorkerRelay(services);
         services.RemoveAll<BeaconHostOptions>();
@@ -82,7 +85,39 @@ public static class BeaconTestRuntimeServices
                     Installed: true,
                     new GameProcessHints(null, null))
             ]));
+
+        string? hostedWorkerPath = configuration?[HostedBenchmarkWorkerOptions.ExecutablePathConfigurationKey];
+        if (!string.IsNullOrWhiteSpace(hostedWorkerPath))
+        {
+            UseHostedBenchmarkWorker(services, hostedWorkerPath);
+        }
         return services;
+    }
+
+    private static void UseHostedBenchmarkWorker(
+        IServiceCollection services,
+        string executablePath)
+    {
+        services.RemoveAll<IStreamWorkerHost>();
+        services.RemoveAll<IStreamWorkerRuntimeEvents>();
+        services.RemoveAll<IStreamSessionAuthorizer>();
+        services.RemoveAll<IBenchmarkRuntime>();
+        services.RemoveAll<FakeBenchmarkRuntime>();
+
+        services.AddSingleton(sp => HostedBenchmarkWorkerOptions.Create(
+            executablePath,
+            sp.GetRequiredService<BeaconServerIdentity>().IdentityPath));
+        services.AddSingleton<HostedBenchmarkWorkerProcessHost>();
+        services.AddSingleton<IStreamWorkerHost>(sp =>
+            sp.GetRequiredService<HostedBenchmarkWorkerProcessHost>());
+        services.AddSingleton<StreamWorkerStreamingBackend>(sp =>
+            new StreamWorkerStreamingBackend(sp.GetRequiredService<IStreamWorkerHost>()));
+        services.AddSingleton<IBenchmarkRuntime>(sp =>
+            sp.GetRequiredService<StreamWorkerStreamingBackend>());
+        services.AddSingleton<IStreamWorkerRuntimeEvents>(sp =>
+            sp.GetRequiredService<StreamWorkerStreamingBackend>());
+        services.AddSingleton<IStreamSessionAuthorizer, StreamWorkerSessionAuthorizer>();
+        services.AddHostedService<StreamWorkerEventRelay>();
     }
 
     private static void RemoveWorkerRelay(IServiceCollection services)

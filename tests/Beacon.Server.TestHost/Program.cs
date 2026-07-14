@@ -9,6 +9,12 @@ public static class TestHostProgram
 {
     public static void Main(string[] args)
     {
+        if (FakeHostedBenchmarkWorkerProgram.IsInvocation(args))
+        {
+            Environment.ExitCode = FakeHostedBenchmarkWorkerProgram.Run(args);
+            return;
+        }
+
         WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
         builder.Services.ConfigureHttpJsonOptions(options =>
@@ -17,7 +23,7 @@ public static class TestHostProgram
         });
 
         builder.Services.AddBeaconServices(builder.Configuration);
-        builder.Services.UseBeaconFakeRuntime();
+        builder.Services.UseBeaconFakeRuntime(builder.Configuration);
         builder.WebHost.ConfigureKestrel(options =>
             options.ConfigureHttpsDefaults(https =>
                 https.ServerCertificate = options.ApplicationServices

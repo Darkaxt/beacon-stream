@@ -11,4 +11,8 @@
     <ProjectReference Include="..\Beacon.Testing\Beacon.Testing.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Beacon.Server.Tests" />
+  </ItemGroup>
+
 </Project>
