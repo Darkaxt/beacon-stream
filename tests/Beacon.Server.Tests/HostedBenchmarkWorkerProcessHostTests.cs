@@ -119,6 +119,23 @@ public sealed class HostedBenchmarkWorkerProcessHostTests
     }
 
     [Fact]
+    public async Task CleanExitCanWinTheExplicitShutdownCompletionRace()
+    {
+        using var fixture = HostedWorkerFixture.Create("clean-exit-on-shutdown");
+        await using var host = fixture.CreateHost();
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        int processId = host.ProcessId;
+
+        await host.ShutdownAsync(CancellationToken.None);
+
+        Assert.False(host.IsReady);
+        Assert.Equal(0, host.ProcessId);
+        Assert.Contains("BEACON_FAKE_HOSTED_WORKER_STOPPED", host.Diagnostics);
+        AssertProcessExited(processId);
+    }
+
+    [Fact]
     public async Task ChildExitFailsCommandAndPublishesGenerationExit()
     {
         using var fixture = HostedWorkerFixture.Create("exit-on-command");

@@ -290,6 +290,7 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
 
         Exception? failure = null;
         bool force = false;
+        bool cleanExitMayHaveWonCompletion = false;
         if (!active.Process.HasExited)
         {
             if (active.Client?.IsReady == true)
@@ -318,6 +319,14 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
                 {
                     throw;
                 }
+                catch (StreamWorkerProcessExitedException error) when (error.ExitCode == 0)
+                {
+                    cleanExitMayHaveWonCompletion = true;
+                }
+                catch (EndOfStreamException)
+                {
+                    cleanExitMayHaveWonCompletion = true;
+                }
                 catch (Exception error)
                 {
                     failure = error;
@@ -331,6 +340,14 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
         }
 
         await ReleaseWorkerAsync(active, force).ConfigureAwait(false);
+        if (cleanExitMayHaveWonCompletion)
+        {
+            int exitCode = await active.ProcessExit.ConfigureAwait(false);
+            if (exitCode != 0)
+            {
+                failure = new StreamWorkerProcessExitedException(exitCode);
+            }
+        }
         if (failure is not null)
         {
             throw failure;

@@ -85,6 +85,12 @@ internal static class FakeHostedBenchmarkWorkerProgram
                 _ = await input.ReadAsync(waitForParentClosure).ConfigureAwait(false);
                 return 24;
             }
+            if (string.Equals(mode, "clean-exit-on-shutdown", StringComparison.Ordinal)
+                && request.BodyCase == WorkerIpcEnvelope.BodyOneofCase.ShutdownWorker)
+            {
+                Console.Error.WriteLine("BEACON_FAKE_HOSTED_WORKER_STOPPED");
+                return 0;
+            }
 
             await WriteAsync(output, Completion(request)).ConfigureAwait(false);
             if (request.BodyCase == WorkerIpcEnvelope.BodyOneofCase.ShutdownWorker)
