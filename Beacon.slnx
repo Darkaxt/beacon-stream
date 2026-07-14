@@ -17,6 +17,8 @@
     <Project Path="tests/Beacon.GameProbe.Tests/Beacon.GameProbe.Tests.csproj" />
     <Project Path="tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj" />
     <Project Path="tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj" />
+    <Project Path="tests/Beacon.Server.TestHost/Beacon.Server.TestHost.csproj" />
     <Project Path="tests/Beacon.StreamWorker.Contracts.Tests/Beacon.StreamWorker.Contracts.Tests.csproj" />
+    <Project Path="tests/Beacon.Testing/Beacon.Testing.csproj" />
   </Folder>
 </Solution>

@@ -11,7 +11,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Beacon.Server.Tests;
 
-public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
+public sealed class AdminApiTests(BeaconServerTestFactory factory) : IClassFixture<BeaconServerTestFactory>
 {
     [Fact]
     public async Task SnapshotReturnsClientsGamesAndSessions()

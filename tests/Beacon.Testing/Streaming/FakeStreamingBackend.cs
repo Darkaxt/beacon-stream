@@ -39,12 +39,16 @@ public sealed class FakeStreamingBackend : IStreamingBackend
             ActiveSessions: sessions.Count,
             Diagnostics: []));
 
-    public Task<StreamingPreflightResult> CheckReadinessAsync(SessionPlan plan, CancellationToken cancellationToken) =>
+    public Task<StreamingPreflightResult> CheckReadinessAsync(
+        SessionPlan plan,
+        CancellationToken cancellationToken) =>
         Task.FromResult(string.IsNullOrWhiteSpace(NextPreflightError)
             ? StreamingPreflightResult.Ok()
             : StreamingPreflightResult.Fail(NextPreflightError));
 
-    public Task<StreamingStartResult> StartAsync(SessionPlan plan, CancellationToken cancellationToken)
+    public Task<StreamingStartResult> StartAsync(
+        SessionPlan plan,
+        CancellationToken cancellationToken)
     {
         StartCalls.Add(plan.SessionId);
 
@@ -65,8 +69,8 @@ public sealed class FakeStreamingBackend : IStreamingBackend
             plan.Stream.InitialBitrateMbps,
             State: "running",
             Error: null,
-            ActiveListenerPort: ActiveListenerPort,
-            RuntimeGeneration: CreateRuntimeGeneration());
+            ActiveListenerPort,
+            CreateRuntimeGeneration());
 
         sessions[plan.SessionId] = session;
         return Task.FromResult(StreamingStartResult.Ok(session));
@@ -96,7 +100,8 @@ public sealed class FakeStreamingBackend : IStreamingBackend
 
         if (!sessions.TryGetValue(sessionId, out StreamingSessionState? session))
         {
-            return Task.FromResult(StreamingStopResult.Fail($"Stream session '{sessionId}' is not running."));
+            return Task.FromResult(StreamingStopResult.Fail(
+                $"Stream session '{sessionId}' is not running."));
         }
         if (expectedGeneration.HasValue
             && session.RuntimeGeneration != expectedGeneration.Value)
@@ -105,7 +110,11 @@ public sealed class FakeStreamingBackend : IStreamingBackend
                 $"Stream session '{sessionId}' runtime generation changed before compensation."));
         }
 
-        StreamingSessionState stopped = session with { State = "stopped", ActiveListenerPort = null };
+        StreamingSessionState stopped = session with
+        {
+            State = "stopped",
+            ActiveListenerPort = null
+        };
         if (!sessions.TryUpdate(sessionId, stopped, session))
         {
             return Task.FromResult(StreamingStopResult.Fail(
@@ -114,7 +123,9 @@ public sealed class FakeStreamingBackend : IStreamingBackend
         return Task.FromResult(StreamingStopResult.Ok(stopped));
     }
 
-    public Task<StreamingSessionState?> GetSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+    public Task<StreamingSessionState?> GetSessionAsync(
+        string sessionId,
+        CancellationToken cancellationToken) =>
         Task.FromResult(sessions.GetValueOrDefault(sessionId));
 
     public IReadOnlyList<StreamingSessionState> GetSessions() =>

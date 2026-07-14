@@ -40,26 +40,31 @@ Use `restore-physical` before `remove` when recovering from an active virtual-pr
 
 `restore-physical` uses the verified backend path, not the raw one-shot API call. The command can fail even after Windows accepts the DisplayConfig apply if the follow-up topology query still shows a virtual primary or no physical primary.
 
-## Server Host Mode
+## Server Composition
 
-Beacon Server defaults to fake host mode, which is safe for deterministic local tests and does not call the Windows display driver:
-
-```powershell
-dotnet run --project src\Beacon.Server
-```
-
-Real Windows host composition must be selected explicitly:
+Beacon Server has one production composition:
 
 ```powershell
-$env:BEACON_HOST_MODE='windows'
-dotnet run --project src\Beacon.Server
+dotnet run --project src\Beacon.Server -- --urls https://127.0.0.1:5001
 ```
 
-In Windows host mode, the server registers `WindowsDisplayBackend`, `WindowsGameLauncher`, and `WindowsSessionActivityInspector`. The media boundary is `UnavailableStreamingBackend` until Beacon StreamWorker is implemented, so launch preflight fails before virtual-display or application side effects instead of fabricating a stream. `/admin/snapshot` exposes `host.mode` and the active boundary names so the composition is visible before testing.
+It always registers `WindowsDisplayBackend`, `WindowsGameLauncher`,
+`WindowsSessionActivityInspector`, `WindowsClientInputSink`, `WindowsRecoveryBackend`,
+and `StreamWorkerStreamingBackend`. `/admin/snapshot` exposes the active boundary names.
+There is no host or streaming mode selector.
+
+Deterministic API and fake-client tests run a separate test-only executable:
+
+```powershell
+dotnet run --project tests\Beacon.Server.TestHost -- --urls http://127.0.0.1:5000 --Beacon:Security:TestHost=true
+```
+
+The fake runtime and seeded fixtures are compiled only from `tests/`; they cannot be
+selected in the shipped server.
 
 ## Manual Recovery Actions
 
-Windows host mode also registers `WindowsRecoveryBackend` for explicit local-admin recovery. These endpoints are manual actions:
+The production server registers `WindowsRecoveryBackend` for explicit local-admin recovery. These endpoints are manual actions:
 
 ```powershell
 curl.exe -X POST http://localhost:5000/admin/recovery/restore-physical

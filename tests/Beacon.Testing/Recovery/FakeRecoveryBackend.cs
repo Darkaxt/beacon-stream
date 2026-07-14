@@ -17,7 +17,9 @@ public sealed class FakeRecoveryBackend : IRecoveryBackend
     public RecoveryActionResult TerminateVirtualProcessesResult { get; set; } =
         RecoveryActionResult.Ok("terminate-virtual-processes", 0, ["fake recovery backend"]);
 
-    public Task<RecoveryActionResult> MoveWindowsBackAsync(bool minimize, CancellationToken cancellationToken)
+    public Task<RecoveryActionResult> MoveWindowsBackAsync(
+        bool minimize,
+        CancellationToken cancellationToken)
     {
         MoveWindowsBackCalls.Add(minimize);
         return Task.FromResult(MoveWindowsBackResult);

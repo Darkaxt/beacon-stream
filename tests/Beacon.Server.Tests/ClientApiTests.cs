@@ -20,7 +20,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Beacon.Server.Tests;
 
-public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
+public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixture<BeaconServerTestFactory>
 {
     [Fact]
     public async Task AdminSnapshotRendersWorkerEvidenceAsSanitizedMetadata()

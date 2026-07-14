@@ -22,6 +22,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Beacon.Server\Beacon.Server.csproj" />
     <ProjectReference Include="..\..\src\Beacon.FakeEndpoint\Beacon.FakeEndpoint.csproj" />
+    <ProjectReference Include="..\Beacon.Server.TestHost\Beacon.Server.TestHost.csproj" />
+    <ProjectReference Include="..\Beacon.Testing\Beacon.Testing.csproj" />
   </ItemGroup>
 
 </Project>

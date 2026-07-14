@@ -194,6 +194,71 @@ public sealed class ArchitectureRecoveryBoundaryTests
     }
 
     [Fact]
+    public void ProductionCompositionHasOneWindowsWorkerRuntime()
+    {
+        string root = FindRepositoryRoot();
+        string registration = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.Server/Hosting/BeaconServiceRegistration.cs"));
+        string settings = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.Server/appsettings.json"));
+        string developmentSettings = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.Server/appsettings.Development.json"));
+
+        Assert.False(File.Exists(ToPlatformPath(
+            root,
+            "src/Beacon.Server/Hosting/BeaconStreamingMode.cs")));
+        Assert.DoesNotContain("StreamingMode", registration, StringComparison.Ordinal);
+        Assert.DoesNotContain("HostModeConfigurationKey", registration, StringComparison.Ordinal);
+        Assert.DoesNotContain("HostModeEnvironmentVariable", registration, StringComparison.Ordinal);
+        Assert.DoesNotContain("FakeStreamingBackend", registration, StringComparison.Ordinal);
+        Assert.DoesNotContain("AddFakeHostBoundaries", registration, StringComparison.Ordinal);
+        Assert.DoesNotContain("NoOpClientInputSink", registration, StringComparison.Ordinal);
+        Assert.DoesNotContain("StaticGameLibraryProvider", registration, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Dispatch\"", registration, StringComparison.Ordinal);
+        Assert.DoesNotContain("HostMode", settings, StringComparison.Ordinal);
+        Assert.DoesNotContain("StreamingMode", settings, StringComparison.Ordinal);
+        Assert.DoesNotContain("HostMode", developmentSettings, StringComparison.Ordinal);
+        Assert.DoesNotContain("StreamingMode", developmentSettings, StringComparison.Ordinal);
+        Assert.Contains("AddWindowsHostBoundaries", registration, StringComparison.Ordinal);
+        Assert.Contains("StreamWorkerStreamingBackend", registration, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TestDoublesAreNotCompiledIntoProductionProjects()
+    {
+        string root = FindRepositoryRoot();
+        string[] productionTestDoubleFiles =
+        [
+            "src/Beacon.Core/Benchmarks/FakeBenchmarkRuntime.cs",
+            "src/Beacon.Core/Displays/FakeDisplayBackend.cs",
+            "src/Beacon.Core/Games/FakeGameLauncher.cs",
+            "src/Beacon.Core/Recovery/FakeRecoveryBackend.cs",
+            "src/Beacon.Core/Sessions/FakeSessionActivityInspector.cs",
+            "src/Beacon.Core/Streaming/FakeStreamingBackend.cs"
+        ];
+
+        Assert.All(productionTestDoubleFiles, relative =>
+            Assert.False(File.Exists(ToPlatformPath(root, relative)), relative));
+
+        string input = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.Core/Input/ClientInput.cs"));
+        string authorization = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.Core/Streaming/IStreamSessionAuthorizer.cs"));
+        string hostOptions = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.Server/Hosting/BeaconHostOptions.cs"));
+
+        Assert.DoesNotContain("NoOpClientInputSink", input, StringComparison.Ordinal);
+        Assert.DoesNotContain("FakeStreamSessionAuthorizer", authorization, StringComparison.Ordinal);
+        Assert.DoesNotContain("Fake", hostOptions, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CompatibilityGuardUsesOneTrackedDefinitionManifest()
     {
         string root = FindRepositoryRoot();

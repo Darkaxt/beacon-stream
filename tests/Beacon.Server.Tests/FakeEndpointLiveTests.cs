@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Beacon.FakeEndpoint;
+using Beacon.Server.TestHost;
 
 namespace Beacon.Server.Tests;
 
@@ -79,7 +80,7 @@ public sealed class FakeEndpointLiveTests
         public Uri Address { get; }
 
         public static Task<BeaconServerProcess> StartAsync(string stateDirectory) =>
-            StartAsync(stateDirectory, typeof(Program).Assembly.Location);
+            StartAsync(stateDirectory, typeof(TestHostMarker).Assembly.Location);
 
         public static async Task<BeaconServerProcess> StartAsync(
             string stateDirectory,
@@ -100,8 +101,6 @@ public sealed class FakeEndpointLiveTests
             startInfo.ArgumentList.Add(serverAssembly);
             startInfo.ArgumentList.Add("--urls");
             startInfo.ArgumentList.Add("http://127.0.0.1:0");
-            startInfo.ArgumentList.Add("--Beacon:HostMode=fake");
-            startInfo.ArgumentList.Add("--Beacon:StreamingMode=fake");
             startInfo.ArgumentList.Add("--Beacon:Security:TestHost=true");
             startInfo.ArgumentList.Add(
                 $"--Beacon:Security:IdentityPath={Path.Combine(stateDirectory, "identity.pfx")}");

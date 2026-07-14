@@ -1,7 +1,8 @@
 using Beacon.Core.Benchmarks;
 using Beacon.Core.Clients;
+using Beacon.Server.State;
 
-namespace Beacon.Server.State;
+namespace Beacon.Server.TestHost;
 
 internal static class FakeBenchmarkEvidence
 {

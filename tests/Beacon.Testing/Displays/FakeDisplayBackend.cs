@@ -93,12 +93,19 @@ public sealed class FakeDisplayBackend : IDisplayBackend
         return Task.FromResult(NextRestoreResult);
     }
 
-    public Task<DisplayRemoveResult> RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken)
+    public Task<DisplayRemoveResult> RemoveVirtualDisplayAsync(
+        string displayId,
+        CancellationToken cancellationToken)
     {
         RemoveCalls.Add(displayId);
         return Task.FromResult(NextRemoveResult);
     }
 
-    private static string FormatCall(string displayId, int width, int height, int refreshHz, HdrPreference hdrPreference) =>
+    private static string FormatCall(
+        string displayId,
+        int width,
+        int height,
+        int refreshHz,
+        HdrPreference hdrPreference) =>
         $"{displayId}:{width}x{height}@{refreshHz}:hdr={hdrPreference}";
 }

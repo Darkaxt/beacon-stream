@@ -1,6 +1,7 @@
 namespace Beacon.Core.Games;
 
-public sealed class StaticGameLibraryProvider(string name, IReadOnlyList<GameDescriptor> games) : IGameLibraryProvider
+public sealed class StaticGameLibraryProvider(string name, IReadOnlyList<GameDescriptor> games)
+    : IGameLibraryProvider
 {
     public string Name { get; } = name;
 

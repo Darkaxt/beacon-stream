@@ -12,7 +12,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Beacon.Server.Tests;
 
-public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
+public sealed class BenchmarkApiTests(BeaconServerTestFactory factory) : IClassFixture<BeaconServerTestFactory>
 {
     [Fact]
     public async Task NewRunReturnsBenchmarkConnectionGrantWithoutVideoMode()

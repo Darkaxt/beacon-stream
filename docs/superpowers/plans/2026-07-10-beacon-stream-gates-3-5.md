@@ -566,6 +566,15 @@ tests. The complete local matrix passes 527 managed tests, 23 native tests, Clie
 Playwright, Android static builds, and the real H.264 Worker process proof. Evidence:
 `docs/validation/2026-07-14-runtime-authorization-and-worker-capability.md`.
 
+Production-composition evidence (2026-07-14): the shipped Server now has exactly one
+Windows plus StreamWorker composition. Runtime host/streaming selectors, fake appsettings,
+production-compiled test doubles, no-op input, seeded benchmark evidence, and the hard-coded
+Dispatch catalog were removed. Deterministic API/process simulation now belongs to dedicated
+projects under `tests/`, while Server and GameProbe share real Steam/Heroic/Hydra/manual
+discovery. The complete managed, Client Lab, Playwright, native Worker, process integration,
+Android static, and architecture-gate matrix passes. Evidence:
+`docs/validation/2026-07-14-single-production-composition.md`.
+
 ## Deferred Until Gate 5 Passes
 
 Create separate audited plans, in this order, for:

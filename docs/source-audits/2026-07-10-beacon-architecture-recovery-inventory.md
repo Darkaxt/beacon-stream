@@ -119,7 +119,7 @@ Windows host mode must fail closed with an explicit architecture-recovery backen
 - WPF formatting and models for those fields.
 - tests that require these removed fields.
 
-Launch, stop, ownership, display, and recovery behavior remain. During recovery, a Windows launch fails stream preflight explicitly until StreamWorker is implemented; fake-host integration tests continue through the protocol-neutral fake backend.
+Launch, stop, ownership, display, and recovery behavior remain. Production now always uses the Beacon StreamWorker; protocol-neutral deterministic doubles and the process-level fake server are compiled only from dedicated projects under `tests/`.
 
 ## Delete: Android Compatibility Paths
 

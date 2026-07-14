@@ -64,23 +64,26 @@ The streaming boundary has one production route and one test implementation:
 
 ## Server
 
-Start deterministic fake host mode on the endpoint expected by the simulators:
+Start the production Windows server:
 
 ```powershell
-$env:ASPNETCORE_URLS='http://127.0.0.1:5000'
-dotnet run --project src\Beacon.Server
+dotnet run --project src\Beacon.Server -- --urls https://127.0.0.1:5001
 ```
 
-Start real Windows host composition:
+The shipped server has one composition: Windows display, launcher, activity,
+input, recovery, installed-game discovery, and Beacon StreamWorker. There is no
+host or streaming mode selector and no fake backend in production projects.
+
+Start the deterministic test-only server used by process-level simulators:
 
 ```powershell
-$env:ASPNETCORE_URLS='http://127.0.0.1:5000'
-$env:BEACON_HOST_MODE='windows'
-dotnet run --project src\Beacon.Server
+dotnet run --project tests\Beacon.Server.TestHost -- --urls http://127.0.0.1:5000 --Beacon:Security:TestHost=true
 ```
 
-Windows mode exercises the real display, launcher, activity, input, recovery, and
-StreamWorker boundaries. Real encoded video is intentionally unavailable until Gate 5.
+The test host and all deterministic doubles are compiled only from `tests/`.
+Production video availability is reported by the identity-bound Worker capability
+handshake; unsupported capture or encoder hardware fails explicitly while network
+benchmarking remains available.
 
 Optional profile and benchmark-evidence persistence:
 
