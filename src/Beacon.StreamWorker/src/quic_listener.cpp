@@ -6,14 +6,17 @@
 #include "beacon/worker/benchmark_source.h"
 #include "beacon/worker/worker_events.h"
 
+#if defined(_WIN32)
 #include <Windows.h>
 #include <ncrypt.h>
 #include <wincrypt.h>
+#endif
 
 #include <msquic.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -56,7 +59,7 @@ std::vector<std::byte> frame_session_message(const Message &message) {
 
 class QuicListener::Impl {
 public:
-  Impl(std::wstring identity_path,
+  Impl(std::filesystem::path identity_path,
        AuthorizedQuicTicketStore &authorized_tickets,
        QuicListenerFaultInjector fault_injector)
       : identity_path_(std::move(identity_path)), protocol_(authorized_tickets),
@@ -265,65 +268,72 @@ public:
   stream::TransportSendResult
   send_for_generation(stream::TransportPacket packet,
                       std::uint64_t session_generation,
-                      bool benchmark = false) {
-    if (packet.channel != stream::StreamChannel::media ||
-        packet.payload.empty()) {
-      return stream::TransportSendResult::connection_closed;
-    }
-
-    std::uint64_t presentation_time_us = 0;
-    if (!benchmark) {
-      const auto media = stream::parse_media_datagram(packet.payload);
-      if (media.error != stream::MediaDatagramError::none ||
-          media.header.sequence != packet.sequence) {
-        return stream::TransportSendResult::connection_closed;
-      }
-      presentation_time_us = media.header.presentation_time_us;
-    }
-
+                      bool benchmark = false) noexcept {
     HQUIC connection = nullptr;
-    std::uint64_t connection_generation = 0;
-    {
-      std::lock_guard lock{mutex_};
-      if (connection_ == nullptr || closing_ || !protocol_.authenticated() ||
-          !transport_state_.datagram_send_enabled() ||
-          session_generation == 0 ||
-          session_generation != current_generation_ ||
-          packet.payload.size() > transport_state_.maximum_datagram_bytes()) {
+    try {
+      if (packet.channel != stream::StreamChannel::media ||
+          packet.payload.empty()) {
         return stream::TransportSendResult::connection_closed;
       }
-      connection = connection_;
-      connection_generation = current_connection_generation_;
-      ++active_api_calls_;
-    }
-    ActiveApiCallGuard active_call{this};
 
-    const auto datagram_bytes =
-        static_cast<std::uint32_t>(packet.payload.size());
-    const auto sequence = packet.sequence;
-    inject_fault(QuicListenerFaultPoint::datagram_context_allocation);
-    auto *context = new DatagramSendContext(
-        std::move(packet.payload), sequence, session_generation,
-        connection_generation, live_datagram_send_contexts_, benchmark);
-    const auto status = api_->DatagramSend(connection, &context->buffer, 1,
-                                           QUIC_SEND_FLAG_NONE, context);
-    {
-      std::lock_guard lock{mutex_};
-      if (!benchmark && QUIC_SUCCEEDED(status) && connection_ == connection &&
-          current_connection_generation_ == connection_generation &&
-          session_generation == current_generation_) {
-        append_pending_event(make_media_evidence_event(
-            current_session_id_, session_generation, sequence,
-            presentation_time_us, datagram_bytes));
+      std::uint64_t presentation_time_us = 0;
+      if (!benchmark) {
+        const auto media = stream::parse_media_datagram(packet.payload);
+        if (media.error != stream::MediaDatagramError::none ||
+            media.header.sequence != packet.sequence) {
+          return stream::TransportSendResult::connection_closed;
+        }
+        presentation_time_us = media.header.presentation_time_us;
       }
-    }
-    active_call.release();
-    if (QUIC_FAILED(status)) {
-      delete context;
+
+      std::uint64_t connection_generation = 0;
+      {
+        std::lock_guard lock{mutex_};
+        if (connection_ == nullptr || closing_ || !protocol_.authenticated() ||
+            !transport_state_.datagram_send_enabled() ||
+            session_generation == 0 ||
+            session_generation != current_generation_ ||
+            packet.payload.size() >
+                transport_state_.maximum_datagram_bytes()) {
+          return stream::TransportSendResult::connection_closed;
+        }
+        connection = connection_;
+        connection_generation = current_connection_generation_;
+        ++active_api_calls_;
+      }
+      ActiveApiCallGuard active_call{this};
+
+      const auto datagram_bytes =
+          static_cast<std::uint32_t>(packet.payload.size());
+      const auto sequence = packet.sequence;
+      inject_fault(QuicListenerFaultPoint::datagram_context_allocation);
+      auto *context = new DatagramSendContext(
+          std::move(packet.payload), sequence, session_generation,
+          connection_generation, live_datagram_send_contexts_, benchmark);
+      const auto status = api_->DatagramSend(connection, &context->buffer, 1,
+                                             QUIC_SEND_FLAG_NONE, context);
+      {
+        std::lock_guard lock{mutex_};
+        if (!benchmark && QUIC_SUCCEEDED(status) &&
+            connection_ == connection &&
+            current_connection_generation_ == connection_generation &&
+            session_generation == current_generation_) {
+          append_pending_event(make_media_evidence_event(
+              current_session_id_, session_generation, sequence,
+              presentation_time_us, datagram_bytes));
+        }
+      }
+      active_call.release();
+      if (QUIC_FAILED(status)) {
+        delete context;
+        return stream::TransportSendResult::connection_closed;
+      }
+      drain_pending_events();
+      return stream::TransportSendResult::accepted;
+    } catch (...) {
+      record_callback_exception(connection, connection != nullptr);
       return stream::TransportSendResult::connection_closed;
     }
-    drain_pending_events();
-    return stream::TransportSendResult::accepted;
   }
 
   void shutdown() noexcept {
@@ -357,6 +367,7 @@ private:
       api_ = nullptr;
     }
     delete_imported_key();
+#if defined(_WIN32)
     if (certificate_ != nullptr) {
       CertFreeCertificateContext(certificate_);
       certificate_ = nullptr;
@@ -365,6 +376,8 @@ private:
       CertCloseStore(certificate_store_, 0);
       certificate_store_ = nullptr;
     }
+#endif
+    stream::secure_clear_bytes(identity_bytes_);
   }
 
   struct DatagramSendContext {
@@ -929,9 +942,17 @@ private:
       return false;
     }
     QUIC_CREDENTIAL_CONFIG credentials{};
+#if defined(_WIN32)
     credentials.Type = QUIC_CREDENTIAL_TYPE_CERTIFICATE_CONTEXT;
     credentials.CertificateContext = reinterpret_cast<QUIC_CERTIFICATE *>(
         const_cast<CERT_CONTEXT *>(certificate_));
+#else
+    QUIC_CERTIFICATE_PKCS12 pkcs12{
+        reinterpret_cast<const std::uint8_t *>(identity_bytes_.data()),
+        static_cast<std::uint32_t>(identity_bytes_.size()), nullptr};
+    credentials.Type = QUIC_CREDENTIAL_TYPE_CERTIFICATE_PKCS12;
+    credentials.CertificatePkcs12 = &pkcs12;
+#endif
     const auto credential_status =
         api_->ConfigurationLoadCredential(configuration_, &credentials);
     if (QUIC_FAILED(credential_status)) {
@@ -948,27 +969,32 @@ private:
   bool load_identity() {
     std::ifstream input(identity_path_, std::ios::binary | std::ios::ate);
     if (!input) {
-      set_failure(QuicListenerFailure::identity_open, GetLastError());
+      set_failure(QuicListenerFailure::identity_open, identity_io_error());
       return false;
     }
     const auto end = input.tellg();
     if (end <= 0 || static_cast<std::uint64_t>(end) > kMaximumIdentityBytes) {
-      set_failure(QuicListenerFailure::identity_open, ERROR_INVALID_DATA);
+      set_failure(QuicListenerFailure::identity_open,
+                  invalid_identity_error());
       return false;
     }
-    std::vector<std::uint8_t> pfx(static_cast<std::size_t>(end));
+    stream::secure_clear_bytes(identity_bytes_);
+    identity_bytes_.resize(static_cast<std::size_t>(end));
     input.seekg(0, std::ios::beg);
-    if (!input.read(reinterpret_cast<char *>(pfx.data()),
-                    static_cast<std::streamsize>(pfx.size()))) {
-      SecureZeroMemory(pfx.data(), pfx.size());
-      set_failure(QuicListenerFailure::identity_open, ERROR_READ_FAULT);
+    if (!input.read(reinterpret_cast<char *>(identity_bytes_.data()),
+                    static_cast<std::streamsize>(identity_bytes_.size()))) {
+      stream::secure_clear_bytes(identity_bytes_);
+      set_failure(QuicListenerFailure::identity_open, identity_read_error());
       return false;
     }
 
-    CRYPT_DATA_BLOB blob{static_cast<DWORD>(pfx.size()), pfx.data()};
+#if defined(_WIN32)
+    CRYPT_DATA_BLOB blob{
+        static_cast<DWORD>(identity_bytes_.size()),
+        reinterpret_cast<BYTE *>(identity_bytes_.data())};
     certificate_store_ = PFXImportCertStore(
         &blob, L"", CRYPT_USER_KEYSET | PKCS12_PREFER_CNG_KSP);
-    SecureZeroMemory(pfx.data(), pfx.size());
+    stream::secure_clear_bytes(identity_bytes_);
     if (certificate_store_ == nullptr) {
       set_failure(QuicListenerFailure::identity_import, GetLastError());
       return false;
@@ -1009,10 +1035,12 @@ private:
     key_provider_name_ = provider_info->pwszProvName == nullptr
                              ? MS_KEY_STORAGE_PROVIDER
                              : provider_info->pwszProvName;
+#endif
     return true;
   }
 
   void delete_imported_key() noexcept {
+#if defined(_WIN32)
     if (key_container_name_.empty()) {
       return;
     }
@@ -1031,6 +1059,32 @@ private:
       }
     }
     NCryptFreeObject(provider);
+#endif
+  }
+
+  static std::uint64_t identity_io_error() noexcept {
+#if defined(_WIN32)
+    return ERROR_FILE_NOT_FOUND;
+#else
+    return errno == 0 ? static_cast<std::uint64_t>(ENOENT)
+                      : static_cast<std::uint64_t>(errno);
+#endif
+  }
+
+  static constexpr std::uint64_t invalid_identity_error() noexcept {
+#if defined(_WIN32)
+    return ERROR_INVALID_DATA;
+#else
+    return EINVAL;
+#endif
+  }
+
+  static constexpr std::uint64_t identity_read_error() noexcept {
+#if defined(_WIN32)
+    return ERROR_READ_FAULT;
+#else
+    return EIO;
+#endif
   }
 
   static std::uint64_t status_code(QUIC_STATUS status) noexcept {
@@ -1504,7 +1558,8 @@ private:
     }
   }
 
-  std::wstring identity_path_;
+  std::filesystem::path identity_path_;
+  std::vector<std::byte> identity_bytes_;
   stream::ServerSessionProtocol protocol_;
   QuicListenerFaultInjector fault_injector_;
   BenchmarkSource benchmark_source_;
@@ -1521,10 +1576,12 @@ private:
   HQUIC listener_{};
   HQUIC connection_{};
   HQUIC session_stream_{};
+#if defined(_WIN32)
   HCERTSTORE certificate_store_{};
   PCCERT_CONTEXT certificate_{};
   std::wstring key_container_name_;
   std::wstring key_provider_name_;
+#endif
   QUIC_ADDR listen_address_{};
   stream::MsQuicTransportState transport_state_;
   QuicListenerMetrics metrics_;
@@ -1554,7 +1611,7 @@ private:
   std::uint64_t platform_error_{};
 };
 
-QuicListener::QuicListener(std::wstring identity_path,
+QuicListener::QuicListener(std::filesystem::path identity_path,
                            AuthorizedQuicTicketStore &authorized_tickets,
                            QuicListenerFaultInjector fault_injector)
     : impl_(std::make_unique<Impl>(std::move(identity_path), authorized_tickets,
@@ -1630,7 +1687,7 @@ void QuicListener::request_active_disconnect() noexcept {
 
 stream::TransportSendResult
 QuicListener::send_for_generation(stream::TransportPacket packet,
-                                  std::uint64_t session_generation) {
+                                  std::uint64_t session_generation) noexcept {
   return impl_->send_for_generation(std::move(packet), session_generation);
 }
 

@@ -39,6 +39,7 @@ else()
     BeaconStreamWorkerPortableCore
     PRIVATE -Wall -Wextra -Wpedantic -Werror
   )
+  target_link_libraries(BeaconStreamWorkerPortableCore PRIVATE OpenSSL)
 endif()
 add_library(
   Beacon::StreamWorkerPortableCore

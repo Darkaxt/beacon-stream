@@ -263,6 +263,8 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::authorize_ticket(
           .session_id = request.session_id(),
           .plan_revision = ticket.plan_revision(),
           .expires_at_unix_ms = ticket.expires_at_unix_ms(),
+          .selected_video = std::nullopt,
+          .benchmark_plan = std::nullopt,
       };
   if (benchmark_prepared_) {
     authorization.benchmark_plan = benchmark_plan_;

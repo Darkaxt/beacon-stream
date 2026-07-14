@@ -49,15 +49,15 @@ authorizer while retaining fake host side effects and fake non-benchmark streami
 - Test: `tests/Beacon.StreamWorker.Tests/quic_listener_probe.cpp`
 - Test: `tests/Beacon.Core.Tests/Architecture/ArchitectureRecoveryBoundaryTests.cs`
 
-- [ ] Add failing shape tests for a filesystem-path identity contract, platform-guarded Windows
+- [x] Add failing shape tests for a filesystem-path identity contract, platform-guarded Windows
   certificate imports, non-Windows PKCS#12 credentials, bounded identity bytes, and secure clear.
-- [ ] Change the listener identity parameter to `std::filesystem::path` without changing the
+- [x] Change the listener identity parameter to `std::filesystem::path` without changing the
   Windows command line or identity file format.
-- [ ] Retain Schannel context import/key cleanup under `_WIN32`; use MsQuic's in-memory PKCS#12
+- [x] Retain Schannel context import/key cleanup under `_WIN32`; use MsQuic's in-memory PKCS#12
   credential on quictls hosts.
-- [ ] Keep identity bytes alive through configuration lifetime and securely clear them on release.
-- [ ] Run the listener probe, native suite, warning-as-error build, and protected-route scan.
-- [ ] Commit and push the portable-listener slice.
+- [x] Keep identity bytes alive through configuration lifetime and securely clear them on release.
+- [x] Run the listener probe, native suite, warning-as-error build, and protected-route scan.
+- [x] Commit and push the portable-listener slice.
 
 ### Task 3: Add The Typed Hosted Benchmark Worker
 

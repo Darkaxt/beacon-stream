@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -103,7 +104,7 @@ public:
   using EventSink = std::function<void(v1::WorkerIpcEnvelope)>;
   using MediaEventSink = std::function<void(QuicMediaEvent)>;
 
-  QuicListener(std::wstring identity_path,
+  QuicListener(std::filesystem::path identity_path,
                AuthorizedQuicTicketStore &authorized_tickets,
                QuicListenerFaultInjector fault_injector = {});
   ~QuicListener() override;
@@ -132,7 +133,7 @@ public:
   void request_active_disconnect() noexcept override;
   [[nodiscard]] stream::TransportSendResult
   send_for_generation(stream::TransportPacket packet,
-                      std::uint64_t session_generation) override;
+                      std::uint64_t session_generation) noexcept override;
   void shutdown() noexcept override;
 
 private:

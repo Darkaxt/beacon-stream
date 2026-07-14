@@ -490,6 +490,36 @@ public sealed class ArchitectureRecoveryBoundaryTests
     }
 
     [Fact]
+    public void QuicListenerUsesOnePortablePkcs12IdentityContract()
+    {
+        string root = FindRepositoryRoot();
+        string header = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.StreamWorker/include/beacon/worker/quic_listener.h"));
+        string source = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.StreamWorker/src/quic_listener.cpp"));
+
+        Assert.Contains("#include <filesystem>", header, StringComparison.Ordinal);
+        Assert.Contains("std::filesystem::path identity_path", header, StringComparison.Ordinal);
+        Assert.Contains("#if defined(_WIN32)", source, StringComparison.Ordinal);
+        Assert.Contains("QUIC_CREDENTIAL_TYPE_CERTIFICATE_CONTEXT", source, StringComparison.Ordinal);
+        Assert.Contains("QUIC_CREDENTIAL_TYPE_CERTIFICATE_PKCS12", source, StringComparison.Ordinal);
+        Assert.Contains("credentials.CertificatePkcs12", source, StringComparison.Ordinal);
+        Assert.Contains("stream::secure_clear_bytes(identity_bytes_)", source, StringComparison.Ordinal);
+        Assert.Contains("std::filesystem::path identity_path_", source, StringComparison.Ordinal);
+
+        int windowsIncludes = source.IndexOf("#include <Windows.h>", StringComparison.Ordinal);
+        int windowsGuard = source.LastIndexOf(
+            "#if defined(_WIN32)",
+            windowsIncludes,
+            StringComparison.Ordinal);
+        int windowsGuardEnd = source.IndexOf("#endif", windowsIncludes, StringComparison.Ordinal);
+        Assert.True(windowsGuard >= 0 && windowsGuard < windowsIncludes);
+        Assert.True(windowsGuardEnd > windowsIncludes);
+    }
+
+    [Fact]
     public void ProductionWorkerCallbacksDoNotCaptureShorterLivedObjectsByReference()
     {
         string root = FindRepositoryRoot();

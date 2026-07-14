@@ -1,7 +1,11 @@
 #include "beacon/worker/quic_ticket_store.h"
 
+#if defined(_WIN32)
 #include <Windows.h>
 #include <bcrypt.h>
+#else
+#include <openssl/sha.h>
+#endif
 
 #include <algorithm>
 #include <limits>
@@ -24,9 +28,17 @@ bool hashes_equal(const TicketHash &left,
   return difference == 0;
 }
 
+stream::StreamTicketAuthorization authorization_failure(
+    stream::StreamTicketAuthorizationResult result) {
+  return {.result = result,
+          .selected_video = std::nullopt,
+          .benchmark_plan = std::nullopt};
+}
+
 } // namespace
 
 TicketHash hash_stream_ticket(std::span<const std::byte> ticket) {
+#if defined(_WIN32)
   if (ticket.size() > std::numeric_limits<ULONG>::max()) {
     throw std::length_error("Stream ticket exceeds the CNG input limit.");
   }
@@ -49,6 +61,15 @@ TicketHash hash_stream_ticket(std::span<const std::byte> ticket) {
     throw std::runtime_error("Could not hash the stream ticket.");
   }
   return result;
+#else
+  TicketHash result{};
+  if (SHA256(reinterpret_cast<const unsigned char *>(ticket.data()),
+             ticket.size(),
+             reinterpret_cast<unsigned char *>(result.data())) == nullptr) {
+    throw std::runtime_error("Could not hash the stream ticket.");
+  }
+  return result;
+#endif
 }
 
 bool AuthorizedQuicTicketStore::authorize(AuthorizedQuicTicket ticket) {
@@ -88,25 +109,28 @@ stream::StreamTicketAuthorization AuthorizedQuicTicketStore::authorize(
         return hashes_equal(record.ticket.hash, hash);
       });
   if (found == records_.end()) {
-    return {.result = stream::StreamTicketAuthorizationResult::unknown};
+    return authorization_failure(
+        stream::StreamTicketAuthorizationResult::unknown);
   }
   if (found->consumed) {
-    return {.result = stream::StreamTicketAuthorizationResult::replayed};
+    return authorization_failure(
+        stream::StreamTicketAuthorizationResult::replayed);
   }
   if (found->ticket.client_id != client_id) {
-    return {.result =
-                stream::StreamTicketAuthorizationResult::client_mismatch};
+    return authorization_failure(
+        stream::StreamTicketAuthorizationResult::client_mismatch);
   }
   if (found->ticket.session_id != session_id) {
-    return {.result =
-                stream::StreamTicketAuthorizationResult::session_mismatch};
+    return authorization_failure(
+        stream::StreamTicketAuthorizationResult::session_mismatch);
   }
   if (found->ticket.plan_revision != plan_revision) {
-    return {.result =
-                stream::StreamTicketAuthorizationResult::plan_mismatch};
+    return authorization_failure(
+        stream::StreamTicketAuthorizationResult::plan_mismatch);
   }
   if (now_unix_ms > found->ticket.expires_at_unix_ms) {
-    return {.result = stream::StreamTicketAuthorizationResult::expired};
+    return authorization_failure(
+        stream::StreamTicketAuthorizationResult::expired);
   }
 
   found->consumed = true;
