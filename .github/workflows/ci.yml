@@ -71,6 +71,7 @@ jobs:
           script: |
             bash scripts/test-native-android-protocol.sh
             gradle -p src/Beacon.Android connectedDebugAndroidTest
+            bash scripts/test-hosted-emulator-stream.sh
 
   native-windows:
     runs-on: windows-latest

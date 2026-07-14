@@ -358,13 +358,13 @@ git push origin codex/beacon-production-benchmarks
 - Create: `docs/validation/2026-07-14-hosted-emulator-stream.md`
 - Modify: `docs/superpowers/plans/2026-07-10-beacon-stream-gates-3-5.md`
 
-- [ ] **Step 1: Add a failing shell fixture validation**
+- [x] **Step 1: Add a failing shell fixture validation**
 
 Make the script reject a missing endpoint binary, MsQuic library, H.264 vector, `openssl`, or
 `adb`. Run it outside an emulator and confirm it fails before any file push with a specific
 missing-device diagnostic.
 
-- [ ] **Step 2: Implement event-driven emulator orchestration**
+- [x] **Step 2: Implement event-driven emulator orchestration**
 
 Generate an ephemeral localhost certificate/key with `openssl`, calculate the SHA-256 SPKI pin,
 push the endpoint, `libmsquic.so`, certificate, key, and 640x360 vector under
@@ -380,7 +380,7 @@ final evidence, wait for its process exit, require every expected marker, and re
 test files in a shell trap. Do not use polling loops, readiness sleeps, or timeout-based process
 termination.
 
-- [ ] **Step 3: Wire the script after device-local instrumentation**
+- [x] **Step 3: Wire the script after device-local instrumentation**
 
 Update the emulator action script to run:
 
@@ -394,7 +394,7 @@ script: |
 The endpoint target and instrumentation test remain test artifacts. Verify the release APK does
 not contain endpoint symbols, certificate files, private keys, or BAU fixture path metadata.
 
-- [ ] **Step 4: Run the complete local static matrix**
+- [x] **Step 4: Run the complete local static matrix**
 
 Run:
 
