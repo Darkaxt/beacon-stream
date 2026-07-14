@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -50,6 +52,7 @@ struct FakeTrace {
   NvencH264Configuration configuration{};
   std::vector<NvencH264Submit> submits;
   std::vector<std::uint32_t> bitrates;
+  void* poisoned_texture{};
 };
 
 class FakeApi final : public INvencH264Api {
@@ -68,7 +71,11 @@ class FakeApi final : public INvencH264Api {
   NvencH264Failure unmap_result{NvencH264Failure::none};
   NvencH264Failure unregister_result{NvencH264Failure::none};
   NvencH264Failure reconfigure_result{NvencH264Failure::none};
+  NvencH264Failure destroy_bitstream_result{NvencH264Failure::none};
+  NvencH264Failure destroy_session_result{NvencH264Failure::none};
   bool omit_parameter_sets{};
+  bool mapped_handle_on_failure{};
+  std::optional<std::size_t> locked_size_override;
 
   [[nodiscard]] void* device_identity(
       const D3d11Texture&) noexcept override {
@@ -103,7 +110,8 @@ class FakeApi final : public INvencH264Api {
   [[nodiscard]] NvencH264ApiHandleResult map_input(
       std::uintptr_t registered) noexcept override {
     trace_->calls.emplace_back("map");
-    return {.handle = map_result == NvencH264Failure::none
+    return {.handle = map_result == NvencH264Failure::none ||
+                              mapped_handle_on_failure
                           ? registered + 100U
                           : 0U,
             .failure = map_result};
@@ -130,13 +138,15 @@ class FakeApi final : public INvencH264Api {
                              0, 0, 0, 1, 0x67, 0x64, 0, 0, 0, 1,
                              0x68, 0xee, 0, 0, 1, 0x65, 0xaa};
       return {.bitstream = {.data = idr_bytes_.data(),
-                            .size = idr_bytes_.size(),
+                            .size = locked_size_override.value_or(
+                                idr_bytes_.size()),
                             .qpc_timestamp = submit.qpc_timestamp},
               .failure = NvencH264Failure::none};
     }
     p_bytes_ = {0, 0, 1, 0x61, 0xbb};
     return {.bitstream = {.data = p_bytes_.data(),
-                          .size = p_bytes_.size(),
+                          .size = locked_size_override.value_or(
+                              p_bytes_.size()),
                           .qpc_timestamp = submit.qpc_timestamp},
             .failure = NvencH264Failure::none};
   }
@@ -169,12 +179,18 @@ class FakeApi final : public INvencH264Api {
   [[nodiscard]] NvencH264Failure destroy_bitstream(
       std::uintptr_t) noexcept override {
     trace_->calls.emplace_back("destroy_bitstream");
-    return NvencH264Failure::none;
+    return destroy_bitstream_result;
   }
 
   [[nodiscard]] NvencH264Failure destroy_session() noexcept override {
     trace_->calls.emplace_back("destroy_session");
-    return NvencH264Failure::none;
+    return destroy_session_result;
+  }
+
+  void poison_session(const D3d11Texture* texture) noexcept override {
+    trace_->calls.emplace_back("poison_session");
+    trace_->poisoned_texture =
+        texture == nullptr ? nullptr : texture->native_texture();
   }
 
   void unload() noexcept override { trace_->calls.emplace_back("unload"); }
@@ -213,6 +229,20 @@ std::size_t call_index(const std::vector<std::string>& calls,
                 calls.end(), value);
   BEACON_TEST_REQUIRE(found != calls.end());
   return static_cast<std::size_t>(std::distance(calls.begin(), found));
+}
+
+void require_poisoned_encoder_is_not_reused(
+    NvencH264Encoder& encoder, const std::shared_ptr<FakeTrace>& trace,
+    std::int64_t timestamp) {
+  const auto calls_before_retry = trace->calls.size();
+  BEACON_TEST_REQUIRE(!encoder.encode(frame(0x2000, timestamp)).has_value());
+  BEACON_TEST_REQUIRE(encoder.failure() ==
+                      NvencH264Failure::session_poisoned);
+  BEACON_TEST_REQUIRE(trace->calls.size() == calls_before_retry);
+  BEACON_TEST_REQUIRE(!encoder.reconfigure_bitrate(20'000'000));
+  BEACON_TEST_REQUIRE(encoder.failure() ==
+                      NvencH264Failure::session_poisoned);
+  BEACON_TEST_REQUIRE(trace->calls.size() == calls_before_retry);
 }
 
 void native_contract_is_fixed_for_sdr_low_latency_h264() {
@@ -285,6 +315,24 @@ void invalid_input_fails_before_native_api_calls() {
   BEACON_TEST_REQUIRE(!encoder.encode(invalid).has_value());
   BEACON_TEST_REQUIRE(encoder.failure() == NvencH264Failure::invalid_frame);
   BEACON_TEST_REQUIRE(trace->calls.empty());
+}
+
+void poisoned_native_open_is_not_retried() {
+  auto trace = std::make_shared<FakeTrace>();
+  auto api = std::make_unique<FakeApi>(trace);
+  api->open_result = NvencH264Failure::session_poisoned;
+  NvencH264Encoder encoder{std::move(api), plan()};
+
+  BEACON_TEST_REQUIRE(!encoder.encode(frame()).has_value());
+  BEACON_TEST_REQUIRE(encoder.failure() ==
+                      NvencH264Failure::session_poisoned);
+  BEACON_TEST_REQUIRE(std::count(trace->calls.begin(), trace->calls.end(),
+                                 "open") == 1);
+  const auto calls_before_retry = trace->calls.size();
+  BEACON_TEST_REQUIRE(!encoder.encode(frame(0x2000, 101)).has_value());
+  BEACON_TEST_REQUIRE(encoder.failure() ==
+                      NvencH264Failure::session_poisoned);
+  BEACON_TEST_REQUIRE(trace->calls.size() == calls_before_retry);
 }
 
 void first_frame_opens_the_fixed_contract_and_emits_parameterized_idr() {
@@ -392,7 +440,7 @@ void bitrate_reconfiguration_is_session_bound_and_typed() {
                       NvencH264Failure::reconfigure_failed);
 }
 
-void encode_failures_release_mapped_and_locked_resources() {
+void submit_failures_release_unaccepted_input() {
   auto trace = std::make_shared<FakeTrace>();
   auto api = std::make_unique<FakeApi>(trace);
   auto* observed = api.get();
@@ -405,18 +453,201 @@ void encode_failures_release_mapped_and_locked_resources() {
   const auto unmap = call_index(trace->calls, "unmap", submit + 1);
   BEACON_TEST_REQUIRE(submit < unmap);
   BEACON_TEST_REQUIRE(std::find(trace->calls.begin(), trace->calls.end(),
-                                "lock") == trace->calls.end());
+                                 "lock") == trace->calls.end());
+}
 
-  observed->submit_result = NvencH264Failure::none;
-  observed->unlock_result = NvencH264Failure::bitstream_unlock_failed;
-  BEACON_TEST_REQUIRE(!encoder.encode(frame(0x2000, 101)).has_value());
+void failed_map_cleanup_poisons_the_registered_input() {
+  auto trace = std::make_shared<FakeTrace>();
+  auto api = std::make_unique<FakeApi>(trace);
+  api->map_result = NvencH264Failure::input_mapping_failed;
+  api->unregister_result = NvencH264Failure::input_unregistration_failed;
+  NvencH264Encoder encoder{std::move(api), plan()};
+
+  BEACON_TEST_REQUIRE(!encoder.encode(frame()).has_value());
+  BEACON_TEST_REQUIRE(encoder.failure() ==
+                      NvencH264Failure::input_unregistration_failed);
+  const auto map = call_index(trace->calls, "map");
+  const auto unregister = call_index(trace->calls, "unregister", map + 1);
+  const auto poison =
+      call_index(trace->calls, "poison_session", unregister + 1);
+  BEACON_TEST_REQUIRE(map < unregister);
+  BEACON_TEST_REQUIRE(unregister < poison);
+  BEACON_TEST_REQUIRE(trace->poisoned_texture ==
+                      reinterpret_cast<void*>(0x2000));
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin(), trace->calls.end(),
+                                "submit") == trace->calls.end());
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin(), trace->calls.end(),
+                                "destroy_session") == trace->calls.end());
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin(), trace->calls.end(),
+                                "unload") == trace->calls.end());
+  require_poisoned_encoder_is_not_reused(encoder, trace, 101);
+}
+
+void failed_map_with_live_handle_is_not_unregistered() {
+  auto trace = std::make_shared<FakeTrace>();
+  auto api = std::make_unique<FakeApi>(trace);
+  api->map_result = NvencH264Failure::input_unmapping_failed;
+  api->mapped_handle_on_failure = true;
+  NvencH264Encoder encoder{std::move(api), plan()};
+
+  BEACON_TEST_REQUIRE(!encoder.encode(frame()).has_value());
+  BEACON_TEST_REQUIRE(encoder.failure() ==
+                      NvencH264Failure::input_unmapping_failed);
+  const auto map = call_index(trace->calls, "map");
+  const auto poison = call_index(trace->calls, "poison_session", map + 1);
+  BEACON_TEST_REQUIRE(map < poison);
+  BEACON_TEST_REQUIRE(trace->poisoned_texture ==
+                      reinterpret_cast<void*>(0x2000));
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + map,
+                                trace->calls.end(), "unregister") ==
+                      trace->calls.end());
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + map,
+                                trace->calls.end(), "submit") ==
+                      trace->calls.end());
+  require_poisoned_encoder_is_not_reused(encoder, trace, 101);
+}
+
+void lock_failure_poisons_without_releasing_in_flight_input() {
+  auto trace = std::make_shared<FakeTrace>();
+  auto api = std::make_unique<FakeApi>(trace);
+  api->lock_result = NvencH264Failure::bitstream_lock_failed;
+  NvencH264Encoder encoder{std::move(api), plan()};
+
+  BEACON_TEST_REQUIRE(!encoder.encode(frame()).has_value());
+  BEACON_TEST_REQUIRE(encoder.failure() ==
+                      NvencH264Failure::bitstream_lock_failed);
+  const auto lock = call_index(trace->calls, "lock");
+  const auto poison = call_index(trace->calls, "poison_session", lock + 1);
+  BEACON_TEST_REQUIRE(lock < poison);
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + lock,
+                                trace->calls.end(), "unmap") ==
+                      trace->calls.end());
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + lock,
+                                trace->calls.end(), "unregister") ==
+                      trace->calls.end());
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + lock,
+                                trace->calls.end(), "destroy_bitstream") ==
+                      trace->calls.end());
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + lock,
+                                trace->calls.end(), "destroy_session") ==
+                      trace->calls.end());
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + lock,
+                                trace->calls.end(), "unload") ==
+                      trace->calls.end());
+  require_poisoned_encoder_is_not_reused(encoder, trace, 101);
+}
+
+void unlock_failure_poisons_without_releasing_locked_input() {
+  auto trace = std::make_shared<FakeTrace>();
+  auto api = std::make_unique<FakeApi>(trace);
+  api->unlock_result = NvencH264Failure::bitstream_unlock_failed;
+  NvencH264Encoder encoder{std::move(api), plan()};
+
+  BEACON_TEST_REQUIRE(!encoder.encode(frame()).has_value());
   BEACON_TEST_REQUIRE(encoder.failure() ==
                       NvencH264Failure::bitstream_unlock_failed);
   const auto lock = call_index(trace->calls, "lock");
   const auto unlock = call_index(trace->calls, "unlock", lock + 1);
-  const auto final_unmap = call_index(trace->calls, "unmap", unlock + 1);
+  const auto poison = call_index(trace->calls, "poison_session", unlock + 1);
   BEACON_TEST_REQUIRE(lock < unlock);
-  BEACON_TEST_REQUIRE(unlock < final_unmap);
+  BEACON_TEST_REQUIRE(unlock < poison);
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + unlock,
+                                trace->calls.end(), "unmap") ==
+                      trace->calls.end());
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + unlock,
+                                trace->calls.end(), "unregister") ==
+                      trace->calls.end());
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + unlock,
+                                trace->calls.end(), "destroy_bitstream") ==
+                      trace->calls.end());
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + unlock,
+                                trace->calls.end(), "destroy_session") ==
+                      trace->calls.end());
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + unlock,
+                                trace->calls.end(), "unload") ==
+                      trace->calls.end());
+  require_poisoned_encoder_is_not_reused(encoder, trace, 101);
+}
+
+void unmap_failure_does_not_unregister_still_mapped_input() {
+  auto trace = std::make_shared<FakeTrace>();
+  auto api = std::make_unique<FakeApi>(trace);
+  api->unmap_result = NvencH264Failure::input_unmapping_failed;
+  NvencH264Encoder encoder{std::move(api), plan()};
+
+  BEACON_TEST_REQUIRE(!encoder.encode(frame()).has_value());
+  BEACON_TEST_REQUIRE(encoder.failure() ==
+                      NvencH264Failure::input_unmapping_failed);
+  const auto unlock = call_index(trace->calls, "unlock");
+  const auto unmap = call_index(trace->calls, "unmap", unlock + 1);
+  const auto poison = call_index(trace->calls, "poison_session", unmap + 1);
+  BEACON_TEST_REQUIRE(unlock < unmap);
+  BEACON_TEST_REQUIRE(unmap < poison);
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + unmap,
+                                trace->calls.end(), "unregister") ==
+                      trace->calls.end());
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + unmap,
+                                trace->calls.end(), "destroy_bitstream") ==
+                      trace->calls.end());
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + unmap,
+                                trace->calls.end(), "destroy_session") ==
+                      trace->calls.end());
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + unmap,
+                                trace->calls.end(), "unload") ==
+                      trace->calls.end());
+  require_poisoned_encoder_is_not_reused(encoder, trace, 101);
+}
+
+void unregister_failure_poisons_after_successful_unmap() {
+  auto trace = std::make_shared<FakeTrace>();
+  auto api = std::make_unique<FakeApi>(trace);
+  api->unregister_result = NvencH264Failure::input_unregistration_failed;
+  NvencH264Encoder encoder{std::move(api), plan()};
+
+  BEACON_TEST_REQUIRE(!encoder.encode(frame()).has_value());
+  BEACON_TEST_REQUIRE(encoder.failure() ==
+                      NvencH264Failure::input_unregistration_failed);
+  const auto unmap = call_index(trace->calls, "unmap");
+  const auto unregister = call_index(trace->calls, "unregister", unmap + 1);
+  const auto poison =
+      call_index(trace->calls, "poison_session", unregister + 1);
+  BEACON_TEST_REQUIRE(unmap < unregister);
+  BEACON_TEST_REQUIRE(unregister < poison);
+  require_poisoned_encoder_is_not_reused(encoder, trace, 101);
+}
+
+void rejected_copy_forces_the_next_delivered_frame_to_idr() {
+  auto trace = std::make_shared<FakeTrace>();
+  auto api = std::make_unique<FakeApi>(trace);
+  auto* observed = api.get();
+  NvencH264Encoder encoder{std::move(api), plan()};
+
+  BEACON_TEST_REQUIRE(encoder.encode(frame()).has_value());
+  observed->locked_size_override = std::numeric_limits<std::size_t>::max();
+  BEACON_TEST_REQUIRE(!encoder.encode(frame(0x2000, 101)).has_value());
+  BEACON_TEST_REQUIRE(encoder.failure() ==
+                      NvencH264Failure::invalid_bitstream);
+  const auto first_lock = call_index(trace->calls, "lock");
+  const auto lock = call_index(trace->calls, "lock", first_lock + 1);
+  const auto unlock = call_index(trace->calls, "unlock", lock + 1);
+  const auto unmap = call_index(trace->calls, "unmap", unlock + 1);
+  const auto unregister = call_index(trace->calls, "unregister", unmap + 1);
+  BEACON_TEST_REQUIRE(lock < unlock);
+  BEACON_TEST_REQUIRE(unlock < unmap);
+  BEACON_TEST_REQUIRE(unmap < unregister);
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin(), trace->calls.end(),
+                                "poison_session") == trace->calls.end());
+
+  observed->locked_size_override.reset();
+  const auto recovered = encoder.encode(frame(0x2000, 102));
+  BEACON_TEST_REQUIRE(recovered.has_value());
+  BEACON_TEST_REQUIRE(recovered->idr);
+  BEACON_TEST_REQUIRE(recovered->has_sps);
+  BEACON_TEST_REQUIRE(recovered->has_pps);
+  BEACON_TEST_REQUIRE(trace->submits.size() == 3);
+  BEACON_TEST_REQUIRE(!trace->submits[1].force_idr);
+  BEACON_TEST_REQUIRE(trace->submits[2].force_idr);
+  BEACON_TEST_REQUIRE(trace->submits[2].output_parameter_sets);
 }
 
 void missing_first_frame_parameter_sets_is_rejected() {
@@ -449,6 +680,64 @@ void device_loss_discards_the_session_and_reopens_on_retry() {
   BEACON_TEST_REQUIRE(retried.has_value());
   BEACON_TEST_REQUIRE(std::count(trace->calls.begin(), trace->calls.end(),
                                  "open") == 2);
+}
+
+void failed_output_destruction_poisons_normal_shutdown() {
+  auto trace = std::make_shared<FakeTrace>();
+  auto api = std::make_unique<FakeApi>(trace);
+  auto* observed = api.get();
+  NvencH264Encoder encoder{std::move(api), plan()};
+  BEACON_TEST_REQUIRE(encoder.encode(frame()).has_value());
+
+  observed->identity = reinterpret_cast<void*>(0x9000);
+  observed->destroy_bitstream_result =
+      NvencH264Failure::bitstream_destruction_failed;
+  BEACON_TEST_REQUIRE(!encoder.encode(frame(0x3000, 101)).has_value());
+  BEACON_TEST_REQUIRE(encoder.failure() ==
+                      NvencH264Failure::bitstream_destruction_failed);
+  const auto destroy_bitstream = call_index(trace->calls, "destroy_bitstream");
+  const auto poison =
+      call_index(trace->calls, "poison_session", destroy_bitstream + 1);
+  BEACON_TEST_REQUIRE(destroy_bitstream < poison);
+  BEACON_TEST_REQUIRE(trace->poisoned_texture == nullptr);
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + destroy_bitstream,
+                                trace->calls.end(), "destroy_session") ==
+                      trace->calls.end());
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + destroy_bitstream,
+                                trace->calls.end(), "unload") ==
+                      trace->calls.end());
+  BEACON_TEST_REQUIRE(std::count(trace->calls.begin(), trace->calls.end(),
+                                 "open") == 1);
+  require_poisoned_encoder_is_not_reused(encoder, trace, 102);
+}
+
+void failed_encoder_destruction_poisons_normal_shutdown() {
+  auto trace = std::make_shared<FakeTrace>();
+  auto api = std::make_unique<FakeApi>(trace);
+  auto* observed = api.get();
+  NvencH264Encoder encoder{std::move(api), plan()};
+  BEACON_TEST_REQUIRE(encoder.encode(frame()).has_value());
+
+  observed->identity = reinterpret_cast<void*>(0x9000);
+  observed->destroy_session_result =
+      NvencH264Failure::session_destruction_failed;
+  BEACON_TEST_REQUIRE(!encoder.encode(frame(0x3000, 101)).has_value());
+  BEACON_TEST_REQUIRE(encoder.failure() ==
+                      NvencH264Failure::session_destruction_failed);
+  const auto destroy_bitstream = call_index(trace->calls, "destroy_bitstream");
+  const auto destroy_session =
+      call_index(trace->calls, "destroy_session", destroy_bitstream + 1);
+  const auto poison =
+      call_index(trace->calls, "poison_session", destroy_session + 1);
+  BEACON_TEST_REQUIRE(destroy_bitstream < destroy_session);
+  BEACON_TEST_REQUIRE(destroy_session < poison);
+  BEACON_TEST_REQUIRE(trace->poisoned_texture == nullptr);
+  BEACON_TEST_REQUIRE(std::find(trace->calls.begin() + destroy_session,
+                                trace->calls.end(), "unload") ==
+                      trace->calls.end());
+  BEACON_TEST_REQUIRE(std::count(trace->calls.begin(), trace->calls.end(),
+                                 "open") == 1);
+  require_poisoned_encoder_is_not_reused(encoder, trace, 102);
 }
 
 void device_changes_and_destruction_follow_exact_cleanup_order() {
@@ -497,13 +786,23 @@ int main() {
     native_contract_is_fixed_for_sdr_low_latency_h264();
     runtime_and_capability_preflight_failures_are_typed();
     invalid_input_fails_before_native_api_calls();
+    poisoned_native_open_is_not_retried();
     first_frame_opens_the_fixed_contract_and_emits_parameterized_idr();
     timestamp_and_forced_idr_rules_are_enforced();
     texture_registrations_are_released_after_each_frame();
     bitrate_reconfiguration_is_session_bound_and_typed();
-    encode_failures_release_mapped_and_locked_resources();
+    submit_failures_release_unaccepted_input();
+    failed_map_cleanup_poisons_the_registered_input();
+    failed_map_with_live_handle_is_not_unregistered();
+    lock_failure_poisons_without_releasing_in_flight_input();
+    unlock_failure_poisons_without_releasing_locked_input();
+    unmap_failure_does_not_unregister_still_mapped_input();
+    unregister_failure_poisons_after_successful_unmap();
+    rejected_copy_forces_the_next_delivered_frame_to_idr();
     missing_first_frame_parameter_sets_is_rejected();
     device_loss_discards_the_session_and_reopens_on_retry();
+    failed_output_destruction_poisons_normal_shutdown();
+    failed_encoder_destruction_poisons_normal_shutdown();
     device_changes_and_destruction_follow_exact_cleanup_order();
   });
 }

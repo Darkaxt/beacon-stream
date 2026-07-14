@@ -69,9 +69,18 @@ try {
         throw "ffprobe rejected the Annex-B stream.`n$($probeInfo -join [Environment]::NewLine)"
     }
     $probeInfo | Write-Output
-    $decoded = & ffmpeg -v error -f h264 -i $output -frames:v 4 -f null NUL 2>&1
+    $decoded = @(& ffmpeg -v error -nostats -progress pipe:1 -f h264 -i $output -f null NUL 2>&1)
     if ($LASTEXITCODE -ne 0) {
         throw "ffmpeg failed to decode four frames.`n$($decoded -join [Environment]::NewLine)"
+    }
+    $decodedFrameMatch = $decoded | Select-String -Pattern '^frame=(?<value>\d+)$' | Select-Object -Last 1
+    $decodeCompleted = $decoded | Select-String -SimpleMatch 'progress=end' | Select-Object -Last 1
+    if (-not $decodedFrameMatch -or -not $decodeCompleted) {
+        throw "ffmpeg did not report a completed decode.`n$($decoded -join [Environment]::NewLine)"
+    }
+    $decodedFrames = [uint32]$decodedFrameMatch.Matches[0].Groups['value'].Value
+    if ($decodedFrames -ne 4) {
+        throw "ffmpeg decoded $decodedFrames frames instead of exactly 4."
     }
     if (($probeInfo -join "`n") -notmatch 'codec_name=h264' -or
         ($probeInfo -join "`n") -notmatch 'width=640' -or
@@ -102,7 +111,7 @@ try {
         throw "The H.264 SPS timing does not represent 120 fps: time_scale=$timeScale num_units_in_tick=$ticks."
     }
     Write-Output "sps_frame_rate=120/1 time_scale=$timeScale num_units_in_tick=$ticks"
-    Write-Output 'BEACON_NVENC_H264_VALIDATION_OK frames=4 decoded=4'
+    Write-Output "BEACON_NVENC_H264_VALIDATION_OK frames=4 decoded=$decodedFrames"
 }
 finally {
     Remove-Item -LiteralPath $output -Force -ErrorAction SilentlyContinue

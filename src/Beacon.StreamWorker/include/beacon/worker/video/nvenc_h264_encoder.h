@@ -20,6 +20,7 @@ enum class NvencH264Failure {
   runtime_unavailable,
   api_unavailable,
   api_incompatible,
+  session_poisoned,
   session_unavailable,
   session_open_failed,
   h264_unsupported,
@@ -29,6 +30,7 @@ enum class NvencH264Failure {
   preset_unavailable,
   initialization_failed,
   bitstream_creation_failed,
+  bitstream_destruction_failed,
   input_registration_failed,
   input_mapping_failed,
   encode_failed,
@@ -37,7 +39,9 @@ enum class NvencH264Failure {
   input_unmapping_failed,
   input_unregistration_failed,
   reconfigure_failed,
+  session_destruction_failed,
   invalid_bitstream,
+  resource_exhausted,
 };
 
 struct NvencH264Plan {
@@ -147,6 +151,8 @@ class INvencH264Api {
   [[nodiscard]] virtual NvencH264Failure destroy_bitstream(
       std::uintptr_t output_bitstream) noexcept = 0;
   [[nodiscard]] virtual NvencH264Failure destroy_session() noexcept = 0;
+  virtual void poison_session(
+      const capture::D3d11Texture* texture) noexcept = 0;
   virtual void unload() noexcept = 0;
 };
 
@@ -175,6 +181,7 @@ class NvencH264Encoder final {
       const ConvertedD3d11Frame& frame) noexcept;
   [[nodiscard]] NvencH264Failure release_input(
       std::uintptr_t mapped, std::uintptr_t registered) noexcept;
+  void poison_session(const ConvertedD3d11Frame* frame) noexcept;
   void shutdown_session() noexcept;
 
   std::unique_ptr<INvencH264Api> api_;
@@ -183,6 +190,7 @@ class NvencH264Encoder final {
   std::uintptr_t output_bitstream_{};
   std::optional<std::int64_t> last_timestamp_;
   bool session_open_{};
+  bool session_poisoned_{};
   bool first_frame_{true};
   NvencH264Failure failure_{NvencH264Failure::none};
 };

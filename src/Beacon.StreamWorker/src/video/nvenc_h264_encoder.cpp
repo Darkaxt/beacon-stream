@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <new>
 #include <utility>
 
 namespace beacon::worker::video {
@@ -101,8 +102,14 @@ H264AccessUnitDescription inspect_annex_b(
 class WindowsNvencH264Api final : public INvencH264Api {
  public:
   ~WindowsNvencH264Api() override {
+    if (poisoned_) {
+      return;
+    }
     if (encoder_ != nullptr) {
-      (void)destroy_session();
+      if (destroy_session() != NvencH264Failure::none) {
+        poison_session(nullptr);
+        return;
+      }
     }
     unload();
   }
@@ -125,6 +132,9 @@ class WindowsNvencH264Api final : public INvencH264Api {
   [[nodiscard]] NvencH264Failure open(
       const capture::D3d11Texture& input,
       const NvencH264Configuration& configuration) noexcept override {
+    if (poisoned_) {
+      return NvencH264Failure::session_poisoned;
+    }
     if (encoder_ != nullptr || library_ != nullptr) {
       return NvencH264Failure::session_unavailable;
     }
@@ -166,16 +176,14 @@ class WindowsNvencH264Api final : public INvencH264Api {
       const auto runtime_failure = classify_nvenc_runtime_preflight(
           library_ != nullptr, entry_points, max_version);
       if (runtime_failure != NvencH264Failure::none) {
-        cleanup_open_failure();
-        return runtime_failure;
+        return cleanup_open_failure(runtime_failure);
       }
 
       functions_ = {};
       functions_.version = NV_ENCODE_API_FUNCTION_LIST_VER;
       if (create_instance_(&functions_) != NV_ENC_SUCCESS ||
           !required_functions_available()) {
-        cleanup_open_failure();
-        return NvencH264Failure::api_unavailable;
+        return cleanup_open_failure(NvencH264Failure::api_unavailable);
       }
 
       NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS open_params{};
@@ -188,8 +196,7 @@ class WindowsNvencH264Api final : public INvencH264Api {
       if (open_status != NV_ENC_SUCCESS || encoder_ == nullptr) {
         const auto failure = operation_failure(
             open_status, NvencH264Failure::session_open_failed);
-        cleanup_open_failure();
-        return failure;
+        return cleanup_open_failure(failure);
       }
 
       const auto capabilities = query_capabilities();
@@ -202,8 +209,7 @@ class WindowsNvencH264Api final : public INvencH264Api {
               .bitrate_bps = configuration.bitrate_bps,
           });
       if (capability_failure != NvencH264Failure::none) {
-        cleanup_open_failure();
-        return capability_failure;
+        return cleanup_open_failure(capability_failure);
       }
 
       NV_ENC_PRESET_CONFIG preset{};
@@ -215,8 +221,7 @@ class WindowsNvencH264Api final : public INvencH264Api {
       if (preset_status != NV_ENC_SUCCESS) {
         const auto failure = operation_failure(
             preset_status, NvencH264Failure::preset_unavailable);
-        cleanup_open_failure();
-        return failure;
+        return cleanup_open_failure(failure);
       }
 
       configuration_ = configuration;
@@ -248,18 +253,18 @@ class WindowsNvencH264Api final : public INvencH264Api {
       if (initialize_status != NV_ENC_SUCCESS) {
         const auto failure = operation_failure(
             initialize_status, NvencH264Failure::initialization_failed);
-        cleanup_open_failure();
-        return failure;
+        return cleanup_open_failure(failure);
       }
       frame_index_ = 0;
       return NvencH264Failure::none;
+    } catch (const std::bad_alloc&) {
+      return cleanup_open_failure(NvencH264Failure::resource_exhausted);
     } catch (...) {
       const auto failure =
           device_ && FAILED(device_->GetDeviceRemovedReason())
               ? NvencH264Failure::device_lost
               : NvencH264Failure::session_open_failed;
-      cleanup_open_failure();
-      return failure;
+      return cleanup_open_failure(failure);
     }
   }
 
@@ -333,15 +338,24 @@ class WindowsNvencH264Api final : public INvencH264Api {
     if (failure == NvencH264Failure::none &&
         mapping.mappedBufferFmt != NV_ENC_BUFFER_FORMAT_NV12) {
       if (mapping.mappedResource != nullptr) {
-        (void)functions_.nvEncUnmapInputResource(encoder_,
-                                                 mapping.mappedResource);
+        const auto unmap_failure = operation_failure(
+            functions_.nvEncUnmapInputResource(encoder_,
+                                                mapping.mappedResource),
+            NvencH264Failure::input_unmapping_failed);
+        if (unmap_failure != NvencH264Failure::none) {
+          failure = unmap_failure;
+        } else {
+          mapping.mappedResource = nullptr;
+        }
       }
-      failure = NvencH264Failure::nv12_unsupported;
+      if (failure == NvencH264Failure::none) {
+        failure = NvencH264Failure::nv12_unsupported;
+      }
     }
-    return {.handle = failure == NvencH264Failure::none
-                          ? reinterpret_cast<std::uintptr_t>(
-                                mapping.mappedResource)
-                          : 0,
+    return {.handle = mapping.mappedResource == nullptr
+                          ? 0
+                          : reinterpret_cast<std::uintptr_t>(
+                                mapping.mappedResource),
             .failure = failure};
   }
 
@@ -500,7 +514,7 @@ class WindowsNvencH264Api final : public INvencH264Api {
     return operation_failure(
         functions_.nvEncDestroyBitstreamBuffer(
             encoder_, reinterpret_cast<NV_ENC_OUTPUT_PTR>(output_bitstream)),
-        NvencH264Failure::bitstream_creation_failed);
+        NvencH264Failure::bitstream_destruction_failed);
   }
 
   [[nodiscard]] NvencH264Failure destroy_session() noexcept override {
@@ -508,17 +522,37 @@ class WindowsNvencH264Api final : public INvencH264Api {
       return NvencH264Failure::none;
     }
     if (functions_.nvEncDestroyEncoder == nullptr) {
-      encoder_ = nullptr;
-      device_ = nullptr;
       return NvencH264Failure::api_unavailable;
     }
     const auto status = functions_.nvEncDestroyEncoder(encoder_);
-    encoder_ = nullptr;
-    device_ = nullptr;
-    return operation_failure(status, NvencH264Failure::session_unavailable);
+    const auto failure = operation_failure(
+        status, NvencH264Failure::session_destruction_failed);
+    if (failure == NvencH264Failure::none) {
+      encoder_ = nullptr;
+      device_ = nullptr;
+    }
+    return failure;
+  }
+
+  void poison_session(
+      const capture::D3d11Texture* input) noexcept override {
+    // No API-safe cleanup sequence remains after an ownership call fails.
+    // Retain native references for the Worker process teardown boundary.
+    auto* texture = input == nullptr
+                        ? nullptr
+                        : static_cast<ID3D11Texture2D*>(
+                              input->native_texture());
+    if (texture != nullptr) {
+      texture->AddRef();
+    }
+    (void)device_.detach();
+    poisoned_ = true;
   }
 
   void unload() noexcept override {
+    if (poisoned_) {
+      return;
+    }
     if (library_ != nullptr) {
       FreeLibrary(library_);
     }
@@ -555,7 +589,7 @@ class WindowsNvencH264Api final : public INvencH264Api {
            functions_.nvEncDestroyEncoder != nullptr;
   }
 
-  [[nodiscard]] NvencH264ApiCapabilities query_capabilities() noexcept {
+  [[nodiscard]] NvencH264ApiCapabilities query_capabilities() {
     NvencH264ApiCapabilities capabilities;
     std::uint32_t codec_count{};
     if (functions_.nvEncGetEncodeGUIDCount(encoder_, &codec_count) !=
@@ -648,13 +682,20 @@ class WindowsNvencH264Api final : public INvencH264Api {
     h264.h264VUIParameters.colourMatrix = NV_ENC_VUI_MATRIX_COEFFS_BT709;
   }
 
-  void cleanup_open_failure() noexcept {
-    if (encoder_ != nullptr && functions_.nvEncDestroyEncoder != nullptr) {
-      (void)functions_.nvEncDestroyEncoder(encoder_);
+  [[nodiscard]] NvencH264Failure cleanup_open_failure(
+      NvencH264Failure failure) noexcept {
+    if (encoder_ != nullptr) {
+      if (functions_.nvEncDestroyEncoder == nullptr ||
+          functions_.nvEncDestroyEncoder(encoder_) != NV_ENC_SUCCESS) {
+        (void)device_.detach();
+        poisoned_ = true;
+        return NvencH264Failure::session_poisoned;
+      }
     }
     encoder_ = nullptr;
     device_ = nullptr;
     unload();
+    return failure;
   }
 
   HMODULE library_{};
@@ -667,6 +708,7 @@ class WindowsNvencH264Api final : public INvencH264Api {
   NV_ENC_CONFIG encode_configuration_{};
   NV_ENC_INITIALIZE_PARAMS initialize_parameters_{};
   std::uint32_t frame_index_{};
+  bool poisoned_{};
 };
 
 }  // namespace
@@ -696,6 +738,10 @@ std::optional<EncodedH264AccessUnit> NvencH264Encoder::encode(
     failure_ = NvencH264Failure::api_unavailable;
     return std::nullopt;
   }
+  if (session_poisoned_) {
+    failure_ = NvencH264Failure::session_poisoned;
+    return std::nullopt;
+  }
   void* const device = api_->device_identity(*frame.texture);
   if (device == nullptr) {
     failure_ = NvencH264Failure::device_unavailable;
@@ -706,6 +752,9 @@ std::optional<EncodedH264AccessUnit> NvencH264Encoder::encode(
   }
   if (session_open_ && device != device_) {
     shutdown_session();
+    if (session_poisoned_) {
+      return std::nullopt;
+    }
   }
   if (!ensure_session(frame, device)) {
     return std::nullopt;
@@ -716,6 +765,13 @@ std::optional<EncodedH264AccessUnit> NvencH264Encoder::encode(
   }
   const auto mapped = api_->map_input(*registered);
   if (mapped.failure != NvencH264Failure::none || mapped.handle == 0) {
+    if (mapped.handle != 0) {
+      failure_ = mapped.failure == NvencH264Failure::none
+                     ? NvencH264Failure::input_mapping_failed
+                     : mapped.failure;
+      poison_session(&frame);
+      return std::nullopt;
+    }
     const auto unregister_failure = api_->unregister_input(*registered);
     failure_ = unregister_failure != NvencH264Failure::none
                    ? unregister_failure
@@ -724,7 +780,11 @@ std::optional<EncodedH264AccessUnit> NvencH264Encoder::encode(
                           : mapped.failure);
     if (failure_ == NvencH264Failure::device_lost ||
         unregister_failure != NvencH264Failure::none) {
-      shutdown_session();
+      if (unregister_failure != NvencH264Failure::none) {
+        poison_session(&frame);
+      } else {
+        shutdown_session();
+      }
     }
     return std::nullopt;
   }
@@ -742,8 +802,9 @@ std::optional<EncodedH264AccessUnit> NvencH264Encoder::encode(
     const auto release_failure = release_input(mapped.handle, *registered);
     failure_ = release_failure != NvencH264Failure::none ? release_failure
                                                          : submit_failure;
-    if (failure_ == NvencH264Failure::device_lost ||
-        release_failure != NvencH264Failure::none) {
+    if (release_failure != NvencH264Failure::none) {
+      poison_session(&frame);
+    } else if (failure_ == NvencH264Failure::device_lost) {
       shutdown_session();
     }
     return std::nullopt;
@@ -752,35 +813,47 @@ std::optional<EncodedH264AccessUnit> NvencH264Encoder::encode(
   const auto locked = api_->lock_bitstream(output_bitstream_);
   if (locked.failure != NvencH264Failure::none ||
       locked.bitstream.data == nullptr || locked.bitstream.size == 0) {
-    const auto release_failure = release_input(mapped.handle, *registered);
-    failure_ = release_failure != NvencH264Failure::none
-                   ? release_failure
-                   : (locked.failure == NvencH264Failure::none
-                          ? NvencH264Failure::invalid_bitstream
-                          : locked.failure);
-    if (failure_ == NvencH264Failure::device_lost ||
-        release_failure != NvencH264Failure::none) {
-      shutdown_session();
-    }
+    failure_ = locked.failure == NvencH264Failure::none
+                   ? NvencH264Failure::invalid_bitstream
+                   : locked.failure;
+    poison_session(&frame);
     return std::nullopt;
   }
 
-  std::vector<std::uint8_t> bytes(
-      locked.bitstream.data,
-      locked.bitstream.data + locked.bitstream.size);
+  NvencH264Failure content_failure{NvencH264Failure::none};
+  std::vector<std::uint8_t> bytes;
+  if (locked.bitstream.size > bytes.max_size()) {
+    content_failure = NvencH264Failure::invalid_bitstream;
+  } else {
+    try {
+      bytes.resize(locked.bitstream.size);
+      std::memcpy(bytes.data(), locked.bitstream.data, locked.bitstream.size);
+    } catch (...) {
+      content_failure = NvencH264Failure::resource_exhausted;
+    }
+  }
   const auto unlock_failure = api_->unlock_bitstream(output_bitstream_);
+  if (unlock_failure != NvencH264Failure::none) {
+    failure_ = unlock_failure;
+    poison_session(&frame);
+    return std::nullopt;
+  }
   const auto release_failure = release_input(mapped.handle, *registered);
-  if (unlock_failure != NvencH264Failure::none ||
-      release_failure != NvencH264Failure::none) {
-    failure_ = unlock_failure != NvencH264Failure::none ? unlock_failure
-                                                        : release_failure;
-    shutdown_session();
+  if (release_failure != NvencH264Failure::none) {
+    failure_ = release_failure;
+    poison_session(&frame);
+    return std::nullopt;
+  }
+  if (content_failure != NvencH264Failure::none) {
+    failure_ = content_failure;
+    first_frame_ = true;
     return std::nullopt;
   }
   if (locked.bitstream.qpc_timestamp != frame.qpc_timestamp ||
       (last_timestamp_ &&
        locked.bitstream.qpc_timestamp <= *last_timestamp_)) {
     failure_ = NvencH264Failure::timestamp_not_monotonic;
+    first_frame_ = true;
     return std::nullopt;
   }
 
@@ -789,6 +862,7 @@ std::optional<EncodedH264AccessUnit> NvencH264Encoder::encode(
       (request_idr &&
        (!description.idr || !description.sps || !description.pps))) {
     failure_ = NvencH264Failure::invalid_bitstream;
+    first_frame_ = true;
     return std::nullopt;
   }
   first_frame_ = false;
@@ -805,6 +879,10 @@ std::optional<EncodedH264AccessUnit> NvencH264Encoder::encode(
 bool NvencH264Encoder::reconfigure_bitrate(
     std::uint32_t bitrate_bps) noexcept {
   failure_ = NvencH264Failure::none;
+  if (session_poisoned_) {
+    failure_ = NvencH264Failure::session_poisoned;
+    return false;
+  }
   if (!session_open_) {
     failure_ = NvencH264Failure::session_unavailable;
     return false;
@@ -864,6 +942,7 @@ bool NvencH264Encoder::ensure_session(const ConvertedD3d11Frame& frame,
   };
   failure_ = api_->open(*frame.texture, configuration);
   if (failure_ != NvencH264Failure::none) {
+    session_poisoned_ = failure_ == NvencH264Failure::session_poisoned;
     return false;
   }
   session_open_ = true;
@@ -902,21 +981,45 @@ std::optional<std::uintptr_t> NvencH264Encoder::registered_input(
 NvencH264Failure NvencH264Encoder::release_input(
     std::uintptr_t mapped, std::uintptr_t registered) noexcept {
   const auto unmap_failure = api_->unmap_input(mapped);
-  const auto unregister_failure = api_->unregister_input(registered);
-  return unmap_failure != NvencH264Failure::none ? unmap_failure
-                                                 : unregister_failure;
+  if (unmap_failure != NvencH264Failure::none) {
+    return unmap_failure;
+  }
+  return api_->unregister_input(registered);
 }
 
-void NvencH264Encoder::shutdown_session() noexcept {
+void NvencH264Encoder::poison_session(
+    const ConvertedD3d11Frame* frame) noexcept {
   if (!api_) {
     return;
   }
   if (session_open_) {
+    api_->poison_session(frame == nullptr ? nullptr : frame->texture.get());
+  }
+  session_open_ = false;
+  session_poisoned_ = true;
+}
+
+void NvencH264Encoder::shutdown_session() noexcept {
+  if (!api_ || session_poisoned_) {
+    return;
+  }
+  if (session_open_) {
     if (output_bitstream_ != 0) {
-      (void)api_->destroy_bitstream(output_bitstream_);
+      const auto bitstream_failure =
+          api_->destroy_bitstream(output_bitstream_);
+      if (bitstream_failure != NvencH264Failure::none) {
+        failure_ = bitstream_failure;
+        poison_session(nullptr);
+        return;
+      }
     }
     output_bitstream_ = 0;
-    (void)api_->destroy_session();
+    const auto session_failure = api_->destroy_session();
+    if (session_failure != NvencH264Failure::none) {
+      failure_ = session_failure;
+      poison_session(nullptr);
+      return;
+    }
   }
   api_->unload();
   session_open_ = false;
