@@ -429,6 +429,18 @@ The repeatable command and captured output are tracked in
   test tool, not a production alternate route.
 - [x] Commit: `feat: encode Beacon H264 with NVENC`
 
+Refactor validation (2026-07-14): the encoder now preserves NVIDIA's register/map/encode/lock/
+unlock/unmap/unregister ordering under every modeled failure. Ambiguous native ownership poisons
+the Worker encoder, retains the native module/device/input references for process teardown, and
+rejects encode or reconfigure reuse instead of destroying or unloading live resources. Partial
+open and normal cleanup failures propagate typed poison/destruction failures. Accepted but
+undelivered output forces the next access unit to IDR with SPS/PPS, and output allocation failures
+remain typed inside the `noexcept` path. The decoder oracle consumes the complete stream and
+reports exactly four frames. All 18 native CTests, all 487 managed tests, formatting, static route
+scans, and the RTX hardware probe pass; independent review reports no remaining P1/P2 findings.
+Evidence and the repeatable command are tracked in
+`docs/validation/2026-07-14-nvenc-h264.md`.
+
 ### Task 17: Packetize Real Access Units And Apply Recovery
 
 **Files:**
