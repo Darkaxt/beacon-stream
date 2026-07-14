@@ -49,6 +49,9 @@ public static class TestHostProgram
                 {
                     isReady = worker.IsReady,
                     processGeneration = worker.CurrentProcessGeneration,
+                    processHasExited = worker.ProcessHasExited,
+                    processExitCode = worker.ProcessExitCode,
+                    clientTerminalError = worker.ClientTerminalError,
                     diagnostics = worker.Diagnostics,
                 });
         });

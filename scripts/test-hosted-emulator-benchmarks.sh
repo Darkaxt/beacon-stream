@@ -287,6 +287,10 @@ emit_transport_diagnostics() {
   "${curl_command}" --fail --silent --show-error --insecure \
     "${local_server_url}/hosted-benchmark-worker/snapshot" >&2 || true
   printf '\n' >&2
+  printf '%s\n' '--- Beacon Server admin snapshot ---' >&2
+  "${curl_command}" --fail --silent --show-error --insecure \
+    "${local_server_url}/admin/snapshot" >&2 || true
+  printf '\n' >&2
 }
 
 run_instrumentation() {

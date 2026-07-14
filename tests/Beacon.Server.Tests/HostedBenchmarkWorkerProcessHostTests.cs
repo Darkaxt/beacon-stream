@@ -43,6 +43,9 @@ public sealed class HostedBenchmarkWorkerProcessHostTests
             CancellationToken.None);
 
         Assert.True(host.IsReady);
+        Assert.False(host.ProcessHasExited);
+        Assert.Null(host.ProcessExitCode);
+        Assert.Null(host.ClientTerminalError);
         Assert.True(generation > 0);
         Assert.True(response.Completion.RequestId > 0);
         Assert.Equal("correlated-session", response.Completion.SessionId);
@@ -156,6 +159,9 @@ public sealed class HostedBenchmarkWorkerProcessHostTests
         Assert.Equal(generation, exited.ProcessGeneration);
         Assert.Equal(23, exited.ExitCode);
         Assert.False(host.IsReady);
+        Assert.True(host.ProcessHasExited);
+        Assert.Equal(23, host.ProcessExitCode);
+        Assert.NotNull(host.ClientTerminalError);
     }
 
     [Fact]

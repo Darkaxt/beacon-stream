@@ -392,7 +392,11 @@ QUIC_STATUS QUIC_API MsQuicClient::connection_callback(
                 ? static_cast<std::uint64_t>(static_cast<std::uint32_t>(
                       event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status))
                 : event->SHUTDOWN_INITIATED_BY_PEER.ErrorCode;
-        log_transport_stage("shutdown", generation, status);
+        log_transport_stage(
+            event->Type == QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT
+                ? "shutdown_transport"
+                : "shutdown_peer",
+            generation, status);
         if (report_loss) self.callbacks_.connection_lost(generation);
         break;
       }

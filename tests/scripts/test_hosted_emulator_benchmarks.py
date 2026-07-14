@@ -196,6 +196,7 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
         calls = self.call_log.read_text(encoding="utf-8")
         self.assertIn("logcat -d -s BeaconStreamCore:I", calls)
         self.assertIn("/hosted-benchmark-worker/snapshot", calls)
+        self.assertIn("/admin/snapshot", calls)
 
     def test_gate4_instrumentation_uses_pinned_https_and_typed_markers(self):
         source = (REPOSITORY_ROOT / "src" / "Beacon.Android" / "app" / "src" /
@@ -217,6 +218,17 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
         test_host_program = (REPOSITORY_ROOT / "tests" / "Beacon.Server.TestHost" /
                              "Program.cs").read_text(encoding="utf-8")
         self.assertIn('/hosted-benchmark-worker/snapshot', test_host_program)
+        for field in (
+                "processHasExited",
+                "processExitCode",
+                "clientTerminalError"):
+            self.assertIn(field, test_host_program)
+        native_client = (REPOSITORY_ROOT / "src" / "Beacon.Android" / "app" / "src" /
+                         "main" / "cpp" / "streamcore" / "msquic_client.cpp").read_text(
+                             encoding="utf-8"
+                         )
+        self.assertIn('"shutdown_transport"', native_client)
+        self.assertIn('"shutdown_peer"', native_client)
 
     def test_android_cross_build_excludes_unrunnable_test_targets(self):
         presets = json.loads(

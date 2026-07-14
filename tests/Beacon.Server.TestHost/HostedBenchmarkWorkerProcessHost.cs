@@ -64,6 +64,29 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
 
     public int ProcessId => Volatile.Read(ref activeWorker)?.Process.Id ?? 0;
 
+    public bool ProcessHasExited =>
+        Volatile.Read(ref activeWorker) is not { } active || active.Process.HasExited;
+
+    public int? ProcessExitCode
+    {
+        get
+        {
+            ActiveWorker? active = Volatile.Read(ref activeWorker);
+            return active is not null && active.Process.HasExited
+                ? active.Process.ExitCode
+                : null;
+        }
+    }
+
+    public string? ClientTerminalError
+    {
+        get
+        {
+            Exception? error = Volatile.Read(ref activeWorker)?.Client?.TerminalError;
+            return error is null ? null : $"{error.GetType().Name}: {error.Message}";
+        }
+    }
+
     public ReadOnlyMemory<byte> WorkerInstanceId =>
         Volatile.Read(ref activeWorker)?.Client?.WorkerInstanceId ?? ReadOnlyMemory<byte>.Empty;
 
