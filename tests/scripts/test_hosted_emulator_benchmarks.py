@@ -198,6 +198,9 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
             'export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}"',
             build_script,
         )
+        self.assertIn('x86_64_build_testing="ON"', build_script)
+        self.assertIn('-DBUILD_TESTING="${x86_64_build_testing}"', build_script)
+        self.assertIn('-DBUILD_TESTING=OFF', build_script)
 
     def test_runner_propagates_test_host_shutdown_failure(self):
         result = self._run({"BEACON_FAKE_SERVER_EXIT": "17"})
