@@ -536,6 +536,14 @@ session/reconnect/restore transaction passes without Apollo or another compatibi
 - [ ] Merge the refactor PR, synchronize clean `main`, and update the authoritative spec,
   extraction map, source audit, and README with observed evidence.
 
+Partial ownership evidence (2026-07-14): the Android MediaCodec callback no longer reports
+codec-configuration or empty end-of-stream output as missing-frame failures, and the unused
+`EncodedVideoDecoder` interface was removed so `SurfaceEncodedVideoDecoder` is the single Java
+decoder lifecycle owner. The clean Android matrix, 512 managed tests, 23 native tests, real Worker
+process proof, Client Lab, Playwright, and architecture guards pass. Emulator acceptance and the
+remaining Task 21 ownership areas stay open. Evidence:
+`docs/validation/2026-07-14-android-decoder-ownership-audit.md`.
+
 ## Deferred Until Gate 5 Passes
 
 Create separate audited plans, in this order, for:

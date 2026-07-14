@@ -1,6 +1,6 @@
 package dev.beacon.android;
 
-public final class SurfaceEncodedVideoDecoder implements EncodedVideoDecoder {
+public final class SurfaceEncodedVideoDecoder {
     private final EncodedVideoCodecFactory codecFactory;
     private final EncodedVideoSurfaceProvider surfaceProvider;
     private final EncodedVideoCodecObserver observer;
@@ -33,7 +33,6 @@ public final class SurfaceEncodedVideoDecoder implements EncodedVideoDecoder {
         this.observer = observer;
     }
 
-    @Override
     public synchronized EncodedVideoDecodeResult start(EncodedVideoDecodeRequest request) {
         try {
             stopActiveCodec();
@@ -76,7 +75,6 @@ public final class SurfaceEncodedVideoDecoder implements EncodedVideoDecoder {
         }
     }
 
-    @Override
     public synchronized void stop() {
         stopActiveCodec();
     }

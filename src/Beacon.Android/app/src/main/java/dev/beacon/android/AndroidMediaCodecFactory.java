@@ -38,6 +38,11 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
         }
     }
 
+    static boolean outputRequiresFrameIdentity(int outputBytes, int flags) {
+        return outputBytes > 0 &&
+            (flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0;
+    }
+
     private static final class AndroidMediaCodec implements EncodedVideoCodec {
         private final MediaCodec codec;
         private final String mimeType;
@@ -221,21 +226,24 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
                 try {
                     boolean endOfStream =
                         (info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
-                    boolean rendered = info.size > 0 &&
-                        (info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0;
+                    boolean rendered = outputRequiresFrameIdentity(
+                        info.size,
+                        info.flags);
                     frameSequence = rendered
                         ? presentationTracker.markOutputReleased(info.presentationTimeUs)
                         : OptionalLong.empty();
                     codec.releaseOutputBuffer(index, rendered);
-                    if (frameSequence.isPresent()) {
-                        observer.onOutputReleased(
-                            frameSequence.getAsLong(),
-                            info.presentationTimeUs,
-                            System.nanoTime(),
-                            true);
-                    } else {
-                        observer.onError(new IllegalStateException(
-                            "MediaCodec output has no queued Beacon frame identity."));
+                    if (rendered) {
+                        if (frameSequence.isPresent()) {
+                            observer.onOutputReleased(
+                                frameSequence.getAsLong(),
+                                info.presentationTimeUs,
+                                System.nanoTime(),
+                                true);
+                        } else {
+                            observer.onError(new IllegalStateException(
+                                "MediaCodec output has no queued Beacon frame identity."));
+                        }
                     }
                     if (endOfStream) observer.onEndOfStream();
                 } catch (RuntimeException failure) {

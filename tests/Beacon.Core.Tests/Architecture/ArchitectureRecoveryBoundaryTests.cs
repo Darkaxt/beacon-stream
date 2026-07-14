@@ -86,6 +86,22 @@ public sealed class ArchitectureRecoveryBoundaryTests
     }
 
     [Fact]
+    public void AndroidDecoderHasOneConcreteSurfaceOwner()
+    {
+        string root = FindRepositoryRoot();
+
+        Assert.False(File.Exists(ToPlatformPath(
+            root,
+            "src/Beacon.Android/app/src/main/java/dev/beacon/android/EncodedVideoDecoder.java")));
+        Assert.DoesNotContain(
+            "implements EncodedVideoDecoder",
+            File.ReadAllText(ToPlatformPath(
+                root,
+                "src/Beacon.Android/app/src/main/java/dev/beacon/android/SurfaceEncodedVideoDecoder.java")),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CompatibilityGuardUsesOneTrackedDefinitionManifest()
     {
         string root = FindRepositoryRoot();
