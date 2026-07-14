@@ -510,10 +510,9 @@ access unit instead of a synthetic marker. This clears the prerequisite only. Ta
 open until the APK emulator renders moving video from the planned virtual display and the full
 session/reconnect/restore transaction passes without Apollo or another compatibility route.
 
-- [ ] Prove neither Apollo nor Sunshine process, service, port, file, or API is used. Do not
-  stop, start, configure, or otherwise control an existing installation during validation;
-  use dependency inspection, runtime tracing, and a clean environment where neither product
-  is installed.
+- [ ] Prove no external streaming control plane or runtime is integrated by inspecting only
+  Beacon's dependency graph, packaged artifacts, process tree, and owned endpoints. Do not
+  enumerate, query, trace, start, stop, or configure another installed streaming product.
 - [ ] Use Client Lab and the APK emulator to select a real catalog application.
 - [ ] Create/activate the correct per-client virtual display at the planned mode.
 - [ ] Show moving H.264 SDR video from that display on `emulator-5554` through StreamCore.
@@ -567,8 +566,9 @@ Create separate audited plans, in this order, for:
 - Service-to-Worker readiness and state are typed, private, and event-driven.
 - Worker-to-StreamCore traffic is authenticated, encrypted, congestion controlled, and
   Beacon-owned.
-- Emulator displays moving H.264 SDR from the planned virtual display while dependency and
-  runtime tracing prove Beacon does not access or control any Apollo or Sunshine installation.
+- Emulator displays moving H.264 SDR from the planned virtual display while Beacon-local
+  dependency and runtime evidence prove no external streaming product is integrated. No
+  installed third-party streaming product is probed during validation.
 - Reconnect uses a fresh ticket without destroying application/display ownership.
 - Explicit stop and ownership cleanup restore verified physical-primary state.
 - No alternate transport, backend, capture fallback, media route, or compatibility artifact

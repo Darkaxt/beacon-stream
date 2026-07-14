@@ -361,7 +361,7 @@ This register is the implementation contract.
 - `REQ-TEST-005`: StreamWorker and StreamCore have deterministic in-memory transport boundaries for packet loss, reordering, cancellation, and lifecycle tests.
 - `REQ-TEST-006`: Android emulator runs the real APK, StreamCore, Surface decoder, benchmark workflow, catalog selection, launch, stop, and reconnect.
 - `REQ-TEST-007`: Real Windows display integration tests remain explicit and manually runnable because they change topology.
-- `REQ-TEST-008`: A production vertical-slice test runs in an environment where Apollo and Sunshine are absent and proves Beacon-owned capture to emulator presentation. Validation on a workstation where either product is present must prove no process, service, file, port, or API dependency without controlling that product.
+- `REQ-TEST-008`: A production vertical-slice test runs in an isolated environment containing only Beacon and its declared platform prerequisites, and proves Beacon-owned capture to emulator presentation. Workstation validation is confined to Beacon's dependency graph, packaged artifacts, process tree, and owned endpoints; it must not enumerate, query, trace, or control another installed streaming product.
 - `REQ-TEST-009`: Physical phone testing is reserved for final decoder quality, 120 Hz, HDR, thermals, Wi-Fi behavior, touch, controllers, audio, and human experience.
 - `REQ-TEST-010`: Static checks prevent upstream compatibility types, wrapper configuration, and duplicate Android routes from re-entering protected boundaries.
 
@@ -536,7 +536,7 @@ The following are explicit removal targets unless the recovery inventory proves 
 
 ### Minimal Beacon-Owned Stream
 
-- Dependency inspection and runtime evidence prove Beacon does not query or control Apollo or Sunshine processes, services, files, ports, or APIs.
+- Beacon-local dependency inspection and runtime evidence prove no external streaming control plane or runtime is integrated. Evidence is limited to Beacon's source dependencies, packaged artifacts, process tree, and owned endpoints; installed third-party streaming products are not probed.
 - APK selects an application from the Beacon catalog.
 - Beacon computes a complete plan before side effects.
 - Beacon prepares the correct per-client display without mirror or physical fallback.
