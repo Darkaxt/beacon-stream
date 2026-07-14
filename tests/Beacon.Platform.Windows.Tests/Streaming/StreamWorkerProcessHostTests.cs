@@ -46,9 +46,10 @@ public sealed class StreamWorkerProcessHostTests
         try
         {
             await workerHost.EnsureReadyAsync(CancellationToken.None);
+            long generation = workerHost.CurrentProcessGeneration;
 
             StreamWorkerProtocolException error = await Assert.ThrowsAsync<StreamWorkerProtocolException>(() =>
-                workerHost.SendAsync(Prepare("session"), CancellationToken.None));
+                workerHost.SendAsync(generation, Prepare("session"), CancellationToken.None));
             Exception? shutdownError = await Record.ExceptionAsync(() =>
                 workerHost.ShutdownAsync(CancellationToken.None));
             try
@@ -530,26 +531,30 @@ public sealed class StreamWorkerProcessHostTests
         await host.EnsureReadyAsync(CancellationToken.None);
         int processId = host.ProcessId;
         var authorizer = new StreamWorkerSessionAuthorizer(host);
-        StreamWorkerAuthorizationContext authorizationContext =
+        StreamRuntimeAuthorizationContext authorizationContext =
             await authorizer.GetContextAsync(CancellationToken.None);
         StreamWorkerCommandResponse prepare = await host.SendAsync(
+            authorizationContext.RuntimeGeneration,
             Prepare("integration-session"),
             CancellationToken.None);
-        StreamWorkerAuthorizationResult authorization = await authorizer.AuthorizeAsync(
-            new StreamWorkerAuthorization(
+        StreamRuntimeAuthorizationResult authorization = await authorizer.AuthorizeAsync(
+            new StreamRuntimeAuthorization(
                 "integration-session",
                 "z-fold-7",
                 1,
                 Enumerable.Repeat((byte)0x5a, 32).ToArray(),
-                authorizationContext.WorkerInstanceId,
+                authorizationContext.RuntimeInstanceId,
+                authorizationContext.RuntimeGeneration,
                 DateTimeOffset.UtcNow.AddMinutes(2)),
             CancellationToken.None);
-        StreamWorkerAuthorizationResult revocation = await authorizer.RevokeAsync(
-            new StreamWorkerRevocation(
+        StreamRuntimeAuthorizationResult revocation = await authorizer.RevokeAsync(
+            new StreamRuntimeRevocation(
                 "integration-session",
-                Enumerable.Repeat((byte)0x5a, 32).ToArray()),
+                Enumerable.Repeat((byte)0x5a, 32).ToArray(),
+                authorizationContext.RuntimeGeneration),
             CancellationToken.None);
         StreamWorkerCommandResponse start = await host.SendAsync(
+            authorizationContext.RuntimeGeneration,
             new WorkerIpcEnvelope
             {
                 SessionId = "integration-session",
@@ -557,6 +562,7 @@ public sealed class StreamWorkerProcessHostTests
             },
             CancellationToken.None);
         StreamWorkerCommandResponse stop = await host.SendAsync(
+            authorizationContext.RuntimeGeneration,
             new WorkerIpcEnvelope
             {
                 SessionId = "integration-session",

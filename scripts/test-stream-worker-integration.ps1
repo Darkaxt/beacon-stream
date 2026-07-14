@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$WorkerPath = ''
+    [string]$WorkerPath = '',
+    [switch]$AllowUnsupportedVideoHardware
 )
 
 $ErrorActionPreference = 'Stop'
@@ -79,11 +80,32 @@ try {
         --width $displayWidth `
         --height $displayHeight
     $nativeExitCode = $LASTEXITCODE
-    if ($nativeExitCode -ne 0 -or
-        $nativeOutput -notmatch '^BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK REAL_H264_ACCESS_UNIT DISCONNECT SHUTDOWN$') {
+    if ($nativeExitCode -eq 0 -and
+        $nativeOutput -match '^BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK REAL_H264_ACCESS_UNIT DISCONNECT SHUTDOWN$') {
+        Write-Host $nativeOutput
+    }
+    elseif ($AllowUnsupportedVideoHardware -and
+        $nativeExitCode -eq 99 -and
+        $nativeOutput -eq 'BEACON_WORKER_VIDEO_FAILURE CAPTURE 5') {
+        Write-Host 'BEACON_WORKER_VIDEO_UNAVAILABLE NVIDIA_ADAPTER_MISSING'
+    }
+    else {
         throw "Native Worker IPC/QUIC integration failed with exit code ${nativeExitCode}: $nativeOutput"
     }
-    Write-Host $nativeOutput
+
+    $failureOutput = & $nativeProbe `
+        --worker $WorkerPath `
+        --identity $identityPath `
+        --fingerprint $fingerprint `
+        --display '\\.\BEACON-NOT-A-DISPLAY' `
+        --width 2560 `
+        --height 1600
+    $failureExitCode = $LASTEXITCODE
+    if ($failureExitCode -ne 99 -or
+        $failureOutput -ne 'BEACON_WORKER_VIDEO_FAILURE CAPTURE 2') {
+        throw "Native Worker failure diagnostic integration failed with exit code ${failureExitCode}: $failureOutput"
+    }
+    Write-Host $failureOutput
 
     $benchmarkOutput = & $nativeProbe `
         --benchmark-worker $WorkerPath `

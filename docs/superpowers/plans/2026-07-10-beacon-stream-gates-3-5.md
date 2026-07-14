@@ -552,10 +552,15 @@ and Client Lab plus its Playwright lifecycle remain green. Evidence:
 Worker-host ownership evidence (2026-07-14): the backend, relay, and service composition now use
 one generation-aware `IStreamWorkerHost` contract. The synthetic legacy-generation adapter and
 its compatibility-only tests were removed, and an architecture regression prevents the split
-contract from returning. Core, Windows platform, and Server suites pass. Ticket authorization's
-remaining unpinned command path and worker-specific Core authorization names remain open for the
-next recovery slice. Evidence:
+contract from returning. Core, Windows platform, and Server suites pass. Evidence:
 `docs/validation/2026-07-14-stream-worker-host-contract.md`.
+
+Runtime-authorization evidence (2026-07-14): Core and Server ticket ownership are protocol
+neutral, ticket authorization and revocation are pinned to the issuing runtime generation, and
+the unpinned Worker command overload is gone. Worker process diagnostics now distinguish an
+unsupported hosted-runner GPU from production-video regressions without adding a synthetic or
+alternate media route. Evidence:
+`docs/validation/2026-07-14-runtime-authorization-and-worker-capability.md`.
 
 ## Deferred Until Gate 5 Passes
 

@@ -122,6 +122,57 @@ public sealed class ArchitectureRecoveryBoundaryTests
     }
 
     [Fact]
+    public void CoreStreamAuthorizationContractIsRuntimeNeutral()
+    {
+        string root = FindRepositoryRoot();
+        string authorization = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.Core/Streaming/IStreamSessionAuthorizer.cs"));
+
+        Assert.DoesNotContain("Worker", authorization, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ServerTicketOwnershipIsRuntimeNeutral()
+    {
+        string root = FindRepositoryRoot();
+        string ticketService = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.Server/Security/StreamTicketService.cs"));
+        string provisioning = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.Server/Security/StreamTicketProvisioningService.cs"));
+
+        Assert.DoesNotContain("Beacon.StreamWorker.Contracts", ticketService, StringComparison.Ordinal);
+        Assert.DoesNotContain("Beacon.StreamWorker.Contracts", provisioning, StringComparison.Ordinal);
+        Assert.DoesNotContain("CreateWorkerAuthorization", ticketService, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HostedRunnerVideoExceptionIsExplicitAndNarrow()
+    {
+        string root = FindRepositoryRoot();
+        string script = File.ReadAllText(ToPlatformPath(
+            root,
+            "scripts/test-stream-worker-integration.ps1"));
+        string workflow = File.ReadAllText(ToPlatformPath(
+            root,
+            ".github/workflows/ci.yml"));
+
+        Assert.Contains("[switch]$AllowUnsupportedVideoHardware", script, StringComparison.Ordinal);
+        Assert.Contains("$nativeExitCode -eq 99", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "BEACON_WORKER_VIDEO_FAILURE CAPTURE 5",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "./scripts/test-stream-worker-integration.ps1 -AllowUnsupportedVideoHardware",
+            workflow,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("continue-on-error", workflow, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void CompatibilityGuardUsesOneTrackedDefinitionManifest()
     {
         string root = FindRepositoryRoot();

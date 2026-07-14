@@ -12,7 +12,9 @@ public sealed class StreamTicketRecord
 
     public required ulong PlanRevision { get; init; }
 
-    public required byte[] WorkerInstanceId { get; init; }
+    public required byte[] RuntimeInstanceId { get; init; }
+
+    public required long RuntimeGeneration { get; init; }
 
     public required DateTimeOffset IssuedAt { get; init; }
 
@@ -22,7 +24,7 @@ public sealed class StreamTicketRecord
 
     public bool Revoked { get; set; }
 
-    public bool WorkerRevocationSent { get; set; }
+    public bool RuntimeRevocationSent { get; set; }
 
     public override string ToString() =>
         $"Stream ticket {TicketId} for {ClientId}/{SessionId} revision {PlanRevision}: " +

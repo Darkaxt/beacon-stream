@@ -1,7 +1,5 @@
 using System.Security.Cryptography;
 using Beacon.Server.State;
-using Beacon.StreamWorker.Contracts.Worker.V1;
-using Google.Protobuf;
 
 namespace Beacon.Server.Security;
 
@@ -15,7 +13,7 @@ public enum StreamTicketFailure
     ClientMismatch,
     SessionMismatch,
     PlanRevisionMismatch,
-    WorkerMismatch,
+    RuntimeMismatch,
 }
 
 public sealed record StreamTicketValidation(bool Success, StreamTicketFailure Failure)
@@ -46,7 +44,15 @@ public sealed class IssuedStreamTicket
 public sealed record PendingStreamTicketRevocation(
     string TicketId,
     string SessionId,
-    byte[] TicketHash);
+    byte[] TicketHash,
+    long RuntimeGeneration);
+
+public sealed record StreamTicketAuthorization(
+    byte[] TicketHash,
+    string ClientId,
+    ulong PlanRevision,
+    byte[] RuntimeInstanceId,
+    DateTimeOffset ExpiresAt);
 
 public sealed class StreamTicketService
 {
@@ -58,7 +64,8 @@ public sealed class StreamTicketService
         string clientId,
         string sessionId,
         ulong planRevision,
-        ReadOnlySpan<byte> workerInstanceId,
+        ReadOnlySpan<byte> runtimeInstanceId,
+        long runtimeGeneration,
         DateTimeOffset issuedAt,
         TimeSpan lifetime)
     {
@@ -66,9 +73,15 @@ public sealed class StreamTicketService
         {
             throw new ArgumentOutOfRangeException(nameof(lifetime), "Ticket lifetime must be at most five minutes.");
         }
-        if (workerInstanceId.IsEmpty)
+        if (runtimeInstanceId.IsEmpty)
         {
-            throw new ArgumentException("Worker instance id is required.", nameof(workerInstanceId));
+            throw new ArgumentException("Runtime instance id is required.", nameof(runtimeInstanceId));
+        }
+        if (runtimeGeneration <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(runtimeGeneration),
+                "Runtime generation must be positive.");
         }
         if (planRevision == 0)
         {
@@ -85,7 +98,8 @@ public sealed class StreamTicketService
             ClientId = RequireText(clientId, nameof(clientId)),
             SessionId = RequireText(sessionId, nameof(sessionId)),
             PlanRevision = planRevision,
-            WorkerInstanceId = workerInstanceId.ToArray(),
+            RuntimeInstanceId = runtimeInstanceId.ToArray(),
+            RuntimeGeneration = runtimeGeneration,
             IssuedAt = issuedAt,
             ExpiresAt = issuedAt.Add(lifetime),
         };
@@ -108,7 +122,8 @@ public sealed class StreamTicketService
         string clientId,
         string sessionId,
         ulong planRevision,
-        ReadOnlySpan<byte> workerInstanceId,
+        ReadOnlySpan<byte> runtimeInstanceId,
+        long runtimeGeneration,
         DateTimeOffset issuedAt,
         TimeSpan lifetime)
     {
@@ -124,10 +139,17 @@ public sealed class StreamTicketService
                 }
             }
         }
-        return Issue(clientId, sessionId, planRevision, workerInstanceId, issuedAt, lifetime);
+        return Issue(
+            clientId,
+            sessionId,
+            planRevision,
+            runtimeInstanceId,
+            runtimeGeneration,
+            issuedAt,
+            lifetime);
     }
 
-    public AuthorizeTicket CreateWorkerAuthorization(string ticketId)
+    public StreamTicketAuthorization CreateRuntimeAuthorization(string ticketId)
     {
         StreamTicketRecord record;
         lock (gate)
@@ -135,14 +157,12 @@ public sealed class StreamTicketService
             record = ticketsById.GetValueOrDefault(ticketId)
                 ?? throw new KeyNotFoundException("Stream ticket was not found.");
         }
-        return new AuthorizeTicket
-        {
-            TicketHash = ByteString.CopyFrom(record.TicketHash),
-            ClientId = record.ClientId,
-            PlanRevision = record.PlanRevision,
-            ExpiresAtUnixMs = checked((ulong)record.ExpiresAt.ToUnixTimeMilliseconds()),
-            WorkerInstanceId = ByteString.CopyFrom(record.WorkerInstanceId),
-        };
+        return new StreamTicketAuthorization(
+            (byte[])record.TicketHash.Clone(),
+            record.ClientId,
+            record.PlanRevision,
+            (byte[])record.RuntimeInstanceId.Clone(),
+            record.ExpiresAt);
     }
 
     public StreamTicketValidation Consume(
@@ -150,7 +170,7 @@ public sealed class StreamTicketService
         string clientId,
         string sessionId,
         ulong planRevision,
-        ReadOnlySpan<byte> workerInstanceId,
+        ReadOnlySpan<byte> runtimeInstanceId,
         DateTimeOffset now)
     {
         byte[] submitted;
@@ -195,9 +215,9 @@ public sealed class StreamTicketService
                 {
                     return StreamTicketValidation.Reject(StreamTicketFailure.PlanRevisionMismatch);
                 }
-                if (!CryptographicOperations.FixedTimeEquals(record.WorkerInstanceId, workerInstanceId))
+                if (!CryptographicOperations.FixedTimeEquals(record.RuntimeInstanceId, runtimeInstanceId))
                 {
-                    return StreamTicketValidation.Reject(StreamTicketFailure.WorkerMismatch);
+                    return StreamTicketValidation.Reject(StreamTicketFailure.RuntimeMismatch);
                 }
                 record.Consumed = true;
                 return StreamTicketValidation.Accepted;
@@ -236,7 +256,7 @@ public sealed class StreamTicketService
         }
     }
 
-    public IReadOnlyList<PendingStreamTicketRevocation> GetPendingWorkerRevocations(
+    public IReadOnlyList<PendingStreamTicketRevocation> GetPendingRuntimeRevocations(
         string clientId,
         string sessionId)
     {
@@ -244,24 +264,25 @@ public sealed class StreamTicketService
         {
             return ticketsById.Values
                 .Where(record => record.Revoked
-                    && !record.WorkerRevocationSent
+                    && !record.RuntimeRevocationSent
                     && string.Equals(record.ClientId, clientId, StringComparison.Ordinal)
                     && string.Equals(record.SessionId, sessionId, StringComparison.Ordinal))
                 .Select(record => new PendingStreamTicketRevocation(
                     record.TicketId,
                     record.SessionId,
-                    (byte[])record.TicketHash.Clone()))
+                    (byte[])record.TicketHash.Clone(),
+                    record.RuntimeGeneration))
                 .ToArray();
         }
     }
 
-    public void MarkWorkerRevocationSent(string ticketId)
+    public void MarkRuntimeRevocationSent(string ticketId)
     {
         lock (gate)
         {
             if (ticketsById.TryGetValue(ticketId, out StreamTicketRecord? record))
             {
-                record.WorkerRevocationSent = true;
+                record.RuntimeRevocationSent = true;
             }
         }
     }

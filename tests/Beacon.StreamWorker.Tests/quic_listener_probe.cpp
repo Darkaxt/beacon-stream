@@ -983,6 +983,118 @@ bool collect_disconnect_event(
   }
 }
 
+struct WorkerVideoFailure {
+  worker_v1::DiagnosticBoundary boundary{
+      worker_v1::DIAGNOSTIC_BOUNDARY_UNSPECIFIED};
+  std::uint32_t native_code{};
+};
+
+std::optional<WorkerVideoFailure> collect_worker_video_failure(
+    beacon::worker::NamedPipeChannel &channel,
+    std::vector<worker_v1::WorkerIpcEnvelope> &events) {
+  bool failed_state = false;
+  bool disconnected = false;
+  std::optional<WorkerVideoFailure> failure;
+  while (!disconnected) {
+    worker_v1::WorkerIpcEnvelope event;
+    if (channel.read(event) != beacon::worker::FrameDecodeStatus::success ||
+        event.protocol_version() != 1 || event.request_id() != 0) {
+      return std::nullopt;
+    }
+
+    if (event.body_case() ==
+        worker_v1::WorkerIpcEnvelope::kWorkerDiagnostic) {
+      const auto &diagnostic = event.worker_diagnostic();
+      const bool video_failure =
+          event.session_id() == "session-a" &&
+          diagnostic.severity() == worker_v1::DIAGNOSTIC_SEVERITY_ERROR &&
+          diagnostic.code() == worker_v1::DIAGNOSTIC_CODE_OPERATION_FAILED &&
+          (diagnostic.boundary() == worker_v1::DIAGNOSTIC_BOUNDARY_CAPTURE ||
+           diagnostic.boundary() == worker_v1::DIAGNOSTIC_BOUNDARY_ENCODER ||
+           diagnostic.boundary() == worker_v1::DIAGNOSTIC_BOUNDARY_TRANSPORT);
+      const bool transport_progress =
+          event.session_id().empty() &&
+          diagnostic.severity() ==
+              worker_v1::DIAGNOSTIC_SEVERITY_INFORMATION &&
+          diagnostic.boundary() == worker_v1::DIAGNOSTIC_BOUNDARY_TRANSPORT;
+      if (video_failure) {
+        failure = WorkerVideoFailure{
+            .boundary = diagnostic.boundary(),
+            .native_code = diagnostic.platform_error_code(),
+        };
+      } else if (!transport_progress) {
+        return std::nullopt;
+      }
+      events.push_back(std::move(event));
+      continue;
+    }
+
+    if (event.session_id() != "session-a") {
+      return std::nullopt;
+    }
+    switch (event.body_case()) {
+    case worker_v1::WorkerIpcEnvelope::kTransportAuthenticated:
+      if (event.transport_authenticated().session_generation() != 1) {
+        return std::nullopt;
+      }
+      break;
+    case worker_v1::WorkerIpcEnvelope::kInputReceived:
+      if (event.input_received().session_generation() != 1) {
+        return std::nullopt;
+      }
+      break;
+    case worker_v1::WorkerIpcEnvelope::kFeedbackReceived:
+      if (event.feedback_received().session_generation() != 1) {
+        return std::nullopt;
+      }
+      break;
+    case worker_v1::WorkerIpcEnvelope::kMediaEvidence:
+      if (event.media_evidence().session_generation() != 1) {
+        return std::nullopt;
+      }
+      break;
+    case worker_v1::WorkerIpcEnvelope::kSessionStateChanged:
+      failed_state =
+          event.session_state_changed().state() ==
+              worker_v1::WORKER_SESSION_STATE_FAILED &&
+          event.session_state_changed().error_code() ==
+              worker_v1::WORKER_ERROR_CODE_OPERATION_FAILED;
+      if (!failed_state) {
+        return std::nullopt;
+      }
+      break;
+    case worker_v1::WorkerIpcEnvelope::kTransportDisconnected:
+      disconnected =
+          event.transport_disconnected().session_generation() == 1;
+      if (!disconnected) {
+        return std::nullopt;
+      }
+      break;
+    default:
+      return std::nullopt;
+    }
+    events.push_back(std::move(event));
+  }
+  if (!failed_state) {
+    return std::nullopt;
+  }
+  return failure;
+}
+
+const char *diagnostic_boundary_name(
+    worker_v1::DiagnosticBoundary boundary) noexcept {
+  switch (boundary) {
+  case worker_v1::DIAGNOSTIC_BOUNDARY_CAPTURE:
+    return "CAPTURE";
+  case worker_v1::DIAGNOSTIC_BOUNDARY_ENCODER:
+    return "ENCODER";
+  case worker_v1::DIAGNOSTIC_BOUNDARY_TRANSPORT:
+    return "TRANSPORT";
+  default:
+    return "UNSPECIFIED";
+  }
+}
+
 int run_worker_process_probe(
     const std::wstring &worker_path, const std::wstring &identity_path,
     const beacon::worker::TicketHash &fingerprint, WorkerProcessProbeMode mode,
@@ -1171,6 +1283,26 @@ int run_worker_process_probe(
     if (!valid_result || client.failed) {
       lock.unlock();
       stop_client(client);
+      if (mode == WorkerProcessProbeMode::video && client.authenticated &&
+          client.certificate_seen) {
+        const auto failure = collect_worker_video_failure(channel, events);
+        if (failure) {
+          responses.clear();
+          auto shutdown = worker_command(4, "");
+          shutdown.mutable_shutdown_worker();
+          if (!exchange_worker_command(channel, shutdown, responses, events)) {
+            return 95;
+          }
+          const auto exit_code = process.wait();
+          if (!exit_code || *exit_code != 0) {
+            return 96;
+          }
+          std::printf("BEACON_WORKER_VIDEO_FAILURE %s %u\n",
+                      diagnostic_boundary_name(failure->boundary),
+                      failure->native_code);
+          return 99;
+        }
+      }
       return 92;
     }
   }

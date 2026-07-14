@@ -82,4 +82,4 @@ jobs:
       - shell: pwsh
         run: ./scripts/build-native-windows.ps1
       - shell: pwsh
-        run: ./scripts/test-stream-worker-integration.ps1
+        run: ./scripts/test-stream-worker-integration.ps1 -AllowUnsupportedVideoHardware

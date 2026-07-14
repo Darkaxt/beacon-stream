@@ -195,9 +195,6 @@ public sealed class StreamWorkerEventRelayTests
         public ValueTask WriteAsync(StreamWorkerEvent value) => channel.Writer.WriteAsync(value);
         public Task EnsureReadyAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<StreamWorkerCommandResponse> SendAsync(
-            WorkerIpcEnvelope command,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<StreamWorkerCommandResponse> SendAsync(
             long expectedProcessGeneration,
             WorkerIpcEnvelope command,
             CancellationToken cancellationToken) => throw new NotSupportedException();

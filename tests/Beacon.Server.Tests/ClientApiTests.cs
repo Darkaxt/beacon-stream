@@ -536,9 +536,10 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
         Assert.True(publicTicket.Length >= 32);
         FakeStreamSessionAuthorizer authorizer = Assert.IsType<FakeStreamSessionAuthorizer>(
             factory.Services.GetRequiredService<IStreamSessionAuthorizer>());
-        StreamWorkerAuthorization privateAuthorization = Assert.IsType<StreamWorkerAuthorization>(
+        StreamRuntimeAuthorization privateAuthorization = Assert.IsType<StreamRuntimeAuthorization>(
             authorizer.Authorizations.LastOrDefault());
         Assert.Equal(planRevision, privateAuthorization.PlanRevision);
+        Assert.Equal(1, privateAuthorization.RuntimeGeneration);
         Assert.Equal(32, privateAuthorization.TicketHash.Length);
         Assert.False(CryptographicOperations.FixedTimeEquals(publicTicket, privateAuthorization.TicketHash));
         Assert.True(connection.EnumerateObject().Select(property => property.Name).ToHashSet().SetEquals(
@@ -2191,18 +2192,18 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
 
     private sealed class ReplacingOnSecondAuthorizationAuthorizer : IStreamSessionAuthorizer
     {
-        private static readonly byte[] WorkerInstanceId = [0x52, 0x41, 0x43, 0x45];
+        private static readonly byte[] RuntimeInstanceId = [0x52, 0x41, 0x43, 0x45];
         private int authorizationCount;
 
         public Func<Task>? BeforeSecondAuthorization { get; set; }
 
-        public List<StreamWorkerRevocation> Revocations { get; } = [];
+        public List<StreamRuntimeRevocation> Revocations { get; } = [];
 
-        public Task<StreamWorkerAuthorizationContext> GetContextAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(new StreamWorkerAuthorizationContext((byte[])WorkerInstanceId.Clone()));
+        public Task<StreamRuntimeAuthorizationContext> GetContextAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new StreamRuntimeAuthorizationContext((byte[])RuntimeInstanceId.Clone(), 7));
 
-        public async Task<StreamWorkerAuthorizationResult> AuthorizeAsync(
-            StreamWorkerAuthorization authorization,
+        public async Task<StreamRuntimeAuthorizationResult> AuthorizeAsync(
+            StreamRuntimeAuthorization authorization,
             CancellationToken cancellationToken)
         {
             authorizationCount++;
@@ -2210,96 +2211,96 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             {
                 await BeforeSecondAuthorization();
             }
-            return StreamWorkerAuthorizationResult.Accepted;
+            return StreamRuntimeAuthorizationResult.Accepted;
         }
 
-        public Task<StreamWorkerAuthorizationResult> RevokeAsync(
-            StreamWorkerRevocation revocation,
+        public Task<StreamRuntimeAuthorizationResult> RevokeAsync(
+            StreamRuntimeRevocation revocation,
             CancellationToken cancellationToken)
         {
             Revocations.Add(revocation);
-            return Task.FromResult(StreamWorkerAuthorizationResult.Accepted);
+            return Task.FromResult(StreamRuntimeAuthorizationResult.Accepted);
         }
     }
 
     private sealed class RejectingAuthorizationAuthorizer : IStreamSessionAuthorizer
     {
-        public Task<StreamWorkerAuthorizationContext> GetContextAsync(
+        public Task<StreamRuntimeAuthorizationContext> GetContextAsync(
             CancellationToken cancellationToken) =>
-            Task.FromResult(new StreamWorkerAuthorizationContext([1, 2, 3, 4]));
+            Task.FromResult(new StreamRuntimeAuthorizationContext([1, 2, 3, 4], 7));
 
-        public Task<StreamWorkerAuthorizationResult> AuthorizeAsync(
-            StreamWorkerAuthorization authorization,
+        public Task<StreamRuntimeAuthorizationResult> AuthorizeAsync(
+            StreamRuntimeAuthorization authorization,
             CancellationToken cancellationToken) =>
-            Task.FromResult(StreamWorkerAuthorizationResult.Reject("ticket rejected"));
+            Task.FromResult(StreamRuntimeAuthorizationResult.Reject("ticket rejected"));
 
-        public Task<StreamWorkerAuthorizationResult> RevokeAsync(
-            StreamWorkerRevocation revocation,
+        public Task<StreamRuntimeAuthorizationResult> RevokeAsync(
+            StreamRuntimeRevocation revocation,
             CancellationToken cancellationToken) =>
-            Task.FromResult(StreamWorkerAuthorizationResult.Accepted);
+            Task.FromResult(StreamRuntimeAuthorizationResult.Accepted);
     }
 
     private sealed class RejectingSecondAuthorizationAuthorizer : IStreamSessionAuthorizer
     {
         private int authorizationCount;
 
-        public Task<StreamWorkerAuthorizationContext> GetContextAsync(
+        public Task<StreamRuntimeAuthorizationContext> GetContextAsync(
             CancellationToken cancellationToken) =>
-            Task.FromResult(new StreamWorkerAuthorizationContext([1, 2, 3, 4]));
+            Task.FromResult(new StreamRuntimeAuthorizationContext([1, 2, 3, 4], 7));
 
-        public Task<StreamWorkerAuthorizationResult> AuthorizeAsync(
-            StreamWorkerAuthorization authorization,
+        public Task<StreamRuntimeAuthorizationResult> AuthorizeAsync(
+            StreamRuntimeAuthorization authorization,
             CancellationToken cancellationToken)
         {
             authorizationCount++;
             return Task.FromResult(authorizationCount == 2
-                ? StreamWorkerAuthorizationResult.Reject("replacement ticket rejected")
-                : StreamWorkerAuthorizationResult.Accepted);
+                ? StreamRuntimeAuthorizationResult.Reject("replacement ticket rejected")
+                : StreamRuntimeAuthorizationResult.Accepted);
         }
 
-        public Task<StreamWorkerAuthorizationResult> RevokeAsync(
-            StreamWorkerRevocation revocation,
+        public Task<StreamRuntimeAuthorizationResult> RevokeAsync(
+            StreamRuntimeRevocation revocation,
             CancellationToken cancellationToken) =>
-            Task.FromResult(StreamWorkerAuthorizationResult.Accepted);
+            Task.FromResult(StreamRuntimeAuthorizationResult.Accepted);
     }
 
     private sealed class RejectingRevocationAuthorizer : IStreamSessionAuthorizer
     {
-        public Task<StreamWorkerAuthorizationContext> GetContextAsync(
+        public Task<StreamRuntimeAuthorizationContext> GetContextAsync(
             CancellationToken cancellationToken) =>
-            Task.FromResult(new StreamWorkerAuthorizationContext([1, 2, 3, 4]));
+            Task.FromResult(new StreamRuntimeAuthorizationContext([1, 2, 3, 4], 7));
 
-        public Task<StreamWorkerAuthorizationResult> AuthorizeAsync(
-            StreamWorkerAuthorization authorization,
+        public Task<StreamRuntimeAuthorizationResult> AuthorizeAsync(
+            StreamRuntimeAuthorization authorization,
             CancellationToken cancellationToken) =>
-            Task.FromResult(StreamWorkerAuthorizationResult.Accepted);
+            Task.FromResult(StreamRuntimeAuthorizationResult.Accepted);
 
-        public Task<StreamWorkerAuthorizationResult> RevokeAsync(
-            StreamWorkerRevocation revocation,
+        public Task<StreamRuntimeAuthorizationResult> RevokeAsync(
+            StreamRuntimeRevocation revocation,
             CancellationToken cancellationToken) =>
-            Task.FromResult(StreamWorkerAuthorizationResult.Reject(
+            Task.FromResult(StreamRuntimeAuthorizationResult.Reject(
                 "ticket revocation rejected"));
     }
 
     private sealed class CancelingAuthorizationAuthorizer : IStreamSessionAuthorizer
     {
-        public List<StreamWorkerRevocation> Revocations { get; } = [];
+        public List<StreamRuntimeRevocation> Revocations { get; } = [];
 
-        public Task<StreamWorkerAuthorizationContext> GetContextAsync(
+        public Task<StreamRuntimeAuthorizationContext> GetContextAsync(
             CancellationToken cancellationToken) =>
-            Task.FromResult(new StreamWorkerAuthorizationContext([1, 2, 3, 4]));
+            Task.FromResult(new StreamRuntimeAuthorizationContext([1, 2, 3, 4], 7));
 
-        public Task<StreamWorkerAuthorizationResult> AuthorizeAsync(
-            StreamWorkerAuthorization authorization,
+        public Task<StreamRuntimeAuthorizationResult> AuthorizeAsync(
+            StreamRuntimeAuthorization authorization,
             CancellationToken cancellationToken) =>
             throw new OperationCanceledException("simulated ticket authorization cancellation");
 
-        public Task<StreamWorkerAuthorizationResult> RevokeAsync(
-            StreamWorkerRevocation revocation,
+        public Task<StreamRuntimeAuthorizationResult> RevokeAsync(
+            StreamRuntimeRevocation revocation,
             CancellationToken cancellationToken)
         {
             Revocations.Add(revocation);
-            return Task.FromResult(StreamWorkerAuthorizationResult.Accepted);
+            return Task.FromResult(StreamRuntimeAuthorizationResult.Accepted);
         }
     }
 

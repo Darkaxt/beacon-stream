@@ -35,10 +35,6 @@ public interface IStreamWorkerHost
     bool IsCurrentProcessGeneration(long processGeneration);
 
     Task<StreamWorkerCommandResponse> SendAsync(
-        WorkerIpcEnvelope command,
-        CancellationToken cancellationToken);
-
-    Task<StreamWorkerCommandResponse> SendAsync(
         long expectedProcessGeneration,
         WorkerIpcEnvelope command,
         CancellationToken cancellationToken);
@@ -139,15 +135,6 @@ public sealed class StreamWorkerProcessHost :
         {
             lifecycleGate.Release();
         }
-    }
-
-    public async Task<StreamWorkerCommandResponse> SendAsync(
-        WorkerIpcEnvelope command,
-        CancellationToken cancellationToken)
-    {
-        await EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
-        long processGeneration = CurrentProcessGeneration;
-        return await SendAsync(processGeneration, command, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<StreamWorkerCommandResponse> SendAsync(

@@ -21,7 +21,7 @@ public sealed class StreamTicketProvisioningServiceTests
 
         Assert.False(result.Success);
         Assert.Null(result.Ticket);
-        Assert.Single(tickets.GetPendingWorkerRevocations("z-fold-7", "session-1"));
+        Assert.Single(tickets.GetPendingRuntimeRevocations("z-fold-7", "session-1"));
     }
 
     [Fact]
@@ -33,6 +33,7 @@ public sealed class StreamTicketProvisioningServiceTests
             "session-1",
             planRevision: 8,
             [1, 2, 3, 4],
+            runtimeGeneration: 7,
             DateTimeOffset.UtcNow,
             TimeSpan.FromMinutes(2));
         var service = new StreamTicketProvisioningService(
@@ -46,27 +47,27 @@ public sealed class StreamTicketProvisioningServiceTests
 
         Assert.False(result.Success);
         Assert.Contains("failed", result.Error, StringComparison.OrdinalIgnoreCase);
-        Assert.Single(tickets.GetPendingWorkerRevocations("z-fold-7", "session-1"));
+        Assert.Single(tickets.GetPendingRuntimeRevocations("z-fold-7", "session-1"));
     }
 
     private sealed class ThrowingAuthorizer(bool throwOnAuthorize, bool throwOnRevoke)
         : IStreamSessionAuthorizer
     {
-        public Task<StreamWorkerAuthorizationContext> GetContextAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(new StreamWorkerAuthorizationContext([1, 2, 3, 4]));
+        public Task<StreamRuntimeAuthorizationContext> GetContextAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new StreamRuntimeAuthorizationContext([1, 2, 3, 4], 7));
 
-        public Task<StreamWorkerAuthorizationResult> AuthorizeAsync(
-            StreamWorkerAuthorization authorization,
+        public Task<StreamRuntimeAuthorizationResult> AuthorizeAsync(
+            StreamRuntimeAuthorization authorization,
             CancellationToken cancellationToken) =>
             throwOnAuthorize
-                ? Task.FromException<StreamWorkerAuthorizationResult>(new InvalidOperationException("authorize failed"))
-                : Task.FromResult(StreamWorkerAuthorizationResult.Accepted);
+                ? Task.FromException<StreamRuntimeAuthorizationResult>(new InvalidOperationException("authorize failed"))
+                : Task.FromResult(StreamRuntimeAuthorizationResult.Accepted);
 
-        public Task<StreamWorkerAuthorizationResult> RevokeAsync(
-            StreamWorkerRevocation revocation,
+        public Task<StreamRuntimeAuthorizationResult> RevokeAsync(
+            StreamRuntimeRevocation revocation,
             CancellationToken cancellationToken) =>
             throwOnRevoke
-                ? Task.FromException<StreamWorkerAuthorizationResult>(new InvalidOperationException("revoke failed"))
-                : Task.FromResult(StreamWorkerAuthorizationResult.Accepted);
+                ? Task.FromException<StreamRuntimeAuthorizationResult>(new InvalidOperationException("revoke failed"))
+                : Task.FromResult(StreamRuntimeAuthorizationResult.Accepted);
     }
 }

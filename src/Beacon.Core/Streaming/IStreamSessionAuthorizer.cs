@@ -1,34 +1,40 @@
 namespace Beacon.Core.Streaming;
 
-public sealed record StreamWorkerAuthorizationContext(byte[] WorkerInstanceId);
+public sealed record StreamRuntimeAuthorizationContext(
+    byte[] RuntimeInstanceId,
+    long RuntimeGeneration);
 
-public sealed record StreamWorkerAuthorization(
+public sealed record StreamRuntimeAuthorization(
     string SessionId,
     string ClientId,
     ulong PlanRevision,
     byte[] TicketHash,
-    byte[] WorkerInstanceId,
+    byte[] RuntimeInstanceId,
+    long RuntimeGeneration,
     DateTimeOffset ExpiresAt);
 
-public sealed record StreamWorkerAuthorizationResult(bool Success, string? Error)
+public sealed record StreamRuntimeAuthorizationResult(bool Success, string? Error)
 {
-    public static StreamWorkerAuthorizationResult Accepted { get; } = new(true, null);
+    public static StreamRuntimeAuthorizationResult Accepted { get; } = new(true, null);
 
-    public static StreamWorkerAuthorizationResult Reject(string error) => new(false, error);
+    public static StreamRuntimeAuthorizationResult Reject(string error) => new(false, error);
 }
 
-public sealed record StreamWorkerRevocation(string SessionId, byte[] TicketHash);
+public sealed record StreamRuntimeRevocation(
+    string SessionId,
+    byte[] TicketHash,
+    long RuntimeGeneration);
 
 public interface IStreamSessionAuthorizer
 {
-    Task<StreamWorkerAuthorizationContext> GetContextAsync(CancellationToken cancellationToken);
+    Task<StreamRuntimeAuthorizationContext> GetContextAsync(CancellationToken cancellationToken);
 
-    Task<StreamWorkerAuthorizationResult> AuthorizeAsync(
-        StreamWorkerAuthorization authorization,
+    Task<StreamRuntimeAuthorizationResult> AuthorizeAsync(
+        StreamRuntimeAuthorization authorization,
         CancellationToken cancellationToken);
 
-    Task<StreamWorkerAuthorizationResult> RevokeAsync(
-        StreamWorkerRevocation revocation,
+    Task<StreamRuntimeAuthorizationResult> RevokeAsync(
+        StreamRuntimeRevocation revocation,
         CancellationToken cancellationToken);
 }
 
@@ -36,26 +42,26 @@ public sealed class FakeStreamSessionAuthorizer : IStreamSessionAuthorizer
 {
     private static readonly byte[] InstanceId = [0x42, 0x45, 0x41, 0x43, 0x4f, 0x4e];
 
-    public List<StreamWorkerAuthorization> Authorizations { get; } = [];
+    public List<StreamRuntimeAuthorization> Authorizations { get; } = [];
 
-    public List<StreamWorkerRevocation> Revocations { get; } = [];
+    public List<StreamRuntimeRevocation> Revocations { get; } = [];
 
-    public Task<StreamWorkerAuthorizationContext> GetContextAsync(CancellationToken cancellationToken) =>
-        Task.FromResult(new StreamWorkerAuthorizationContext((byte[])InstanceId.Clone()));
+    public Task<StreamRuntimeAuthorizationContext> GetContextAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(new StreamRuntimeAuthorizationContext((byte[])InstanceId.Clone(), 1));
 
-    public Task<StreamWorkerAuthorizationResult> AuthorizeAsync(
-        StreamWorkerAuthorization authorization,
+    public Task<StreamRuntimeAuthorizationResult> AuthorizeAsync(
+        StreamRuntimeAuthorization authorization,
         CancellationToken cancellationToken)
     {
         Authorizations.Add(authorization);
-        return Task.FromResult(StreamWorkerAuthorizationResult.Accepted);
+        return Task.FromResult(StreamRuntimeAuthorizationResult.Accepted);
     }
 
-    public Task<StreamWorkerAuthorizationResult> RevokeAsync(
-        StreamWorkerRevocation revocation,
+    public Task<StreamRuntimeAuthorizationResult> RevokeAsync(
+        StreamRuntimeRevocation revocation,
         CancellationToken cancellationToken)
     {
         Revocations.Add(revocation);
-        return Task.FromResult(StreamWorkerAuthorizationResult.Accepted);
+        return Task.FromResult(StreamRuntimeAuthorizationResult.Accepted);
     }
 }

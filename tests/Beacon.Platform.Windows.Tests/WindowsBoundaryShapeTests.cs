@@ -8,6 +8,18 @@ namespace Beacon.Platform.Windows.Tests;
 public sealed class WindowsBoundaryShapeTests
 {
     [Fact]
+    public void StreamWorkerHostExposesOnlyGenerationBoundCommands()
+    {
+        MethodInfo send = Assert.Single(
+            typeof(IStreamWorkerHost).GetMethods(),
+            method => method.Name == "SendAsync");
+
+        Assert.Equal(
+            [typeof(long), typeof(WorkerIpcEnvelope), typeof(CancellationToken)],
+            send.GetParameters().Select(parameter => parameter.ParameterType));
+    }
+
+    [Fact]
     public void WindowsInputAndNamedPipeConstructorsRemainAvailable()
     {
         Assert.NotNull(typeof(WindowsInputCommand).GetConstructor(

@@ -750,7 +750,7 @@ public sealed class StreamWorkerStreamingBackendTests
             return Task.CompletedTask;
         }
 
-        public Task<StreamWorkerCommandResponse> SendAsync(
+        private Task<StreamWorkerCommandResponse> SendCoreAsync(
             WorkerIpcEnvelope command,
             CancellationToken cancellationToken)
         {
@@ -806,7 +806,7 @@ public sealed class StreamWorkerStreamingBackendTests
                 throw new StreamWorkerGenerationChangedException(expectedProcessGeneration);
             }
             GenerationBoundCommands.Add(command.Clone());
-            StreamWorkerCommandResponse response = await SendAsync(command, cancellationToken);
+            StreamWorkerCommandResponse response = await SendCoreAsync(command, cancellationToken);
             if (command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.StartMedia)
             {
                 MediaStarted = true;
