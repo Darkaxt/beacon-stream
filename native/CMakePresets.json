@@ -40,6 +40,7 @@
         "BEACON_NATIVE_DEPENDENCIES_DIR": "$env{HOME}/.cache/beacon/native/_deps",
         "BEACON_PROTOC_EXECUTABLE": "$env{BEACON_PROTOC_EXECUTABLE}",
         "BEACON_WITH_MSQUIC": "ON",
+        "BUILD_TESTING": "OFF",
         "CMAKE_BUILD_TYPE": "Debug"
       }
     },

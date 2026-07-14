@@ -177,6 +177,20 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
                              "Program.cs").read_text(encoding="utf-8")
         self.assertIn('/hosted-benchmark-worker/snapshot', test_host_program)
 
+    def test_android_cross_build_excludes_unrunnable_test_targets(self):
+        presets = json.loads(
+            (REPOSITORY_ROOT / "native" / "CMakePresets.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        android_base = next(
+            preset
+            for preset in presets["configurePresets"]
+            if preset["name"] == "android-base"
+        )
+
+        self.assertEqual("OFF", android_base["cacheVariables"]["BUILD_TESTING"])
+
     def test_runner_propagates_test_host_shutdown_failure(self):
         result = self._run({"BEACON_FAKE_SERVER_EXIT": "17"})
 
