@@ -77,6 +77,10 @@ public:
   [[nodiscard]] std::uint64_t active_generation() const noexcept;
 
 private:
+  [[nodiscard]] std::shared_ptr<IVideoPipelineGeneration>
+  create_started_generation(const WorkerVideoPlan &plan,
+                            std::uint64_t session_generation,
+                            std::uint16_t maximum_datagram_bytes) noexcept;
   void start_generation(
       const QuicSessionProtocolOutput::AcceptedStartSession &start);
   void stop_generation(std::uint64_t session_generation) noexcept;
@@ -87,6 +91,7 @@ private:
   mutable std::mutex mutex_;
   WorkerVideoPlan plan_;
   std::shared_ptr<IVideoPipelineGeneration> active_;
+  std::uint64_t starting_generation_{};
   std::uint64_t active_generation_{};
   bool prepared_{};
 };

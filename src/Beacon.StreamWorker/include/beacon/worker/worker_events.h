@@ -1,6 +1,6 @@
 #pragma once
 
-#include "beacon/worker/video/production_video_generation.h"
+#include "beacon/worker/video/video_pipeline_failure.h"
 #include "stream_control.pb.h"
 #include "worker_ipc.pb.h"
 

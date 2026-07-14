@@ -1,6 +1,7 @@
 #include "beacon/worker/named_pipe_channel.h"
 #include "beacon/worker/quic_listener.h"
 
+#include "beacon/stream/frame_assembler.h"
 #include "beacon/stream/media_datagram.h"
 
 #include "stream_control.pb.h"
@@ -38,6 +39,48 @@ constexpr std::uint64_t kAdditionalMediaSequence{77};
 constexpr std::uint64_t kAdditionalMediaPresentationTimeUs{2'345'678};
 namespace stream_v1 = beacon::stream::v1;
 namespace worker_v1 = beacon::worker::v1;
+
+bool contains_annex_b_parameter_sets_and_idr(
+    std::span<const std::byte> bytes) noexcept {
+  bool sequence_parameter_set = false;
+  bool picture_parameter_set = false;
+  bool idr = false;
+  for (std::size_t index = 0; index + 3 < bytes.size();) {
+    std::size_t start_code_bytes = 0;
+    if (bytes[index] == std::byte{0} && bytes[index + 1] == std::byte{0}) {
+      if (bytes[index + 2] == std::byte{1}) {
+        start_code_bytes = 3;
+      } else if (index + 4 < bytes.size() &&
+                 bytes[index + 2] == std::byte{0} &&
+                 bytes[index + 3] == std::byte{1}) {
+        start_code_bytes = 4;
+      }
+    }
+    if (start_code_bytes == 0) {
+      ++index;
+      continue;
+    }
+    const auto nal_index = index + start_code_bytes;
+    if (nal_index >= bytes.size()) {
+      break;
+    }
+    switch (std::to_integer<std::uint8_t>(bytes[nal_index]) & 0x1fU) {
+    case 5:
+      idr = true;
+      break;
+    case 7:
+      sequence_parameter_set = true;
+      break;
+    case 8:
+      picture_parameter_set = true;
+      break;
+    default:
+      break;
+    }
+    index = nal_index + 1;
+  }
+  return sequence_parameter_set && picture_parameter_set && idr;
+}
 
 class UniqueHandle {
 public:
@@ -254,6 +297,8 @@ struct ClientState {
   std::mutex mutex;
   std::condition_variable changed;
   std::vector<std::byte> session_bytes;
+  beacon::stream::FrameAssembler video_frames{
+      beacon::stream::maximum_media_frame_bytes};
   bool authenticated{};
   bool datagram_received{};
   bool additional_datagram_received{};
@@ -458,24 +503,10 @@ QUIC_STATUS QUIC_API connection_callback(HQUIC connection, void *context,
     break;
   case QUIC_CONNECTION_EVENT_DATAGRAM_RECEIVED: {
     const auto &buffer = *event->DATAGRAM_RECEIVED.Buffer;
-    const auto parsed = beacon::stream::parse_media_datagram(
-        {reinterpret_cast<const std::byte *>(buffer.Buffer), buffer.Length});
+    const auto datagram = std::span<const std::byte>{
+        reinterpret_cast<const std::byte *>(buffer.Buffer), buffer.Length};
+    const auto parsed = beacon::stream::parse_media_datagram(datagram);
     std::lock_guard lock{state.mutex};
-    const auto flags = static_cast<std::uint16_t>(parsed.header.flags);
-    const bool valid_h264 =
-        parsed.error == beacon::stream::MediaDatagramError::none &&
-        parsed.header.media_kind == beacon::stream::MediaKind::video &&
-        parsed.header.sequence != 0 &&
-        parsed.header.presentation_time_us != 0 &&
-        parsed.header.frame_bytes != 0 && !parsed.payload.empty();
-    const bool startup_h264 =
-        valid_h264 &&
-        (state.datagram_received ||
-         ((flags & static_cast<std::uint16_t>(
-                       beacon::stream::MediaDatagramFlags::idr)) != 0 &&
-          (flags & static_cast<std::uint16_t>(
-                       beacon::stream::MediaDatagramFlags::codec_configuration)) !=
-              0));
     const bool additional_media =
         parsed.error == beacon::stream::MediaDatagramError::none &&
         parsed.header.sequence == kAdditionalMediaSequence &&
@@ -485,10 +516,37 @@ QUIC_STATUS QUIC_API connection_callback(HQUIC connection, void *context,
         parsed.header.flags ==
             beacon::stream::MediaDatagramFlags::end_of_access_unit &&
         parsed.payload.size() == 1 && parsed.payload[0] == std::byte{0x42};
+    bool accepted_video_chunk = false;
+    bool startup_h264 = false;
+    if (!additional_media) {
+      auto assembled = state.video_frames.push(datagram);
+      accepted_video_chunk =
+          assembled.status ==
+              beacon::stream::FramePushStatus::accepted_incomplete ||
+          assembled.status == beacon::stream::FramePushStatus::completed;
+      if (assembled.status == beacon::stream::FramePushStatus::completed &&
+          assembled.frame) {
+        const auto flags = static_cast<std::uint16_t>(assembled.frame->flags);
+        startup_h264 = assembled.frame->sequence != 0 &&
+                       assembled.frame->presentation_time_us != 0 &&
+                       (flags & static_cast<std::uint16_t>(
+                                    beacon::stream::MediaDatagramFlags::idr)) !=
+                           0 &&
+                       (flags & static_cast<std::uint16_t>(
+                                    beacon::stream::MediaDatagramFlags::
+                                        codec_configuration)) != 0 &&
+                       contains_annex_b_parameter_sets_and_idr(
+                           assembled.frame->bytes);
+      }
+    }
     state.datagram_received = state.datagram_received || startup_h264;
     state.additional_datagram_received =
         state.additional_datagram_received || additional_media;
-    state.failed = state.failed || (!startup_h264 && !additional_media);
+    state.failed = state.failed ||
+                   (!additional_media &&
+                    (!accepted_video_chunk ||
+                     (state.video_frames.metrics().completed_frames != 0 &&
+                      !state.datagram_received)));
     state.changed.notify_all();
     break;
   }

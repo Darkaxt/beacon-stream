@@ -51,7 +51,7 @@ bool WorkerVideoPipeline::prepare(const WorkerVideoPlan &plan) {
     return false;
   }
   std::lock_guard lock{mutex_};
-  if (active_) {
+  if (active_ || starting_generation_ != 0) {
     return false;
   }
   plan_ = plan;
@@ -98,6 +98,7 @@ void WorkerVideoPipeline::reset() noexcept {
   {
     std::lock_guard lock{mutex_};
     active = std::move(active_);
+    starting_generation_ = 0;
     active_generation_ = 0;
     plan_ = {};
     prepared_ = false;
@@ -117,12 +118,36 @@ std::uint64_t WorkerVideoPipeline::active_generation() const noexcept {
   return active_generation_;
 }
 
+std::shared_ptr<IVideoPipelineGeneration>
+WorkerVideoPipeline::create_started_generation(
+    const WorkerVideoPlan &plan, std::uint64_t session_generation,
+    std::uint16_t maximum_datagram_bytes) noexcept {
+  std::shared_ptr<IVideoPipelineGeneration> generation;
+  try {
+    generation = factory_.create(plan);
+  } catch (...) {
+    return {};
+  }
+  if (!generation) {
+    return {};
+  }
+  try {
+    if (generation->start(session_generation, maximum_datagram_bytes)) {
+      return generation;
+    }
+  } catch (...) {
+  }
+  generation->stop();
+  return {};
+}
+
 void WorkerVideoPipeline::start_generation(
     const QuicSessionProtocolOutput::AcceptedStartSession &start) {
-  std::shared_ptr<IVideoPipelineGeneration> failed;
+  WorkerVideoPlan plan;
   {
     std::lock_guard lock{mutex_};
-    if (!prepared_ || active_ || start.session_generation == 0 ||
+    if (!prepared_ || active_ || starting_generation_ != 0 ||
+        start.session_generation == 0 ||
         start.maximum_datagram_bytes == 0 ||
         start.session_id != plan_.session_id ||
         !start.start_session.has_selected_video() ||
@@ -130,21 +155,29 @@ void WorkerVideoPipeline::start_generation(
                                      plan_)) {
       return;
     }
-    try {
-      auto generation = factory_.create(plan_);
-      if (!generation || !generation->start(start.session_generation,
-                                            start.maximum_datagram_bytes)) {
-        failed = std::move(generation);
-      } else {
+    plan = plan_;
+    starting_generation_ = start.session_generation;
+  }
+
+  auto generation = create_started_generation(
+      plan, start.session_generation, start.maximum_datagram_bytes);
+  std::shared_ptr<IVideoPipelineGeneration> abandoned;
+  {
+    std::lock_guard lock{mutex_};
+    if (starting_generation_ != start.session_generation) {
+      abandoned = std::move(generation);
+    } else {
+      starting_generation_ = 0;
+      if (generation && prepared_ && !active_ && plan_ == plan) {
         active_ = std::move(generation);
         active_generation_ = start.session_generation;
+      } else {
+        abandoned = std::move(generation);
       }
-    } catch (...) {
-      return;
     }
   }
-  if (failed) {
-    failed->stop();
+  if (abandoned) {
+    abandoned->stop();
   }
 }
 
@@ -153,14 +186,20 @@ void WorkerVideoPipeline::stop_generation(
   std::shared_ptr<IVideoPipelineGeneration> active;
   {
     std::lock_guard lock{mutex_};
-    if (!active_ || session_generation == 0 ||
-        session_generation != active_generation_) {
+    if (session_generation == 0) {
       return;
     }
-    active = std::move(active_);
-    active_generation_ = 0;
+    if (session_generation == starting_generation_) {
+      starting_generation_ = 0;
+    }
+    if (active_ && session_generation == active_generation_) {
+      active = std::move(active_);
+      active_generation_ = 0;
+    }
   }
-  active->stop();
+  if (active) {
+    active->stop();
+  }
 }
 
 void WorkerVideoPipeline::forward_generation_event(

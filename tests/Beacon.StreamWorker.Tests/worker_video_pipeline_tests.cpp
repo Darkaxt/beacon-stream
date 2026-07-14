@@ -2,8 +2,11 @@
 
 #include "../Beacon.StreamProtocol.Tests/test_failure.h"
 
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -12,13 +15,30 @@ namespace {
 namespace stream_v1 = beacon::stream::v1;
 namespace video = beacon::worker::video;
 
+struct StartGate {
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool entered{};
+  bool released{};
+};
+
 class RecordingGeneration final : public video::IVideoPipelineGeneration {
 public:
+  explicit RecordingGeneration(StartGate *start_gate = nullptr)
+      : start_gate_(start_gate) {}
+
   bool start(std::uint64_t session_generation,
              std::uint16_t maximum_datagram_bytes) override {
     ++start_count;
     generation = session_generation;
     datagram_bytes = maximum_datagram_bytes;
+    if (start_gate_ != nullptr) {
+      std::unique_lock lock{start_gate_->mutex};
+      start_gate_->entered = true;
+      start_gate_->changed.notify_all();
+      start_gate_->changed.wait(lock,
+                                [this] { return start_gate_->released; });
+    }
     return start_result;
   }
 
@@ -42,20 +62,29 @@ public:
   std::size_t idr_count{};
   std::size_t stop_count{};
   std::vector<beacon::worker::QuicMediaEvent> events;
+
+private:
+  StartGate *start_gate_{};
 };
 
 class RecordingFactory final : public video::IVideoPipelineGenerationFactory {
 public:
+  explicit RecordingFactory(StartGate *start_gate = nullptr)
+      : start_gate_(start_gate) {}
+
   std::shared_ptr<video::IVideoPipelineGeneration>
   create(const video::WorkerVideoPlan &plan) override {
     plans.push_back(plan);
-    auto generation = std::make_shared<RecordingGeneration>();
+    auto generation = std::make_shared<RecordingGeneration>(start_gate_);
     generations.push_back(generation);
     return generation;
   }
 
   std::vector<video::WorkerVideoPlan> plans;
   std::vector<std::shared_ptr<RecordingGeneration>> generations;
+
+private:
+  StartGate *start_gate_{};
 };
 
 video::WorkerVideoPlan plan() {
@@ -201,6 +230,37 @@ void explicit_stop_and_reset_release_resources_exactly_once() {
   BEACON_TEST_REQUIRE(!pipeline.request_idr());
 }
 
+void disconnect_during_start_abandons_generation_without_losing_plan() {
+  StartGate gate;
+  RecordingFactory factory(&gate);
+  video::WorkerVideoPipeline pipeline(factory);
+  BEACON_TEST_REQUIRE(pipeline.prepare(plan()));
+
+  std::thread starter([&pipeline] { pipeline.handle_media_event(start_event(5)); });
+  {
+    std::unique_lock lock{gate.mutex};
+    gate.changed.wait(lock, [&gate] { return gate.entered; });
+  }
+
+  pipeline.handle_media_event(
+      beacon::worker::QuicTransportDisconnected{.session_generation = 5});
+  {
+    std::lock_guard lock{gate.mutex};
+    gate.released = true;
+  }
+  gate.changed.notify_all();
+  starter.join();
+
+  BEACON_TEST_REQUIRE(factory.generations.size() == 1);
+  BEACON_TEST_REQUIRE(factory.generations[0]->stop_count == 1);
+  BEACON_TEST_REQUIRE(pipeline.active_generation() == 0);
+  BEACON_TEST_REQUIRE(pipeline.prepared());
+
+  pipeline.handle_media_event(start_event(6));
+  BEACON_TEST_REQUIRE(factory.generations.size() == 2);
+  BEACON_TEST_REQUIRE(pipeline.active_generation() == 6);
+}
+
 } // namespace
 
 int main() {
@@ -210,5 +270,6 @@ int main() {
     stale_events_cannot_control_the_active_generation();
     disconnect_releases_one_generation_but_preserves_reconnect_plan();
     explicit_stop_and_reset_release_resources_exactly_once();
+    disconnect_during_start_abandons_generation_without_losing_plan();
   });
 }

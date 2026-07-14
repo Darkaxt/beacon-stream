@@ -258,6 +258,58 @@ public sealed class ArchitectureRecoveryBoundaryTests
         Assert.DoesNotContain("synthetic_media_source_", listener, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ProductionWorkerContainsNoSyntheticMediaRoute()
+    {
+        string root = FindRepositoryRoot();
+        string workerRoot = ToPlatformPath(root, "src/Beacon.StreamWorker");
+
+        string[] violations = Directory
+            .EnumerateFiles(workerRoot, "*", SearchOption.AllDirectories)
+            .Where(path => Path.GetFileName(path).Contains(
+                "synthetic_media", StringComparison.OrdinalIgnoreCase)
+                || File.ReadAllText(path).Contains("SyntheticMediaSource", StringComparison.Ordinal)
+                || File.ReadAllText(path).Contains("emit_access_unit_marker", StringComparison.Ordinal))
+            .Select(path => ToRepositoryRelativePath(root, path))
+            .Order()
+            .ToArray();
+
+        Assert.Empty(violations);
+    }
+
+    [Fact]
+    public void ProductionWorkerCallbacksDoNotCaptureShorterLivedObjectsByReference()
+    {
+        string root = FindRepositoryRoot();
+        string main = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.StreamWorker/src/main.cpp"));
+
+        Assert.DoesNotContain("[&enqueue_async]", main, StringComparison.Ordinal);
+        Assert.DoesNotContain("[&video_pipeline]", main, StringComparison.Ordinal);
+        Assert.Contains("std::weak_ptr", main, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void VideoPipelineDelegatesExternalGenerationStartupOutOfItsStateTransition()
+    {
+        string root = FindRepositoryRoot();
+        string source = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.StreamWorker/src/video/worker_video_pipeline.cpp"));
+        int start = source.IndexOf(
+            "void WorkerVideoPipeline::start_generation",
+            StringComparison.Ordinal);
+        int stop = source.IndexOf(
+            "void WorkerVideoPipeline::stop_generation",
+            StringComparison.Ordinal);
+
+        Assert.True(start >= 0 && stop > start);
+        string transition = source[start..stop];
+        Assert.DoesNotContain("factory_.create", transition, StringComparison.Ordinal);
+        Assert.DoesNotContain("->start(", transition, StringComparison.Ordinal);
+    }
+
     private static async Task<IReadOnlyList<string>> EnumerateTrackedSourceFilesAsync(string root)
     {
         var startInfo = new ProcessStartInfo("git")

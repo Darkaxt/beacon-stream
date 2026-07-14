@@ -156,18 +156,18 @@ probe with real access-unit evidence, the complete .NET suite, Android JVM/build
 Client Lab tests. Scan tracked first-party paths for prohibited upstream runtime references and
 parallel media routes. Do not use ADB or touch Apollo.
 
-- [ ] **Step 2: Record evidence, commit, and push the implementation sync**
+- [x] **Step 2: Record evidence, commit, and push the implementation sync**
 
 Update `docs/validation` and the Gate 5 plan with exact commands/results, commit the coherent
 implementation, and push `codex/beacon-production-benchmarks`.
 
-- [ ] **Step 3: Audit and refactor ownership**
+- [x] **Step 3: Audit and refactor ownership**
 
 Review callback lifetime, stale generation handling, stop ordering, native failure diagnostics,
 plan binding, dead synthetic production paths, and source provenance. Add a failing regression
 before every behavioral fix and remove only code proven obsolete.
 
-- [ ] **Step 4: Repeat the entire validation matrix**
+- [x] **Step 4: Repeat the entire validation matrix**
 
 Expected: the same static and dynamic evidence passes after refactoring.
 

@@ -3,34 +3,15 @@
 #include "beacon/worker/capture/wgc_display_capture.h"
 #include "beacon/worker/video/d3d11_video_processor.h"
 #include "beacon/worker/video/nvenc_h264_encoder.h"
+#include "beacon/worker/video/video_pipeline_failure.h"
 #include "beacon/worker/video/video_media_session.h"
 #include "beacon/worker/video/worker_video_pipeline.h"
 
 #include <atomic>
 #include <cstdint>
-#include <functional>
 #include <memory>
-#include <string>
 
 namespace beacon::worker::video {
-
-enum class VideoPipelineFailureBoundary {
-  capture,
-  video_processor,
-  encoder,
-  media_session,
-  transport,
-};
-
-struct VideoPipelineFailureEvent {
-  std::string session_id;
-  std::uint64_t session_generation{};
-  VideoPipelineFailureBoundary boundary{VideoPipelineFailureBoundary::capture};
-  std::uint32_t native_code{};
-};
-
-using VideoPipelineFailureSink =
-    std::function<void(VideoPipelineFailureEvent)>;
 
 class ProductionVideoGeneration final
     : public IVideoPipelineGeneration,
