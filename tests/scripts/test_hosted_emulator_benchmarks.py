@@ -191,6 +191,14 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
 
         self.assertEqual("OFF", android_base["cacheVariables"]["BUILD_TESTING"])
 
+        build_script = (
+            REPOSITORY_ROOT / "scripts" / "build-native-android.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}"',
+            build_script,
+        )
+
     def test_runner_propagates_test_host_shutdown_failure(self):
         result = self._run({"BEACON_FAKE_SERVER_EXIT": "17"})
 

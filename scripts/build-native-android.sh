@@ -19,6 +19,7 @@ fi
 export ANDROID_NDK_ROOT="${BEACON_ANDROID_NDK_ROOT}"
 export ANDROID_NDK_HOME="${BEACON_ANDROID_NDK_ROOT}"
 export PATH="${BEACON_ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin:${PATH}"
+export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}"
 
 bash "${script_dir}/bootstrap-native-dependencies-linux.sh"
 
