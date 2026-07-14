@@ -305,10 +305,18 @@ run_instrumentation() {
     return 1
   fi
   cat "${output_file}"
-  grep -Fq "OK (1 test)" "${output_file}"
+  if ! grep -Fq "OK (1 test)" "${output_file}"; then
+    emit_transport_diagnostics
+    echo "Hosted benchmark instrumentation '${method}' did not pass." >&2
+    return 1
+  fi
   local marker
   for marker in "$@"; do
-    grep -Fq "${marker}" "${output_file}"
+    if ! grep -Fq "${marker}" "${output_file}"; then
+      emit_transport_diagnostics
+      echo "Hosted benchmark instrumentation '${method}' omitted marker '${marker}'." >&2
+      return 1
+    fi
   done
 }
 

@@ -69,6 +69,12 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
                 printf 'instrumentation transport failure\n' >&2
                 exit 1
               fi
+              if [[ "${BEACON_FAKE_INSTRUMENTATION_FAILURE:-}" == "network-zero-exit" &&
+                    "${arguments}" == *"#gate4NetworkAndHardwareBenchmark"* ]]; then
+                printf 'java.lang.IllegalStateException: Benchmark transport failed.\n'
+                printf 'FAILURES!!!\n'
+                exit 0
+              fi
               if [[ "${arguments}" == *"#gate4NetworkAndHardwareBenchmark"* ]]; then
                 printf 'BEACON_GATE4_NATIVE_NETWORK_COMPLETE\n'
                 printf 'BEACON_GATE4_REAL_HARDWARE_CAPABILITY_REJECTED\n'
@@ -86,6 +92,7 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
             fi
         """)
         self.curl = self._script("curl", """
+            printf 'curl %s\n' "$*" >> "${BEACON_FAKE_CALL_LOG}"
             url="${!#}"
             if [[ "${url}" == */identity ]]; then
               printf '{"publicKeyFingerprint":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}\n'
@@ -174,6 +181,21 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
         )
         calls = self.call_log.read_text(encoding="utf-8")
         self.assertIn("logcat -d -s BeaconStreamCore:I", calls)
+
+    def test_runner_diagnoses_failed_junit_output_when_instrumentation_exits_zero(self):
+        result = self._run({"BEACON_FAKE_INSTRUMENTATION_FAILURE": "network-zero-exit"})
+
+        self.assertNotEqual(0, result.returncode)
+        combined = result.stdout + result.stderr
+        self.assertIn("Benchmark transport failed.", combined)
+        self.assertIn(
+            "BEACON_STREAMCORE_TRANSPORT shutdown generation=1 value=1234",
+            combined,
+        )
+        self.assertIn('"processGeneration":1', combined)
+        calls = self.call_log.read_text(encoding="utf-8")
+        self.assertIn("logcat -d -s BeaconStreamCore:I", calls)
+        self.assertIn("/hosted-benchmark-worker/snapshot", calls)
 
     def test_gate4_instrumentation_uses_pinned_https_and_typed_markers(self):
         source = (REPOSITORY_ROOT / "src" / "Beacon.Android" / "app" / "src" /
