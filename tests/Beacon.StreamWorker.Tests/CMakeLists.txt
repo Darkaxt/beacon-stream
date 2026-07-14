@@ -70,7 +70,11 @@ add_executable(BeaconStreamWorkerProductionVideoGenerationTests production_video
 target_link_libraries(BeaconStreamWorkerProductionVideoGenerationTests PRIVATE Beacon::StreamWorkerCore)
 add_test(NAME BeaconStreamWorker.ProductionVideoGeneration COMMAND BeaconStreamWorkerProductionVideoGenerationTests)
 
-add_executable(BeaconStreamWorkerQuicListenerProbe quic_listener_probe.cpp)
+add_executable(
+  BeaconStreamWorkerQuicListenerProbe
+  quic_listener_probe.cpp
+  probe_process_runtime.cpp
+)
 target_sources(
   BeaconStreamWorkerQuicListenerProbe
   PRIVATE
@@ -83,3 +87,10 @@ target_include_directories(
 )
 target_link_libraries(BeaconStreamWorkerQuicListenerProbe PRIVATE Beacon::StreamWorkerCore)
 beacon_deploy_msquic(BeaconStreamWorkerQuicListenerProbe)
+
+add_executable(
+  BeaconStreamWorkerProbeRuntimeTests
+  probe_process_runtime_tests.cpp
+  probe_process_runtime.cpp
+)
+add_test(NAME BeaconStreamWorker.ProbeRuntime COMMAND BeaconStreamWorkerProbeRuntimeTests)

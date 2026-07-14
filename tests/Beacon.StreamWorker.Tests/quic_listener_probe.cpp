@@ -4,12 +4,12 @@
 #include "beacon/stream/frame_assembler.h"
 #include "beacon/stream/media_datagram.h"
 #include "benchmark_collector.h"
+#include "probe_process_runtime.h"
 
 #include "stream_control.pb.h"
 #include "worker_ipc.pb.h"
 
 #include <Windows.h>
-#include <crtdbg.h>
 #include <msquic.h>
 #include <wincrypt.h>
 
@@ -1505,10 +1505,7 @@ bool disconnect_callback_fault_is_contained(
 } // namespace
 
 int wmain(int argument_count, wchar_t **arguments) {
-  SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX |
-               SEM_NOOPENFILEERRORBOX);
-  _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
-  _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+  beacon::worker::tests::configure_noninteractive_probe_process();
 
   if (argument_count == 7 &&
       std::wstring_view(arguments[1]) == L"--benchmark-worker" &&
