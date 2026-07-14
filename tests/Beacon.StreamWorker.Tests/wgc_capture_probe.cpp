@@ -1,4 +1,5 @@
 #include "beacon/worker/capture/wgc_display_capture.h"
+#include "beacon/worker/video/d3d11_video_processor.h"
 
 #include <Windows.h>
 #include <d3d11.h>
@@ -23,6 +24,9 @@ namespace {
 using beacon::worker::capture::CapturedD3d11Frame;
 using beacon::worker::capture::WgcCapturePlan;
 using beacon::worker::capture::WgcDisplayCapture;
+using beacon::worker::video::D3d11VideoProcessor;
+using beacon::worker::video::D3d11VideoProcessorFailure;
+using beacon::worker::video::D3d11VideoProcessorPlan;
 
 constexpr UINT change_color_message = WM_APP + 1;
 
@@ -171,8 +175,9 @@ class PainterWindow final {
   bool ready_flag_{};
 };
 
-std::optional<std::uint64_t> frame_hash(const CapturedD3d11Frame& frame) {
-  auto* source = static_cast<ID3D11Texture2D*>(frame.texture->native_texture());
+std::optional<std::uint64_t> texture_hash(
+    const beacon::worker::capture::D3d11Texture& texture) {
+  auto* source = static_cast<ID3D11Texture2D*>(texture.native_texture());
   if (source == nullptr) {
     return std::nullopt;
   }
@@ -199,8 +204,12 @@ std::optional<std::uint64_t> frame_hash(const CapturedD3d11Frame& frame) {
     return std::nullopt;
   }
   std::uint64_t hash = 1469598103934665603ULL;
-  const auto row_bytes = static_cast<std::size_t>(description.Width) * 4U;
-  for (std::uint32_t row = 0; row < description.Height; ++row) {
+  const bool nv12 = description.Format == DXGI_FORMAT_NV12;
+  const auto row_bytes =
+      static_cast<std::size_t>(description.Width) * (nv12 ? 1U : 4U);
+  const std::uint32_t rows =
+      description.Height + (nv12 ? description.Height / 2U : 0U);
+  for (std::uint32_t row = 0; row < rows; ++row) {
     const auto* bytes = static_cast<const std::uint8_t*>(mapped.pData) +
                         static_cast<std::size_t>(row) * mapped.RowPitch;
     for (std::size_t index = 0; index < row_bytes; index += 16U) {
@@ -233,26 +242,37 @@ int wmain(int argc, wchar_t** argv) {
     PainterWindow painter{rectangle};
     WgcDisplayCapture capture{
         beacon::worker::capture::create_windows_wgc_capture_platform()};
+    D3d11VideoProcessor processor{
+        beacon::worker::video::create_windows_d3d11_video_processor_platform()};
     std::mutex mutex;
     std::condition_variable changed;
     std::vector<std::uint64_t> hashes;
     std::vector<std::int64_t> timestamps;
     bool hash_failed = false;
+    D3d11VideoProcessorFailure conversion_failure{
+        D3d11VideoProcessorFailure::none};
     const bool started = capture.start(
         WgcCapturePlan{.device_name = device_name,
                        .width = width,
                        .height = height},
         [&](CapturedD3d11Frame frame) {
-          const auto hash = frame_hash(frame);
+          const auto converted = processor.convert(
+              frame, D3d11VideoProcessorPlan{.output_width = width,
+                                             .output_height = height,
+                                             .frame_rate_numerator = 120,
+                                             .frame_rate_denominator = 1});
+          const auto hash = converted ? texture_hash(*converted->texture)
+                                      : std::optional<std::uint64_t>{};
           std::lock_guard lock{mutex};
           if (!hash.has_value()) {
             hash_failed = true;
+            conversion_failure = processor.failure();
             changed.notify_all();
             return;
           }
           if (hashes.empty() || hashes.back() != *hash) {
             hashes.push_back(*hash);
-            timestamps.push_back(frame.qpc_timestamp);
+            timestamps.push_back(converted->qpc_timestamp);
             if (hashes.size() == 1) {
               painter.change();
             }
@@ -271,12 +291,13 @@ int wmain(int argc, wchar_t** argv) {
     capture.stop();
     painter.stop();
     if (hash_failed || hashes.size() < 2 || timestamps[1] <= timestamps[0]) {
-      std::wcerr << L"WGC frame evidence was invalid.\n";
+      std::wcerr << L"WGC NV12 frame evidence was invalid. conversion="
+                 << static_cast<int>(conversion_failure) << L"\n";
       return 5;
     }
     std::wcout << L"BEACON_WGC_CAPTURE_OK device=" << device_name
                << L" adapter=" << capture.selected_adapter_description()
-               << L" size=" << width << L"x" << height
+               << L" size=" << width << L"x" << height << L" format=NV12"
                << L" frame1=" << hashes[0] << L" frame2=" << hashes[1]
                << L" qpc1=" << timestamps[0] << L" qpc2=" << timestamps[1]
                << L"\n";

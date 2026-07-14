@@ -391,14 +391,23 @@ probe repeated the same physical-only 2560x1600@240 result.
 - Create: `src/Beacon.StreamWorker/src/video/d3d11_video_processor.*`
 - Create: conversion tests and a GPU integration probe
 
-- [ ] Test exact capability query, planned crop/aspect behavior, BGRA-to-NV12 conversion,
+- [x] Test exact capability query, planned crop/aspect behavior, BGRA-to-NV12 conversion,
   output dimensions, BT.709 limited metadata, texture reuse, device loss, and unsupported
   capability failure.
-- [ ] Use `ID3D11VideoProcessor`/`VideoProcessorBlt` on the capture device. Do not add a CPU or
+- [x] Use `ID3D11VideoProcessor`/`VideoProcessorBlt` on the capture device. Do not add a CPU or
   shader fallback.
-- [ ] Validate generated NV12 planes against deterministic color bars within declared
+- [x] Validate generated NV12 planes against deterministic color bars within declared
   tolerances.
-- [ ] Commit: `feat: convert Beacon frames on D3D11`
+- [x] Commit: `feat: convert Beacon frames on D3D11`
+
+Validation (2026-07-14): the clean Windows native build completed all 382 steps and all 17
+CTests pass. The NVIDIA integration probe converted deterministic 1280x720 BGRA bars to
+640x360 NV12; sampled YUV values exactly matched BT.709 limited-range expectations within
+the declared tolerance of five. The moving-window WGC probe converted two real 2560x1600
+frames on `NVIDIA GeForce RTX 4090 Laptop GPU` to distinct NV12 hashes with increasing QPC
+timestamps. All 486 managed tests and the 25 focused architecture/documentation tests pass;
+formatting and prohibited-route/fallback scans are clean. Neither probe creates, configures,
+queries, or controls an Apollo runtime or display lifecycle.
 
 ### Task 16: Encode H.264 With Native NVENC
 

@@ -68,6 +68,10 @@ change the prohibition against upstream runtime compatibility.
 - `Beacon.StreamWorker` is a Beacon-owned native process behind versioned, typed named-pipe
   IPC. It emits deterministic access-unit markers for Gate 3 and owns the single MsQuic
   server transport; it does not own display, launch, or session policy.
+- StreamWorker now owns an original narrow D3D11 video-processor boundary. It queries the
+  exact BGRA full-range BT.709 to NV12 limited-range BT.709 conversion, preserves aspect ratio,
+  uses a bounded reusable texture pool on the capture device, and fails without a CPU or
+  shader fallback. Sunshine `display_vram.cpp` remains reference-only evidence.
 - Android packages one Beacon-owned JNI StreamCore route with pinned MsQuic and Protobuf
   dependencies. Lifecycle, certificate pinning, ticket handoff, packet assembly, reconnect,
   stop, and exact native-resource release are exercised through that route.
