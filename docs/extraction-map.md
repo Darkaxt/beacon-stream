@@ -9,7 +9,7 @@ audit and the later gates.
 
 | Source | Beacon boundary | Status |
 | --- | --- | --- |
-| Apollo `third-party/sudovda/sudovda-ioctl.h` | `src/Beacon.Platform.Windows/Displays/WindowsDisplayApi.cs` | Protocol facts adapted for the SudoVDA interface GUID, protocol version, and IOCTL constants. |
+| SudoVDA `Common/Include/sudovda-ioctl.h` and `Driver.cpp` | `src/Beacon.Platform.Windows/Displays` | Driver interface, protocol, watchdog-query, and heartbeat IOCTL facts adapted into a Beacon-owned control session; no Apollo runtime or configuration dependency. |
 | Apollo, Vibeshine, and Sunshine behavior | `docs/source-audits/2026-07-08-windows-input-sink-upstream-audit.md` | Reference-only audit for display targeting and client-local input ownership; no streaming code copied. |
 | Local Steam files | `src/Beacon.Core/Games/Steam`, `src/Beacon.GameProbe` | Read-only parsing of installed applications, libraries, and non-Steam shortcuts. |
 | Local Heroic files | `src/Beacon.Core/Games/Heroic` | Read-only parsing of installed GOG and sideloaded applications. |

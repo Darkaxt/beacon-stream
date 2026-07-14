@@ -349,6 +349,24 @@ solution passed all 466 tests, and the manual WGC probe captured changing frame 
 monotonic QPC timestamps from both the 2560x1600 physical display and a temporary
 2560x1600@60 SudoVDA lease while selecting the NVIDIA RTX 4090 adapter.
 
+### Task 14B: Own The SudoVDA Driver Session
+
+Beacon currently opens and closes a SudoVDA handle inside each display operation. Under the
+driver's default watchdog contract, a prepared display can therefore disappear after the
+operation returns. Add one Beacon-owned control session below `WindowsDisplayBackend` that
+queries the watchdog and sends `IOCTL_DRIVER_PING` while one or more Beacon display leases
+exist. Multiple Beacon leases share the session; the final successful removal releases it.
+
+The heartbeat is monitoring/liveness only. It cannot authorize cleanup, remove a display, or
+replace the inactive-client **AND** no-owned-work rule. Do not change machine-wide driver
+registry values, driver-device state, Apollo configuration, or the Apollo service/process.
+Capacity and heartbeat failures fail honestly with diagnostics.
+
+Deterministic tests drive heartbeat ticks without wall-clock sleeps and prove zero-lease,
+first-lease, multiple-lease, final-release, failure-diagnostic, and no-cleanup behavior. Live
+validation may query and use SudoVDA through Beacon but must not control Apollo or restart the
+shared driver on this workstation.
+
 ### Task 15: Convert And Scale On D3D11
 
 **Files:**
@@ -436,7 +454,10 @@ monotonic QPC timestamps from both the 2560x1600 physical display and a temporar
 
 ### Task 20: Gate 5 Full Dynamic Acceptance
 
-- [ ] Stop Apollo and Sunshine and prove neither process, port, file, nor API is used.
+- [ ] Prove neither Apollo nor Sunshine process, service, port, file, or API is used. Do not
+  stop, start, configure, or otherwise control an existing installation during validation;
+  use dependency inspection, runtime tracing, and a clean environment where neither product
+  is installed.
 - [ ] Use Client Lab and the APK emulator to select a real catalog application.
 - [ ] Create/activate the correct per-client virtual display at the planned mode.
 - [ ] Show moving H.264 SDR video from that display on `emulator-5554` through StreamCore.

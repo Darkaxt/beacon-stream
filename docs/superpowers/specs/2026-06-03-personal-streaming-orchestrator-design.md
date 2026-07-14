@@ -183,7 +183,7 @@ This register is the implementation contract.
 
 ### Product Boundary
 
-- `REQ-BOUND-001`: Beacon must stream with Apollo and Sunshine absent and stopped.
+- `REQ-BOUND-001`: Beacon must stream without Apollo or Sunshine installed, running, configured, queried, or controlled.
 - `REQ-BOUND-002`: Beacon must not implement Apollo, Sunshine, GameStream, Moonlight, or Artemis compatibility as a product feature.
 - `REQ-BOUND-003`: Beacon must not expose upstream pairing, app-list, launch, cancel, RTSP, NVHTTP, runtime-descriptor, or wrapper-manifest contracts.
 - `REQ-BOUND-004`: Beacon must ship one production StreamWorker and one APK StreamCore path.
@@ -281,6 +281,11 @@ This register is the implementation contract.
 - `REQ-DISP-013`: The laptop panel cannot remain inactive when no session owns that state.
 - `REQ-DISP-014`: An owned application may keep the virtual display alive without keeping it primary or stealing the physical desktop.
 - `REQ-DISP-015`: Before/after topology, display id, resolution, refresh, primary state, HDR state, and reason are journaled for every topology operation.
+- `REQ-DISP-016`: Beacon owns a SudoVDA control session while at least one Beacon display lease exists and sends the driver heartbeat required to preserve those leases.
+- `REQ-DISP-017`: The driver heartbeat is a liveness mechanism only. Its schedule or failure cannot remove a lease, trigger cleanup, or replace the inactive-client **AND** no-owned-work cleanup gate.
+- `REQ-DISP-018`: Beacon derives heartbeat cadence from the driver-reported watchdog contract, shares one control session across its own concurrent leases, and closes it after the final Beacon lease is released.
+- `REQ-DISP-019`: Beacon does not read or write Apollo settings, control the Apollo service or process, reuse Apollo lifecycle state, or require Apollo to keep SudoVDA displays alive.
+- `REQ-DISP-020`: Beacon does not rewrite machine-wide SudoVDA watchdog or monitor-capacity configuration. Driver capacity exhaustion and heartbeat failures are reported as explicit readiness or session faults.
 
 ### Session Ownership And Cleanup
 
@@ -356,7 +361,7 @@ This register is the implementation contract.
 - `REQ-TEST-005`: StreamWorker and StreamCore have deterministic in-memory transport boundaries for packet loss, reordering, cancellation, and lifecycle tests.
 - `REQ-TEST-006`: Android emulator runs the real APK, StreamCore, Surface decoder, benchmark workflow, catalog selection, launch, stop, and reconnect.
 - `REQ-TEST-007`: Real Windows display integration tests remain explicit and manually runnable because they change topology.
-- `REQ-TEST-008`: A production vertical-slice test runs with Apollo and Sunshine stopped and proves Beacon-owned capture to emulator presentation.
+- `REQ-TEST-008`: A production vertical-slice test runs in an environment where Apollo and Sunshine are absent and proves Beacon-owned capture to emulator presentation. Validation on a workstation where either product is present must prove no process, service, file, port, or API dependency without controlling that product.
 - `REQ-TEST-009`: Physical phone testing is reserved for final decoder quality, 120 Hz, HDR, thermals, Wi-Fi behavior, touch, controllers, audio, and human experience.
 - `REQ-TEST-010`: Static checks prevent upstream compatibility types, wrapper configuration, and duplicate Android routes from re-entering protected boundaries.
 
@@ -475,7 +480,7 @@ No source is retained merely because tests already exist or implementation effor
 - Stream through the single Beacon protocol.
 - Decode and present through StreamCore on `emulator-5554`.
 - Select and launch one server-catalog application.
-- Stop, reconnect, and restore without Apollo or Sunshine running.
+- Stop, reconnect, and restore through Beacon-owned components with no Apollo or Sunshine dependency.
 
 Only after Gate 5 passes may work resume on audio, richer input, HEVC/AV1, HDR, physical-device validation, and UI refinement.
 
@@ -531,7 +536,7 @@ The following are explicit removal targets unless the recovery inventory proves 
 
 ### Minimal Beacon-Owned Stream
 
-- Apollo and Sunshine processes are stopped.
+- Dependency inspection and runtime evidence prove Beacon does not query or control Apollo or Sunshine processes, services, files, ports, or APIs.
 - APK selects an application from the Beacon catalog.
 - Beacon computes a complete plan before side effects.
 - Beacon prepares the correct per-client display without mirror or physical fallback.
