@@ -85,7 +85,6 @@ public final class BeaconStreamCoreInstrumentationTest {
         RecordingBindings bindings = new RecordingBindings();
         CountDownLatch sinkEntered = new CountDownLatch(1);
         CountDownLatch releaseSink = new CountDownLatch(1);
-        CountDownLatch closeStarted = new CountDownLatch(1);
         CountDownLatch closeFinished = new CountDownLatch(1);
         AtomicInteger frames = new AtomicInteger();
         BeaconStreamCore core = new BeaconStreamCore(
@@ -106,12 +105,11 @@ public final class BeaconStreamCoreInstrumentationTest {
         sinkEntered.await();
         bindings.callbacks.onFrame(directBuffer(2), 2, 2, 1, false, false);
         Thread closer = new Thread(() -> {
-            closeStarted.countDown();
             core.close();
             closeFinished.countDown();
         });
         closer.start();
-        closeStarted.await();
+        bindings.stopEntered.await();
         assertEquals(0, bindings.releaseCount);
         releaseSink.countDown();
         closeFinished.await();
@@ -838,6 +836,7 @@ public final class BeaconStreamCoreInstrumentationTest {
         BeaconStreamCore.NativeCallbacks callbacks;
         int stopCount;
         int releaseCount;
+        final CountDownLatch stopEntered = new CountDownLatch(1);
 
         @Override public long create(BeaconStreamCore.NativeCallbacks value) { callbacks = value; return 11; }
         @Override public boolean start(long handle, BeaconStreamSession.NativeGrant grant) {
@@ -845,7 +844,10 @@ public final class BeaconStreamCoreInstrumentationTest {
         }
         @Override public void sendInput(long handle, BeaconApiClient.InputBatch input) { }
         @Override public void replaceSurface(long handle, Object surface) { }
-        @Override public void stop(long handle) { stopCount++; }
+        @Override public void stop(long handle) {
+            stopCount++;
+            stopEntered.countDown();
+        }
         @Override public void release(long handle) { releaseCount++; }
     }
 }
