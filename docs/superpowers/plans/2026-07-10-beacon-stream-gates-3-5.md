@@ -503,6 +503,12 @@ this task did not inspect or alter that shared runtime.
 
 ### Task 20: Gate 5 Full Dynamic Acceptance
 
+Task 20 is gated by the production composition slice in
+`docs/superpowers/plans/2026-07-14-beacon-production-video-pipeline.md`. The individually
+validated capture, conversion, encoder, packetizer, and transport modules are not acceptance
+evidence until StreamWorker composes them and its process-level probe emits real moving H.264
+access units instead of a synthetic marker.
+
 - [ ] Prove neither Apollo nor Sunshine process, service, port, file, or API is used. Do not
   stop, start, configure, or otherwise control an existing installation during validation;
   use dependency inspection, runtime tracing, and a clean environment where neither product
