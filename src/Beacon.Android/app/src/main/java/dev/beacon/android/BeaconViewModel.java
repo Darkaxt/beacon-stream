@@ -263,10 +263,12 @@ public final class BeaconViewModel implements AutoCloseable {
     }
 
     public void disconnect() throws IOException {
+        stopOwnedStreamCore();
         record("disconnect", service.disconnect());
     }
 
     public void quit(BeaconApiClient.QuitState state) throws IOException {
+        stopOwnedStreamCore();
         record("quit", service.quit(state));
     }
 

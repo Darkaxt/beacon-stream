@@ -36,6 +36,26 @@ public sealed class WindowsGameLauncherTests
         Assert.True(command.UseShellExecute);
     }
 
+    [Fact]
+    public void SelectOwnedProcessId_DoesNotClaimShellHandlerProcess()
+    {
+        int? processId = WindowsGameLauncher.SelectOwnedProcessId(
+            useShellExecute: true,
+            startedProcessId: 7654);
+
+        Assert.Null(processId);
+    }
+
+    [Fact]
+    public void SelectOwnedProcessId_ClaimsDirectlyStartedProcess()
+    {
+        int? processId = WindowsGameLauncher.SelectOwnedProcessId(
+            useShellExecute: false,
+            startedProcessId: 7654);
+
+        Assert.Equal(7654, processId);
+    }
+
     private static GameLaunchRequest CreateRequest(GameDescriptor game) =>
         new(game, CreatePlan(game), "client-z-fold-7");
 

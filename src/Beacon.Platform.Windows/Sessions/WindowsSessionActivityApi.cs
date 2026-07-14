@@ -8,6 +8,8 @@ public sealed class WindowsSessionActivityApi : IWindowsSessionActivityApi
 {
     private const int ProcessBasicInformation = 0;
 
+    public int CurrentProcessId => Environment.ProcessId;
+
     public bool IsProcessRunning(int processId)
     {
         try
@@ -78,6 +80,40 @@ public sealed class WindowsSessionActivityApi : IWindowsSessionActivityApi
         }, IntPtr.Zero);
 
         return windows;
+    }
+
+    public async Task<bool> TerminateProcessAsync(
+        int processId,
+        CancellationToken cancellationToken)
+    {
+        if (processId <= 0 || processId == CurrentProcessId)
+        {
+            return false;
+        }
+
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            if (process.HasExited)
+            {
+                return true;
+            }
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync(cancellationToken);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
     }
 
     private static bool TryGetParentProcessId(Process process, out int parentProcessId)

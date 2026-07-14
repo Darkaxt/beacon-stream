@@ -10,6 +10,7 @@ using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Server.Benchmarks;
 using Beacon.Server.State;
+using Beacon.Server.Streaming;
 using Beacon.Server.Security;
 
 namespace Beacon.Server.Api;
@@ -438,12 +439,7 @@ public static class ClientEndpoints
             InMemoryClientStore clients,
             InMemorySessionStore sessions,
             GameLibraryService games,
-            DisplayLeaseManager leases,
-            IDisplayBackend displayBackend,
-            IGameLauncher launcher,
-            ISessionOwnershipTracker ownership,
-            IStreamingBackend streaming,
-            StreamTicketProvisioningService ticketProvisioning,
+            StreamSessionLaunchService launchService,
             BeaconServerIdentity serverIdentity,
             CancellationToken cancellationToken) =>
         {
@@ -461,100 +457,35 @@ public static class ClientEndpoints
 
             var resolved = (ResolvedPlan)resolution;
 
-            StreamingPreflightResult streamingPreflight = await streaming.CheckReadinessAsync(resolved.Plan, cancellationToken);
-            if (!streamingPreflight.Success)
-            {
-                return Results.Problem(
-                    streamingPreflight.Error,
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
-
-            DisplayLeaseResult leaseResult = await leases.EnsureLeaseAsync(resolved.Profile, cancellationToken);
-            if (!leaseResult.Success || leaseResult.Lease is null)
-            {
-                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
-            }
-
-            sessions.Save(resolved.Plan);
-
-            GameLaunchResult launchResult = await launcher.LaunchAsync(
-                new GameLaunchRequest(resolved.Game, resolved.Plan, leaseResult.Lease.DisplayId),
-                cancellationToken);
-            if (!launchResult.Success || launchResult.State is null)
-            {
-                DisplayRestoreResult restore = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
-                string restoreStatus = restore.Success
-                    ? "Physical primary restore requested after game launch failure."
-                    : $"Physical primary restore failed after game launch failure: {restore.Error}";
-
-                return Results.Problem(
-                    $"{launchResult.Error} {restoreStatus}",
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
-
-            await ownership.RecordLaunchAsync(resolved.Plan, launchResult.State, cancellationToken);
-
-            StreamTicketProvisioningResult ticketResult = await ticketProvisioning.ProvisionAsync(
+            StreamSessionLaunchResult launch = await launchService.LaunchAsync(
                 clientId,
-                resolved.Plan.SessionId,
-                resolved.Plan.Revision,
+                resolved.Profile,
+                resolved.Game,
+                resolved.Plan,
                 cancellationToken);
-            if (!ticketResult.Success || ticketResult.Ticket is null)
+            if (!launch.Success
+                || launch.Lease is null
+                || launch.Launch is null
+                || launch.Stream is null
+                || launch.Ticket is null)
             {
                 return Results.Problem(
-                    ticketResult.Error,
+                    launch.Error,
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
-            IssuedStreamTicket issuedTicket = ticketResult.Ticket;
-
-            StreamingStartResult streamResult = await streaming.StartAsync(resolved.Plan, cancellationToken);
-            if (!streamResult.Success
-                || streamResult.Session is null
-                || !string.Equals(streamResult.Session.State, "running", StringComparison.Ordinal)
-                || streamResult.Session.ActiveListenerPort is not (> 0 and <= 65_535)
-                || streamResult.Session.RuntimeGeneration == Guid.Empty)
-            {
-                string streamError = streamResult.Error
-                    ?? $"Stream session '{resolved.Plan.SessionId}' has no active streaming runtime.";
-                string stopStatus = string.Empty;
-                if (streamResult.Success)
-                {
-                    StreamingStopResult stopped = await streaming.StopRuntimeAsync(
-                        resolved.Plan.SessionId,
-                        streamResult.Session?.RuntimeGeneration ?? Guid.Empty,
-                        cancellationToken);
-                    stopStatus = stopped.Success
-                        ? " Streaming runtime stopped after invalid metadata."
-                        : $" Streaming runtime stop compensation failed after invalid metadata: {stopped.Error}.";
-                }
-                StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
-                    clientId,
-                    resolved.Plan.SessionId,
-                    cancellationToken);
-                string revocationStatus = revoked.Success
-                    ? "Stream ticket revoked after stream start failure."
-                    : $"Stream ticket revocation failed after stream start failure: {revoked.Error}";
-                DisplayRestoreResult restore = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
-                string restoreStatus = restore.Success
-                    ? "Physical primary restore requested after stream start failure."
-                    : $"Physical primary restore failed after stream start failure: {restore.Error}";
-
-                return Results.Problem(
-                    $"{streamError}{stopStatus} {revocationStatus} {restoreStatus}",
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
+            sessions.Save(resolved.Plan);
 
             return Results.Ok(new
             {
                 clientId,
-                displayId = leaseResult.Lease.DisplayId,
+                displayId = launch.Lease.DisplayId,
                 state = "streaming",
-                launch = launchResult.State,
-                stream = streamResult.Session,
+                launch = launch.Launch,
+                stream = launch.Stream,
                 connection = CreateConnectionGrant(
                     resolved.Plan,
-                    streamResult.Session,
-                    issuedTicket,
+                    launch.Stream,
+                    launch.Ticket,
                     serverIdentity),
             });
         });
@@ -617,6 +548,8 @@ public static class ClientEndpoints
             InMemorySessionStore sessions,
             DisplayLeaseManager leases,
             ISessionOwnershipTracker ownership,
+            IStreamingBackend streaming,
+            StreamTicketProvisioningService ticketProvisioning,
             CancellationToken cancellationToken) =>
         {
             ClientProfile? profile = clients.GetProfile(clientId);
@@ -649,6 +582,38 @@ public static class ClientEndpoints
             SessionOwnershipSnapshot? ownershipSnapshot = plan is null
                 ? null
                 : await ownership.GetSnapshotAsync(plan.SessionId, cancellationToken);
+            StreamingSessionState? stream = plan is null
+                ? null
+                : await streaming.GetSessionAsync(plan.SessionId, cancellationToken);
+            if (plan is not null && ownershipSnapshot?.HasOwnedWork != true)
+            {
+                if (IsActiveRuntime(stream))
+                {
+                    StreamingStopResult stopped = await streaming.StopRuntimeAsync(
+                        plan.SessionId,
+                        stream!.RuntimeGeneration,
+                        cancellationToken);
+                    if (!stopped.Success)
+                    {
+                        return Results.Problem(
+                            stopped.Error,
+                            statusCode: StatusCodes.Status503ServiceUnavailable);
+                    }
+
+                    stream = stopped.Session;
+                }
+
+                StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
+                    clientId,
+                    plan.SessionId,
+                    cancellationToken);
+                if (!revoked.Success)
+                {
+                    return Results.Problem(
+                        revoked.Error,
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+            }
             bool displayRemoved = await leases.CleanupIfAllowedAsync(
                 displayId,
                 clientActive: false,
@@ -668,6 +633,7 @@ public static class ClientEndpoints
                 displayId,
                 leasePrepared = false,
                 displayRemoved,
+                stream,
                 ownership = ownershipSnapshot
             });
         });
@@ -790,16 +756,26 @@ public static class ClientEndpoints
             SessionOwnershipSnapshot? ownershipSnapshot = null;
             if (plan is not null)
             {
-                StreamingStopResult stop = await streaming.StopAsync(plan.SessionId, cancellationToken);
-                if (!stop.Success)
-                {
-                    return Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
-                }
-
-                stream = stop.Session;
+                stream = await streaming.GetSessionAsync(plan.SessionId, cancellationToken);
                 if (!request.ClientActive)
                 {
                     ownershipSnapshot = await ownership.GetSnapshotAsync(plan.SessionId, cancellationToken);
+                    if (ownershipSnapshot?.HasOwnedWork != true
+                        && stream is not null
+                        && string.Equals(stream.State, "running", StringComparison.Ordinal)
+                        && stream.RuntimeGeneration != Guid.Empty)
+                    {
+                        StreamingStopResult stop = await streaming.StopRuntimeAsync(
+                            plan.SessionId,
+                            stream.RuntimeGeneration,
+                            cancellationToken);
+                        if (!stop.Success)
+                        {
+                            return Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+                        }
+
+                        stream = stop.Session;
+                    }
                 }
             }
 
@@ -835,6 +811,7 @@ public static class ClientEndpoints
             InMemorySessionStore sessions,
             DisplayLeaseManager leases,
             IStreamingBackend streaming,
+            ISessionOwnershipTracker ownership,
             StreamTicketProvisioningService ticketProvisioning,
             BeaconServerIdentity serverIdentity,
             CancellationToken cancellationToken) =>
@@ -856,21 +833,49 @@ public static class ClientEndpoints
             StreamingSessionState? streamingSession = await streaming.GetSessionAsync(
                 plan.SessionId,
                 cancellationToken);
-            if (streamingSession is null
-                || !string.Equals(streamingSession.State, "running", StringComparison.Ordinal)
-                || streamingSession.ActiveListenerPort is not (> 0 and <= 65_535)
-                || streamingSession.RuntimeGeneration == Guid.Empty)
+            bool restartRequired = !IsActiveRuntime(streamingSession);
+            if (restartRequired)
             {
-                return Results.Problem(
-                    $"Stream session '{plan.SessionId}' has no active streaming runtime.",
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
+                SessionOwnershipSnapshot? ownershipSnapshot = await ownership.GetSnapshotAsync(
+                    plan.SessionId,
+                    cancellationToken);
+                if (ownershipSnapshot is null)
+                {
+                    return Results.Problem(
+                        $"Stream session '{plan.SessionId}' has no active streaming runtime or launched-session ownership.",
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+
+                StreamingPreflightResult preflight = await streaming.CheckReadinessAsync(
+                    plan,
+                    cancellationToken);
+                if (!preflight.Success)
+                {
+                    return Results.Problem(
+                        preflight.Error ?? "Streaming runtime preflight failed.",
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
             }
 
-            DisplayLeaseResult leaseResult = await leases.EnsureLeaseAsync(profile, cancellationToken);
+            DisplayLeaseResult leaseResult = await leases.PrepareLeaseAsync(profile, cancellationToken);
             if (!leaseResult.Success || leaseResult.Lease is null)
             {
                 return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
             }
+
+            if (restartRequired)
+            {
+                StreamingStartResult restarted = await streaming.StartAsync(plan, cancellationToken);
+                if (!restarted.Success || !IsActiveRuntime(restarted.Session))
+                {
+                    return Results.Problem(
+                        restarted.Error ?? $"Stream session '{plan.SessionId}' restart did not publish an active runtime.",
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+
+                streamingSession = restarted.Session;
+            }
+            StreamingSessionState activeStreamingSession = streamingSession!;
 
             StreamTicketProvisioningResult ticketResult = await ticketProvisioning.ProvisionAsync(
                 clientId,
@@ -879,15 +884,24 @@ public static class ClientEndpoints
                 cancellationToken);
             if (!ticketResult.Success || ticketResult.Ticket is null)
             {
+                string detail = ticketResult.Error ?? "Reconnect ticket provisioning failed.";
+                if (restartRequired)
+                {
+                    detail += await StopReconnectRuntimeAsync(
+                        streaming,
+                        plan.SessionId,
+                        activeStreamingSession.RuntimeGeneration,
+                        "fresh ticket provisioning failure");
+                }
                 return Results.Problem(
-                    ticketResult.Error,
+                    detail,
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
             IssuedStreamTicket replacement = ticketResult.Ticket;
             StreamingSessionState? confirmedStreamingSession = await streaming.GetSessionAsync(
                 plan.SessionId,
                 cancellationToken);
-            if (!IsSameActiveRuntime(streamingSession, confirmedStreamingSession))
+            if (!IsSameActiveRuntime(activeStreamingSession, confirmedStreamingSession))
             {
                 StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
                     clientId,
@@ -927,15 +941,23 @@ public static class ClientEndpoints
             SessionPlan? plan = sessions.Get(clientId);
             StreamingSessionState? stream = null;
             SessionOwnershipSnapshot? ownershipSnapshot = null;
+            SessionOwnedWorkTerminationResult? ownedWorkTermination = null;
             if (plan is not null)
             {
-                StreamingStopResult stop = await streaming.StopAsync(plan.SessionId, cancellationToken);
-                if (!stop.Success)
+                stream = await streaming.GetSessionAsync(plan.SessionId, cancellationToken);
+                if (IsActiveRuntime(stream))
                 {
-                    return Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
-                }
+                    StreamingStopResult stop = await streaming.StopRuntimeAsync(
+                        plan.SessionId,
+                        stream!.RuntimeGeneration,
+                        cancellationToken);
+                    if (!stop.Success)
+                    {
+                        return Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+                    }
 
-                stream = stop.Session;
+                    stream = stop.Session;
+                }
                 StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
                     clientId,
                     plan.SessionId,
@@ -947,6 +969,19 @@ public static class ClientEndpoints
                         statusCode: StatusCodes.Status503ServiceUnavailable);
                 }
                 ownershipSnapshot = await ownership.GetSnapshotAsync(plan.SessionId, cancellationToken);
+                if (ownershipSnapshot?.HasOwnedWork == true)
+                {
+                    ownedWorkTermination = await ownership.TerminateOwnedWorkAsync(
+                        plan.SessionId,
+                        cancellationToken);
+                    ownershipSnapshot = await ownership.GetSnapshotAsync(plan.SessionId, cancellationToken);
+                }
+                else if (ownershipSnapshot is not null)
+                {
+                    await ownership.ClearAsync(plan.SessionId, cancellationToken);
+                    ownedWorkTermination = SessionOwnedWorkTerminationResult.Ok([]);
+                    ownershipSnapshot = null;
+                }
             }
 
             bool removed = await leases.CleanupIfAllowedAsync(
@@ -961,7 +996,15 @@ public static class ClientEndpoints
                 await ownership.ClearAsync(plan.SessionId, cancellationToken);
             }
 
-            return Results.Ok(new { clientId, cleanupEvaluated = true, displayRemoved = removed, stream, ownership = ownershipSnapshot });
+            return Results.Ok(new
+            {
+                clientId,
+                cleanupEvaluated = true,
+                displayRemoved = removed,
+                stream,
+                ownedWorkTermination,
+                ownership = ownershipSnapshot
+            });
         });
 
         clients.MapPost("/{clientId}/emergency-restore", async (
@@ -1069,12 +1112,38 @@ public static class ClientEndpoints
         StreamingSessionState expected,
         StreamingSessionState? actual) =>
         actual is not null
-        && string.Equals(actual.State, "running", StringComparison.Ordinal)
-        && actual.ActiveListenerPort is > 0 and <= 65_535
-        && actual.RuntimeGeneration != Guid.Empty
+        && IsActiveRuntime(actual)
         && string.Equals(actual.SessionId, expected.SessionId, StringComparison.Ordinal)
         && actual.ActiveListenerPort == expected.ActiveListenerPort
         && actual.RuntimeGeneration == expected.RuntimeGeneration;
+
+    private static bool IsActiveRuntime(StreamingSessionState? session) =>
+        session is not null
+        && string.Equals(session.State, "running", StringComparison.Ordinal)
+        && session.ActiveListenerPort is > 0 and <= 65_535
+        && session.RuntimeGeneration != Guid.Empty;
+
+    private static async Task<string> StopReconnectRuntimeAsync(
+        IStreamingBackend streaming,
+        string sessionId,
+        Guid runtimeGeneration,
+        string reason)
+    {
+        try
+        {
+            StreamingStopResult stopped = await streaming.StopRuntimeAsync(
+                sessionId,
+                runtimeGeneration,
+                CancellationToken.None);
+            return stopped.Success
+                ? $" Restarted streaming runtime stopped after {reason}."
+                : $" Restarted streaming runtime stop failed after {reason}: {stopped.Error}.";
+        }
+        catch (Exception error)
+        {
+            return $" Restarted streaming runtime stop failed after {reason} ({error.GetType().Name}).";
+        }
+    }
 
     private sealed record ConnectionGrant(
         int ProtocolVersion,

@@ -22,17 +22,35 @@ public sealed class WindowsSessionActivityInspector(
         DisplayPathSnapshot? sessionDisplay = topology.Paths.FirstOrDefault(path =>
             path.DisplayId.Equals(record.Plan.Display.DisplayId, StringComparison.OrdinalIgnoreCase));
 
-        bool ownedWindowRemaining = sessionDisplay is not null &&
-            activityApi.EnumerateTopLevelWindows().Any(window =>
+        int[] ownedWindowProcessIds = sessionDisplay is null
+            ? []
+            : activityApi.EnumerateTopLevelWindows().Where(window =>
                 window.IsVisible &&
                 window.Bounds.Intersects(sessionDisplay.X, sessionDisplay.Y, sessionDisplay.Width, sessionDisplay.Height) &&
-                IsOwnedWindow(record, childProcessIdSet, window));
+                IsOwnedWindow(record, childProcessIdSet, window))
+                .Select(window => window.ProcessId)
+                .Distinct()
+                .ToArray();
+        bool ownedWindowRemaining = ownedWindowProcessIds.Length > 0;
+
+        int[] ownedProcessIds = (
+            launchedProcessRunning && record.LaunchState.ProcessId is int launchedProcessId
+                ? [launchedProcessId]
+                : Array.Empty<int>())
+            .Concat(childProcessIds.Where(activityApi.IsProcessRunning))
+            .Concat(ownedWindowProcessIds)
+            .Distinct()
+            .Order()
+            .ToArray();
 
         return new SessionActivitySnapshot(
             launchedProcessRunning,
             childProcessRunning,
             ownedWindowRemaining,
-            CreateReasons(record, launchedProcessRunning, childProcessRunning, ownedWindowRemaining));
+            CreateReasons(record, launchedProcessRunning, childProcessRunning, ownedWindowRemaining))
+        {
+            OwnedProcessIds = ownedProcessIds
+        };
     }
 
     private bool IsOwnedWindow(

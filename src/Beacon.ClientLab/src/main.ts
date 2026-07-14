@@ -12,6 +12,7 @@ import {
   formatLaunchEvents,
   formatInputAccepted,
   formatPlanDetails,
+  formatStreamStop,
   getJson,
   patchJson,
   postJson,
@@ -28,6 +29,7 @@ import {
   type PlanResponse,
   type PlanRequest,
   type ProfileDraft,
+  type StreamStopResponse,
   type TelemetryProfileName
 } from './clientLab';
 
@@ -132,6 +134,11 @@ element('disconnectButton').addEventListener('click', async () => {
 element('reconnectButton').addEventListener('click', async () => {
   const result = await postJson<{ displayId: string; state: string }>(`/clients/${clientId}/reconnect`, {});
   appendLog(`${result.state} ${result.displayId}`);
+});
+
+element('stopStreamButton').addEventListener('click', async () => {
+  const result = await postJson<StreamStopResponse>(`/clients/${clientId}/stream/stop`, {});
+  appendLog(formatStreamStop(result));
 });
 
 element('quitButton').addEventListener('click', async () => {

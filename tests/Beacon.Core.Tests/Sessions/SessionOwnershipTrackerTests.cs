@@ -79,7 +79,70 @@ public sealed class SessionOwnershipTrackerTests
         Assert.False(snapshot.OwnedWindowRemaining);
     }
 
+    [Fact]
+    public async Task TerminateOwnedWorkUsesInspectedProcessesAndClearsVerifiedRecord()
+    {
+        var inspector = new FakeSessionActivityInspector();
+        var terminator = new RecordingOwnedWorkTerminator(inspector);
+        SessionOwnershipTracker tracker = CreateTracker(inspector, terminator, out SessionPlan plan);
+        inspector.SetActivity(
+            plan.SessionId,
+            new SessionActivitySnapshot(true, true, true, [])
+            {
+                OwnedProcessIds = [1234, 1235, 1236]
+            });
+
+        SessionOwnedWorkTerminationResult result = await tracker.TerminateOwnedWorkAsync(
+            plan.SessionId,
+            CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal([1234, 1235, 1236], result.ProcessIds);
+        Assert.Equal([1234, 1235, 1236], Assert.Single(terminator.Requests));
+        Assert.Null(await tracker.GetSnapshotAsync(plan.SessionId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task UnobservableShellLaunchRemainsTrackedForLaterCleanup()
+    {
+        var inspector = new FakeSessionActivityInspector();
+        SessionPlan plan = CreatePlan();
+        var tracker = new SessionOwnershipTracker(
+            inspector,
+            new RecordingOwnedWorkTerminator(inspector));
+        await tracker.RecordLaunchAsync(
+            plan,
+            new GameLaunchState(
+                plan.SessionId,
+                plan.AppId,
+                "steam-rungameid",
+                "steam://rungameid/16180920483166814208",
+                ProcessId: null,
+                plan.Display.DisplayId,
+                Started: true),
+            CancellationToken.None);
+
+        SessionOwnedWorkTerminationResult result = await tracker.TerminateOwnedWorkAsync(
+            plan.SessionId,
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("not observable", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(await tracker.GetSnapshotAsync(plan.SessionId, CancellationToken.None));
+    }
+
     private static SessionOwnershipTracker CreateTracker(FakeSessionActivityInspector inspector, out SessionPlan plan)
+    {
+        return CreateTracker(
+            inspector,
+            new RecordingOwnedWorkTerminator(inspector),
+            out plan);
+    }
+
+    private static SessionOwnershipTracker CreateTracker(
+        FakeSessionActivityInspector inspector,
+        ISessionOwnedWorkTerminator terminator,
+        out SessionPlan plan)
     {
         plan = CreatePlan();
         var launchState = new GameLaunchState(
@@ -91,9 +154,25 @@ public sealed class SessionOwnershipTrackerTests
             plan.Display.DisplayId,
             Started: true);
 
-        var tracker = new SessionOwnershipTracker(inspector);
+        var tracker = new SessionOwnershipTracker(inspector, terminator);
         tracker.RecordLaunchAsync(plan, launchState, CancellationToken.None).GetAwaiter().GetResult();
         return tracker;
+    }
+
+    private sealed class RecordingOwnedWorkTerminator(FakeSessionActivityInspector inspector)
+        : ISessionOwnedWorkTerminator
+    {
+        public List<IReadOnlyList<int>> Requests { get; } = [];
+
+        public Task<SessionOwnedWorkTerminationResult> TerminateAsync(
+            SessionOwnershipRecord record,
+            SessionActivitySnapshot activity,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add(activity.OwnedProcessIds);
+            inspector.ClearActivity(record.Plan.SessionId);
+            return Task.FromResult(SessionOwnedWorkTerminationResult.Ok(activity.OwnedProcessIds));
+        }
     }
 
     private static SessionPlan CreatePlan() =>

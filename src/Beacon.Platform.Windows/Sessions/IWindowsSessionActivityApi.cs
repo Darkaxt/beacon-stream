@@ -2,6 +2,8 @@ namespace Beacon.Platform.Windows.Sessions;
 
 public interface IWindowsSessionActivityApi
 {
+    int CurrentProcessId { get; }
+
     bool IsProcessRunning(int processId);
 
     IReadOnlyList<int> GetChildProcessIds(int processId);
@@ -9,6 +11,8 @@ public interface IWindowsSessionActivityApi
     DateTimeOffset? GetProcessStartTime(int processId);
 
     IReadOnlyList<WindowsTopLevelWindow> EnumerateTopLevelWindows();
+
+    Task<bool> TerminateProcessAsync(int processId, CancellationToken cancellationToken);
 }
 
 public sealed record WindowsTopLevelWindow(

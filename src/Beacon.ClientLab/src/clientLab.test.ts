@@ -11,6 +11,7 @@ import {
   formatLaunchEvents,
   formatInputAccepted,
   formatPlanDetails,
+  formatStreamStop,
   validateProfileDraft,
   type LaunchResponse,
   type BenchmarkPrepareResponse,
@@ -72,6 +73,24 @@ describe('Client Lab profile validation', () => {
       'streaming client-z-fold-7',
       'running av1 120fps'
     ]);
+  });
+
+  it('formats explicit stream stop independently from display cleanup', () => {
+    expect(formatStreamStop({
+      clientId: 'z-fold-7',
+      stream: {
+        sessionId: 'z-fold-7-steam-shortcut:3767414131',
+        clientId: 'z-fold-7',
+        appId: 'steam-shortcut:3767414131',
+        displayId: 'client-z-fold-7',
+        codec: 'h264',
+        fps: 120,
+        initialBitrateMbps: 65,
+        transport: 'lan-direct',
+        state: 'stopped',
+        error: null
+      }
+    })).toBe('stopped z-fold-7-steam-shortcut:3767414131');
   });
 
   it('builds telemetry payloads from named profiles', () => {

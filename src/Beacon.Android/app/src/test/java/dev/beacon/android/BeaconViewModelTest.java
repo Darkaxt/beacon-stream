@@ -118,6 +118,42 @@ public final class BeaconViewModelTest {
     }
 
     @Test
+    public void disconnectStopsOwnedClientMediaWithoutReleasingReusableCore() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(200, grantBody());
+        RecordingCoreBindings bindings = new RecordingCoreBindings();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings, frame -> { }, Executors.newSingleThreadExecutor());
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "https://server", service, core);
+
+        model.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+        model.disconnect();
+
+        assertEquals("launch,disconnect", service.actions());
+        assertEquals(1, bindings.stopCount);
+        assertEquals(0, bindings.releaseCount);
+        model.close();
+    }
+
+    @Test
+    public void quitStopsOwnedClientMediaBeforeServerSessionClosure() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(200, grantBody());
+        RecordingCoreBindings bindings = new RecordingCoreBindings();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings, frame -> { }, Executors.newSingleThreadExecutor());
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "https://server", service, core);
+
+        model.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+        model.quit(new BeaconApiClient.QuitState(false));
+
+        assertEquals("launch,quit", service.actions());
+        assertEquals(1, bindings.stopCount);
+        assertEquals(0, bindings.releaseCount);
+        model.close();
+    }
+
+    @Test
     public void videoGrantBindsTheBeaconPipelineAndRoutesCompleteAccessUnits() throws Exception {
         FakeService service = new FakeService();
         service.next = new BeaconApiClient.BeaconResult(200, grantBody());

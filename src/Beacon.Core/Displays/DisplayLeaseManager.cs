@@ -154,6 +154,18 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend, IDiagnos
             return false;
         }
 
+        if (ownedProcessRunning || ownedWindowRemaining)
+        {
+            Publish(
+                DiagnosticSeverity.Information,
+                "lease.cleanup.retained",
+                "Display lease retained because owned session work is still present.",
+                clientId: null,
+                displayId,
+                CleanupMetadata(clientActive, ownedProcessRunning, ownedWindowRemaining));
+            return false;
+        }
+
         DisplayRestoreResult restoreResult = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
         if (!restoreResult.Success)
         {
@@ -161,18 +173,6 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend, IDiagnos
                 DiagnosticSeverity.Error,
                 "lease.cleanup.restore-failed",
                 $"Physical primary restore failed during cleanup: {restoreResult.Error}",
-                clientId: null,
-                displayId,
-                CleanupMetadata(clientActive, ownedProcessRunning, ownedWindowRemaining));
-            return false;
-        }
-
-        if (ownedProcessRunning || ownedWindowRemaining)
-        {
-            Publish(
-                DiagnosticSeverity.Information,
-                "lease.cleanup.retained",
-                "Display lease retained because owned session work is still present.",
                 clientId: null,
                 displayId,
                 CleanupMetadata(clientActive, ownedProcessRunning, ownedWindowRemaining));

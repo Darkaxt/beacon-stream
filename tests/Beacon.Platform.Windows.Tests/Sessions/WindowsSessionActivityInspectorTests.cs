@@ -89,6 +89,33 @@ public sealed class WindowsSessionActivityInspectorTests
         Assert.True(snapshot.OwnedWindowRemaining);
     }
 
+    [Fact]
+    public async Task InspectAsync_ReportsOnlyTheThreeOwnedProcessIdentities()
+    {
+        var activityApi = new FakeWindowsSessionActivityApi();
+        activityApi.RunningProcesses.UnionWith([100, 200]);
+        activityApi.ParentByProcessId[200] = 100;
+        activityApi.StartTimeByProcessId[300] = SessionStart.AddMinutes(1);
+        activityApi.StartTimeByProcessId[400] = SessionStart.AddMinutes(-1);
+        activityApi.Windows.Add(new WindowsTopLevelWindow(
+            300,
+            "New Game Window",
+            new WindowsRectangle(100, 100, 800, 600),
+            IsVisible: true));
+        activityApi.Windows.Add(new WindowsTopLevelWindow(
+            400,
+            "Unrelated Updater",
+            new WindowsRectangle(100, 100, 800, 600),
+            IsVisible: true));
+        var inspector = CreateInspector(activityApi);
+
+        SessionActivitySnapshot snapshot = await inspector.InspectAsync(
+            CreateRecord(),
+            CancellationToken.None);
+
+        Assert.Equal([100, 200, 300], snapshot.OwnedProcessIds);
+    }
+
     private static WindowsSessionActivityInspector CreateInspector(FakeWindowsSessionActivityApi activityApi)
     {
         var displayApi = new FakeWindowsDisplayApi

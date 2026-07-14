@@ -490,14 +490,14 @@ this task did not inspect or alter that shared runtime.
 - Modify: Android ViewModel/session tests
 - Modify: Client Lab and FakeEndpoint flows
 
-- [ ] Test the ordered startup transaction from the specification and reverse compensation
+- [x] Test the ordered startup transaction from the specification and reverse compensation
   for every failure point.
-- [ ] Prove unexpected transport loss stops media resources but does not terminate the app or
+- [x] Prove unexpected transport loss stops media resources but does not terminate the app or
   display lease. A still-beaconing client obtains a fresh ticket and reconnects to the same
   server-owned session.
-- [ ] Prove explicit stop and session closure obey inactive **AND** no-owned-work before lease
+- [x] Prove explicit stop and session closure obey inactive **AND** no-owned-work before lease
   removal and physical-primary restore.
-- [ ] Prove Worker crash reports failure without stranding display ownership and allows an
+- [x] Prove Worker crash reports failure without stranding display ownership and allows an
   explicit/reconnect-driven Worker restart.
 - [ ] Commit: `feat: complete Beacon stream session transaction`
 

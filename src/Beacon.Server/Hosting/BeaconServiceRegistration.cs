@@ -103,6 +103,7 @@ public static class BeaconServiceRegistration
         services.AddSingleton<StreamTicketService>();
         services.AddSingleton<StreamTicketProvisioningService>();
         services.AddSingleton<BenchmarkRuntimeOrchestrator>();
+        services.AddSingleton<StreamSessionLaunchService>();
         services.AddSingleton<InMemoryDiagnosticEventJournal>();
         services.AddSingleton<IDiagnosticEventSink>(sp =>
             sp.GetRequiredService<InMemoryDiagnosticEventJournal>());
@@ -267,6 +268,9 @@ public static class BeaconServiceRegistration
         services.AddSingleton<FakeSessionActivityInspector>();
         services.AddSingleton<ISessionActivityInspector>(sp =>
             sp.GetRequiredService<FakeSessionActivityInspector>());
+        services.AddSingleton<ISessionOwnedWorkTerminator>(sp =>
+            new FakeSessionOwnedWorkTerminator(
+                sp.GetRequiredService<FakeSessionActivityInspector>()));
         return services;
     }
 
@@ -284,6 +288,7 @@ public static class BeaconServiceRegistration
         services.AddSingleton<IGameLauncher, WindowsGameLauncher>();
         services.AddSingleton<IWindowsSessionActivityApi, WindowsSessionActivityApi>();
         services.AddSingleton<ISessionActivityInspector, WindowsSessionActivityInspector>();
+        services.AddSingleton<ISessionOwnedWorkTerminator, WindowsSessionOwnedWorkTerminator>();
         services.AddSingleton<IWindowsInputApi, WindowsInputApi>();
         services.AddSingleton<WindowsClientInputSink>();
         services.AddSingleton<IClientInputSink>(sp =>

@@ -175,7 +175,7 @@ public sealed class StreamWorkerStreamingBackendTests
     }
 
     [Fact]
-    public async Task FeedbackMediaAndDisconnectRequireExactBinding()
+    public async Task TransportDisconnectClearsBindingButRetainsRuntimeForFreshGeneration()
     {
         var host = new RecordingStreamWorkerHost();
         var backend = new StreamWorkerStreamingBackend(host);
@@ -195,6 +195,13 @@ public sealed class StreamWorkerStreamingBackendTests
             new StreamWorkerTransportDisconnected(1, plan.SessionId, 7)));
         Assert.False(runtimeEvents.IsCurrent(
             new StreamWorkerMediaEvidence(1, plan.SessionId, 7, 9, 10, 11)));
+        StreamingSessionState retained = Assert.IsType<StreamingSessionState>(
+            await backend.GetSessionAsync(plan.SessionId, CancellationToken.None));
+        Assert.Equal("running", retained.State);
+        Assert.True(runtimeEvents.TryBind(
+            new StreamWorkerTransportAuthenticated(1, plan.SessionId, 8, 1300)));
+        Assert.True(runtimeEvents.IsCurrent(
+            new StreamWorkerMediaEvidence(1, plan.SessionId, 8, 10, 11, 12)));
     }
 
     [Fact]

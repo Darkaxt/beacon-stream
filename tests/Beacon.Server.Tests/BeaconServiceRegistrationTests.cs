@@ -42,6 +42,7 @@ public sealed class BeaconServiceRegistrationTests
         Assert.DoesNotContain(provider.GetServices<IHostedService>(), service => service is StreamWorkerEventRelay);
         Assert.Empty(provider.GetServices<IStreamWorkerRuntimeEvents>());
         Assert.IsType<FakeSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
+        Assert.IsType<FakeSessionOwnedWorkTerminator>(provider.GetRequiredService<ISessionOwnedWorkTerminator>());
         Assert.IsType<NoOpClientInputSink>(provider.GetRequiredService<IClientInputSink>());
         ClientInputHealth inputHealth = provider.GetRequiredService<IClientInputHealthProvider>().GetHealth();
         Assert.Equal("no-op", inputHealth.Backend);
@@ -71,6 +72,7 @@ public sealed class BeaconServiceRegistrationTests
         Assert.IsType<WindowsGameLauncher>(provider.GetRequiredService<IGameLauncher>());
         Assert.IsType<WindowsSessionActivityApi>(provider.GetRequiredService<IWindowsSessionActivityApi>());
         Assert.IsType<WindowsSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
+        Assert.IsType<WindowsSessionOwnedWorkTerminator>(provider.GetRequiredService<ISessionOwnedWorkTerminator>());
         Assert.IsType<WindowsInputApi>(provider.GetRequiredService<IWindowsInputApi>());
         Assert.IsType<WindowsClientInputSink>(provider.GetRequiredService<IClientInputSink>());
         ClientInputHealth inputHealth = provider.GetRequiredService<IClientInputHealthProvider>().GetHealth();

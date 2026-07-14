@@ -96,6 +96,11 @@ export interface LaunchResponse {
   stream: StreamState | null;
 }
 
+export interface StreamStopResponse {
+  clientId: string;
+  stream: StreamState | null;
+}
+
 export interface CapabilitiesPayload {
   av1: boolean;
   hevc: boolean;
@@ -369,6 +374,12 @@ export function formatLaunchEvents(launch: LaunchResponse): string[] {
   }
 
   return events;
+}
+
+export function formatStreamStop(response: StreamStopResponse): string {
+  return response.stream === null
+    ? `no active stream for ${response.clientId}`
+    : `${response.stream.state} ${response.stream.sessionId}`;
 }
 
 export function createPointerGesturePayload(sequence: number): InputPayload {

@@ -49,9 +49,9 @@ public sealed class FakeEndpointLiveTests
                 "POST /clients/z-fold-7/plan",
                 "POST /clients/z-fold-7/launch",
                 "POST /clients/z-fold-7/input",
-                "POST /clients/z-fold-7/reconnect",
                 "POST /clients/z-fold-7/disconnect",
-                "POST /clients/z-fold-7/plan",
+                "POST /clients/z-fold-7/reconnect",
+                "POST /clients/z-fold-7/stream/stop",
                 "POST /clients/z-fold-7/quit",
                 "POST /clients/z-fold-7/emergency-restore"
             ],

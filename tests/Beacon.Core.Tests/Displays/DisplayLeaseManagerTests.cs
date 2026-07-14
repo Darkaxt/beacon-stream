@@ -85,7 +85,7 @@ public sealed class DisplayLeaseManagerTests
     }
 
     [Fact]
-    public async Task CleanupRestoresPhysicalPrimaryWhenClientInactiveButOwnedWindowRemains()
+    public async Task CleanupDoesNotChangeTopologyWhenClientInactiveButOwnedWindowRemains()
     {
         var backend = new FakeDisplayBackend();
         var manager = new DisplayLeaseManager(backend);
@@ -99,7 +99,7 @@ public sealed class DisplayLeaseManagerTests
 
         Assert.False(removed);
         Assert.Empty(backend.RemoveCalls);
-        Assert.Equal("physical-primary", Assert.Single(backend.RestoreCalls));
+        Assert.Empty(backend.RestoreCalls);
     }
 
     [Fact]
