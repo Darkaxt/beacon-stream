@@ -13,7 +13,7 @@ lifecycle.
 ## Static And Build Evidence
 
 - `dotnet format`, warning-as-error build, and all 524 managed tests pass.
-- `./scripts/build-native-windows.ps1` passes all 26 native tests, including endpoint framing,
+- `./scripts/build-native-windows.ps1` passes all 27 native tests, including endpoint framing,
   final-feedback/stop ordering, shared authorization, packetization, MsQuic, WGC, D3D11, and
   NVENC regressions.
 - The real Worker process probe passes authenticated input, feedback, H.264 access-unit,
@@ -34,7 +34,9 @@ lifecycle.
 
 ## Hosted Dynamic Evidence
 
-Pending the GitHub Android emulator run. Acceptance requires all of these exact markers:
+GitHub Actions run `29356605416` passed on commit `f20a307`. The hosted Android job
+executed the APK's sole production StreamCore, MediaCodec, and `SurfaceView` path against the
+shared-protocol test endpoint and recorded:
 
 ```text
 BEACON_HOSTED_ENDPOINT_AUTHENTICATED 1
@@ -42,9 +44,24 @@ BEACON_HOSTED_ENDPOINT_FRAMES 30
 BEACON_HOSTED_ENDPOINT_RENDERED_FEEDBACK 30
 BEACON_HOSTED_ENDPOINT_STOPPED 1
 BEACON_HOSTED_STREAM_FRAMES 30
-BEACON_HOSTED_STREAM_PIXEL_VARIANTS <value greater than or equal to 2>
+BEACON_HOSTED_STREAM_PIXEL_VARIANTS 30
 BEACON_HOSTED_EMULATOR_STREAM_OK
 ```
 
-The validation remains incomplete until GitHub records changing, nonblank `SurfaceView` pixels
-from the real H.264 vector and clean endpoint/decoder/Activity teardown.
+This proves changing, nonblank pixels from the real H.264 vector and clean endpoint, decoder,
+StreamCore, and Activity teardown. It does not exercise Windows capture, catalog launch,
+virtual-display activation, input delivery, reconnect, or physical-primary restoration; those
+remain part of the full Gate 5 dynamic acceptance.
+
+## Refactor Audit
+
+- Production Worker and the hosted endpoint both consume the shared session protocol, ticket
+  authorizer, and media packetizer; no second wire contract or parser was retained.
+- Hosted endpoint and instrumentation symbols are absent from production Android, Worker, and
+  Server source sets and from the release APK.
+- New lifecycle waits are condition/latch driven. MsQuic idle timeout remains disabled rather
+  than owning cancellation or session teardown.
+- StreamCore sends the terminal `StopSession` on the reliable session stream before transport
+  release, and the server closes only after accepted stop and final rendered-frame feedback.
+- The post-acceptance audit found no additional ownership or duplication refactor justified by
+  current evidence. Full product transaction work remains explicitly separate.

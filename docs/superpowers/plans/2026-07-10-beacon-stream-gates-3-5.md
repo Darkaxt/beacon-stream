@@ -473,13 +473,14 @@ Evidence: `docs/validation/2026-07-14-media-packetization-recovery.md`.
   drop, awaiting-IDR recovery, decoder failure feedback, stop/reconnect, and release once.
 - [x] Delete both old splitters only after tests prove StreamCore receives complete access
   units.
-- [ ] On emulator, require structured first-frame and moving-frame evidence; do not infer
+- [x] On emulator, require structured first-frame and moving-frame evidence; do not infer
   success only from an HTTP response or nonblank Surface.
 - [x] Commit: `feat: render Beacon H264 in StreamCore` (`1f64dd5`)
 
 Static evidence: `docs/validation/2026-07-14-android-mediacodec-streamcore.md`.
-Emulator and instrumentation execution remain open because another task currently owns ADB;
-this task did not inspect or alter that shared runtime.
+Hosted emulator evidence is recorded in
+`docs/validation/2026-07-14-hosted-emulator-stream.md`. Local ADB remained untouched because
+another task owns that shared runtime.
 
 ### Task 19: Integrate Launch, Reconnect, Stop, And Restore Transaction
 
