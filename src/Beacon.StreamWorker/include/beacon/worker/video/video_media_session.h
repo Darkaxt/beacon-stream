@@ -1,8 +1,9 @@
 #pragma once
 
+#include "beacon/stream/video_media_packetizer.h"
 #include "beacon/worker/media_datagram_transport.h"
-#include "beacon/worker/video/media_packetizer.h"
 #include "beacon/worker/video/media_rate_controller.h"
+#include "beacon/worker/video/nvenc_h264_encoder.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -24,7 +25,8 @@ enum class VideoMediaSessionFailure {
 
 struct VideoMediaSendResult {
   VideoMediaSessionFailure failure{VideoMediaSessionFailure::none};
-  MediaPacketizerFailure packetizer_failure{MediaPacketizerFailure::none};
+  stream::VideoMediaPacketizerFailure packetizer_failure{
+      stream::VideoMediaPacketizerFailure::none};
   std::uint64_t sequence{};
   std::size_t attempted_datagrams{};
   std::size_t accepted_datagrams{};
@@ -81,7 +83,7 @@ private:
 
   IMediaDatagramTransport &transport_;
   IVideoBitrateControl &bitrate_control_;
-  MediaPacketizer packetizer_;
+  stream::VideoMediaPacketizer packetizer_;
   MediaRateController rate_controller_;
   std::mutex send_mutex_;
   mutable std::mutex mutex_;

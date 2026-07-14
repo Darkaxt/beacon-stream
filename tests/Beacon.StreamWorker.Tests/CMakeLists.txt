@@ -50,10 +50,6 @@ target_link_libraries(
     dxgi
 )
 
-add_executable(BeaconStreamWorkerMediaPacketizerTests media_packetizer_tests.cpp)
-target_link_libraries(BeaconStreamWorkerMediaPacketizerTests PRIVATE Beacon::StreamWorkerCore)
-add_test(NAME BeaconStreamWorker.MediaPacketizer COMMAND BeaconStreamWorkerMediaPacketizerTests)
-
 add_executable(BeaconStreamWorkerMediaRateControllerTests media_rate_controller_tests.cpp)
 target_link_libraries(BeaconStreamWorkerMediaRateControllerTests PRIVATE Beacon::StreamWorkerCore)
 add_test(NAME BeaconStreamWorker.MediaRateController COMMAND BeaconStreamWorkerMediaRateControllerTests)

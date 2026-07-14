@@ -147,7 +147,7 @@ git push origin codex/beacon-production-benchmarks
 - Delete: `src/Beacon.StreamWorker/src/video/media_packetizer.cpp`
 - Delete: `tests/Beacon.StreamWorker.Tests/media_packetizer_tests.cpp`
 
-- [ ] **Step 1: Move packetization tests to the shared contract and verify RED**
+- [x] **Step 1: Move packetization tests to the shared contract and verify RED**
 
 Express packet input without an encoder type:
 
@@ -166,7 +166,7 @@ empty input, maximum frame, datagram size, and chunk-count assertions.
 Run `./scripts/build-native-windows.ps1`. Expected: compile failure because the shared packetizer
 does not exist.
 
-- [ ] **Step 2: Implement the shared packetizer**
+- [x] **Step 2: Implement the shared packetizer**
 
 Define:
 
@@ -191,7 +191,7 @@ Move the existing serialization implementation unchanged except for the input vi
 `VideoMediaSession` at the NVENC boundary by constructing the view from `annex_b`, `idr`, and
 `has_sps || has_pps`. Delete the Worker packetizer implementation rather than wrapping it.
 
-- [ ] **Step 3: Validate, commit, and push packetization**
+- [x] **Step 3: Validate, commit, and push packetization**
 
 Run:
 

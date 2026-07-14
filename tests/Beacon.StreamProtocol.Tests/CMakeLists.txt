@@ -38,6 +38,13 @@ add_executable(
 target_link_libraries(BeaconServerSessionProtocolTests PRIVATE Beacon::StreamProtocol)
 add_test(NAME BeaconStreamProtocol.ServerSession COMMAND BeaconServerSessionProtocolTests)
 
+add_executable(
+  BeaconVideoMediaPacketizerTests
+  video_media_packetizer_tests.cpp
+)
+target_link_libraries(BeaconVideoMediaPacketizerTests PRIVATE Beacon::StreamProtocol)
+add_test(NAME BeaconStreamProtocol.VideoMediaPacketizer COMMAND BeaconVideoMediaPacketizerTests)
+
 if(ANDROID)
   add_executable(
     BeaconAndroidStreamCoreTests

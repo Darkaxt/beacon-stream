@@ -8,6 +8,7 @@ add_library(
     src/secure_bytes.cpp
     src/server_session_protocol.cpp
     src/session.cpp
+    src/video_media_packetizer.cpp
 )
 
 target_include_directories(

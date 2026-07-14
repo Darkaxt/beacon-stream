@@ -11,6 +11,7 @@ readonly tests=(
   BeaconSessionTests
   BeaconFrameAssemblerTests
   BeaconServerSessionProtocolTests
+  BeaconVideoMediaPacketizerTests
   BeaconMsQuicTransportTests
   BeaconAndroidStreamCoreTests
   BeaconAndroidCertificatePinTests

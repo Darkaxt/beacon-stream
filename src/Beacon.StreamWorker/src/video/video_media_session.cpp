@@ -62,9 +62,15 @@ VideoMediaSession::send_access_unit(std::uint64_t session_generation,
     sequence = next_access_unit_sequence_++;
   }
 
-  auto packetized = packetizer_.packetize(
-      access_unit, sequence, presentation_time_us, maximum_datagram_bytes);
-  if (packetized.failure != MediaPacketizerFailure::none) {
+  const stream::EncodedVideoAccessUnitView packetizer_input{
+      .bytes = access_unit.annex_b,
+      .idr = access_unit.idr,
+      .codec_configuration = access_unit.has_sps || access_unit.has_pps,
+  };
+  auto packetized = packetizer_.packetize(packetizer_input, sequence,
+                                          presentation_time_us,
+                                          maximum_datagram_bytes);
+  if (packetized.failure != stream::VideoMediaPacketizerFailure::none) {
     arm_idr();
     return {
         .failure = VideoMediaSessionFailure::packetization_failed,
@@ -75,7 +81,7 @@ VideoMediaSession::send_access_unit(std::uint64_t session_generation,
 
   VideoMediaSendResult result{
       .failure = VideoMediaSessionFailure::none,
-      .packetizer_failure = MediaPacketizerFailure::none,
+      .packetizer_failure = stream::VideoMediaPacketizerFailure::none,
       .sequence = sequence,
   };
   for (auto &packet : packetized.packets) {

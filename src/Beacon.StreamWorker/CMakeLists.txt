@@ -9,7 +9,6 @@ add_library(
     src/quic_listener.cpp
     src/quic_ticket_store.cpp
     src/video/d3d11_video_processor.cpp
-    src/video/media_packetizer.cpp
     src/video/media_rate_controller.cpp
     src/video/nvenc_h264_encoder.cpp
     src/video/production_video_capabilities.cpp
