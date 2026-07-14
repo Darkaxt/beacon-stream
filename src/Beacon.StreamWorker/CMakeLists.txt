@@ -8,6 +8,7 @@ add_library(
     src/video/worker_video_pipeline.cpp
     src/worker_events.cpp
     src/worker_host.cpp
+    src/worker_ipc_frame.cpp
 )
 
 target_include_directories(

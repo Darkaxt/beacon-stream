@@ -156,6 +156,49 @@ if(ANDROID)
 endif()
 
 if(BEACON_WITH_MSQUIC)
+  if(UNIX AND NOT ANDROID)
+    add_executable(
+      BeaconHostedBenchmarkWorker
+      hosted_benchmark_worker.cpp
+      hosted_benchmark_worker_channel.cpp
+    )
+    target_link_libraries(
+      BeaconHostedBenchmarkWorker
+      PRIVATE Beacon::StreamWorkerPortableCore OpenSSL
+    )
+    target_compile_options(
+      BeaconHostedBenchmarkWorker
+      PRIVATE -Wall -Wextra -Wpedantic -Werror
+    )
+
+    add_executable(
+      BeaconHostedBenchmarkWorkerChannelTests
+      hosted_benchmark_worker_channel.cpp
+      hosted_benchmark_worker_channel_tests.cpp
+    )
+    target_link_libraries(
+      BeaconHostedBenchmarkWorkerChannelTests
+      PRIVATE Beacon::StreamWorkerPortableCore
+    )
+    target_compile_options(
+      BeaconHostedBenchmarkWorkerChannelTests
+      PRIVATE -Wall -Wextra -Wpedantic -Werror
+    )
+    target_compile_definitions(
+      BeaconHostedBenchmarkWorkerChannelTests
+      PRIVATE
+        BEACON_HOSTED_WORKER_PATH="$<TARGET_FILE:BeaconHostedBenchmarkWorker>"
+    )
+    add_dependencies(
+      BeaconHostedBenchmarkWorkerChannelTests
+      BeaconHostedBenchmarkWorker
+    )
+    add_test(
+      NAME BeaconStreamWorker.HostedBenchmarkChannel
+      COMMAND BeaconHostedBenchmarkWorkerChannelTests
+    )
+  endif()
+
   function(beacon_deploy_msquic target)
     if(WIN32)
       add_custom_command(

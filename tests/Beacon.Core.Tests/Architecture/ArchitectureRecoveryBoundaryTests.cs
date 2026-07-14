@@ -478,6 +478,7 @@ public sealed class ArchitectureRecoveryBoundaryTests
         Assert.Contains("src/benchmark_source.cpp", portable, StringComparison.Ordinal);
         Assert.Contains("src/quic_listener.cpp", portable, StringComparison.Ordinal);
         Assert.Contains("src/worker_host.cpp", portable, StringComparison.Ordinal);
+        Assert.Contains("src/worker_ipc_frame.cpp", portable, StringComparison.Ordinal);
         Assert.DoesNotContain("src/named_pipe_channel.cpp", portable, StringComparison.Ordinal);
         Assert.DoesNotContain("src/capture/", portable, StringComparison.Ordinal);
         Assert.DoesNotContain("src/video/d3d11", portable, StringComparison.Ordinal);
@@ -517,6 +518,38 @@ public sealed class ArchitectureRecoveryBoundaryTests
         int windowsGuardEnd = source.IndexOf("#endif", windowsIncludes, StringComparison.Ordinal);
         Assert.True(windowsGuard >= 0 && windowsGuard < windowsIncludes);
         Assert.True(windowsGuardEnd > windowsIncludes);
+    }
+
+    [Fact]
+    public void HostedBenchmarkWorkerRemainsLinuxTestInfrastructureOnly()
+    {
+        string root = FindRepositoryRoot();
+        string testCmake = File.ReadAllText(ToPlatformPath(
+            root,
+            "tests/Beacon.StreamProtocol.Tests/CMakeLists.txt"));
+        string productionWorkerCmake = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.StreamWorker/CMakeLists.txt"));
+        string nativeCmake = File.ReadAllText(ToPlatformPath(root, "native/CMakeLists.txt"));
+        string hostedSource = File.ReadAllText(ToPlatformPath(
+            root,
+            "tests/Beacon.StreamProtocol.Tests/hosted_benchmark_worker.cpp"));
+        string hostedChannel = File.ReadAllText(ToPlatformPath(
+            root,
+            "tests/Beacon.StreamProtocol.Tests/hosted_benchmark_worker_channel.cpp"));
+
+        int linuxTestGuard = testCmake.IndexOf("if(UNIX AND NOT ANDROID)", StringComparison.Ordinal);
+        int hostedTarget = testCmake.IndexOf(
+            "add_executable(\n      BeaconHostedBenchmarkWorker",
+            StringComparison.Ordinal);
+        Assert.True(linuxTestGuard >= 0 && hostedTarget > linuxTestGuard);
+        Assert.DoesNotContain("BeaconHostedBenchmarkWorker", productionWorkerCmake, StringComparison.Ordinal);
+        Assert.DoesNotContain("BeaconHostedBenchmarkWorker", nativeCmake, StringComparison.Ordinal);
+        Assert.Contains("BEACON_HOSTED_WORKER_READY", hostedSource, StringComparison.Ordinal);
+        Assert.Contains("BEACON_HOSTED_WORKER_STOPPED", hostedSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("sleep_for", hostedSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("wait_for", hostedSource, StringComparison.Ordinal);
+        Assert.Contains("::poll(descriptors.data(), descriptors.size(), -1)", hostedChannel, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -68,17 +68,17 @@ authorizer while retaining fake host side effects and fake non-benchmark streami
 - Create: `tests/Beacon.StreamProtocol.Tests/hosted_benchmark_worker.cpp`
 - Modify: `tests/Beacon.StreamProtocol.Tests/CMakeLists.txt`
 
-- [ ] Write failing native tests for exact big-endian frame reads/writes, malformed/oversized frame
+- [x] Write failing native tests for exact big-endian frame reads/writes, malformed/oversized frame
   rejection, clean EOF, and terminal Worker completion.
-- [ ] Implement binary stdin/stdout framing using the existing maximum Worker message size and
+- [x] Implement binary stdin/stdout framing using the existing maximum Worker message size and
   generated protobuf contract.
-- [ ] Compose `WorkerHost`, `AuthorizedQuicTicketStore`, `QuicListener`, outbound queue, and a
+- [x] Compose `WorkerHost`, `AuthorizedQuicTicketStore`, `QuicListener`, outbound queue, and a
   no-video pipeline. Report video unavailable truthfully while keeping benchmark support active.
-- [ ] Publish hello/capabilities/ready, serialize all output through one queue, and shut down only
+- [x] Publish hello/capabilities/ready, serialize all output through one queue, and shut down only
   on typed command, channel closure, or unrecoverable process failure.
-- [ ] Add fixed, non-secret process markers for readiness and clean shutdown on stderr.
-- [ ] Build/test the target on Linux and prove it is not part of Windows/Android product artifacts.
-- [ ] Commit and push the hosted Worker slice.
+- [x] Add fixed, non-secret process markers for readiness and clean shutdown on stderr.
+- [x] Build/test the target on Linux and prove it is not part of Windows/Android product artifacts.
+- [x] Commit and push the hosted Worker slice.
 
 ### Task 4: Let TestHost Own The Hosted Worker Process
 
