@@ -304,22 +304,22 @@ ctest --preset windows-x64-debug --output-on-failure
 - Modify: Android telemetry/network observers
 - Modify: Client Lab benchmark simulation
 
-- [ ] Test reliable throughput rounds, datagram loss/reorder/RTT/jitter rounds, decode-vector
+- [x] Test reliable throughput rounds, datagram loss/reorder/RTT/jitter rounds, decode-vector
   rounds, presentation evidence, thermal sampling, explicit cancellation, and network-change
   restart from a new run id.
-- [ ] Trigger full calibration automatically from material fingerprint changes and manually
+- [x] Trigger full calibration automatically from material fingerprint changes and manually
   from the APK. Session preflight uses a short explicitly specified measurement round; it is
   not a lifecycle timeout.
-- [ ] Do not apply live bitrate adaptation yet. Feed measured evidence into the planner.
-- [ ] Commit: `feat: benchmark Beacon network and hardware path`
+- [x] Do not apply live bitrate adaptation yet. Feed measured evidence into the planner.
+- [x] Commit: `feat: benchmark Beacon network and hardware path`
 
 ### Task 13: Gate 4 Validate, Sync, Refactor, Validate, Sync
 
 - [ ] Run deterministic fake benchmarks, real loopback, emulator network/hardware benchmark,
   Client Lab, and the complete regression matrix.
-- [ ] Confirm the fake Z Fold 7 profile still preserves `2560x1600` and `120 Hz` intent while
+- [x] Confirm the fake Z Fold 7 profile still preserves `2560x1600` and `120 Hz` intent while
   the server remains free to reject 120 FPS when measured evidence is insufficient.
-- [ ] Verify automatic Wi-Fi/network fingerprint changes create a new run and unchanged
+- [x] Verify automatic Wi-Fi/network fingerprint changes create a new run and unchanged
   fingerprints reuse valid evidence.
 - [ ] Merge the implementation PR, audit scoring/ownership/duplicate telemetry, add
   regressions, repeat all validation, and merge the refactor PR.

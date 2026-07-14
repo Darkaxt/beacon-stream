@@ -3,6 +3,7 @@
 
 #include "beacon/stream/frame_assembler.h"
 #include "beacon/stream/media_datagram.h"
+#include "benchmark_collector.h"
 
 #include "stream_control.pb.h"
 #include "worker_ipc.pb.h"
@@ -15,6 +16,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -37,8 +39,27 @@ constexpr std::string_view kAlpn{"beacon-stream/1"};
 constexpr std::string_view kRawTicket{"loopback-ticket"};
 constexpr std::uint64_t kAdditionalMediaSequence{77};
 constexpr std::uint64_t kAdditionalMediaPresentationTimeUs{2'345'678};
+constexpr std::string_view kBenchmarkRunId{
+    "11111111-1111-1111-1111-111111111111"};
+constexpr std::array<std::byte, 16> kBenchmarkRunToken{
+    std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a},
+    std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a},
+    std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a},
+    std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a}};
+constexpr std::uint32_t kBenchmarkReliablePacketCount{8};
+constexpr std::uint32_t kBenchmarkReliablePayloadBytes{4'096};
+constexpr std::uint32_t kBenchmarkDatagramPacketCount{16};
+constexpr std::uint32_t kBenchmarkDatagramPayloadBytes{1'000};
+constexpr std::uint64_t kBenchmarkMeasurementIntervalUs{500'000};
 namespace stream_v1 = beacon::stream::v1;
 namespace worker_v1 = beacon::worker::v1;
+
+std::uint64_t monotonic_us() noexcept {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
 
 bool contains_annex_b_parameter_sets_and_idr(
     std::span<const std::byte> bytes) noexcept {
@@ -307,6 +328,8 @@ struct ClientState {
   bool certificate_seen{};
   bool send_data_after_auth{true};
   bool exercise_ordered_actions{true};
+  bool benchmark_mode{};
+  bool post_auth_sent{};
   std::uint32_t video_width{2560};
   std::uint32_t video_height{1600};
   stream_v1::SessionErrorCode authentication_error{
@@ -314,6 +337,9 @@ struct ClientState {
   std::string raw_ticket{kRawTicket};
   std::uint32_t protocol_version{1};
   beacon::worker::TicketHash expected_fingerprint{};
+  beacon::android::streamcore::BenchmarkCollector benchmark_collector;
+  std::optional<beacon::android::streamcore::BenchmarkCollectionResult>
+      benchmark_result;
 
   bool send(HQUIC stream, std::vector<std::byte> bytes, QUIC_SEND_FLAGS flags) {
     auto *context = new SendContext(std::move(bytes));
@@ -327,6 +353,31 @@ struct ClientState {
   }
 
   bool send_post_auth_messages() {
+    if (benchmark_mode) {
+      stream_v1::SessionStreamEnvelope benchmark;
+      benchmark.set_protocol_version(1);
+      benchmark.set_session_id("session-a");
+      benchmark.set_sequence(2);
+      auto *start = benchmark.mutable_start_benchmark();
+      start->set_run_id(kBenchmarkRunId);
+      start->set_schema_version(3);
+      start->set_run_token(kBenchmarkRunToken.data(),
+                           kBenchmarkRunToken.size());
+      start->mutable_reliable_round()->set_packet_count(
+          kBenchmarkReliablePacketCount);
+      start->mutable_reliable_round()->set_payload_bytes(
+          kBenchmarkReliablePayloadBytes);
+      start->mutable_reliable_round()->set_measurement_interval_us(
+          kBenchmarkMeasurementIntervalUs);
+      start->mutable_datagram_round()->set_packet_count(
+          kBenchmarkDatagramPacketCount);
+      start->mutable_datagram_round()->set_payload_bytes(
+          kBenchmarkDatagramPayloadBytes);
+      start->mutable_datagram_round()->set_measurement_interval_us(
+          kBenchmarkMeasurementIntervalUs);
+      return send(session_stream, frame(benchmark), QUIC_SEND_FLAG_NONE);
+    }
+
     stream_v1::SessionStreamEnvelope control;
     control.set_protocol_version(1);
     control.set_session_id("session-a");
@@ -408,7 +459,7 @@ QUIC_STATUS QUIC_API stream_callback(HQUIC stream, void *context,
   switch (event->Type) {
   case QUIC_STREAM_EVENT_RECEIVE:
     if (stream_context.session) {
-      bool accepted = false;
+      bool send_post_auth = false;
       {
         std::lock_guard lock{state.mutex};
         for (std::uint32_t index = 0; index < event->RECEIVE.BufferCount;
@@ -419,30 +470,98 @@ QUIC_STATUS QUIC_API stream_callback(HQUIC stream, void *context,
           state.session_bytes.insert(state.session_bytes.end(), begin,
                                      begin + buffer.Length);
         }
-        if (state.session_bytes.size() >= 4) {
+        while (!state.failed && state.session_bytes.size() >= 4) {
           const auto size =
               (std::to_integer<std::uint32_t>(state.session_bytes[0]) << 24U) |
               (std::to_integer<std::uint32_t>(state.session_bytes[1]) << 16U) |
               (std::to_integer<std::uint32_t>(state.session_bytes[2]) << 8U) |
               std::to_integer<std::uint32_t>(state.session_bytes[3]);
-          if (size > 0 && state.session_bytes.size() >= 4U + size) {
-            stream_v1::SessionStreamEnvelope reply;
-            const bool parsed = reply.ParseFromArray(
-                state.session_bytes.data() + 4, static_cast<int>(size));
+          if (size == 0 ||
+              size > beacon::worker::maximum_stream_message_bytes) {
+            state.failed = true;
+            break;
+          }
+          if (state.session_bytes.size() < 4U + size) {
+            break;
+          }
+
+          stream_v1::SessionStreamEnvelope reply;
+          const bool parsed = reply.ParseFromArray(
+              state.session_bytes.data() + 4, static_cast<int>(size));
+          state.session_bytes.erase(state.session_bytes.begin(),
+                                    state.session_bytes.begin() + 4U + size);
+          if (!parsed || reply.protocol_version() != 1 ||
+              reply.session_id() != "session-a") {
+            state.failed = true;
+            break;
+          }
+
+          if (reply.has_session_authenticated()) {
+            if (state.authenticated || state.post_auth_sent) {
+              state.failed = true;
+              break;
+            }
+            state.authentication_error =
+                reply.session_authenticated().error_code();
             state.authenticated =
-                parsed && reply.has_session_authenticated() &&
                 reply.session_authenticated().accepted() &&
                 reply.session_authenticated().maximum_datagram_bytes() > 0;
-            if (parsed && reply.has_session_authenticated()) {
-              state.authentication_error =
-                  reply.session_authenticated().error_code();
-            }
             state.failed = !state.authenticated;
-            accepted = state.authenticated;
+            send_post_auth =
+                state.authenticated && state.send_data_after_auth;
+            state.post_auth_sent = send_post_auth;
+            continue;
           }
+
+          if (!state.authenticated || !state.benchmark_mode) {
+            state.failed = true;
+            break;
+          }
+
+          if (reply.has_benchmark_reliable_chunk()) {
+            const auto &chunk = reply.benchmark_reliable_chunk();
+            if (chunk.run_id() != kBenchmarkRunId || chunk.round_id() != 1 ||
+                !state.benchmark_collector.observe_reliable(
+                    chunk.sequence(),
+                    static_cast<std::uint32_t>(chunk.payload().size()),
+                    monotonic_us())) {
+              state.failed = true;
+              break;
+            }
+            continue;
+          }
+
+          if (reply.has_benchmark_round_completed()) {
+            const auto &completed = reply.benchmark_round_completed();
+            if (completed.run_id() != kBenchmarkRunId ||
+                completed.round_id() != 2 ||
+                completed.expected_packet_count() !=
+                    kBenchmarkDatagramPacketCount ||
+                completed.payload_bytes() != kBenchmarkDatagramPayloadBytes) {
+              state.failed = true;
+              break;
+            }
+            std::vector<beacon::android::streamcore::BenchmarkRttObservation>
+                observations;
+            observations.reserve(completed.rtt_observations_size());
+            for (const auto &observation : completed.rtt_observations()) {
+              observations.push_back({.sequence = observation.sequence(),
+                                      .rtt_us = observation.rtt_us()});
+            }
+            auto result = state.benchmark_collector.complete(monotonic_us(),
+                                                             observations);
+            if (!result.has_value()) {
+              state.failed = true;
+              break;
+            }
+            state.benchmark_result = std::move(result);
+            continue;
+          }
+
+          state.failed = true;
         }
       }
-      if (accepted && state.send_data_after_auth &&
+      if (send_post_auth &&
           !state.send_post_auth_messages()) {
         std::lock_guard lock{state.mutex};
         state.failed = true;
@@ -505,8 +624,15 @@ QUIC_STATUS QUIC_API connection_callback(HQUIC connection, void *context,
     const auto &buffer = *event->DATAGRAM_RECEIVED.Buffer;
     const auto datagram = std::span<const std::byte>{
         reinterpret_cast<const std::byte *>(buffer.Buffer), buffer.Length};
-    const auto parsed = beacon::stream::parse_media_datagram(datagram);
     std::lock_guard lock{state.mutex};
+    if (state.benchmark_mode) {
+      state.failed =
+          state.failed ||
+          !state.benchmark_collector.observe_datagram(datagram, monotonic_us());
+      state.changed.notify_all();
+      break;
+    }
+    const auto parsed = beacon::stream::parse_media_datagram(datagram);
     const bool additional_media =
         parsed.error == beacon::stream::MediaDatagramError::none &&
         parsed.header.sequence == kAdditionalMediaSequence &&
@@ -771,6 +897,60 @@ bool collect_stream_events(beacon::worker::NamedPipeChannel &channel,
   return true;
 }
 
+bool collect_benchmark_authentication_event(
+    beacon::worker::NamedPipeChannel &channel,
+    std::vector<worker_v1::WorkerIpcEnvelope> &events) {
+  bool authenticated = false;
+  bool connection_observed = false;
+  bool connection_configured = false;
+  bool transport_connected = false;
+  while (!connection_observed || !connection_configured ||
+         !transport_connected || !authenticated) {
+    worker_v1::WorkerIpcEnvelope event;
+    if (channel.read(event) != beacon::worker::FrameDecodeStatus::success ||
+        event.protocol_version() != 1 || event.request_id() != 0) {
+      return false;
+    }
+    if (event.body_case() == worker_v1::WorkerIpcEnvelope::kWorkerDiagnostic) {
+      if (!event.session_id().empty() ||
+          event.worker_diagnostic().severity() !=
+              worker_v1::DIAGNOSTIC_SEVERITY_INFORMATION ||
+          event.worker_diagnostic().boundary() !=
+              worker_v1::DIAGNOSTIC_BOUNDARY_TRANSPORT ||
+          event.worker_diagnostic().platform_error_code() != 0 ||
+          event.worker_diagnostic().numeric_value() != 1) {
+        return false;
+      }
+      switch (event.worker_diagnostic().code()) {
+      case worker_v1::DIAGNOSTIC_CODE_CONNECTION_OBSERVED:
+        connection_observed = true;
+        break;
+      case worker_v1::DIAGNOSTIC_CODE_CONNECTION_CONFIGURED:
+        connection_configured = true;
+        break;
+      case worker_v1::DIAGNOSTIC_CODE_TRANSPORT_CONNECTED:
+        transport_connected = true;
+        break;
+      default:
+        return false;
+      }
+      events.push_back(std::move(event));
+      continue;
+    }
+    authenticated =
+        event.session_id() == "session-a" &&
+        event.body_case() ==
+            worker_v1::WorkerIpcEnvelope::kTransportAuthenticated &&
+        event.transport_authenticated().session_generation() == 1 &&
+        event.transport_authenticated().maximum_datagram_bytes() > 0;
+    if (!authenticated) {
+      return false;
+    }
+    events.push_back(std::move(event));
+  }
+  return true;
+}
+
 bool collect_disconnect_event(
     beacon::worker::NamedPipeChannel &channel,
     std::vector<worker_v1::WorkerIpcEnvelope> &events) {
@@ -792,21 +972,25 @@ bool collect_disconnect_event(
   }
 }
 
-int run_worker_process_probe(const std::wstring &worker_path,
-                             const std::wstring &identity_path,
-                             const beacon::worker::TicketHash &fingerprint,
-                             const std::wstring &display_device_name,
-                             std::uint32_t width, std::uint32_t height) {
+enum class WorkerProcessProbeMode { video, benchmark };
+
+int run_worker_process_probe(
+    const std::wstring &worker_path, const std::wstring &identity_path,
+    const beacon::worker::TicketHash &fingerprint, WorkerProcessProbeMode mode,
+    const std::wstring &display_device_name = {}, std::uint32_t width = 0,
+    std::uint32_t height = 0) {
   std::string display_device;
-  display_device.reserve(display_device_name.size());
-  for (const wchar_t value : display_device_name) {
-    if (value < 0 || value > 0x7f) {
+  if (mode == WorkerProcessProbeMode::video) {
+    display_device.reserve(display_device_name.size());
+    for (const wchar_t value : display_device_name) {
+      if (value < 0 || value > 0x7f) {
+        return 79;
+      }
+      display_device.push_back(static_cast<char>(value));
+    }
+    if (display_device.empty() || width == 0 || height == 0) {
       return 79;
     }
-    display_device.push_back(static_cast<char>(value));
-  }
-  if (display_device.empty() || width == 0 || height == 0) {
-    return 79;
   }
   const auto pipe_name = L"\\\\.\\pipe\\beacon-worker-process-probe-" +
                          std::to_wstring(GetCurrentProcessId()) + L"-" +
@@ -879,18 +1063,37 @@ int run_worker_process_probe(const std::wstring &worker_path,
   std::vector<worker_v1::WorkerIpcEnvelope> events;
   std::vector<worker_v1::WorkerIpcEnvelope> responses;
   auto prepare = worker_command(1, "session-a");
-  auto *plan = prepare.mutable_prepare_session();
-  plan->set_display_target("display-a");
-  plan->set_display_device_name(display_device);
-  plan->set_video_codec(worker_v1::WORKER_VIDEO_CODEC_H264);
-  plan->set_width(width);
-  plan->set_height(height);
-  plan->set_frames_per_second_numerator(120);
-  plan->set_frames_per_second_denominator(1);
-  plan->set_dynamic_range(worker_v1::WORKER_DYNAMIC_RANGE_SDR);
-  plan->set_minimum_bitrate_kbps(8'000);
-  plan->set_initial_bitrate_kbps(24'000);
-  plan->set_maximum_bitrate_kbps(40'000);
+  if (mode == WorkerProcessProbeMode::video) {
+    auto *plan = prepare.mutable_prepare_session();
+    plan->set_display_target("display-a");
+    plan->set_display_device_name(display_device);
+    plan->set_video_codec(worker_v1::WORKER_VIDEO_CODEC_H264);
+    plan->set_width(width);
+    plan->set_height(height);
+    plan->set_frames_per_second_numerator(120);
+    plan->set_frames_per_second_denominator(1);
+    plan->set_dynamic_range(worker_v1::WORKER_DYNAMIC_RANGE_SDR);
+    plan->set_minimum_bitrate_kbps(8'000);
+    plan->set_initial_bitrate_kbps(24'000);
+    plan->set_maximum_bitrate_kbps(40'000);
+  } else {
+    auto *plan = prepare.mutable_prepare_benchmark()->mutable_plan();
+    plan->set_run_id(kBenchmarkRunId);
+    plan->set_schema_version(3);
+    plan->set_run_token(kBenchmarkRunToken.data(), kBenchmarkRunToken.size());
+    plan->mutable_reliable_round()->set_packet_count(
+        kBenchmarkReliablePacketCount);
+    plan->mutable_reliable_round()->set_payload_bytes(
+        kBenchmarkReliablePayloadBytes);
+    plan->mutable_reliable_round()->set_measurement_interval_us(
+        kBenchmarkMeasurementIntervalUs);
+    plan->mutable_datagram_round()->set_packet_count(
+        kBenchmarkDatagramPacketCount);
+    plan->mutable_datagram_round()->set_payload_bytes(
+        kBenchmarkDatagramPayloadBytes);
+    plan->mutable_datagram_round()->set_measurement_interval_us(
+        kBenchmarkMeasurementIntervalUs);
+  }
   if (!exchange_worker_command(channel, prepare, responses, events)) {
     return 88;
   }
@@ -935,8 +1138,20 @@ int run_worker_process_probe(const std::wstring &worker_path,
   ClientState client;
   client.expected_fingerprint = fingerprint;
   client.exercise_ordered_actions = false;
-  client.video_width = width;
-  client.video_height = height;
+  if (mode == WorkerProcessProbeMode::video) {
+    client.video_width = width;
+    client.video_height = height;
+  } else {
+    client.benchmark_mode = true;
+    if (!client.benchmark_collector.start(
+            {.run_token = kBenchmarkRunToken,
+             .reliable_packet_count = kBenchmarkReliablePacketCount,
+             .reliable_payload_bytes = kBenchmarkReliablePayloadBytes,
+             .datagram_packet_count = kBenchmarkDatagramPacketCount,
+             .datagram_payload_bytes = kBenchmarkDatagramPayloadBytes})) {
+      return 98;
+    }
+  }
   if (!start_client(
           client,
           static_cast<std::uint16_t>(
@@ -946,18 +1161,38 @@ int run_worker_process_probe(const std::wstring &worker_path,
   }
   {
     std::unique_lock lock{client.mutex};
-    client.changed.wait(lock, [&client] {
-      return client.datagram_received || client.failed ||
-             client.connection_closed;
+    client.changed.wait(lock, [&client, mode] {
+      const bool completed = mode == WorkerProcessProbeMode::video
+                                 ? client.datagram_received
+                                 : client.benchmark_result.has_value();
+      return completed || client.failed || client.connection_closed;
     });
-    if (!client.datagram_received || client.failed || !client.authenticated ||
-        !client.certificate_seen) {
+    bool valid_result = client.authenticated && client.certificate_seen;
+    if (mode == WorkerProcessProbeMode::video) {
+      valid_result = valid_result && client.datagram_received;
+    } else if (client.benchmark_result.has_value()) {
+      const auto &result = *client.benchmark_result;
+      valid_result =
+          valid_result && result.sustainable_throughput_mbps > 0.0 &&
+          result.received_datagrams == kBenchmarkDatagramPacketCount &&
+          result.samples.size() == kBenchmarkDatagramPacketCount &&
+          std::ranges::all_of(result.samples, [](const auto &sample) {
+            return sample.received && sample.rtt_us > 0;
+          });
+    } else {
+      valid_result = false;
+    }
+    if (!valid_result || client.failed) {
       lock.unlock();
       stop_client(client);
       return 92;
     }
   }
-  if (!collect_stream_events(channel, events)) {
+  const bool events_collected =
+      mode == WorkerProcessProbeMode::video
+          ? collect_stream_events(channel, events)
+          : collect_benchmark_authentication_event(channel, events);
+  if (!events_collected) {
     stop_client(client);
     return 93;
   }
@@ -977,9 +1212,14 @@ int run_worker_process_probe(const std::wstring &worker_path,
   if (!exit_code || *exit_code != 0) {
     return 96;
   }
-  std::printf("BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK "
-              "REAL_H264_ACCESS_UNIT "
-              "DISCONNECT SHUTDOWN\n");
+  if (mode == WorkerProcessProbeMode::benchmark) {
+    std::printf("BEACON_WORKER_BENCHMARK_OK AUTH RELIABLE DATAGRAM RTT "
+                "DISCONNECT SHUTDOWN\n");
+  } else {
+    std::printf("BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK "
+                "REAL_H264_ACCESS_UNIT "
+                "DISCONNECT SHUTDOWN\n");
+  }
   return 0;
 }
 
@@ -1139,6 +1379,26 @@ bool disconnect_callback_fault_is_contained(
 } // namespace
 
 int wmain(int argument_count, wchar_t **arguments) {
+  if (argument_count == 7 &&
+      std::wstring_view(arguments[1]) == L"--benchmark-worker" &&
+      std::wstring_view(arguments[3]) == L"--identity" &&
+      std::wstring_view(arguments[5]) == L"--fingerprint") {
+    beacon::worker::TicketHash fingerprint{};
+    const std::wstring_view wide_fingerprint{arguments[6]};
+    std::string fingerprint_text;
+    fingerprint_text.reserve(wide_fingerprint.size());
+    for (const wchar_t value : wide_fingerprint) {
+      if (value < 0 || value > 0x7f) {
+        return 65;
+      }
+      fingerprint_text.push_back(static_cast<char>(value));
+    }
+    if (!decode_fingerprint(fingerprint_text, fingerprint)) {
+      return 66;
+    }
+    return run_worker_process_probe(arguments[2], arguments[4], fingerprint,
+                                    WorkerProcessProbeMode::benchmark);
+  }
   if (argument_count == 13 && std::wstring_view(arguments[1]) == L"--worker" &&
       std::wstring_view(arguments[3]) == L"--identity" &&
       std::wstring_view(arguments[5]) == L"--fingerprint" &&
@@ -1162,8 +1422,9 @@ int wmain(int argument_count, wchar_t **arguments) {
         static_cast<std::uint32_t>(std::wcstoul(arguments[10], nullptr, 10));
     const auto height =
         static_cast<std::uint32_t>(std::wcstoul(arguments[12], nullptr, 10));
-    return run_worker_process_probe(arguments[2], arguments[4], fingerprint,
-                                    arguments[8], width, height);
+    return run_worker_process_probe(
+        arguments[2], arguments[4], fingerprint, WorkerProcessProbeMode::video,
+        arguments[8], width, height);
   }
   if (argument_count != 4)
     return 64;

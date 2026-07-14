@@ -75,5 +75,15 @@ target_link_libraries(BeaconStreamWorkerProductionVideoGenerationTests PRIVATE B
 add_test(NAME BeaconStreamWorker.ProductionVideoGeneration COMMAND BeaconStreamWorkerProductionVideoGenerationTests)
 
 add_executable(BeaconStreamWorkerQuicListenerProbe quic_listener_probe.cpp)
+target_sources(
+  BeaconStreamWorkerQuicListenerProbe
+  PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../../src/Beacon.Android/app/src/main/cpp/streamcore/benchmark_collector.cpp"
+)
+target_include_directories(
+  BeaconStreamWorkerQuicListenerProbe
+  PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../../src/Beacon.Android/app/src/main/cpp/streamcore"
+)
 target_link_libraries(BeaconStreamWorkerQuicListenerProbe PRIVATE Beacon::StreamWorkerCore)
 beacon_deploy_msquic(BeaconStreamWorkerQuicListenerProbe)

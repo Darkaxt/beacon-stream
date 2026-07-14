@@ -85,6 +85,17 @@ try {
     }
     Write-Host $nativeOutput
 
+    $benchmarkOutput = & $nativeProbe `
+        --benchmark-worker $WorkerPath `
+        --identity $identityPath `
+        --fingerprint $fingerprint
+    $benchmarkExitCode = $LASTEXITCODE
+    if ($benchmarkExitCode -ne 0 -or
+        $benchmarkOutput -notmatch '^BEACON_WORKER_BENCHMARK_OK AUTH RELIABLE DATAGRAM RTT DISCONNECT SHUTDOWN$') {
+        throw "Native Worker benchmark integration failed with exit code ${benchmarkExitCode}: $benchmarkOutput"
+    }
+    Write-Host $benchmarkOutput
+
     $startupExitOutput = & $nativeProbe `
         --worker $nativeProbe `
         --identity $identityPath `
