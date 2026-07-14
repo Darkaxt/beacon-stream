@@ -132,6 +132,7 @@ public final class BeaconActivity extends Activity {
 
         TextView title = text("Beacon", uiState.titleTextSizeSp(), true);
         root.addView(title);
+        root.addView(touchSurface());
 
         addLocalSettingsControls(root);
 
@@ -219,7 +220,6 @@ public final class BeaconActivity extends Activity {
                 AndroidDeviceBenchmarkRunner.system(this),
                 readGame());
         }));
-        root.addView(touchSurface());
         root.addView(button("Send Pointer", model -> model.sendInput(BeaconApiClient.InputBatch.pointerTap(1, 0.5, 0.5))));
         root.addView(button("Send Escape", model -> model.sendInput(BeaconApiClient.InputBatch.keyboardPress(2, "Escape", "Escape"))));
         root.addView(button("Stop Stream", model -> model.stopStream()));
