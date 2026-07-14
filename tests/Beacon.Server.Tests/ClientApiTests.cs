@@ -1640,6 +1640,74 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
     }
 
     [Fact]
+    public async Task InactiveDisconnectRevokesUnusedStreamTicketBeforeDisplayCleanup()
+    {
+        WebApplicationFactory<Program> disconnectFactory =
+            factory.WithWebHostBuilder(_ => { });
+        HttpClient client = disconnectFactory.CreateClient();
+
+        HttpResponseMessage launch = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/launch",
+            new { gameId = "steam-shortcut:3767414131" });
+        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+        using JsonDocument launchDocument = await JsonDocument.ParseAsync(
+            await launch.Content.ReadAsStreamAsync());
+        JsonElement connection = launchDocument.RootElement.GetProperty("connection");
+        string ticket = connection.GetProperty("ticket").GetString()!;
+        string sessionId = connection.GetProperty("sessionId").GetString()!;
+        ulong planRevision = connection.GetProperty("planRevision").GetUInt64();
+
+        HttpResponseMessage disconnect = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/disconnect",
+            new { clientActive = false });
+
+        Assert.Equal(HttpStatusCode.OK, disconnect.StatusCode);
+        StreamTicketService tickets = disconnectFactory.Services
+            .GetRequiredService<StreamTicketService>();
+        StreamTicketValidation validation = tickets.Consume(
+            ticket,
+            "z-fold-7",
+            sessionId,
+            planRevision,
+            [0x42, 0x45, 0x41, 0x43, 0x4f, 0x4e],
+            DateTimeOffset.UtcNow);
+        Assert.False(validation.Success);
+        Assert.Equal(StreamTicketFailure.Revoked, validation.Failure);
+    }
+
+    [Fact]
+    public async Task InactiveDisconnectSkipsDisplayCleanupWhenTicketRevocationFails()
+    {
+        var display = new FakeDisplayBackend();
+        WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.RemoveAll<IStreamSessionAuthorizer>();
+                services.AddSingleton<IDisplayBackend>(display);
+                services.AddSingleton<IStreamSessionAuthorizer>(
+                    new RejectingRevocationAuthorizer());
+            }));
+        HttpClient client = failingFactory.CreateClient();
+
+        HttpResponseMessage launch = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/launch",
+            new { gameId = "steam-shortcut:3767414131" });
+        HttpResponseMessage disconnect = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/disconnect",
+            new { clientActive = false });
+
+        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, disconnect.StatusCode);
+        Assert.Contains(
+            "ticket revocation rejected",
+            await disconnect.Content.ReadAsStringAsync(),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(display.RestoreCalls);
+        Assert.Empty(display.RemoveCalls);
+    }
+
+    [Fact]
     public async Task DisconnectWithUnknownLengthJsonBodyParsesInactiveClient()
     {
         var display = new FakeDisplayBackend();
@@ -2193,6 +2261,24 @@ public sealed class ClientApiTests(WebApplicationFactory<Program> factory) : ICl
             StreamWorkerRevocation revocation,
             CancellationToken cancellationToken) =>
             Task.FromResult(StreamWorkerAuthorizationResult.Accepted);
+    }
+
+    private sealed class RejectingRevocationAuthorizer : IStreamSessionAuthorizer
+    {
+        public Task<StreamWorkerAuthorizationContext> GetContextAsync(
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new StreamWorkerAuthorizationContext([1, 2, 3, 4]));
+
+        public Task<StreamWorkerAuthorizationResult> AuthorizeAsync(
+            StreamWorkerAuthorization authorization,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(StreamWorkerAuthorizationResult.Accepted);
+
+        public Task<StreamWorkerAuthorizationResult> RevokeAsync(
+            StreamWorkerRevocation revocation,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(StreamWorkerAuthorizationResult.Reject(
+                "ticket revocation rejected"));
     }
 
     private sealed class CancelingAuthorizationAuthorizer : IStreamSessionAuthorizer

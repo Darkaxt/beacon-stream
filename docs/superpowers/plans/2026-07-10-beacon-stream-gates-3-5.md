@@ -544,6 +544,12 @@ process proof, Client Lab, Playwright, and architecture guards pass. Emulator ac
 remaining Task 21 ownership areas stay open. Evidence:
 `docs/validation/2026-07-14-android-decoder-ownership-audit.md`.
 
+Compensation evidence (2026-07-14): explicit inactive disconnect now revokes unused session
+tickets before display cleanup, while active disconnect retains the reconnect path. Revocation
+failure returns `503` before physical restore/removal. The full managed solution passes 514 tests,
+and Client Lab plus its Playwright lifecycle remain green. Evidence:
+`docs/validation/2026-07-14-inactive-disconnect-compensation.md`.
+
 ## Deferred Until Gate 5 Passes
 
 Create separate audited plans, in this order, for:

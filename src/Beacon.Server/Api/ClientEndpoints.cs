@@ -747,6 +747,7 @@ public static class ClientEndpoints
             DisplayLeaseManager leases,
             IStreamingBackend streaming,
             ISessionOwnershipTracker ownership,
+            StreamTicketProvisioningService ticketProvisioning,
             CancellationToken cancellationToken) =>
         {
             DisconnectRequest request = await ReadDisconnectRequestAsync(httpRequest, cancellationToken);
@@ -775,6 +776,18 @@ public static class ClientEndpoints
                         }
 
                         stream = stop.Session;
+                    }
+
+                    StreamTicketProvisioningResult revoked =
+                        await ticketProvisioning.RevokeSessionAsync(
+                            clientId,
+                            plan.SessionId,
+                            cancellationToken);
+                    if (!revoked.Success)
+                    {
+                        return Results.Problem(
+                            revoked.Error,
+                            statusCode: StatusCodes.Status503ServiceUnavailable);
                     }
                 }
             }
