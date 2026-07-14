@@ -169,6 +169,22 @@ public sealed class HostedBenchmarkWorkerProcessHostTests
         Assert.Equal("BEACON_FAKE_HOSTED_WORKER_STOPPED", host.Diagnostics[^1]);
     }
 
+    [Fact]
+    public async Task ForwardsOnlySanitizedWorkerMarkersToDiagnosticSink()
+    {
+        using var fixture = HostedWorkerFixture.Create("diagnostics");
+        var forwarded = new List<string>();
+        await using var host = fixture.CreateHost(diagnosticSink: forwarded.Add);
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        await host.ShutdownAsync(CancellationToken.None);
+
+        Assert.Contains("BEACON_FAKE_HOSTED_WORKER_READY", forwarded);
+        Assert.Contains("BEACON_FAKE_HOSTED_WORKER_STOPPED", forwarded);
+        Assert.DoesNotContain(forwarded, value => value.Contains("not-safe", StringComparison.Ordinal));
+        Assert.All(forwarded, value => Assert.DoesNotContain(fixture.IdentityPath, value, StringComparison.Ordinal));
+    }
+
     private static WorkerIpcEnvelope Command(string sessionId) => new()
     {
         SessionId = sessionId,
@@ -210,7 +226,9 @@ public sealed class HostedBenchmarkWorkerProcessHostTests
             return new HostedWorkerFixture(directory, executable, identity);
         }
 
-        public HostedBenchmarkWorkerProcessHost CreateHost(int diagnosticCapacity = 16)
+        public HostedBenchmarkWorkerProcessHost CreateHost(
+            int diagnosticCapacity = 16,
+            Action<string>? diagnosticSink = null)
         {
             HostedBenchmarkWorkerOptions options = HostedBenchmarkWorkerOptions.Create(
                 ExecutablePath,
@@ -219,7 +237,8 @@ public sealed class HostedBenchmarkWorkerProcessHostTests
                 options,
                 CreateStartInfo,
                 eventCapacity: 16,
-                diagnosticCapacity);
+                diagnosticCapacity,
+                diagnosticSink);
         }
 
         private static ProcessStartInfo CreateStartInfo(HostedBenchmarkWorkerOptions options)

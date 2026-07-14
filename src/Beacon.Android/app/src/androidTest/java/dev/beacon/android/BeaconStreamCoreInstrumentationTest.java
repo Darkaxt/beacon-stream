@@ -372,6 +372,8 @@ public final class BeaconStreamCoreInstrumentationTest {
             instrumentation,
             AndroidDeviceBenchmarkRunner.system(instrumentation.getTargetContext()),
             true);
+        assertNotNull(outcome.networkEvidence);
+        emit("BEACON_GATE4_NATIVE_NETWORK_COMPLETE");
         emit("BEACON_HARDWARE_EVIDENCE " + decoderEvidence(outcome.deviceEvidence));
         boolean expectedRejection = outcome.completion.statusCode() == 400 && (
             outcome.completion.body().contains("No sustainable decoder candidate is available.") ||
@@ -380,6 +382,9 @@ public final class BeaconStreamCoreInstrumentationTest {
         assertTrue(
             outcome.completion.body() + " device=" + decoderEvidence(outcome.deviceEvidence),
             outcome.completion.isSuccess() || expectedRejection);
+        emit(expectedRejection
+            ? "BEACON_GATE4_REAL_HARDWARE_CAPABILITY_REJECTED"
+            : "BEACON_GATE4_REAL_HARDWARE_ACCEPTED");
         emit("BEACON_GATE4_REAL_HARDWARE_OBSERVED");
     }
 
@@ -414,6 +419,7 @@ public final class BeaconStreamCoreInstrumentationTest {
             false);
         assertTrue(outcome.completion.body(), outcome.completion.isSuccess());
         emit("BEACON_GATE4_BENCHMARK_COMPLETE");
+        emit("BEACON_GATE4_CERTIFIED_MANUAL_COMPLETE");
     }
 
     @Test
@@ -427,6 +433,7 @@ public final class BeaconStreamCoreInstrumentationTest {
         assertTrue(outcome.deviceEvidence.decoderSamples().isEmpty());
         assertEquals(1, outcome.deviceEvidence.powerSamples().size());
         emit("BEACON_GATE4_SESSION_PREFLIGHT");
+        emit("BEACON_GATE4_CERTIFIED_PREFLIGHT_COMPLETE");
     }
 
     private static Gate4BenchmarkOutcome runGate4Benchmark(
@@ -444,10 +451,12 @@ public final class BeaconStreamCoreInstrumentationTest {
         Bundle arguments = requireGate3Arguments();
         String serverUrl = requireArgument(arguments, "serverUrl");
         String clientId = requireArgument(arguments, "clientId");
+        String serverPublicKeyFingerprint =
+            requireArgument(arguments, "serverPublicKeyFingerprint");
         installCredential(instrumentation, clientId);
         BeaconApiClient api = new BeaconApiClient(
             instrumentation.getTargetContext(),
-            new BeaconClientConfig(serverUrl, clientId));
+            new BeaconClientConfig(serverUrl, clientId, serverPublicKeyFingerprint));
         assertTrue(api.hello().isSuccess());
         assertTrue(api.reportCapabilities(gate3Capabilities()).isSuccess());
 

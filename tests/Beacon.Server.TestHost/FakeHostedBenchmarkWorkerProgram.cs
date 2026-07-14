@@ -62,6 +62,7 @@ internal static class FakeHostedBenchmarkWorkerProgram
             {
                 Console.Error.WriteLine($"BEACON_FAKE_HOSTED_WORKER_DIAGNOSTIC {index}");
             }
+            Console.Error.WriteLine("not-safe-marker");
         }
         if (string.Equals(mode, "normal", StringComparison.Ordinal)
             || string.Equals(mode, "diagnostics", StringComparison.Ordinal))

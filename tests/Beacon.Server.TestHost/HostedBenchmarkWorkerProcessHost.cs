@@ -15,12 +15,18 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
     private readonly Lock diagnosticGate = new();
     private readonly Queue<string> diagnostics = [];
     private readonly int diagnosticCapacity;
+    private readonly Action<string>? diagnosticSink;
     private ActiveWorker? activeWorker;
     private long nextProcessGeneration;
     private int disposed;
 
     public HostedBenchmarkWorkerProcessHost(HostedBenchmarkWorkerOptions options)
-        : this(options, CreateStartInfo, eventCapacity: 64, diagnosticCapacity: 16)
+        : this(
+            options,
+            CreateStartInfo,
+            eventCapacity: 64,
+            diagnosticCapacity: 16,
+            static marker => Console.Error.WriteLine(marker))
     {
     }
 
@@ -28,7 +34,8 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
         HostedBenchmarkWorkerOptions options,
         Func<HostedBenchmarkWorkerOptions, ProcessStartInfo> createStartInfo,
         int eventCapacity,
-        int diagnosticCapacity)
+        int diagnosticCapacity,
+        Action<string>? diagnosticSink = null)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         this.createStartInfo = createStartInfo ?? throw new ArgumentNullException(nameof(createStartInfo));
@@ -41,6 +48,7 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
             throw new ArgumentOutOfRangeException(nameof(diagnosticCapacity));
         }
         this.diagnosticCapacity = diagnosticCapacity;
+        this.diagnosticSink = diagnosticSink;
         eventChannel = Channel.CreateBounded<StreamWorkerEvent>(new BoundedChannelOptions(eventCapacity)
         {
             SingleReader = true,
@@ -389,6 +397,13 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
                     diagnostics.Dequeue();
                 }
                 diagnostics.Enqueue(line);
+            }
+            try
+            {
+                diagnosticSink?.Invoke(line);
+            }
+            catch (Exception)
+            {
             }
         }
     }

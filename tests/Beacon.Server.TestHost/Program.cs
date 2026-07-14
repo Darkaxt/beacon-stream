@@ -39,6 +39,19 @@ public static class TestHostProgram
             algorithm = identity.Algorithm,
             publicKeyFingerprint = identity.PublicKeyFingerprint,
         }));
+        app.MapGet("/hosted-benchmark-worker/snapshot", (IServiceProvider services) =>
+        {
+            HostedBenchmarkWorkerProcessHost? worker =
+                services.GetService<HostedBenchmarkWorkerProcessHost>();
+            return worker is null
+                ? Results.NotFound(new { error = "Hosted benchmark Worker is not configured." })
+                : Results.Ok(new
+                {
+                    isReady = worker.IsReady,
+                    processGeneration = worker.CurrentProcessGeneration,
+                    diagnostics = worker.Diagnostics,
+                });
+        });
         app.MapAdminEndpoints();
         app.MapGameEndpoints();
         app.MapClientEndpoints();

@@ -117,17 +117,17 @@ authorizer while retaining fake host side effects and fake non-benchmark streami
 - Modify: `src/Beacon.Android/app/src/androidTest/java/dev/beacon/android/BeaconStreamCoreInstrumentationTest.java`
 - Modify: `docs/validation/2026-07-14-hosted-emulator-stream.md`
 
-- [ ] Write a fake-process/fake-ADB script test that proves structured Kestrel readiness parsing,
+- [x] Write a fake-process/fake-ADB script test that proves structured Kestrel readiness parsing,
   exact instrumentation dispatch, required markers, snapshot validation, secret absence, child
   cleanup, and failure propagation.
-- [ ] Add explicit instrumentation markers proving native network completion, expected
+- [x] Add explicit instrumentation markers proving native network completion, expected
   real-hardware capability rejection, certified manual completion, and preflight completion.
-- [ ] Build the Linux Worker through pinned dependencies and protoc, then start an isolated TestHost
+- [x] Build the Linux Worker through pinned dependencies and protoc, then start an isolated TestHost
   with the same PKCS#12 identity and an OS-assigned HTTPS port.
-- [ ] Run the three Gate 4 methods explicitly against `10.0.2.2`, capture instrumentation/logcat,
+- [x] Run the three Gate 4 methods explicitly against `10.0.2.2`, capture instrumentation/logcat,
   and verify Server snapshots after each transaction.
-- [ ] Add the runner to the hosted Android job without touching local ADB.
-- [ ] Run script unit tests, Android unit/build checks, static scans, and push for hosted execution.
+- [x] Add the runner to the hosted Android job without touching local ADB.
+- [x] Run script unit tests, Android unit/build checks, static scans, and push for hosted execution.
 - [ ] Inspect the GitHub run and record exact run id, commit, benchmark markers, Worker markers, and
   Server snapshot evidence in the validation document.
 - [ ] Commit and push the dynamic evidence.
