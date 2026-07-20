@@ -54,12 +54,13 @@ These invariants are non-negotiable.
 8. Display, application, session, and recovery ownership remain in Beacon Service, never in StreamWorker or the APK.
 9. Benchmark measurements are facts. Only Beacon Service selects streaming settings.
 10. New feature work remains frozen until architecture recovery and one Beacon-owned emulator vertical slice pass their acceptance gates.
+11. Privileged Windows execution is isolated in one Beacon Host Agent that implements typed mechanics without owning session policy.
 
 ## Product Components
 
 ### Beacon Service
 
-Beacon Service is the authoritative Windows service and control plane.
+Beacon Service is the authoritative Windows host and control plane. It runs non-elevated as the owning user in the interactive Windows session; privileged mechanics are delegated to Beacon Host Agent without transferring policy ownership.
 
 Responsibilities:
 
@@ -75,6 +76,12 @@ Responsibilities:
 - Operational journal, health, diagnostics, and recovery.
 
 Beacon Service does not capture or encode frames in its managed service process. Native streaming failures must not crash or corrupt the policy owner.
+
+### Beacon Host Agent
+
+Beacon Host Agent is the sole elevated Beacon process. It runs in the owning user's interactive Windows session, exposes no network endpoint, and executes a fixed versioned set of display and driver operations over a SID-restricted named pipe. Beacon Service remains the policy and lifecycle owner; Host Agent cannot plan sessions, infer cleanup, launch applications, or start StreamWorker.
+
+The normative process, IPC, package-verification, transaction, and validation requirements are defined in `2026-07-21-beacon-host-agent-design.md`.
 
 ### Beacon StreamWorker
 
@@ -214,7 +221,24 @@ This register is the implementation contract.
 - `REQ-SEC-005`: Ticket expiry is a security validity rule, not a session cancellation timeout.
 - `REQ-SEC-006`: Private keys, credentials, session tickets, and media keys never appear in public API snapshots, logs, exception text, or `ToString()` output.
 - `REQ-SEC-007`: Owning-client actions are scoped to that client's active session.
-- `REQ-SEC-008`: The local cockpit may perform broader administrative recovery with UAC elevation when required.
+- `REQ-SEC-008`: The local cockpit requests broader administrative recovery through Beacon Service and Host Agent; it does not directly elevate or bypass server policy.
+
+### Privileged Host Boundary
+
+- `REQ-HOST-001`: One installer-time elevation registers `Beacon.HostAgent` for the owning user's interactive logon at highest run level.
+- `REQ-HOST-002`: Routine Beacon startup, display control, recovery, and approved SudoVDA updates do not prompt for UAC.
+- `REQ-HOST-003`: Host Agent is the only elevated Beacon process and exposes no network listener.
+- `REQ-HOST-004`: Beacon Service owns all desired state, ordering, session policy, cleanup gates, and compensation; Host Agent executes typed Windows mechanics only.
+- `REQ-HOST-005`: Host Agent IPC is versioned, local-only, bound to the owning user SID, protected by an explicit pipe ACL, and authenticated from the kernel-provided client identity.
+- `REQ-HOST-006`: Host Agent accepts no arbitrary command, executable path, command line, script, environment block, registry path, device instance id, or unrestricted filesystem path.
+- `REQ-HOST-007`: Pipe disconnect never implies stream stop, display removal, primary restoration, application termination, or any other lifecycle transition.
+- `REQ-HOST-008`: Display mutations re-resolve and verify target identity and preserve a physical path immediately before execution.
+- `REQ-HOST-009`: Driver updates use complete manifest-bound INF/CAT/binary packages staged below an ACL-controlled Beacon directory; a loose DLL is never installable.
+- `REQ-HOST-010`: Host Agent rejects package traversal, reparse points, unexpected files, hash mismatch, signer mismatch, INF mismatch, architecture mismatch, and incompatible driver protocol.
+- `REQ-HOST-011`: Driver update success requires verification of the active published INF, device state, protocol, signer, version, and binary hash after device restart.
+- `REQ-HOST-012`: Failed driver verification triggers one deterministic rollback to the previously recorded package; unverified rollback is reported as a durable degraded state.
+- `REQ-HOST-013`: No timeout cancels a host operation or owns cleanup. Heartbeats report liveness only.
+- `REQ-HOST-014`: Core, StreamWorker, StreamCore, and the public APK protocol contain no Host Agent implementation contract.
 
 ### Network Fingerprint And Benchmark Triggers
 
