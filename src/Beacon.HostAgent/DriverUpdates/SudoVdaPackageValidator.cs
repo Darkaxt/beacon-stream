@@ -10,7 +10,7 @@ namespace Beacon.HostAgent.DriverUpdates;
 internal sealed class SudoVdaPackageValidator(
     SudoVdaPackagePaths paths,
     SudoVdaPackagePolicy policy,
-    ISudoVdaSignatureVerifier signatures)
+    ISudoVdaSignatureVerifier signatures) : ISudoVdaPackageValidator
 {
     private const int ManifestSchemaVersion = 1;
     private const string ManifestFileName = "manifest.json";

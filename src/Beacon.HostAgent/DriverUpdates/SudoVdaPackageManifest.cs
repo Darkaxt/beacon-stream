@@ -33,6 +33,14 @@ internal sealed record SudoVdaValidatedPackage(
     string SignerThumbprint,
     IReadOnlyDictionary<string, string> FileHashes);
 
+internal interface ISudoVdaPackageValidator
+{
+    Task<SudoVdaValidatedPackage> ValidateAndStageAsync(
+        string packageId,
+        Guid transactionId,
+        CancellationToken cancellationToken);
+}
+
 internal sealed record SudoVdaSignatureEvidence(
     bool Valid,
     string Subject,
