@@ -10,6 +10,7 @@ public sealed class HostAgentPipeServerTests
     public async Task VerifiedLocalClientReceivesCorrelatedResponse()
     {
         SecurityIdentifier owner = CurrentOwner();
+        string pipeName = $"beacon-host-agent-test-{Guid.NewGuid():N}";
         int dispatchCount = 0;
         var server = new HostAgentPipeServer(
             owner,
@@ -17,10 +18,11 @@ public sealed class HostAgentPipeServerTests
             {
                 dispatchCount++;
                 return Task.FromResult(Success(request));
-            });
+            },
+            pipeName: pipeName);
         using var shutdown = new CancellationTokenSource();
         Task serving = server.RunAsync(shutdown.Token);
-        await using var client = CreateClient(owner);
+        await using var client = CreateClient(pipeName);
         await client.ConnectAsync(CancellationToken.None);
         HostAgentRequest request = Request();
 
@@ -40,6 +42,7 @@ public sealed class HostAgentPipeServerTests
     public async Task RejectedCallerIsClosedWithoutDispatch()
     {
         SecurityIdentifier owner = CurrentOwner();
+        string pipeName = $"beacon-host-agent-test-{Guid.NewGuid():N}";
         int dispatchCount = 0;
         var server = new HostAgentPipeServer(
             owner,
@@ -48,10 +51,11 @@ public sealed class HostAgentPipeServerTests
                 dispatchCount++;
                 return Task.FromResult(Success(request));
             },
-            new RejectingCallerVerifier());
+            new RejectingCallerVerifier(),
+            pipeName);
         using var shutdown = new CancellationTokenSource();
         Task serving = server.RunAsync(shutdown.Token);
-        await using var client = CreateClient(owner);
+        await using var client = CreateClient(pipeName);
         await client.ConnectAsync(CancellationToken.None);
 
         await Assert.ThrowsAsync<EndOfStreamException>(() =>
@@ -62,10 +66,10 @@ public sealed class HostAgentPipeServerTests
         Assert.Equal(0, dispatchCount);
     }
 
-    private static NamedPipeClientStream CreateClient(SecurityIdentifier owner) =>
+    private static NamedPipeClientStream CreateClient(string pipeName) =>
         new(
             ".",
-            HostAgentPipeIdentity.CreateName(owner),
+            pipeName,
             PipeDirection.InOut,
             PipeOptions.Asynchronous,
             TokenImpersonationLevel.Identification);

@@ -7,6 +7,7 @@ namespace Beacon.HostAgent;
 internal sealed class HostAgentPipeServer
 {
     private readonly SecurityIdentifier owner;
+    private readonly string pipeName;
     private readonly Func<HostAgentRequest, CancellationToken, Task<HostAgentResponse>> dispatch;
     private readonly IHostAgentCallerVerifier callerVerifier;
 
@@ -20,9 +21,13 @@ internal sealed class HostAgentPipeServer
     internal HostAgentPipeServer(
         SecurityIdentifier owner,
         Func<HostAgentRequest, CancellationToken, Task<HostAgentResponse>> dispatch,
-        IHostAgentCallerVerifier? callerVerifier = null)
+        IHostAgentCallerVerifier? callerVerifier = null,
+        string? pipeName = null)
     {
         this.owner = owner ?? throw new ArgumentNullException(nameof(owner));
+        this.pipeName = string.IsNullOrWhiteSpace(pipeName)
+            ? HostAgentPipeIdentity.CreateName(owner)
+            : pipeName;
         this.dispatch = dispatch ?? throw new ArgumentNullException(nameof(dispatch));
         this.callerVerifier = callerVerifier ?? new WindowsHostAgentCallerVerifier(owner);
     }
@@ -55,7 +60,7 @@ internal sealed class HostAgentPipeServer
 
     private NamedPipeServerStream CreatePipe() =>
         NamedPipeServerStreamAcl.Create(
-            HostAgentPipeIdentity.CreateName(owner),
+            pipeName,
             PipeDirection.InOut,
             maxNumberOfServerInstances: 1,
             PipeTransmissionMode.Byte,
