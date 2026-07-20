@@ -13,7 +13,9 @@ public enum HostAgentOperation
     SetVirtualPrimary,
     RestorePhysicalPrimary,
     RemoveVirtualDisplay,
-    QueryHdrCapability
+    QueryHdrCapability,
+    InstallStagedSudoVdaPackage,
+    QuerySudoVdaUpdate
 }
 
 public sealed record HostAgentRequest(

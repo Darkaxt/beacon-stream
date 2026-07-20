@@ -42,6 +42,77 @@ public sealed class HostAgentProtocolTests
     }
 
     [Fact]
+    public void DriverUpdateRequestRoundTripsWithIdentifiersOnly()
+    {
+        Guid requestId = Guid.NewGuid();
+        Guid transactionId = Guid.NewGuid();
+        HostAgentRequest request = new(
+            HostAgentProtocol.CurrentVersion,
+            requestId,
+            HostAgentOperation.InstallStagedSudoVdaPackage,
+            HostAgentProtocol.CreatePayload(
+                new InstallStagedSudoVdaPackagePayload(
+                    "sudovda-22.48.58.193",
+                    transactionId)));
+
+        HostAgentRequest decoded = HostAgentProtocol.DeserializeRequest(
+            HostAgentProtocol.SerializeRequest(request));
+        InstallStagedSudoVdaPackagePayload payload =
+            HostAgentProtocol.ReadPayload<InstallStagedSudoVdaPackagePayload>(decoded.Payload);
+
+        Assert.Equal(HostAgentOperation.InstallStagedSudoVdaPackage, decoded.Operation);
+        Assert.Equal("sudovda-22.48.58.193", payload.PackageId);
+        Assert.Equal(transactionId, payload.TransactionId);
+        Assert.DoesNotContain("path", decoded.Payload.GetRawText(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("command", decoded.Payload.GetRawText(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DriverUpdateResultRoundTripsWithTypedEvidence()
+    {
+        Guid transactionId = Guid.NewGuid();
+        var evidence = new SudoVdaDriverEvidencePayload(
+            DeviceInstanceId: @"ROOT\DISPLAY\0000",
+            HardwareId: @"root\sudomaker\sudovda",
+            PublishedInf: "oem163.inf",
+            DriverVersion: "22.48.58.193",
+            ProtocolVersion: "0.2.0",
+            SignerSubject: "CN=Beacon Test Driver",
+            SignerThumbprint: "0123456789ABCDEF",
+            BinarySha256: "BD26C518");
+        var value = new SudoVdaUpdatePayload(
+            transactionId,
+            "sudovda-22.48.58.193",
+            SudoVdaUpdateState.Succeeded,
+            "driver-update-succeeded",
+            evidence,
+            evidence);
+
+        JsonElement json = HostAgentProtocol.CreatePayload(value);
+        SudoVdaUpdatePayload decoded = HostAgentProtocol.ReadPayload<SudoVdaUpdatePayload>(json);
+
+        Assert.Equal(SudoVdaUpdateState.Succeeded, decoded.State);
+        Assert.Equal("oem163.inf", decoded.ActiveEvidence?.PublishedInf);
+        Assert.Equal("succeeded", json.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public void UnknownDriverUpdatePayloadMemberIsRejected()
+    {
+        using JsonDocument document = JsonDocument.Parse($$"""
+            {
+              "packageId": "sudovda-22.48.58.193",
+              "transactionId": "{{Guid.NewGuid():D}}",
+              "executablePath": "C:\\malware.exe"
+            }
+            """);
+
+        Assert.Throws<JsonException>(() =>
+            HostAgentProtocol.ReadPayload<InstallStagedSudoVdaPackagePayload>(
+                document.RootElement));
+    }
+
+    [Fact]
     public async Task ResponseRoundTripsThroughBoundedFrame()
     {
         Guid requestId = Guid.NewGuid();
