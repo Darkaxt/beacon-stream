@@ -6,6 +6,7 @@ using Beacon.Core.Recovery;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Displays;
+using Beacon.Platform.Windows.HostAgent;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.Benchmarks;
 using Beacon.Server.Hosting;
@@ -33,7 +34,10 @@ public static class BeaconTestRuntimeServices
         {
             RemoveWorkerRelay(services);
         }
+        RemoveHostAgentRelay(services);
         services.RemoveAll<BeaconHostOptions>();
+        services.RemoveAll<IWindowsDisplayLeaseSession>();
+        services.RemoveAll<IWindowsDisplayNameResolver>();
         services.RemoveAll<IDisplayBackend>();
         services.RemoveAll<IRecoveryBackend>();
         services.RemoveAll<IGameLauncher>();
@@ -44,7 +48,6 @@ public static class BeaconTestRuntimeServices
         services.RemoveAll<NoOpClientInputSink>();
         if (useProductionStreamWorker)
         {
-            services.RemoveAll<IWindowsDisplayNameResolver>();
             services.RemoveAll<IStreamWorkerRuntimeEvents>();
             services.RemoveAll<StreamWorkerStreamingBackend>();
             services.RemoveAll<IStreamingBackend>();
@@ -89,6 +92,8 @@ public static class BeaconTestRuntimeServices
             sp.GetRequiredService<NoOpClientInputSink>());
         if (useProductionStreamWorker)
         {
+            services.RemoveAll<IWindowsDisplayApi>();
+            services.AddSingleton<IWindowsDisplayApi>(_ => new WindowsDisplayApi());
             services.AddSingleton<IWindowsDisplayNameResolver, TestHostPrimaryDisplayNameResolver>();
             services.AddSingleton(sp => new StreamWorkerStreamingBackend(
                 sp.GetRequiredService<IStreamWorkerHost>(),
@@ -194,6 +199,19 @@ public static class BeaconTestRuntimeServices
             ServiceDescriptor descriptor = services[index];
             if (descriptor.ServiceType == typeof(IHostedService)
                 && descriptor.ImplementationType == typeof(StreamWorkerEventRelay))
+            {
+                services.RemoveAt(index);
+            }
+        }
+    }
+
+    private static void RemoveHostAgentRelay(IServiceCollection services)
+    {
+        for (int index = services.Count - 1; index >= 0; index--)
+        {
+            ServiceDescriptor descriptor = services[index];
+            if (descriptor.ServiceType == typeof(IHostedService)
+                && descriptor.ImplementationType == typeof(HostAgentConnectionHostedService))
             {
                 services.RemoveAt(index);
             }

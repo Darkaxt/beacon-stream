@@ -12,6 +12,7 @@ using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Displays;
 using Beacon.Platform.Windows.Games;
+using Beacon.Platform.Windows.HostAgent;
 using Beacon.Platform.Windows.Input;
 using Beacon.Platform.Windows.Recovery;
 using Beacon.Platform.Windows.Sessions;
@@ -39,7 +40,11 @@ public sealed class BeaconServiceRegistrationTests
 
         Assert.Equal("windows", options.ModeName);
         Assert.Equal(nameof(StreamWorkerStreamingBackend), options.StreamingBackendName);
-        Assert.IsType<WindowsDisplayApi>(provider.GetRequiredService<IWindowsDisplayApi>());
+        HostAgentWindowsDisplayApi displayApi = Assert.IsType<HostAgentWindowsDisplayApi>(
+            provider.GetRequiredService<IWindowsDisplayApi>());
+        Assert.Same(displayApi, provider.GetRequiredService<IWindowsDisplayLeaseSession>());
+        Assert.Same(displayApi, provider.GetRequiredService<IWindowsDisplayNameResolver>());
+        Assert.IsType<HostAgentConnection>(provider.GetRequiredService<IHostAgentConnection>());
         Assert.IsType<WindowsDisplayBackend>(provider.GetRequiredService<IDisplayBackend>());
         Assert.IsType<WindowsRecoveryApi>(provider.GetRequiredService<IWindowsRecoveryApi>());
         Assert.IsType<WindowsRecoveryBackend>(provider.GetRequiredService<IRecoveryBackend>());
@@ -55,6 +60,9 @@ public sealed class BeaconServiceRegistrationTests
             provider.GetRequiredService<IStreamWorkerHost>());
         Assert.Single(provider.GetServices<IStreamingBackend>());
         Assert.Contains(provider.GetServices<IHostedService>(), service => service is StreamWorkerEventRelay);
+        Assert.Contains(
+            provider.GetServices<IHostedService>(),
+            service => service is HostAgentConnectionHostedService);
         Assert.Same(
             provider.GetRequiredService<StreamWorkerStreamingBackend>(),
             provider.GetRequiredService<IStreamWorkerRuntimeEvents>());
@@ -97,6 +105,9 @@ public sealed class BeaconServiceRegistrationTests
         Assert.Empty(provider.GetServices<IStreamWorkerHost>());
         Assert.Empty(provider.GetServices<IStreamWorkerRuntimeEvents>());
         Assert.DoesNotContain(provider.GetServices<IHostedService>(), service => service is StreamWorkerEventRelay);
+        Assert.DoesNotContain(
+            provider.GetServices<IHostedService>(),
+            service => service is HostAgentConnectionHostedService);
     }
 
     [Fact]

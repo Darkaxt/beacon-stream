@@ -10,6 +10,7 @@ using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Displays;
 using Beacon.Platform.Windows.Games;
 using Beacon.Platform.Windows.Input;
+using Beacon.Platform.Windows.HostAgent;
 using Beacon.Platform.Windows.Recovery;
 using Beacon.Platform.Windows.Sessions;
 using Beacon.Platform.Windows.Streaming;
@@ -17,6 +18,7 @@ using Beacon.Server.Benchmarks;
 using Beacon.Server.State;
 using Beacon.Server.Security;
 using Beacon.Server.Streaming;
+using System.Security.Principal;
 
 namespace Beacon.Server.Hosting;
 
@@ -123,14 +125,23 @@ public static class BeaconServiceRegistration
         services.AddHostedService<StreamWorkerEventRelay>();
     }
 
-    private static IServiceCollection AddWindowsHostBoundaries(this IServiceCollection services)
+    private static IServiceCollection AddWindowsHostBoundaries(
+        this IServiceCollection services)
     {
-        services.AddSingleton(WindowsDisplayNameMapStore.Default);
-        services.AddSingleton<WindowsDisplayNameMap>();
-        services.AddSingleton<IWindowsDisplayNameResolver>(sp =>
-            sp.GetRequiredService<WindowsDisplayNameMap>());
+        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+        SecurityIdentifier owner = identity.User
+            ?? throw new InvalidOperationException("The Beacon server user has no Windows SID.");
+        services.AddSingleton(new HostAgentConnection(owner));
+        services.AddSingleton<IHostAgentConnection>(sp =>
+            sp.GetRequiredService<HostAgentConnection>());
+        services.AddHostedService<HostAgentConnectionHostedService>();
+        services.AddSingleton<HostAgentWindowsDisplayApi>();
         services.AddSingleton<IWindowsDisplayApi>(sp =>
-            new WindowsDisplayApi(sp.GetRequiredService<WindowsDisplayNameMap>()));
+            sp.GetRequiredService<HostAgentWindowsDisplayApi>());
+        services.AddSingleton<IWindowsDisplayLeaseSession>(sp =>
+            sp.GetRequiredService<HostAgentWindowsDisplayApi>());
+        services.AddSingleton<IWindowsDisplayNameResolver>(sp =>
+            sp.GetRequiredService<HostAgentWindowsDisplayApi>());
         services.AddSingleton<IDisplayBackend, WindowsDisplayBackend>();
         services.AddSingleton<IWindowsRecoveryApi, WindowsRecoveryApi>();
         services.AddSingleton<IRecoveryBackend, WindowsRecoveryBackend>();

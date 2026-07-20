@@ -92,7 +92,7 @@ public sealed class HostAgentProtocolTests
             {
               "protocolVersion": {{HostAgentProtocol.CurrentVersion}},
               "requestId": "{{Guid.NewGuid():D}}",
-              "operation": "launchApollo",
+              "operation": "launchUnknownProduct",
               "payload": {}
             }
             """;
