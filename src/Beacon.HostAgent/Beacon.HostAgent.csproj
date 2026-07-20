@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Beacon.HostAgent.Contracts\Beacon.HostAgent.Contracts.csproj" />
+    <ProjectReference Include="..\Beacon.Platform.Windows\Beacon.Platform.Windows.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Beacon.HostAgent.Tests" />
+  </ItemGroup>
+
+</Project>

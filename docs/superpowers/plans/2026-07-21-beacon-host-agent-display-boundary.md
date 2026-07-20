@@ -143,7 +143,7 @@ git commit -m "feat: add restricted Host Agent pipe"
 - Create: `src/Beacon.HostAgent/IHostAgentDisplayExecutor.cs`
 - Create: `src/Beacon.HostAgent/WindowsHostAgentDisplayExecutor.cs`
 - Create: `src/Beacon.HostAgent/HostAgentDispatcher.cs`
-- Create: `src/Beacon.HostAgent/HostAgentDisplayPayloads.cs`
+- Create: `src/Beacon.HostAgent.Contracts/HostAgentDisplayPayloads.cs`
 - Create: `tests/Beacon.HostAgent.Tests/HostAgentDispatcherTests.cs`
 
 - [ ] **Step 1: Write failing dispatcher tests**
@@ -363,4 +363,3 @@ Do not start StreamWorker or the emulator until Steps 1-5 pass. The next runtime
 - No step introduces Apollo, Sunshine, GameStream, Moonlight, wrapper, descriptor-file, or alternate Android paths.
 - No product timeout, startup sleep, lease timeout, or cancellation watchdog is introduced.
 - The plan contains no unresolved placeholder or alternate implementation choice.
-
