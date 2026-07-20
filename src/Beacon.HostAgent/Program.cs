@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Principal;
+using Beacon.HostAgent.DriverUpdates;
 using Beacon.Platform.Windows.Displays;
 
 namespace Beacon.HostAgent;
@@ -39,7 +40,32 @@ internal static class Program
             var displayNames = new WindowsDisplayNameMap(WindowsDisplayNameMapStore.Default);
             await using var displayApi = new WindowsDisplayApi(displayNames);
             var executor = new WindowsHostAgentDisplayExecutor(displayApi, displayNames);
-            var dispatcher = new HostAgentDispatcher(executor);
+            HostAgentDriverUpdateStorage storage = HostAgentDriverUpdateStorage.Default;
+            var signatureVerifier = new WindowsSudoVdaSignatureVerifier();
+            string activeDriverBinary = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                "System32",
+                "drivers",
+                "UMDF",
+                "SudoVDA.dll");
+            SudoVdaPackagePolicy policy = new SudoVdaPackagePolicyStore(
+                storage.DriverPolicyPath).LoadOrCreate(
+                    signatureVerifier.Verify(activeDriverBinary));
+            var validator = new SudoVdaPackageValidator(
+                new SudoVdaPackagePaths(storage.Inbox, storage.Staged),
+                policy,
+                signatureVerifier);
+            var driverPlatform = new WindowsSudoVdaDriverPlatform(
+                new WindowsSudoVdaDeviceInventory(),
+                signatureVerifier,
+                new HostAgentSudoVdaDisplayUpdateGuard(executor),
+                new WindowsPnpUtilRunner());
+            var driverUpdates = new SudoVdaUpdateCoordinator(
+                validator,
+                new SudoVdaUpdateJournal(storage.Transactions),
+                driverPlatform,
+                storage.InstalledEvidence);
+            var dispatcher = new HostAgentDispatcher(executor, driverUpdates);
             var server = new HostAgentPipeServer(options.Owner, dispatcher);
             HostAgentDiagnostics.Write(
                 $"started owner={options.Owner.Value} session={Process.GetCurrentProcess().SessionId}");

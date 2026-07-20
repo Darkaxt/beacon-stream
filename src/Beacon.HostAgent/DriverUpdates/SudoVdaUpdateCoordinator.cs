@@ -6,7 +6,7 @@ internal sealed class SudoVdaUpdateCoordinator(
     ISudoVdaPackageValidator validator,
     SudoVdaUpdateJournal journal,
     ISudoVdaUpdatePlatform platform,
-    string installedEvidenceRoot)
+    string installedEvidenceRoot) : IHostAgentDriverUpdateExecutor
 {
     private readonly Lock gate = new();
     private readonly Dictionary<Guid, Task> operations = [];

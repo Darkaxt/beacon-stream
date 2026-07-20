@@ -1,11 +1,17 @@
 using System.Text.Json;
 using Beacon.HostAgent.Contracts;
+using Beacon.HostAgent.DriverUpdates;
 using Beacon.Platform.Windows.Displays;
 
 namespace Beacon.HostAgent;
 
-internal sealed class HostAgentDispatcher(IHostAgentDisplayExecutor displays)
+internal sealed class HostAgentDispatcher(
+    IHostAgentDisplayExecutor displays,
+    IHostAgentDriverUpdateExecutor? driverUpdates = null)
 {
+    private readonly IHostAgentDriverUpdateExecutor driverUpdates =
+        driverUpdates ?? UnavailableDriverUpdateExecutor.Instance;
+
     public async Task<HostAgentResponse> DispatchAsync(
         HostAgentRequest request,
         CancellationToken cancellationToken)
@@ -37,6 +43,8 @@ internal sealed class HostAgentDispatcher(IHostAgentDisplayExecutor displays)
                     .ConfigureAwait(false),
                 HostAgentOperation.QueryHdrCapability => await QueryHdrAsync(request, cancellationToken)
                     .ConfigureAwait(false),
+                HostAgentOperation.InstallStagedSudoVdaPackage => StartDriverUpdate(request),
+                HostAgentOperation.QuerySudoVdaUpdate => QueryDriverUpdate(request),
                 _ => Failure(request, "unsupported-operation", "Unsupported Host Agent operation.")
             };
         }
@@ -47,6 +55,10 @@ internal sealed class HostAgentDispatcher(IHostAgentDisplayExecutor displays)
         catch (ArgumentException)
         {
             return Failure(request, "invalid-payload", "Host Agent request payload is invalid.");
+        }
+        catch (SudoVdaUpdateStartException error)
+        {
+            return Failure(request, error.Code, error.Message);
         }
     }
 
@@ -193,6 +205,34 @@ internal sealed class HostAgentDispatcher(IHostAgentDisplayExecutor displays)
             new DisplayHdrCapabilityPayload(result.Supported, result.Enabled, result.Reason));
     }
 
+    private HostAgentResponse StartDriverUpdate(HostAgentRequest request)
+    {
+        InstallStagedSudoVdaPackagePayload payload =
+            HostAgentProtocol.ReadPayload<InstallStagedSudoVdaPackagePayload>(request.Payload);
+        SudoVdaUpdatePayload result = driverUpdates.Start(
+            payload.PackageId,
+            payload.TransactionId,
+            payload.ReportedActiveLeaseCount);
+        return Success(request, result);
+    }
+
+    private HostAgentResponse QueryDriverUpdate(HostAgentRequest request)
+    {
+        QuerySudoVdaUpdatePayload payload =
+            HostAgentProtocol.ReadPayload<QuerySudoVdaUpdatePayload>(request.Payload);
+        if (payload.TransactionId == Guid.Empty)
+        {
+            throw new ArgumentException("Driver update transaction id is required.");
+        }
+        return driverUpdates.TryGet(payload.TransactionId, out SudoVdaUpdatePayload? result)
+            && result is not null
+                ? Success(request, result)
+                : Failure(
+                    request,
+                    "driver-update-not-found",
+                    "Driver update transaction was not found.");
+    }
+
     private static HostAgentLeaseSnapshotPayload ToPayload(
         SudoVdaDriverLeaseSessionSnapshot snapshot) =>
         new(
@@ -259,4 +299,23 @@ internal sealed class HostAgentDispatcher(IHostAgentDisplayExecutor displays)
             resultCode,
             diagnostic,
             HostAgentProtocol.CreatePayload(new EmptyHostAgentPayload()));
+
+    private sealed class UnavailableDriverUpdateExecutor : IHostAgentDriverUpdateExecutor
+    {
+        public static UnavailableDriverUpdateExecutor Instance { get; } = new();
+
+        public SudoVdaUpdatePayload Start(
+            string packageId,
+            Guid transactionId,
+            int reportedActiveLeaseCount) =>
+            throw new SudoVdaUpdateStartException(
+                "driver-update-unavailable",
+                "Host Agent driver updates are unavailable.");
+
+        public bool TryGet(Guid transactionId, out SudoVdaUpdatePayload? value)
+        {
+            value = null;
+            return false;
+        }
+    }
 }

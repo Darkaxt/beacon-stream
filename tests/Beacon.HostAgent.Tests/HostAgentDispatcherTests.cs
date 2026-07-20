@@ -1,4 +1,5 @@
 using Beacon.HostAgent.Contracts;
+using Beacon.HostAgent.DriverUpdates;
 using Beacon.Platform.Windows.Displays;
 
 namespace Beacon.HostAgent.Tests;
@@ -189,6 +190,102 @@ public sealed class HostAgentDispatcherTests
         Assert.Empty(executor.Calls);
     }
 
+    [Fact]
+    public async Task DriverUpdateStartReturnsDurableAcceptedTransaction()
+    {
+        var displays = new FakeDisplayExecutor();
+        var updates = new FakeDriverUpdateExecutor();
+        var dispatcher = new HostAgentDispatcher(displays, updates);
+        Guid transactionId = Guid.NewGuid();
+
+        HostAgentResponse response = await dispatcher.DispatchAsync(
+            Request(
+                HostAgentOperation.InstallStagedSudoVdaPackage,
+                new InstallStagedSudoVdaPackagePayload(
+                    "sudovda-22.48.58.193",
+                    transactionId,
+                    ReportedActiveLeaseCount: 0)),
+            new CancellationToken(canceled: true));
+
+        Assert.True(response.Success);
+        SudoVdaUpdatePayload payload = HostAgentProtocol.ReadPayload<SudoVdaUpdatePayload>(
+            response.Payload);
+        Assert.Equal(transactionId, payload.TransactionId);
+        Assert.Equal(SudoVdaUpdateState.Accepted, payload.State);
+        Assert.Equal(
+            new[] { $"start:sudovda-22.48.58.193:{transactionId:D}:0" },
+            updates.Calls);
+        Assert.Empty(displays.Calls);
+    }
+
+    [Fact]
+    public async Task DriverUpdateQueryReturnsDurableState()
+    {
+        var updates = new FakeDriverUpdateExecutor();
+        var dispatcher = new HostAgentDispatcher(new FakeDisplayExecutor(), updates);
+        Guid transactionId = Guid.NewGuid();
+        updates.QueryResult = new SudoVdaUpdatePayload(
+            transactionId,
+            "sudovda-22.48.58.193",
+            SudoVdaUpdateState.Succeeded,
+            "driver-update-succeeded",
+            PreviousEvidence: null,
+            ActiveEvidence: null);
+
+        HostAgentResponse response = await dispatcher.DispatchAsync(
+            Request(
+                HostAgentOperation.QuerySudoVdaUpdate,
+                new QuerySudoVdaUpdatePayload(transactionId)),
+            CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.Equal(
+            SudoVdaUpdateState.Succeeded,
+            HostAgentProtocol.ReadPayload<SudoVdaUpdatePayload>(response.Payload).State);
+        Assert.Equal(new[] { $"query:{transactionId:D}" }, updates.Calls);
+    }
+
+    [Fact]
+    public async Task UnknownDriverUpdateQueryReturnsStableFailure()
+    {
+        var updates = new FakeDriverUpdateExecutor();
+        var dispatcher = new HostAgentDispatcher(new FakeDisplayExecutor(), updates);
+
+        HostAgentResponse response = await dispatcher.DispatchAsync(
+            Request(
+                HostAgentOperation.QuerySudoVdaUpdate,
+                new QuerySudoVdaUpdatePayload(Guid.NewGuid())),
+            CancellationToken.None);
+
+        Assert.False(response.Success);
+        Assert.Equal("driver-update-not-found", response.ResultCode);
+    }
+
+    [Fact]
+    public async Task DriverUpdateStartFailureUsesDomainResultCode()
+    {
+        var updates = new FakeDriverUpdateExecutor
+        {
+            StartError = new SudoVdaUpdateStartException(
+                "driver-update-busy",
+                "Another driver update transaction is active.")
+        };
+        var dispatcher = new HostAgentDispatcher(new FakeDisplayExecutor(), updates);
+
+        HostAgentResponse response = await dispatcher.DispatchAsync(
+            Request(
+                HostAgentOperation.InstallStagedSudoVdaPackage,
+                new InstallStagedSudoVdaPackagePayload(
+                    "sudovda-next",
+                    Guid.NewGuid(),
+                    ReportedActiveLeaseCount: 0)),
+            CancellationToken.None);
+
+        Assert.False(response.Success);
+        Assert.Equal("driver-update-busy", response.ResultCode);
+        Assert.Equal("Another driver update transaction is active.", response.Diagnostic);
+    }
+
     private static HostAgentRequest Request<T>(HostAgentOperation operation, T payload) =>
         new(
             HostAgentProtocol.CurrentVersion,
@@ -286,6 +383,41 @@ public sealed class HostAgentDispatcherTests
             Calls.Add($"resolve:{displayId}");
             displayName = DisplayName;
             return displayName is not null;
+        }
+    }
+
+    private sealed class FakeDriverUpdateExecutor : IHostAgentDriverUpdateExecutor
+    {
+        public List<string> Calls { get; } = [];
+
+        public SudoVdaUpdateStartException? StartError { get; init; }
+
+        public SudoVdaUpdatePayload? QueryResult { get; set; }
+
+        public SudoVdaUpdatePayload Start(
+            string packageId,
+            Guid transactionId,
+            int reportedActiveLeaseCount)
+        {
+            Calls.Add($"start:{packageId}:{transactionId:D}:{reportedActiveLeaseCount}");
+            if (StartError is not null)
+            {
+                throw StartError;
+            }
+            return new SudoVdaUpdatePayload(
+                transactionId,
+                packageId,
+                SudoVdaUpdateState.Accepted,
+                "driver-update-accepted",
+                PreviousEvidence: null,
+                ActiveEvidence: null);
+        }
+
+        public bool TryGet(Guid transactionId, out SudoVdaUpdatePayload? value)
+        {
+            Calls.Add($"query:{transactionId:D}");
+            value = QueryResult;
+            return value is not null;
         }
     }
 }
