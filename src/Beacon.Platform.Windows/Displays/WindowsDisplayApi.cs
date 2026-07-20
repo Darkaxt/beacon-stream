@@ -25,14 +25,15 @@ public sealed class WindowsDisplayApi :
     private const uint OpenExisting = 3;
     private const uint FileAttributeNormal = 0x00000080;
     private const uint ErrorSuccess = 0;
-    private const uint ErrorGenFailure = 31;
     private const uint QdcAllPaths = 0x00000001;
     private const uint QdcOnlyActivePaths = 0x00000002;
     private const uint QdcVirtualModeAware = 0x00000010;
     private const uint SdcUseSuppliedDisplayConfig = 0x00000020;
+    private const uint SdcValidate = 0x00000040;
     private const uint SdcApply = 0x00000080;
     private const uint SdcSaveToDatabase = 0x00000200;
     private const uint SdcAllowChanges = 0x00000400;
+    private const uint SdcTopologyExtend = 0x00000004;
     private const uint SdcTopologySupplied = 0x00000010;
     private const uint SdcAllowPathOrderChanges = 0x00002000;
     private const uint SdcVirtualModeAware = 0x00008000;
@@ -55,6 +56,7 @@ public sealed class WindowsDisplayApi :
     private static readonly Guid SudoVdaInterfaceGuid = new("e5bcc234-1e0c-418a-a0d4-ef8b7501414d");
     private readonly WindowsDisplayNameMap displayNameMap;
     private readonly SudoVdaDriverLeaseSession driverLeaseSession;
+    private readonly WindowsDisplayLeaseTopologyReconciler topologyReconciler;
 
     public WindowsDisplayApi()
         : this(new WindowsDisplayNameMap(WindowsDisplayNameMapStore.Default))
@@ -62,12 +64,15 @@ public sealed class WindowsDisplayApi :
     }
 
     public WindowsDisplayApi(WindowsDisplayNameMap displayNameMap)
-        : this(
-            displayNameMap,
-            new SudoVdaDriverLeaseSession(
-                new WindowsSudoVdaDriverConnectionFactory(),
-                new TaskDelaySudoVdaHeartbeatScheduler()))
     {
+        this.displayNameMap = displayNameMap;
+        topologyReconciler = new WindowsDisplayLeaseTopologyReconciler(
+            QueryActiveTopology,
+            ApplyExtendedTopology);
+        driverLeaseSession = new SudoVdaDriverLeaseSession(
+            new WindowsSudoVdaDriverConnectionFactory(),
+            new TaskDelaySudoVdaHeartbeatScheduler(),
+            topologyReconciler.ReconcileAsync);
     }
 
     internal WindowsDisplayApi(
@@ -76,6 +81,9 @@ public sealed class WindowsDisplayApi :
     {
         this.displayNameMap = displayNameMap;
         this.driverLeaseSession = driverLeaseSession;
+        topologyReconciler = new WindowsDisplayLeaseTopologyReconciler(
+            QueryActiveTopology,
+            ApplyExtendedTopology);
     }
 
     public SudoVdaDriverLeaseSessionSnapshot Snapshot => driverLeaseSession.Snapshot;
@@ -106,9 +114,21 @@ public sealed class WindowsDisplayApi :
         }
 
         bool compatible = version.Major == ExpectedProtocolMajor && version.Minor >= ExpectedProtocolMinor;
-        return compatible
-            ? new DisplayDriverStatus(Ready: true, Diagnostic: $"SudoVDA driver is ready. Protocol {version.Major}.{version.Minor}.{version.Incremental}.")
-            : new DisplayDriverStatus(Ready: false, Diagnostic: $"SudoVDA protocol {version.Major}.{version.Minor}.{version.Incremental} is incompatible with Beacon protocol {ExpectedProtocolMajor}.{ExpectedProtocolMinor}.");
+        if (!compatible)
+        {
+            return new DisplayDriverStatus(
+                Ready: false,
+                Diagnostic: $"SudoVDA protocol {version.Major}.{version.Minor}.{version.Incremental} is incompatible with Beacon protocol {ExpectedProtocolMajor}.{ExpectedProtocolMinor}.");
+        }
+
+        DisplayApiResult ccdAccess = ValidateDisplayConfigAccess();
+        string driverDiagnostic =
+            $"SudoVDA driver is ready. Protocol {version.Major}.{version.Minor}.{version.Incremental}.";
+        return ccdAccess.Success
+            ? new DisplayDriverStatus(Ready: true, Diagnostic: driverDiagnostic)
+            : new DisplayDriverStatus(
+                Ready: false,
+                Diagnostic: $"{driverDiagnostic} {ccdAccess.Error}");
     }
 
     public Task<DisplayApiResult> CreateVirtualDisplayAsync(
@@ -120,6 +140,20 @@ public sealed class WindowsDisplayApi :
     {
         cancellationToken.ThrowIfCancellationRequested();
         IReadOnlyList<string> beforeDisplayNames = EnumerateDisplayNames(activeOnly: false);
+        if (!TryQueryDisplayConfig(
+            QdcOnlyActivePaths | QdcVirtualModeAware,
+            out DisplayConfigPathInfo[] beforeActivePaths,
+            out _,
+            out string beforeTopologyDiagnostic))
+        {
+            return Task.FromResult(DisplayApiResult.Fail(beforeTopologyDiagnostic));
+        }
+        if (!DescribeDisplayPaths(beforeActivePaths).Any(
+            candidate => candidate.Kind == DisplayPathKind.Physical))
+        {
+            return Task.FromResult(DisplayApiResult.Fail(
+                "Refusing to create a virtual display because no active physical display path can be preserved."));
+        }
 
         using SafeFileHandle? handle = OpenSudoVdaDevice(out string diagnostic);
         if (handle is null)
@@ -165,7 +199,13 @@ public sealed class WindowsDisplayApi :
             }
 
             RememberDisplayName(displayId, displayName);
-            DisplayApiResult activationResult = ActivateDisplayMode(addOutput, displayName, width, height, refreshHz);
+            DisplayApiResult activationResult = ActivateDisplayMode(
+                addOutput,
+                displayName,
+                width,
+                height,
+                refreshHz,
+                beforeActivePaths);
             if (!activationResult.Success)
             {
                 RemoveVirtualDisplay(handle, monitorGuid);
@@ -198,6 +238,18 @@ public sealed class WindowsDisplayApi :
         cancellationToken.ThrowIfCancellationRequested();
         DisplayPathSnapshot? physicalDisplay = EnumerateActiveDisplayPaths(displayIdByDisplayName: null)
             .FirstOrDefault(path => path.Kind == DisplayPathKind.Physical);
+
+        if (physicalDisplay is null)
+        {
+            DisplayApiResult extended = ApplyExtendedTopology();
+            if (!extended.Success)
+            {
+                return Task.FromResult(extended);
+            }
+
+            physicalDisplay = EnumerateActiveDisplayPaths(displayIdByDisplayName: null)
+                .FirstOrDefault(path => path.Kind == DisplayPathKind.Physical);
+        }
 
         string displayName;
         if (physicalDisplay is not null)
@@ -417,9 +469,13 @@ public sealed class WindowsDisplayApi :
         string displayName,
         int width,
         int height,
-        int refreshHz)
+        int refreshHz,
+        IReadOnlyList<DisplayConfigPathInfo> preservedActivePaths)
     {
-        DisplayApiResult activeResult = EnsureDisplayConfigTargetActive(addOutput, displayName);
+        DisplayApiResult activeResult = EnsureDisplayConfigTargetActive(
+            addOutput,
+            displayName,
+            preservedActivePaths);
         if (!activeResult.Success)
         {
             return activeResult;
@@ -430,7 +486,8 @@ public sealed class WindowsDisplayApi :
 
     private static DisplayApiResult EnsureDisplayConfigTargetActive(
         VirtualDisplayAddOut addOutput,
-        string displayName)
+        string displayName,
+        IReadOnlyList<DisplayConfigPathInfo> preservedActivePaths)
     {
         if (!TryQueryDisplayConfig(
             QdcOnlyActivePaths | QdcVirtualModeAware,
@@ -441,7 +498,8 @@ public sealed class WindowsDisplayApi :
             return DisplayApiResult.Fail(activeDiagnostic);
         }
 
-        if (activePaths.Any(path => IsTargetPath(path, addOutput)))
+        IReadOnlyList<DisplayRestoreCandidate> activeDisplays = DescribeDisplayPaths(activePaths);
+        if (!WindowsDisplayDiagnostics.RequiresExtendedTopologyRepair(activeDisplays, displayName))
         {
             return DisplayApiResult.Ok();
         }
@@ -471,6 +529,22 @@ public sealed class WindowsDisplayApi :
                 IsSameDisplayPath(selectedPath, activePath) ? selectedPath : activePath,
                 groupId++));
         }
+        if (!DescribeDisplayPaths(activePaths).Any(candidate => candidate.Kind == DisplayPathKind.Physical))
+        {
+            DisplayConfigPathInfo physicalPath = preservedActivePaths
+                .FirstOrDefault(IsPhysicalDisplayPath);
+            DisplayConfigPathInfo currentPhysicalPath = allPaths.FirstOrDefault(
+                path => IsSameDisplayPath(path, physicalPath));
+            if (IsSameDisplayPath(currentPhysicalPath, physicalPath))
+            {
+                physicalPath = currentPhysicalPath;
+            }
+            if (IsPhysicalDisplayPath(physicalPath) &&
+                !requestedPaths.Any(path => IsSameDisplayPath(path, physicalPath)))
+            {
+                requestedPaths.Add(PrepareTopologyPath(physicalPath, groupId++));
+            }
+        }
 
         requestedPaths.Add(PrepareTopologyPath(targetPath, groupId));
 
@@ -481,7 +555,7 @@ public sealed class WindowsDisplayApi :
             IntPtr.Zero,
             SdcApply | SdcTopologySupplied | SdcAllowPathOrderChanges | SdcVirtualModeAware);
 
-        if (status == ErrorGenFailure)
+        if (WindowsDisplayDiagnostics.ShouldRetryWithSuppliedDisplayConfig(status))
         {
             status = NativeMethods.SetDisplayConfigWithoutModes(
                 checked((uint)requestedPaths.Count),
@@ -496,6 +570,77 @@ public sealed class WindowsDisplayApi :
             : DisplayApiResult.Fail(
                 $"Unable to activate DisplayConfig target for {displayName}. Adapter={FormatLuid(addOutput.AdapterLuid)} Target={addOutput.TargetId} Result={status}.");
     }
+
+    private static DisplayApiResult ApplyExtendedTopology()
+    {
+        uint status = NativeMethods.SetDisplayConfigWithoutPaths(
+            0,
+            IntPtr.Zero,
+            0,
+            IntPtr.Zero,
+            ExtendedTopologyApplyFlags());
+        return status == ErrorSuccess
+            ? DisplayApiResult.Ok()
+            : DisplayApiResult.Fail($"Unable to apply an extended display topology. Result={status}.");
+    }
+
+    internal static uint ExtendedTopologyApplyFlags() =>
+        SdcApply | SdcTopologyExtend;
+
+    internal static uint SuppliedDisplayConfigValidateFlags() =>
+        SdcValidate | SdcUseSuppliedDisplayConfig | SdcVirtualModeAware;
+
+    private static DisplayApiResult ValidateDisplayConfigAccess()
+    {
+        if (!TryQueryDisplayConfig(
+            QdcOnlyActivePaths | QdcVirtualModeAware,
+            out DisplayConfigPathInfo[] paths,
+            out DisplayConfigModeInfo[] modes,
+            out string diagnostic))
+        {
+            return DisplayApiResult.Fail(
+                $"Windows CCD access validation could not query the active topology: {diagnostic}");
+        }
+
+        uint status = NativeMethods.SetDisplayConfig(
+            checked((uint)paths.Length),
+            paths,
+            checked((uint)modes.Length),
+            modes,
+            SuppliedDisplayConfigValidateFlags());
+        return status == ErrorSuccess
+            ? DisplayApiResult.Ok()
+            : DisplayApiResult.Fail(
+                $"Windows CCD access validation failed. SetDisplayConfig Result={status}.");
+    }
+
+    private static IReadOnlyList<DisplayRestoreCandidate> DescribeDisplayPaths(
+        IEnumerable<DisplayConfigPathInfo> paths)
+    {
+        var displays = new List<DisplayRestoreCandidate>();
+        foreach (DisplayConfigPathInfo path in paths)
+        {
+            if (!TryGetSourceDisplayName(path, out string? displayName) || displayName is null)
+            {
+                continue;
+            }
+
+            displays.Add(new DisplayRestoreCandidate(
+                displayName,
+                TryClassifyDisplayName(displayName, out DisplayPathKind kind) ? kind : null,
+                IsPrimary: false,
+                X: 0,
+                Y: 0));
+        }
+
+        return displays;
+    }
+
+    private static bool IsPhysicalDisplayPath(DisplayConfigPathInfo path) =>
+        TryGetSourceDisplayName(path, out string? displayName) &&
+        displayName is not null &&
+        TryClassifyDisplayName(displayName, out DisplayPathKind kind) &&
+        kind == DisplayPathKind.Physical;
 
     private static DisplayApiResult ApplyDisplayConfigMode(string displayName, int width, int height, int refreshHz)
     {
@@ -1273,6 +1418,14 @@ public sealed class WindowsDisplayApi :
         public static extern uint SetDisplayConfigWithoutModes(
             uint numPathArrayElements,
             [In] DisplayConfigPathInfo[] pathArray,
+            uint numModeInfoArrayElements,
+            IntPtr modeInfoArray,
+            uint flags);
+
+        [DllImport("user32.dll", EntryPoint = "SetDisplayConfig")]
+        public static extern uint SetDisplayConfigWithoutPaths(
+            uint numPathArrayElements,
+            IntPtr pathArray,
             uint numModeInfoArrayElements,
             IntPtr modeInfoArray,
             uint flags);

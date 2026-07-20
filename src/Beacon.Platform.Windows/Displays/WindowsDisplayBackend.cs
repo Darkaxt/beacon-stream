@@ -32,7 +32,7 @@ public sealed class WindowsDisplayBackend : IDisplayBackend
         DisplayDriverStatus driverStatus = api.GetDriverStatus();
         SudoVdaDriverLeaseSessionSnapshot sessionSnapshot = driverLeaseSession.Snapshot;
         bool driverReady = driverStatus.Ready && sessionSnapshot.Healthy;
-        string driverDiagnostic = sessionSnapshot.Healthy
+        string driverDiagnostic = sessionSnapshot.Healthy && sessionSnapshot.LeaseCount == 0
             ? driverStatus.Diagnostic
             : $"{driverStatus.Diagnostic} {sessionSnapshot.Diagnostic}";
         try

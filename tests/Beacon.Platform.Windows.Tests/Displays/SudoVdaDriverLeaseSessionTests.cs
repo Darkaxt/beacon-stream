@@ -89,6 +89,48 @@ public sealed class SudoVdaDriverLeaseSessionTests
     }
 
     [Fact]
+    public async Task SuccessfulScheduledHeartbeatReconcilesLeasedDisplayTopology()
+    {
+        var connection = new FakeSudoVdaDriverConnection(timeoutSeconds: 3);
+        var factory = new FakeSudoVdaDriverConnectionFactory(connection);
+        var scheduler = new ManualSudoVdaHeartbeatScheduler();
+        int reconciliationCount = 0;
+        await using var session = new SudoVdaDriverLeaseSession(
+            factory,
+            scheduler,
+            _ =>
+            {
+                reconciliationCount++;
+                return ValueTask.CompletedTask;
+            });
+        await session.HoldAsync("client-one", CancellationToken.None);
+
+        await scheduler.TickAsync();
+
+        Assert.Equal(1, reconciliationCount);
+    }
+
+    [Fact]
+    public async Task FailedTopologyReconciliationMarksLeaseSessionUnhealthy()
+    {
+        var connection = new FakeSudoVdaDriverConnection(timeoutSeconds: 3);
+        var factory = new FakeSudoVdaDriverConnectionFactory(connection);
+        var scheduler = new ManualSudoVdaHeartbeatScheduler();
+        await using var session = new SudoVdaDriverLeaseSession(
+            factory,
+            scheduler,
+            _ => throw new InvalidOperationException("extended topology was not verified"));
+        await session.HoldAsync("client-one", CancellationToken.None);
+
+        await scheduler.TickAsync();
+
+        Assert.False(session.Snapshot.Healthy);
+        Assert.Equal(1, session.Snapshot.LeaseCount);
+        Assert.True(session.Snapshot.HeartbeatActive);
+        Assert.Contains("not verified", session.Snapshot.Diagnostic, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task PingFailureReportsFaultAndNeverInvokesDisplayCleanup()
     {
         var connection = new FakeSudoVdaDriverConnection(timeoutSeconds: 3);

@@ -57,6 +57,45 @@ public static class DisplayProbeApp
                         await driverSession.ReleaseAsync(probeDisplayId, CancellationToken.None);
                     }
 
+                case DiagnoseCreateHeldDisplayProbeCommand diagnose:
+                    if (api is not IWindowsDisplayLeaseSession diagnoseSession)
+                    {
+                        error.WriteLine("The active display API does not expose a SudoVDA driver session.");
+                        return 2;
+                    }
+
+                    string diagnoseDisplayId = ToDisplayId(diagnose.ClientId);
+                    SudoVdaDriverLeaseHoldResult diagnoseHold = await diagnoseSession.HoldAsync(
+                        diagnoseDisplayId,
+                        CancellationToken.None);
+                    output.WriteLine(
+                        $"hold: {(diagnoseHold.Success ? "success" : "failed")} " +
+                        $"acquired={diagnoseHold.Acquired.ToString().ToLowerInvariant()} " +
+                        $"error={diagnoseHold.Error ?? "none"}");
+                    if (!diagnoseHold.Success)
+                    {
+                        return 2;
+                    }
+
+                    DisplayApiResult diagnoseCreate = await api.CreateVirtualDisplayAsync(
+                        diagnoseDisplayId,
+                        diagnose.Width,
+                        diagnose.Height,
+                        diagnose.RefreshHz,
+                        CancellationToken.None);
+                    output.WriteLine(DisplayProbeFormatter.FormatApiResult("create", diagnoseCreate));
+                    DisplayTopologySnapshot diagnoseTopology = await api.QueryTopologyAsync(
+                        CancellationToken.None);
+                    output.Write(DisplayProbeFormatter.FormatStatus(api.GetDriverStatus(), diagnoseTopology));
+                    return diagnoseCreate.Success
+                        && diagnoseTopology.HasDisplayMode(
+                            diagnoseDisplayId,
+                            diagnose.Width,
+                            diagnose.Height,
+                            diagnose.RefreshHz)
+                        ? 0
+                        : 2;
+
                 case PrepareDisplayProbeCommand prepare:
                     var prepareBackend = new WindowsDisplayBackend(api);
                     DisplayEnsureResult prepareResult = await prepareBackend.PrepareVirtualDisplayAsync(

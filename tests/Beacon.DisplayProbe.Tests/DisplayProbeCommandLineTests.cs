@@ -80,4 +80,20 @@ public sealed class DisplayProbeCommandLineTests
 
         Assert.IsType<DriverSessionDisplayProbeCommand>(command);
     }
+
+    [Fact]
+    public void ParseDiagnoseCreateHeldPreservesRequestedMode()
+    {
+        DisplayProbeCommand command = DisplayProbeCommandLine.Parse(
+            [
+                "diagnose-create-held",
+                "--client", "z-fold-7",
+                "--width", "2560",
+                "--height", "1600",
+                "--refresh", "120"
+            ]);
+
+        var diagnose = Assert.IsType<DiagnoseCreateHeldDisplayProbeCommand>(command);
+        Assert.Equal(new("z-fold-7", 2560, 1600, 120), diagnose);
+    }
 }

@@ -6,6 +6,12 @@ public sealed record StatusDisplayProbeCommand : DisplayProbeCommand;
 
 public sealed record DriverSessionDisplayProbeCommand : DisplayProbeCommand;
 
+public sealed record DiagnoseCreateHeldDisplayProbeCommand(
+    string ClientId,
+    int Width,
+    int Height,
+    int RefreshHz) : DisplayProbeCommand;
+
 public sealed record PrepareDisplayProbeCommand(
     string ClientId,
     int Width,
@@ -41,6 +47,7 @@ public static class DisplayProbeCommandLine
         {
             "status" => new StatusDisplayProbeCommand(),
             "driver-session" => new DriverSessionDisplayProbeCommand(),
+            "diagnose-create-held" => ParseDiagnoseCreateHeld(args),
             "prepare" => ParsePrepare(args),
             "ensure" => ParseEnsure(args),
             "primary" => new PrimaryDisplayProbeCommand(ReadRequiredOption(args, "--client")),
@@ -61,6 +68,14 @@ public static class DisplayProbeCommandLine
             options.RefreshHz,
             options.Hdr);
     }
+
+    private static DiagnoseCreateHeldDisplayProbeCommand ParseDiagnoseCreateHeld(
+        IReadOnlyList<string> args) =>
+        new(
+            ReadRequiredOption(args, "--client"),
+            ReadRequiredInt(args, "--width"),
+            ReadRequiredInt(args, "--height"),
+            ReadRequiredInt(args, "--refresh"));
 
     private static EnsureDisplayProbeCommand ParseEnsure(IReadOnlyList<string> args)
     {

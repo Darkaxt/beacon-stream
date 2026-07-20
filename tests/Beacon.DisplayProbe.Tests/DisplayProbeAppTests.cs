@@ -128,6 +128,40 @@ public sealed class DisplayProbeAppTests
         Assert.Empty(api.CreatedDisplays);
     }
 
+    [Fact]
+    public async Task DiagnoseCreateHeldLeavesLeaseHeldAndReportsObservedTopology()
+    {
+        var api = new ProbeWindowsDisplayApi
+        {
+            AfterCreateTopology = DisplayTopologySnapshot.Extended(
+                physicalDisplayId: "physical-laptop-panel",
+                virtualDisplayId: "client-z-fold-7",
+                width: 2560,
+                height: 1600,
+                refreshHz: 120,
+                virtualPrimary: false)
+        };
+        using var output = new StringWriter();
+
+        int exitCode = await DisplayProbeApp.RunAsync(
+            api,
+            [
+                "diagnose-create-held",
+                "--client", "z-fold-7",
+                "--width", "2560",
+                "--height", "1600",
+                "--refresh", "120"
+            ],
+            output,
+            TextWriter.Null);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("create: success", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("client-z-fold-7", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal("client-z-fold-7", Assert.Single(api.HeldDisplayIds));
+        Assert.Empty(api.ReleasedDisplayIds);
+    }
+
     private sealed class ProbeWindowsDisplayApi : IWindowsDisplayApi, IWindowsDisplayLeaseSession
     {
         public DisplayTopologySnapshot CurrentTopology { get; set; } =

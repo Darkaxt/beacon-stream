@@ -52,8 +52,12 @@ $installDirectory = Join-Path $env:LOCALAPPDATA "BeaconStream\HostAgent"
 $taskName = "Beacon Stream Host Agent"
 
 $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+$runningAgentProcesses = @(Get-Process -Name "Beacon.HostAgent" -ErrorAction SilentlyContinue)
 if ($null -ne $existingTask -and $existingTask.State -eq "Running") {
     Stop-ScheduledTask -TaskName $taskName
+}
+if ($runningAgentProcesses.Count -gt 0) {
+    $runningAgentProcesses | Wait-Process -ErrorAction SilentlyContinue
 }
 
 New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null

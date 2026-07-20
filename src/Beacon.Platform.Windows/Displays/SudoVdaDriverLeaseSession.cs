@@ -2,7 +2,8 @@ namespace Beacon.Platform.Windows.Displays;
 
 internal sealed class SudoVdaDriverLeaseSession(
     ISudoVdaDriverConnectionFactory connectionFactory,
-    ISudoVdaHeartbeatScheduler heartbeatScheduler)
+    ISudoVdaHeartbeatScheduler heartbeatScheduler,
+    Func<CancellationToken, ValueTask>? reconcileLeasedDisplayTopology = null)
     : IWindowsDisplayLeaseSession, IDisposable, IAsyncDisposable
 {
     private readonly SemaphoreSlim transitionGate = new(1, 1);
@@ -234,6 +235,7 @@ internal sealed class SudoVdaDriverLeaseSession(
                     SetHealthySnapshot(
                         Snapshot.WatchdogTimeoutSeconds ?? 0,
                         $"Beacon SudoVDA heartbeat acknowledged for {displayIds.Count} display leases.");
+                    await ReconcileLeasedDisplayTopologyAsync(cancellationToken);
                     return;
                 }
 
@@ -256,6 +258,7 @@ internal sealed class SudoVdaDriverLeaseSession(
                     SetHealthySnapshot(
                         recoveryResult.WatchdogTimeoutSeconds,
                         $"Beacon SudoVDA heartbeat recovered after: {pingResult.Error}");
+                    await ReconcileLeasedDisplayTopologyAsync(cancellationToken);
                     return;
                 }
 
@@ -272,6 +275,7 @@ internal sealed class SudoVdaDriverLeaseSession(
                 SetHealthySnapshot(
                     reconnectResult.WatchdogTimeoutSeconds,
                     "Beacon SudoVDA heartbeat recovered its driver connection.");
+                await ReconcileLeasedDisplayTopologyAsync(cancellationToken);
                 return;
             }
 
@@ -280,6 +284,24 @@ internal sealed class SudoVdaDriverLeaseSession(
         finally
         {
             stateGate.Release();
+        }
+    }
+
+    private async ValueTask ReconcileLeasedDisplayTopologyAsync(CancellationToken cancellationToken)
+    {
+        if (reconcileLeasedDisplayTopology is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await reconcileLeasedDisplayTopology(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            SetUnhealthySnapshot(
+                $"Beacon SudoVDA heartbeat was acknowledged, but leased display topology reconciliation failed: {ex.Message}");
         }
     }
 

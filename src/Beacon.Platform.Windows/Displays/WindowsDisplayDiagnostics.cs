@@ -108,6 +108,16 @@ public static class WindowsDisplayDiagnostics
         return candidates.FirstOrDefault(candidate => candidate.X != 0 || candidate.Y != 0)?.DisplayId;
     }
 
+    public static bool RequiresExtendedTopologyRepair(
+        IReadOnlyList<DisplayRestoreCandidate> activeDisplays,
+        string requiredDisplayName) =>
+        !activeDisplays.Any(candidate =>
+            string.Equals(candidate.DisplayId, requiredDisplayName, StringComparison.OrdinalIgnoreCase)) ||
+        !activeDisplays.Any(candidate => candidate.Kind == DisplayPathKind.Physical);
+
+    public static bool ShouldRetryWithSuppliedDisplayConfig(uint topologyStatus) =>
+        topologyStatus != 0;
+
     public static DisplayApiResult VerifyPhysicalRestore(string displayName, DisplayTopologySnapshot topology) =>
         topology.PhysicalPrimaryVerified
             ? DisplayApiResult.Ok()

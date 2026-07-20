@@ -138,6 +138,27 @@ public sealed class WindowsDisplayBackendTests
     }
 
     [Fact]
+    public async Task GetHealthAsync_WhenLeaseIsActive_ReportsHealthyHeartbeatDiagnostic()
+    {
+        var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
+        var session = new FakeWindowsDisplayLeaseSession
+        {
+            SessionSnapshot = new SudoVdaDriverLeaseSessionSnapshot(
+                LeaseCount: 1,
+                WatchdogTimeoutSeconds: 3,
+                HeartbeatActive: true,
+                Healthy: true,
+                Diagnostic: "Beacon SudoVDA heartbeat acknowledged for 1 display leases.")
+        };
+        var backend = new WindowsDisplayBackend(api, session);
+
+        DisplayHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.True(health.DriverReady);
+        Assert.Contains("heartbeat acknowledged", health.Diagnostic, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task PrepareVirtualDisplayAsync_WhenDriverSessionHoldFails_DoesNotTouchTopology()
     {
         var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
