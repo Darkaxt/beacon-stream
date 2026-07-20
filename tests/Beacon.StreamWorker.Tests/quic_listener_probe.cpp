@@ -55,7 +55,7 @@ constexpr std::array<std::byte, 16> kBenchmarkRunToken{
     std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a}};
 constexpr std::uint32_t kBenchmarkReliablePacketCount{8};
 constexpr std::uint32_t kBenchmarkReliablePayloadBytes{4'096};
-constexpr std::uint32_t kBenchmarkDatagramPacketCount{16};
+constexpr std::uint32_t kBenchmarkDatagramPacketCount{256};
 constexpr std::uint32_t kBenchmarkDatagramPayloadBytes{1'000};
 constexpr std::uint64_t kBenchmarkMeasurementIntervalUs{500'000};
 namespace stream_v1 = beacon::stream::v1;
@@ -363,11 +363,13 @@ struct ClientState {
   bool additional_datagram_received{};
   bool connection_closed{};
   bool failed{};
+  std::optional<std::uint64_t> peer_shutdown_error;
   bool certificate_seen{};
   bool send_data_after_auth{true};
   bool exercise_ordered_actions{true};
   bool benchmark_mode{};
   bool post_auth_sent{};
+  std::uint64_t feedback_sequence{};
   std::uint32_t video_width{2560};
   std::uint32_t video_height{1600};
   stream_v1::SessionErrorCode authentication_error{
@@ -543,6 +545,19 @@ struct ClientState {
            send(feedback_stream, frame(feedback), QUIC_SEND_FLAG_FIN);
   }
 
+  bool send_benchmark_echo(
+      const beacon::stream::BenchmarkDatagramHeader &header) {
+    stream_v1::FeedbackStreamEnvelope feedback;
+    feedback.set_protocol_version(1);
+    feedback.set_session_id("session-a");
+    feedback.set_sequence(++feedback_sequence);
+    auto *echo = feedback.mutable_benchmark_datagram_echo();
+    echo->set_run_id(kBenchmarkRunId);
+    echo->set_round_id(header.round_id);
+    echo->set_sequence(header.sequence);
+    return send(feedback_stream, frame(feedback), QUIC_SEND_FLAG_NONE);
+  }
+
   bool send_stop_session() {
     stream_v1::SessionStreamEnvelope stop;
     stop.set_protocol_version(1);
@@ -550,7 +565,7 @@ struct ClientState {
     stop.set_sequence(4);
     stop.mutable_stop_session()->set_reason(
         stream_v1::SESSION_STOP_REASON_CLIENT_REQUEST);
-    return send(session_stream, frame(stop), QUIC_SEND_FLAG_NONE);
+    return send(session_stream, frame(stop), QUIC_SEND_FLAG_FIN);
   }
 };
 
@@ -651,9 +666,11 @@ QUIC_STATUS QUIC_API connection_callback(HQUIC connection, void *context,
         reinterpret_cast<const std::byte *>(buffer.Buffer), buffer.Length};
     std::lock_guard lock{state.mutex};
     if (state.benchmark_mode) {
-      state.failed =
-          state.failed ||
-          !state.benchmark_collector.observe_datagram(datagram, monotonic_us());
+      const auto parsed = beacon::stream::parse_benchmark_datagram(datagram);
+      state.failed = state.failed || !parsed.has_value() ||
+                     !state.benchmark_collector.observe_datagram(
+                         datagram, monotonic_us()) ||
+                     !state.send_benchmark_echo(parsed->header);
       state.changed.notify_all();
       break;
     }
@@ -716,6 +733,13 @@ QUIC_STATUS QUIC_API connection_callback(HQUIC connection, void *context,
   case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT: {
     std::lock_guard lock{state.mutex};
     state.failed = true;
+  }
+    state.changed.notify_all();
+    break;
+  case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER: {
+    std::lock_guard lock{state.mutex};
+    state.peer_shutdown_error =
+        event->SHUTDOWN_INITIATED_BY_PEER.ErrorCode;
   }
     state.changed.notify_all();
     break;
@@ -1708,6 +1732,14 @@ int wmain(int argument_count, wchar_t **arguments) {
   }
   if (!client.send_stop_session() || !listener.wait_for_received_packets(5))
     return 78;
+  {
+    std::unique_lock lock{client.mutex};
+    client.changed.wait(lock, [&client] {
+      return client.peer_shutdown_error.has_value() || client.failed;
+    });
+    if (client.failed || client.peer_shutdown_error != 4)
+      return 99;
+  }
   const auto packets = listener.take_received_packets();
   const bool session = std::ranges::any_of(packets, [](const auto &packet) {
     return packet.channel == beacon::stream::StreamChannel::session;

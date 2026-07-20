@@ -884,9 +884,16 @@ private:
       }
     }
     if (reply_failed ||
-        (output.should_close_connection() && output.session_replies.empty())) {
+        (output.connection_disposition ==
+             stream::ServerConnectionDisposition::protocol_failure &&
+         output.session_replies.empty())) {
       api_->ConnectionShutdown(connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE,
                                3);
+    } else if (output.connection_disposition ==
+                   stream::ServerConnectionDisposition::session_complete &&
+               output.session_replies.empty()) {
+      api_->ConnectionShutdown(connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE,
+                               4);
     }
     if (accepted_benchmark &&
         !start_benchmark_traffic(stream, *accepted_benchmark)) {
