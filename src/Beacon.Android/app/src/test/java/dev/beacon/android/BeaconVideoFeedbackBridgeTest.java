@@ -12,7 +12,10 @@ public final class BeaconVideoFeedbackBridgeTest {
     public void sendsOnlyForTheActiveBeaconGeneration() {
         RecordingSink sink = new RecordingSink();
         List<Throwable> failures = new ArrayList<>();
-        BeaconVideoFeedbackBridge bridge = new BeaconVideoFeedbackBridge(failures::add);
+        RecordingObserver observer = new RecordingObserver();
+        BeaconVideoFeedbackBridge bridge = new BeaconVideoFeedbackBridge(
+            failures::add,
+            observer);
 
         bridge.onQueueDepthChanged(1, 2);
         bridge.activate(7, sink);
@@ -30,7 +33,54 @@ public final class BeaconVideoFeedbackBridgeTest {
                 "rendered:7:8:9:10",
                 "idr:7:8"),
             sink.events);
+        assertEquals(
+            List.of(
+                "queue:7:3:4",
+                "decoder:7:FAILED:321",
+                "rendered:7:8:9:10",
+                "idr:7:8"),
+            observer.events);
         assertEquals(List.of(), failures);
+    }
+
+    private static final class RecordingObserver
+        implements BeaconVideoFeedbackBridge.Observer {
+        private final List<String> events = new ArrayList<>();
+
+        @Override
+        public void onQueueDepthSent(
+            long generation,
+            int queuedAccessUnits,
+            long droppedAccessUnits) {
+            events.add("queue:" + generation + ":" + queuedAccessUnits + ":" +
+                droppedAccessUnits);
+        }
+
+        @Override
+        public void onDecoderStateSent(
+            long generation,
+            BeaconStreamCore.DecoderState state,
+            int platformErrorCode) {
+            events.add("decoder:" + generation + ":" + state + ":" +
+                platformErrorCode);
+        }
+
+        @Override
+        public void onRenderedFrameSent(
+            long generation,
+            long frameSequence,
+            long presentationTimeUs,
+            long renderedAtUs) {
+            events.add("rendered:" + generation + ":" + frameSequence + ":" +
+                presentationTimeUs + ":" + renderedAtUs);
+        }
+
+        @Override
+        public void onIdrRequested(
+            long generation,
+            long lastCompleteSequence) {
+            events.add("idr:" + generation + ":" + lastCompleteSequence);
+        }
     }
 
     private static final class RecordingSink implements BeaconVideoFeedbackBridge.Sink {

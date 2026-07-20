@@ -12,12 +12,22 @@ final class BeaconVideoSession implements BeaconViewModel.VideoSession {
     BeaconVideoSession(
         EncodedVideoSurfaceProvider surfaceProvider,
         BeaconVideoFeedbackBridge.FailureObserver failureObserver) {
-        if (surfaceProvider == null || failureObserver == null) {
+        this(
+            surfaceProvider,
+            failureObserver,
+            BeaconVideoFeedbackBridge.Observer.noOp());
+    }
+
+    BeaconVideoSession(
+        EncodedVideoSurfaceProvider surfaceProvider,
+        BeaconVideoFeedbackBridge.FailureObserver failureObserver,
+        BeaconVideoFeedbackBridge.Observer observer) {
+        if (surfaceProvider == null || failureObserver == null || observer == null) {
             throw new IllegalArgumentException("Beacon video session dependencies are required.");
         }
         decoderExecutor = Executors.newSingleThreadExecutor(
             action -> new Thread(action, "beacon-video-decoder"));
-        feedback = new BeaconVideoFeedbackBridge(failureObserver);
+        feedback = new BeaconVideoFeedbackBridge(failureObserver, observer);
         pipeline = new BeaconVideoPipeline(
             new AndroidMediaCodecFactory(),
             surfaceProvider,

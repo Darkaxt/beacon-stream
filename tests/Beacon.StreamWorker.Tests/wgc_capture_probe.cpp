@@ -252,9 +252,7 @@ int wmain(int argc, wchar_t** argv) {
     D3d11VideoProcessorFailure conversion_failure{
         D3d11VideoProcessorFailure::none};
     const bool started = capture.start(
-        WgcCapturePlan{.device_name = device_name,
-                       .width = width,
-                       .height = height},
+        WgcCapturePlan{.device_name = device_name},
         [&](CapturedD3d11Frame frame) {
           const auto converted = processor.convert(
               frame, D3d11VideoProcessorPlan{.output_width = width,

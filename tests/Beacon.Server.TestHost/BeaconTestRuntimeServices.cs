@@ -5,6 +5,7 @@ using Beacon.Core.Input;
 using Beacon.Core.Recovery;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
+using Beacon.Platform.Windows.Displays;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.Server.Benchmarks;
 using Beacon.Server.Hosting;
@@ -17,11 +18,21 @@ namespace Beacon.Server.TestHost;
 
 public static class BeaconTestRuntimeServices
 {
+    public const string ProductionStreamWorkerConfigurationKey =
+        "Beacon:TestHost:UseProductionStreamWorker";
+
     public static IServiceCollection UseBeaconFakeRuntime(
         this IServiceCollection services,
         IConfiguration? configuration = null)
     {
-        RemoveWorkerRelay(services);
+        bool useProductionStreamWorker = bool.TryParse(
+            configuration?[ProductionStreamWorkerConfigurationKey],
+            out bool configuredProductionStreamWorker)
+            && configuredProductionStreamWorker;
+        if (!useProductionStreamWorker)
+        {
+            RemoveWorkerRelay(services);
+        }
         services.RemoveAll<BeaconHostOptions>();
         services.RemoveAll<IDisplayBackend>();
         services.RemoveAll<IRecoveryBackend>();
@@ -31,24 +42,37 @@ public static class BeaconTestRuntimeServices
         services.RemoveAll<IClientInputSink>();
         services.RemoveAll<IClientInputHealthProvider>();
         services.RemoveAll<NoOpClientInputSink>();
-        services.RemoveAll<IStreamWorkerHost>();
-        services.RemoveAll<IStreamWorkerRuntimeEvents>();
-        services.RemoveAll<StreamWorkerProcessHost>();
-        services.RemoveAll<StreamWorkerProcessHostOptions>();
-        services.RemoveAll<StreamWorkerStreamingBackend>();
-        services.RemoveAll<IStreamSessionAuthorizer>();
-        services.RemoveAll<IStreamingBackend>();
-        services.RemoveAll<IBenchmarkRuntime>();
+        if (useProductionStreamWorker)
+        {
+            services.RemoveAll<IWindowsDisplayNameResolver>();
+            services.RemoveAll<IStreamWorkerRuntimeEvents>();
+            services.RemoveAll<StreamWorkerStreamingBackend>();
+            services.RemoveAll<IStreamingBackend>();
+            services.RemoveAll<IBenchmarkRuntime>();
+        }
+        else
+        {
+            services.RemoveAll<IStreamWorkerHost>();
+            services.RemoveAll<IStreamWorkerRuntimeEvents>();
+            services.RemoveAll<StreamWorkerProcessHost>();
+            services.RemoveAll<StreamWorkerProcessHostOptions>();
+            services.RemoveAll<StreamWorkerStreamingBackend>();
+            services.RemoveAll<IStreamSessionAuthorizer>();
+            services.RemoveAll<IStreamingBackend>();
+            services.RemoveAll<IBenchmarkRuntime>();
+        }
         services.RemoveAll<FakeBenchmarkRuntime>();
         services.RemoveAll<IBenchmarkEvidenceRepository>();
         services.RemoveAll<IGameLibraryProvider>();
 
         services.AddSingleton(new BeaconHostOptions(
-            "fake",
+            useProductionStreamWorker ? "fake-worker" : "fake",
             nameof(FakeDisplayBackend),
             nameof(FakeGameLauncher),
             nameof(FakeSessionActivityInspector),
-            nameof(FakeStreamingBackend)));
+            useProductionStreamWorker
+                ? nameof(StreamWorkerStreamingBackend)
+                : nameof(FakeStreamingBackend)));
         services.AddSingleton<IDisplayBackend, FakeDisplayBackend>();
         services.AddSingleton<IRecoveryBackend, FakeRecoveryBackend>();
         services.AddSingleton<IGameLauncher, FakeGameLauncher>();
@@ -63,11 +87,27 @@ public static class BeaconTestRuntimeServices
             sp.GetRequiredService<NoOpClientInputSink>());
         services.AddSingleton<IClientInputHealthProvider>(sp =>
             sp.GetRequiredService<NoOpClientInputSink>());
-        services.AddSingleton<IStreamSessionAuthorizer, FakeStreamSessionAuthorizer>();
-        services.AddSingleton<IStreamingBackend, FakeStreamingBackend>();
-        services.AddSingleton<FakeBenchmarkRuntime>();
-        services.AddSingleton<IBenchmarkRuntime>(sp =>
-            sp.GetRequiredService<FakeBenchmarkRuntime>());
+        if (useProductionStreamWorker)
+        {
+            services.AddSingleton<IWindowsDisplayNameResolver, TestHostPrimaryDisplayNameResolver>();
+            services.AddSingleton(sp => new StreamWorkerStreamingBackend(
+                sp.GetRequiredService<IStreamWorkerHost>(),
+                sp.GetRequiredService<IWindowsDisplayNameResolver>()));
+            services.AddSingleton<IStreamingBackend>(sp =>
+                sp.GetRequiredService<StreamWorkerStreamingBackend>());
+            services.AddSingleton<IBenchmarkRuntime>(sp =>
+                sp.GetRequiredService<StreamWorkerStreamingBackend>());
+            services.AddSingleton<IStreamWorkerRuntimeEvents>(sp =>
+                sp.GetRequiredService<StreamWorkerStreamingBackend>());
+        }
+        else
+        {
+            services.AddSingleton<IStreamSessionAuthorizer, FakeStreamSessionAuthorizer>();
+            services.AddSingleton<IStreamingBackend, FakeStreamingBackend>();
+            services.AddSingleton<FakeBenchmarkRuntime>();
+            services.AddSingleton<IBenchmarkRuntime>(sp =>
+                sp.GetRequiredService<FakeBenchmarkRuntime>());
+        }
         services.AddSingleton<IBenchmarkEvidenceRepository>(_ =>
             new InMemoryBenchmarkEvidenceRepository(
                 [FakeBenchmarkEvidence.CreateZFold7(DateTimeOffset.UtcNow)]));
@@ -87,11 +127,38 @@ public static class BeaconTestRuntimeServices
             ]));
 
         string? hostedWorkerPath = configuration?[HostedBenchmarkWorkerOptions.ExecutablePathConfigurationKey];
-        if (!string.IsNullOrWhiteSpace(hostedWorkerPath))
+        if (!useProductionStreamWorker && !string.IsNullOrWhiteSpace(hostedWorkerPath))
         {
             UseHostedBenchmarkWorker(services, hostedWorkerPath);
         }
         return services;
+    }
+
+    private sealed class TestHostPrimaryDisplayNameResolver(IWindowsDisplayApi displayApi) :
+        IWindowsDisplayNameResolver
+    {
+        public bool TryResolveDisplayName(string displayId, out string? displayName)
+        {
+            displayName = null;
+            try
+            {
+                DisplayTopologySnapshot topology = displayApi
+                    .QueryTopologyAsync(CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+                DisplayPathSnapshot? path = topology.Paths.FirstOrDefault(candidate =>
+                        candidate.Kind == DisplayPathKind.Physical && candidate.IsPrimary)
+                    ?? topology.Paths.FirstOrDefault(candidate => candidate.IsPrimary)
+                    ?? topology.Paths.FirstOrDefault(candidate => candidate.Kind == DisplayPathKind.Physical)
+                    ?? topology.Paths.FirstOrDefault();
+                displayName = path?.DisplayId;
+                return !string.IsNullOrWhiteSpace(displayName);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                return false;
+            }
+        }
     }
 
     private static void UseHostedBenchmarkWorker(

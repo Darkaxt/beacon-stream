@@ -24,15 +24,46 @@ final class BeaconVideoFeedbackBridge implements BeaconVideoPipeline.Observer {
         void onFailure(Throwable failure);
     }
 
+    interface Observer {
+        default void onQueueDepthSent(
+            long generation,
+            int queuedAccessUnits,
+            long droppedAccessUnits) { }
+        default void onDecoderStateSent(
+            long generation,
+            BeaconStreamCore.DecoderState state,
+            int platformErrorCode) { }
+        default void onRenderedFrameSent(
+            long generation,
+            long frameSequence,
+            long presentationTimeUs,
+            long renderedAtUs) { }
+        default void onIdrRequested(
+            long generation,
+            long lastCompleteSequence) { }
+
+        static Observer noOp() {
+            return new Observer() { };
+        }
+    }
+
     private final FailureObserver failureObserver;
+    private final Observer observer;
     private Sink sink;
     private long generation;
 
     BeaconVideoFeedbackBridge(FailureObserver failureObserver) {
-        if (failureObserver == null) {
+        this(failureObserver, Observer.noOp());
+    }
+
+    BeaconVideoFeedbackBridge(
+        FailureObserver failureObserver,
+        Observer observer) {
+        if (failureObserver == null || observer == null) {
             throw new IllegalArgumentException("Video feedback failure observer is required.");
         }
         this.failureObserver = failureObserver;
+        this.observer = observer;
     }
 
     synchronized void activate(long generation, Sink sink) {
@@ -54,13 +85,19 @@ final class BeaconVideoFeedbackBridge implements BeaconVideoPipeline.Observer {
         int platformErrorCode) {
         ActiveSink active = activeSink();
         if (active == null) return;
-        active.sink.sendDecoderState(
-            active.generation,
+        BeaconStreamCore.DecoderState sentState =
             switch (state) {
                 case READY -> BeaconStreamCore.DecoderState.READY;
                 case AWAITING_IDR -> BeaconStreamCore.DecoderState.AWAITING_IDR;
                 case FAILED -> BeaconStreamCore.DecoderState.FAILED;
-            },
+            };
+        active.sink.sendDecoderState(
+            active.generation,
+            sentState,
+            platformErrorCode);
+        observer.onDecoderStateSent(
+            active.generation,
+            sentState,
             platformErrorCode);
     }
 
@@ -74,6 +111,10 @@ final class BeaconVideoFeedbackBridge implements BeaconVideoPipeline.Observer {
             active.generation,
             queuedAccessUnits,
             droppedAccessUnits);
+        observer.onQueueDepthSent(
+            active.generation,
+            queuedAccessUnits,
+            droppedAccessUnits);
     }
 
     @Override
@@ -83,6 +124,7 @@ final class BeaconVideoFeedbackBridge implements BeaconVideoPipeline.Observer {
         active.sink.requestDecoderIdr(
             active.generation,
             lastCompleteSequence);
+        observer.onIdrRequested(active.generation, lastCompleteSequence);
     }
 
     @Override
@@ -93,6 +135,11 @@ final class BeaconVideoFeedbackBridge implements BeaconVideoPipeline.Observer {
         ActiveSink active = activeSink();
         if (active == null) return;
         active.sink.sendRenderedFrame(
+            active.generation,
+            frameSequence,
+            presentationTimeUs,
+            renderedAtUs);
+        observer.onRenderedFrameSent(
             active.generation,
             frameSequence,
             presentationTimeUs,

@@ -139,6 +139,15 @@ public sealed class StreamWorkerEventRelayTests
         await host.WriteAsync(new StreamWorkerConnectionConfigured(1, 22));
         await host.WriteAsync(new StreamWorkerTransportConnected(1, 22));
         await host.WriteAsync(new StreamWorkerTransportFailed(1, 22, 0x80410006));
+        await host.WriteAsync(new StreamWorkerSessionStateChanged(
+            1, "session", WorkerSessionState.Failed, WorkerErrorCode.OperationFailed));
+        await host.WriteAsync(new StreamWorkerSessionFailure(
+            1,
+            "session",
+            7,
+            DiagnosticBoundary.Capture,
+            DiagnosticCode.OperationFailed,
+            2));
         await host.WriteAsync(new StreamWorkerProcessExited(1, 23));
         await host.WriteAsync(Input(8, ClientInputEvent.StreamKeyboard(1, true)));
         await host.WriteAsync(Input(9, ClientInputEvent.StreamKeyboard(2, false)));
@@ -156,6 +165,9 @@ public sealed class StreamWorkerEventRelayTests
         Assert.Contains("worker.connection_configured", rendered, StringComparison.Ordinal);
         Assert.Contains("worker.transport_connected", rendered, StringComparison.Ordinal);
         Assert.Contains("worker.transport_failed", rendered, StringComparison.Ordinal);
+        Assert.Contains("worker.session_failed", rendered, StringComparison.Ordinal);
+        Assert.Contains("worker.video_failed", rendered, StringComparison.Ordinal);
+        Assert.Contains("boundary=Capture", rendered, StringComparison.Ordinal);
         Assert.Contains("platformStatusCode=2151743494", rendered, StringComparison.Ordinal);
         Assert.Contains("input.dispatch_failed", rendered, StringComparison.Ordinal);
         Assert.Contains("input.rejected", rendered, StringComparison.Ordinal);

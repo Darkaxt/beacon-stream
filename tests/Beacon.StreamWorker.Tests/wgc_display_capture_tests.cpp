@@ -112,7 +112,7 @@ class FakePlatform final : public IWgcCapturePlatform {
 };
 
 WgcCapturePlan plan() {
-  return {.device_name = L"\\\\.\\DISPLAY1", .width = 2560, .height = 1600};
+  return {.device_name = L"\\\\.\\DISPLAY1"};
 }
 
 void exact_active_display_and_nvidia_adapter_are_selected() {
@@ -128,18 +128,15 @@ void exact_active_display_and_nvidia_adapter_are_selected() {
   BEACON_TEST_REQUIRE(capture.selected_adapter_description() == L"NVIDIA RTX");
 }
 
-void missing_inactive_and_wrong_mode_targets_fail_before_capture() {
+void missing_and_inactive_targets_fail_before_capture() {
   for (const auto failure : {WgcCaptureFailure::display_missing,
-                             WgcCaptureFailure::display_inactive,
-                             WgcCaptureFailure::display_mode_mismatch}) {
+                             WgcCaptureFailure::display_inactive}) {
     auto platform = std::make_unique<FakePlatform>();
     auto* observed = platform.get();
     if (failure == WgcCaptureFailure::display_missing) {
       platform->targets.clear();
     } else if (failure == WgcCaptureFailure::display_inactive) {
       platform->targets[0].active = false;
-    } else {
-      platform->targets[0].height = 1440;
     }
     WgcDisplayCapture capture{std::move(platform)};
 
@@ -317,7 +314,7 @@ void stop_waits_for_inflight_callback_and_releases_once() {
 int main() {
   return beacon::stream::testing::run_tests([] {
     exact_active_display_and_nvidia_adapter_are_selected();
-    missing_inactive_and_wrong_mode_targets_fail_before_capture();
+    missing_and_inactive_targets_fail_before_capture();
     missing_nvidia_adapter_and_platform_start_failure_are_truthful();
     throwing_platform_start_fails_transactionally_and_allows_retry();
     stop_requested_during_platform_start_wins_and_allows_retry();

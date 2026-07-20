@@ -239,6 +239,26 @@ public final class BeaconStreamCoreTest {
     }
 
     @Test
+    public void explicitStopIgnoresCurrentGenerationLoss() {
+        RecordingBindings bindings = new RecordingBindings();
+        AtomicReference<String> failureStage = new AtomicReference<>();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings,
+            frame -> { },
+            Executors.newSingleThreadExecutor(),
+            () -> { },
+            failureStage::set);
+
+        core.start(session("explicit-current"));
+        core.stop();
+        bindings.callbacks.onConnectionLost(1);
+
+        assertEquals(0, core.connectionLossCountForTest());
+        assertNull(failureStage.get());
+        core.close();
+    }
+
+    @Test
     public void currentGenerationReceivesExactlyOneLoss() {
         RecordingBindings bindings = new RecordingBindings();
         BeaconStreamCore core = new BeaconStreamCore(

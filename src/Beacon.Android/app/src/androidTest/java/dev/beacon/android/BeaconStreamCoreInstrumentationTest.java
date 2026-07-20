@@ -289,22 +289,31 @@ public final class BeaconStreamCoreInstrumentationTest {
         installCredential(instrumentation, clientId);
         Gate3SessionEvidence evidence = Gate3SessionEvidence.startFirstInvocation(
             instrumentation.getTargetContext(), clientId);
-        BeaconStreamCore core = new BeaconStreamCore(
-            evidence, evidence::recordFeedbackSent, evidence::recordStreamFailure);
+        AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
+        Gate3VideoRuntime videoRuntime = new Gate3VideoRuntime(evidence);
         BeaconApiClient api = new BeaconApiClient(
-            instrumentation.getTargetContext(), new BeaconClientConfig(serverUrl, clientId));
-        BeaconViewModel model = new BeaconViewModel(clientId, serverUrl, api, core);
+            instrumentation.getTargetContext(), productionClientConfig(arguments, serverUrl, clientId));
+        BeaconViewModel model = new BeaconViewModel(
+            clientId,
+            serverUrl,
+            api,
+            gate3StreamCoreFactory(evidence, coreReference),
+            videoRuntime::createSession);
         try {
             registerAndLaunch(model);
             evidence.recordGrant(model.latestStream());
-            evidence.awaitMarkerAndFeedback();
+            evidence.awaitRenderedFrameFeedback();
             model.sendInput(BeaconApiClient.InputBatch.keyboardPress(1, inputMarker, "Escape"));
             evidence.recordInputSent();
             evidence.persistForReconnect();
         } finally {
-            model.close();
-            BeaconStreamCore.awaitNativeRegistryIdleForTest();
-            evidence.recordTransportClosedAfterNativeDrain();
+            try {
+                model.close();
+                BeaconStreamCore.awaitNativeRegistryIdleForTest();
+                evidence.recordTransportClosedAfterNativeDrain();
+            } finally {
+                videoRuntime.close();
+            }
         }
 
         assertFirstInvocationEvidence(evidence);
@@ -315,7 +324,7 @@ public final class BeaconStreamCoreInstrumentationTest {
     }
 
     @Test
-    public void gate3EvidenceFailsClosedOnPreMarkerTransportLoss() {
+    public void gate3EvidenceFailsClosedOnPreFrameTransportLoss() {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
         Gate3SessionEvidence evidence = Gate3SessionEvidence.startFirstInvocation(
             instrumentation.getTargetContext(), "gate3-failure-fixture");
@@ -323,7 +332,7 @@ public final class BeaconStreamCoreInstrumentationTest {
         evidence.recordStreamFailure("transport");
 
         AssertionError error = assertThrows(
-            AssertionError.class, evidence::awaitMarkerAndFeedback);
+            AssertionError.class, evidence::awaitRenderedFrameFeedback);
         assertTrue(error.getMessage().contains("transport"));
     }
 
@@ -338,28 +347,38 @@ public final class BeaconStreamCoreInstrumentationTest {
             instrumentation.getTargetContext(), clientId);
         Gate3SessionEvidence evidence = Gate3SessionEvidence.startReconnect(
             instrumentation.getTargetContext(), clientId);
-        BeaconStreamCore core = new BeaconStreamCore(
-            evidence, evidence::recordFeedbackSent, evidence::recordStreamFailure);
+        AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
+        Gate3VideoRuntime videoRuntime = new Gate3VideoRuntime(evidence);
         BeaconApiClient api = new BeaconApiClient(
-            instrumentation.getTargetContext(), new BeaconClientConfig(serverUrl, clientId));
-        BeaconViewModel model = new BeaconViewModel(clientId, serverUrl, api, core);
+            instrumentation.getTargetContext(), productionClientConfig(arguments, serverUrl, clientId));
+        BeaconViewModel model = new BeaconViewModel(
+            clientId,
+            serverUrl,
+            api,
+            gate3StreamCoreFactory(evidence, coreReference),
+            videoRuntime::createSession);
         try {
             model.reconnect();
             assertSuccessful(model);
             evidence.recordGrant(model.latestStream());
-            evidence.awaitMarkerAndFeedback();
+            evidence.awaitRenderedFrameFeedback();
             evidence.assertFreshReconnect(previous);
             model.stopStream();
             assertSuccessful(model);
         } finally {
-            model.close();
-            BeaconStreamCore.awaitNativeRegistryIdleForTest();
-            evidence.recordTransportClosedAfterNativeDrain();
+            try {
+                model.close();
+                BeaconStreamCore.awaitNativeRegistryIdleForTest();
+                evidence.recordTransportClosedAfterNativeDrain();
+            } finally {
+                videoRuntime.close();
+            }
         }
 
         assertTrue(evidence.transportConnected());
-        assertEquals(1L, evidence.receivedFrameCount());
+        assertTrue(evidence.receivedFrameCount() >= 1L);
         assertTrue(evidence.feedbackSent());
+        assertTrue(evidence.surfacePresented());
         assertTrue(evidence.transportClosed());
         evidence.clearPersistedReconnect();
         emit("BEACON_GATE3_RECONNECT_FRESH_TICKET");
@@ -671,28 +690,40 @@ public final class BeaconStreamCoreInstrumentationTest {
         installCredential(instrumentation, clientId);
         Gate3SessionEvidence evidence = Gate3SessionEvidence.startReconnect(
             instrumentation.getTargetContext(), clientId);
-        BeaconStreamCore core = new BeaconStreamCore(
-            evidence, evidence::recordFeedbackSent, evidence::recordStreamFailure);
+        AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
+        Gate3VideoRuntime videoRuntime = new Gate3VideoRuntime(evidence);
         BeaconApiClient api = new BeaconApiClient(
-            instrumentation.getTargetContext(), new BeaconClientConfig(serverUrl, clientId));
-        BeaconViewModel model = new BeaconViewModel(clientId, serverUrl, api, core);
+            instrumentation.getTargetContext(), productionClientConfig(arguments, serverUrl, clientId));
+        BeaconViewModel model = new BeaconViewModel(
+            clientId,
+            serverUrl,
+            api,
+            gate3StreamCoreFactory(evidence, coreReference),
+            videoRuntime::createSession);
         try {
             registerAndLaunch(model);
             evidence.recordGrant(model.latestStream());
-            evidence.awaitMarkerAndFeedback();
+            evidence.awaitRenderedFrameFeedback();
             emit("BEACON_GATE3_WORKER_CRASH_ARMED");
+            BeaconStreamCore core = coreReference.get();
+            assertNotNull(core);
             core.awaitConnectionLossForTest(1);
             assertEquals(1, core.connectionLossCountForTest());
             assertTrue(core.stoppedForTest());
         } finally {
-            model.close();
-            BeaconStreamCore.awaitNativeRegistryIdleForTest();
-            evidence.recordTransportClosedAfterNativeDrain();
+            try {
+                model.close();
+                BeaconStreamCore.awaitNativeRegistryIdleForTest();
+                evidence.recordTransportClosedAfterNativeDrain();
+            } finally {
+                videoRuntime.close();
+            }
         }
 
         assertTrue(evidence.transportConnected());
-        assertEquals(1L, evidence.receivedFrameCount());
+        assertTrue(evidence.receivedFrameCount() >= 1L);
         assertTrue(evidence.feedbackSent());
+        assertTrue(evidence.surfacePresented());
         assertTrue(evidence.transportClosed());
         emit("BEACON_GATE3_WORKER_CRASH_OBSERVED");
     }
@@ -704,6 +735,16 @@ public final class BeaconStreamCoreInstrumentationTest {
                 "Missing required instrumentation argument: " + name);
         }
         return value.trim();
+    }
+
+    private static BeaconClientConfig productionClientConfig(
+        Bundle arguments,
+        String serverUrl,
+        String clientId) {
+        return new BeaconClientConfig(
+            serverUrl,
+            clientId,
+            requireArgument(arguments, "serverPublicKeyFingerprint"));
     }
 
     private static Bundle requireGate3Arguments() {
@@ -767,12 +808,75 @@ public final class BeaconStreamCoreInstrumentationTest {
         assertSuccessful(model);
     }
 
+    private static BeaconViewModel.StreamCoreFactory gate3StreamCoreFactory(
+        Gate3SessionEvidence evidence,
+        AtomicReference<BeaconStreamCore> coreReference) {
+        return (sink, failureObserver, benchmarkObserver) -> {
+            BeaconStreamCore core = new BeaconStreamCore(
+                sink,
+                () -> { },
+                stage -> {
+                    evidence.recordStreamFailure(stage);
+                    failureObserver.onFailure(stage);
+                },
+                benchmarkObserver);
+            coreReference.set(core);
+            return core;
+        };
+    }
+
+    private static final class Gate3VideoRuntime implements AutoCloseable {
+        private final Gate3SessionEvidence evidence;
+        private final BenchmarkPresentationSurface presentationSurface;
+        private final EncodedVideoSurfaceProvider surfaceProvider;
+
+        Gate3VideoRuntime(Gate3SessionEvidence evidence) {
+            this.evidence = evidence;
+            presentationSurface = new AndroidImageReaderPresentationSurfaceFactory().create(
+                1280,
+                720,
+                new BenchmarkPresentationSurfaceFactory.Observer() {
+                    @Override
+                    public void onFramePresented(
+                        long presentationTimeUs,
+                        long presentedAtNs) {
+                        evidence.recordSurfacePresentation(
+                            presentationTimeUs,
+                            presentedAtNs);
+                    }
+
+                    @Override
+                    public void onFailure(Throwable failure) {
+                        evidence.recordVideoFailure(failure);
+                    }
+                });
+            surfaceProvider = presentationSurface::surface;
+        }
+
+        BeaconViewModel.VideoSession createSession(
+            BeaconVideoFeedbackBridge.FailureObserver failureObserver) {
+            return new BeaconVideoSession(
+                surfaceProvider,
+                failure -> {
+                    evidence.recordVideoFailure(failure);
+                    failureObserver.onFailure(failure);
+                },
+                evidence);
+        }
+
+        @Override
+        public void close() {
+            presentationSurface.close();
+        }
+    }
+
     private static void assertFirstInvocationEvidence(Gate3SessionEvidence evidence) {
         assertTrue(evidence.transportConnected());
-        assertEquals(1L, evidence.receivedFrameCount());
-        assertEquals(1L, evidence.markerSequence());
+        assertTrue(evidence.receivedFrameCount() >= 1L);
+        assertTrue(evidence.frameSequence() > 0L);
         assertTrue(evidence.inputSent());
         assertTrue(evidence.feedbackSent());
+        assertTrue(evidence.surfacePresented());
         assertTrue(evidence.transportClosed());
     }
 

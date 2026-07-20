@@ -48,9 +48,7 @@ bool ProductionVideoGeneration::start(
 
   const auto weak = weak_from_this();
   const bool capture_started = capture_.start(
-      {.device_name = plan_.display_device_name,
-       .width = plan_.width,
-       .height = plan_.height},
+      {.device_name = plan_.display_device_name},
       [weak](capture::CapturedD3d11Frame frame) {
         if (const auto generation = weak.lock()) {
           generation->process_frame(std::move(frame));

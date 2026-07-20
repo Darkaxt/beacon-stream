@@ -23,8 +23,7 @@ WgcDisplayCapture::WgcDisplayCapture(
 WgcDisplayCapture::~WgcDisplayCapture() { stop(); }
 
 bool WgcDisplayCapture::start(const WgcCapturePlan& plan, FrameSink sink) {
-  if (plan.device_name.empty() || plan.width == 0 || plan.height == 0 ||
-      !sink) {
+  if (plan.device_name.empty() || !sink) {
     set_failure(WgcCaptureFailure::invalid_plan);
     return false;
   }
@@ -54,10 +53,6 @@ bool WgcDisplayCapture::start(const WgcCapturePlan& plan, FrameSink sink) {
     if (!target->active || target->monitor == 0) {
       return fail_start(WgcCaptureFailure::display_inactive, false);
     }
-    if (target->width != plan.width || target->height != plan.height) {
-      return fail_start(WgcCaptureFailure::display_mode_mismatch, false);
-    }
-
     const auto adapters = platform_->graphics_adapters();
     const WgcAdapterSnapshot* adapter = nullptr;
     for (const auto& candidate : adapters) {
@@ -77,8 +72,8 @@ bool WgcDisplayCapture::start(const WgcCapturePlan& plan, FrameSink sink) {
       stopped_before_platform_start = stop_requested_;
       if (!stopped_before_platform_start) {
         selected_adapter_description_ = adapter->description;
-        pool_width_ = plan.width;
-        pool_height_ = plan.height;
+        pool_width_ = target->width;
+        pool_height_ = target->height;
         sink_ = std::move(sink);
         active_ = true;
       }

@@ -121,7 +121,7 @@ public final class BeaconStreamCore implements AutoCloseable {
                 synchronized (BeaconStreamCore.this) {
                     long expectedGeneration = startingGeneration != 0
                         ? startingGeneration : activeGeneration;
-                    if (!open || generation == 0 || generation != expectedGeneration ||
+                    if (!open || stopped || generation == 0 || generation != expectedGeneration ||
                         generation == lastLossGeneration) {
                         return;
                     }

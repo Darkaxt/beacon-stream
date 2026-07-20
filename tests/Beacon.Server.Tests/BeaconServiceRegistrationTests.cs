@@ -100,6 +100,43 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public async Task TestHostCanKeepProductionWorkerWithFakeMachineBoundaries()
+    {
+        IConfiguration configuration = CreateConfiguration(
+            new KeyValuePair<string, string?>(
+                BeaconTestRuntimeServices.ProductionStreamWorkerConfigurationKey,
+                bool.TrueString),
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.StreamWorkerPathConfigurationKey,
+                Path.Combine(Path.GetTempPath(), "Beacon.StreamWorker.exe")));
+        var services = new ServiceCollection();
+        services.AddBeaconServices(
+            configuration,
+            environmentClientProfilesPath: null,
+            environmentStreamWorkerPath: null,
+            environmentBenchmarkEvidencePath: null);
+
+        services.UseBeaconFakeRuntime(configuration);
+        await using ServiceProvider provider = BuildServiceProvider(services);
+
+        BeaconHostOptions options = provider.GetRequiredService<BeaconHostOptions>();
+        Assert.Equal("fake-worker", options.ModeName);
+        Assert.Equal(nameof(StreamWorkerStreamingBackend), options.StreamingBackendName);
+        Assert.IsType<FakeDisplayBackend>(provider.GetRequiredService<IDisplayBackend>());
+        Assert.IsType<FakeGameLauncher>(provider.GetRequiredService<IGameLauncher>());
+        Assert.IsType<StreamWorkerProcessHost>(provider.GetRequiredService<IStreamWorkerHost>());
+        Assert.IsType<StreamWorkerStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
+        Assert.Same(
+            provider.GetRequiredService<IStreamingBackend>(),
+            provider.GetRequiredService<IBenchmarkRuntime>());
+        Assert.Same(
+            provider.GetRequiredService<IStreamingBackend>(),
+            provider.GetRequiredService<IStreamWorkerRuntimeEvents>());
+        Assert.Contains(provider.GetServices<IHostedService>(), service => service is StreamWorkerEventRelay);
+        Assert.Single(provider.GetServices<IStreamingBackend>());
+    }
+
+    [Fact]
     public async Task HostedWorkerConfigurationReplacesOnlyBenchmarkRuntimeAndAuthorization()
     {
         string directory = Path.Combine(

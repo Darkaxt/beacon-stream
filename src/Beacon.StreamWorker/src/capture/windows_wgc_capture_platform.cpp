@@ -27,6 +27,31 @@ using namespace winrt::Windows::Graphics::Capture;
 using namespace winrt::Windows::Graphics::DirectX;
 using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
 
+class ThreadWinrtApartment final {
+ public:
+  ThreadWinrtApartment() {
+    const auto result = RoInitialize(RO_INIT_MULTITHREADED);
+    if (FAILED(result) && result != RPC_E_CHANGED_MODE) {
+      winrt::throw_hresult(result);
+    }
+    uninitialize_ = SUCCEEDED(result);
+  }
+
+  ~ThreadWinrtApartment() {
+    if (uninitialize_) {
+      RoUninitialize();
+    }
+  }
+
+ private:
+  bool uninitialize_{};
+};
+
+void ensure_winrt_apartment() {
+  thread_local ThreadWinrtApartment apartment;
+  static_cast<void>(apartment);
+}
+
 std::uint64_t pack_luid(const LUID& luid) noexcept {
   return static_cast<std::uint64_t>(static_cast<std::uint32_t>(luid.LowPart)) |
          (static_cast<std::uint64_t>(static_cast<std::uint32_t>(luid.HighPart))
@@ -48,20 +73,7 @@ class WindowsD3d11Texture final : public D3d11Texture {
 
 class WindowsWgcCapturePlatform final : public IWgcCapturePlatform {
  public:
-  WindowsWgcCapturePlatform() {
-    const auto result = RoInitialize(RO_INIT_MULTITHREADED);
-    if (FAILED(result) && result != RPC_E_CHANGED_MODE) {
-      winrt::throw_hresult(result);
-    }
-    uninitialize_ro_ = SUCCEEDED(result);
-  }
-
-  ~WindowsWgcCapturePlatform() override {
-    stop_capture();
-    if (uninitialize_ro_) {
-      RoUninitialize();
-    }
-  }
+  ~WindowsWgcCapturePlatform() override { stop_capture(); }
 
   [[nodiscard]] std::vector<WgcDisplayTargetSnapshot>
   display_targets() override {
@@ -126,6 +138,7 @@ class WindowsWgcCapturePlatform final : public IWgcCapturePlatform {
       return false;
     }
     try {
+      ensure_winrt_apartment();
       winrt::com_ptr<IDXGIAdapter1> selected = find_adapter(adapter.luid);
       if (!selected) {
         return false;
@@ -191,6 +204,7 @@ class WindowsWgcCapturePlatform final : public IWgcCapturePlatform {
       return false;
     }
     try {
+      ensure_winrt_apartment();
       std::lock_guard lock{mutex_};
       if (!running_ || !frame_pool_ || !winrt_device_) {
         return false;
@@ -207,6 +221,7 @@ class WindowsWgcCapturePlatform final : public IWgcCapturePlatform {
 
   void stop_capture() noexcept override {
     try {
+      ensure_winrt_apartment();
       Direct3D11CaptureFramePool pool{nullptr};
       GraphicsCaptureSession session{nullptr};
       {
@@ -291,6 +306,7 @@ class WindowsWgcCapturePlatform final : public IWgcCapturePlatform {
       callback = callback_;
     }
     try {
+      ensure_winrt_apartment();
       auto frame = sender.TryGetNextFrame();
       if (frame && callback) {
         auto access = frame.Surface().as<
@@ -331,7 +347,6 @@ class WindowsWgcCapturePlatform final : public IWgcCapturePlatform {
   winrt::event_token frame_token_{};
   std::size_t active_callbacks_{};
   bool running_{};
-  bool uninitialize_ro_{};
 };
 
 }  // namespace

@@ -9,6 +9,9 @@
 
 #include <Windows.h>
 #include <bcrypt.h>
+#include <roapi.h>
+
+#include <winrt/base.h>
 
 #include <atomic>
 #include <cstddef>
@@ -22,6 +25,27 @@
 #include <vector>
 
 namespace {
+
+class ProcessWinrtApartment final {
+ public:
+  ProcessWinrtApartment() {
+    const auto result = RoInitialize(RO_INIT_MULTITHREADED);
+    if (FAILED(result) && result != RPC_E_CHANGED_MODE) {
+      winrt::throw_hresult(result);
+    }
+    uninitialize_ = SUCCEEDED(result);
+  }
+
+  ~ProcessWinrtApartment() {
+    winrt::clear_factory_cache();
+    if (uninitialize_) {
+      RoUninitialize();
+    }
+  }
+
+ private:
+  bool uninitialize_{};
+};
 
 std::vector<std::byte> create_instance_id() {
   std::vector<std::byte> id(16);
@@ -44,6 +68,8 @@ int wmain(int argument_count, wchar_t** arguments) {
   }
 
   try {
+    ProcessWinrtApartment winrt_apartment;
+    static_cast<void>(winrt_apartment);
     auto channel = beacon::worker::NamedPipeChannel::connect(arguments[2]);
     auto instance_id = create_instance_id();
     if (instance_id.empty()) {

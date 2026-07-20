@@ -361,7 +361,9 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
     {
         if (envelope.BodyCase == WorkerIpcEnvelope.BodyOneofCase.WorkerDiagnostic)
         {
-            return TranslateConnectionDiagnostic(envelope);
+            return string.IsNullOrWhiteSpace(envelope.SessionId)
+                ? TranslateConnectionDiagnostic(envelope)
+                : TranslateSessionFailure(envelope);
         }
 
         if (string.IsNullOrWhiteSpace(envelope.SessionId))
@@ -378,8 +380,48 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
             WorkerIpcEnvelope.BodyOneofCase.InputReceived => TranslateInput(envelope),
             WorkerIpcEnvelope.BodyOneofCase.FeedbackReceived => TranslateFeedback(envelope),
             WorkerIpcEnvelope.BodyOneofCase.MediaEvidence => TranslateMediaEvidence(envelope),
+            WorkerIpcEnvelope.BodyOneofCase.SessionStateChanged =>
+                TranslateSessionStateChanged(envelope),
             _ => throw new StreamWorkerProtocolException("StreamWorker emitted an unknown unsolicited event."),
         };
+    }
+
+    private StreamWorkerSessionStateChanged TranslateSessionStateChanged(
+        WorkerIpcEnvelope envelope)
+    {
+        var state = envelope.SessionStateChanged;
+        if (state.State != WorkerSessionState.Failed
+            || state.ErrorCode is WorkerErrorCode.Unspecified or WorkerErrorCode.None)
+        {
+            throw new StreamWorkerProtocolException("StreamWorker session state event is invalid.");
+        }
+        return new StreamWorkerSessionStateChanged(
+            processGeneration,
+            envelope.SessionId,
+            state.State,
+            state.ErrorCode);
+    }
+
+    private StreamWorkerSessionFailure TranslateSessionFailure(WorkerIpcEnvelope envelope)
+    {
+        WorkerDiagnostic diagnostic = envelope.WorkerDiagnostic;
+        if (diagnostic.Severity != DiagnosticSeverity.Error
+            || diagnostic.Boundary is not (
+                DiagnosticBoundary.Transport
+                or DiagnosticBoundary.Capture
+                or DiagnosticBoundary.Encoder)
+            || diagnostic.Code != DiagnosticCode.OperationFailed
+            || diagnostic.NumericValue == 0)
+        {
+            throw new StreamWorkerProtocolException("StreamWorker session diagnostic is invalid.");
+        }
+        return new StreamWorkerSessionFailure(
+            processGeneration,
+            envelope.SessionId,
+            diagnostic.NumericValue,
+            diagnostic.Boundary,
+            diagnostic.Code,
+            diagnostic.PlatformErrorCode);
     }
 
     private StreamWorkerEvent TranslateConnectionDiagnostic(WorkerIpcEnvelope envelope)

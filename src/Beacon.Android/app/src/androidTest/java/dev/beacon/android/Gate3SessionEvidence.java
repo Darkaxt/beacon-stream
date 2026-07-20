@@ -10,7 +10,6 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
@@ -22,26 +21,25 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
-final class Gate3SessionEvidence implements BeaconStreamCore.EncodedFrameSink {
+final class Gate3SessionEvidence implements BeaconVideoFeedbackBridge.Observer {
     private static final String PreferencesName = "beacon.gate3.session.evidence";
     private static final String TicketFingerprintKey = "ticketFingerprint";
     private static final String SessionIdKey = "sessionId";
-    private static final String MarkerSequenceKey = "markerSequence";
+    private static final String FrameSequenceKey = "frameSequence";
     private static final String TicketEvidenceFile = "beacon-gate3-ticket-evidence";
-    private static final byte[] MarkerBytes =
-        "BEACON-G3-MARKER".getBytes(StandardCharsets.US_ASCII);
 
     private final SharedPreferences preferences;
     private final File ticketEvidence;
-    private final CountDownLatch markerReceived = new CountDownLatch(1);
-    private final CountDownLatch feedbackSent = new CountDownLatch(1);
-    private final AtomicLong receivedFrameCount = new AtomicLong();
+    private final CountDownLatch frameRendered = new CountDownLatch(1);
+    private final CountDownLatch framePresented = new CountDownLatch(1);
+    private final AtomicLong renderedFrameCount = new AtomicLong();
     private final AtomicReference<Throwable> failure = new AtomicReference<>();
     private boolean transportConnected;
     private boolean inputSent;
     private boolean transportClosed;
-    private boolean feedbackObserved;
-    private long markerSequence;
+    private boolean renderedFeedbackObserved;
+    private boolean surfacePresentationObserved;
+    private long frameSequence;
     private String ticketFingerprint;
     private String sessionId;
 
@@ -69,55 +67,66 @@ final class Gate3SessionEvidence implements BeaconStreamCore.EncodedFrameSink {
             PreferencesName + "." + clientId, Context.MODE_PRIVATE);
         String ticketFingerprint = preferences.getString(TicketFingerprintKey, null);
         String sessionId = preferences.getString(SessionIdKey, null);
-        long markerSequence = preferences.getLong(MarkerSequenceKey, 0);
-        if (ticketFingerprint == null || sessionId == null || markerSequence <= 0) {
+        long frameSequence = preferences.getLong(FrameSequenceKey, 0);
+        if (ticketFingerprint == null || sessionId == null || frameSequence <= 0) {
             throw new IllegalStateException("Missing Gate 3 reconnect evidence.");
         }
-        return new PreviousInvocation(ticketFingerprint, sessionId, markerSequence);
+        return new PreviousInvocation(ticketFingerprint, sessionId, frameSequence);
     }
 
     @Override
-    public void onFrame(BeaconStreamCore.EncodedFrame frame) {
-        long count = receivedFrameCount.incrementAndGet();
-        if (!matches(MarkerBytes, frame.bytes)) {
+    public void onRenderedFrameSent(
+        long generation,
+        long renderedFrameSequence,
+        long presentationTimeUs,
+        long renderedAtUs) {
+        renderedFrameCount.incrementAndGet();
+        if (generation <= 0 || renderedFrameSequence <= 0 ||
+            presentationTimeUs < 0 || renderedAtUs < 0) {
             failure.compareAndSet(null,
-                new AssertionError("Expected the Gate 3 non-decodable marker bytes."));
+                new AssertionError("Rendered Gate 3 frame evidence is invalid."));
         }
-        if (frame.sequence <= 0) {
-            failure.compareAndSet(null,
-                new AssertionError("Expected a positive transport marker sequence."));
-        }
-        if (count != 1) {
-            failure.compareAndSet(null,
-                new AssertionError("Expected exactly one Gate 3 marker frame."));
-        }
-        markerSequence = frame.sequence;
+        if (frameSequence == 0) frameSequence = renderedFrameSequence;
         transportConnected = true;
-        markerReceived.countDown();
+        renderedFeedbackObserved = true;
+        frameRendered.countDown();
     }
 
-    private static boolean matches(byte[] expected, ByteBuffer actual) {
-        ByteBuffer copy = actual.asReadOnlyBuffer();
-        if (copy.remaining() != expected.length) return false;
-        for (byte value : expected) {
-            if (copy.get() != value) return false;
+    @Override
+    public void onDecoderStateSent(
+        long generation,
+        BeaconStreamCore.DecoderState state,
+        int platformErrorCode) {
+        if (state == BeaconStreamCore.DecoderState.FAILED) {
+            recordStreamFailure(
+                "decoder:" + platformErrorCode + ":generation:" + generation);
         }
-        return true;
     }
 
-    void recordFeedbackSent() {
-        feedbackObserved = true;
-        feedbackSent.countDown();
+    void recordSurfacePresentation(long presentationTimeUs, long renderedAtNs) {
+        if (presentationTimeUs < 0 || renderedAtNs <= 0) {
+            failure.compareAndSet(null,
+                new AssertionError("Gate 3 presentation-surface evidence is invalid."));
+        }
+        surfacePresentationObserved = true;
+        framePresented.countDown();
+    }
+
+    void recordVideoFailure(Throwable videoFailure) {
+        String message = videoFailure == null || videoFailure.getMessage() == null
+            ? "unknown"
+            : videoFailure.getMessage();
+        recordStreamFailure("video:" + message);
     }
 
     void recordStreamFailure(String stage) {
-        if (markerReceived.getCount() == 0 && feedbackSent.getCount() == 0) {
+        if (frameRendered.getCount() == 0 && framePresented.getCount() == 0) {
             return;
         }
         failure.compareAndSet(null,
             new AssertionError("Gate 3 stream failed before evidence completed: " + stage));
-        markerReceived.countDown();
-        feedbackSent.countDown();
+        frameRendered.countDown();
+        framePresented.countDown();
     }
 
     void recordGrant(String responseBody) {
@@ -129,15 +138,15 @@ final class Gate3SessionEvidence implements BeaconStreamCore.EncodedFrameSink {
         appendTicketEvidence(ticket);
     }
 
-    void awaitMarkerAndFeedback() throws InterruptedException {
-        markerReceived.await();
-        feedbackSent.await();
+    void awaitRenderedFrameFeedback() throws InterruptedException {
+        frameRendered.await();
+        framePresented.await();
         Throwable observed = failure.get();
         if (observed instanceof AssertionError) {
             throw (AssertionError) observed;
         }
         if (observed != null) {
-            throw new AssertionError("Gate 3 marker sink failed.", observed);
+            throw new AssertionError("Gate 3 video evidence failed.", observed);
         }
     }
 
@@ -151,11 +160,11 @@ final class Gate3SessionEvidence implements BeaconStreamCore.EncodedFrameSink {
 
     void persistForReconnect() {
         requireGrantEvidence();
-        assertTrue("Gate 3 marker sequence was not observed.", markerSequence > 0);
+        assertTrue("Gate 3 rendered frame sequence was not observed.", frameSequence > 0);
         assertTrue("Could not persist Gate 3 reconnect evidence.", preferences.edit()
             .putString(TicketFingerprintKey, ticketFingerprint)
             .putString(SessionIdKey, sessionId)
-            .putLong(MarkerSequenceKey, markerSequence)
+            .putLong(FrameSequenceKey, frameSequence)
             .commit());
     }
 
@@ -163,14 +172,14 @@ final class Gate3SessionEvidence implements BeaconStreamCore.EncodedFrameSink {
         requireGrantEvidence();
         assertEquals(previous.sessionId, sessionId);
         assertNotEquals(previous.ticketFingerprint, ticketFingerprint);
-        assertEquals(previous.markerSequence + 1, markerSequence);
+        assertTrue("Reconnect did not render a frame.", frameSequence > 0);
     }
 
     void clearPersistedReconnect() {
         assertTrue("Could not clear Gate 3 reconnect evidence.", preferences.edit()
             .remove(TicketFingerprintKey)
             .remove(SessionIdKey)
-            .remove(MarkerSequenceKey)
+            .remove(FrameSequenceKey)
             .commit());
     }
 
@@ -179,11 +188,11 @@ final class Gate3SessionEvidence implements BeaconStreamCore.EncodedFrameSink {
     }
 
     long receivedFrameCount() {
-        return receivedFrameCount.get();
+        return renderedFrameCount.get();
     }
 
-    long markerSequence() {
-        return markerSequence;
+    long frameSequence() {
+        return frameSequence;
     }
 
     boolean inputSent() {
@@ -191,7 +200,11 @@ final class Gate3SessionEvidence implements BeaconStreamCore.EncodedFrameSink {
     }
 
     boolean feedbackSent() {
-        return feedbackObserved;
+        return renderedFeedbackObserved;
+    }
+
+    boolean surfacePresented() {
+        return surfacePresentationObserved;
     }
 
     boolean transportClosed() {
@@ -239,12 +252,12 @@ final class Gate3SessionEvidence implements BeaconStreamCore.EncodedFrameSink {
     static final class PreviousInvocation {
         final String ticketFingerprint;
         final String sessionId;
-        final long markerSequence;
+        final long frameSequence;
 
-        PreviousInvocation(String ticketFingerprint, String sessionId, long markerSequence) {
+        PreviousInvocation(String ticketFingerprint, String sessionId, long frameSequence) {
             this.ticketFingerprint = ticketFingerprint;
             this.sessionId = sessionId;
-            this.markerSequence = markerSequence;
+            this.frameSequence = frameSequence;
         }
     }
 }

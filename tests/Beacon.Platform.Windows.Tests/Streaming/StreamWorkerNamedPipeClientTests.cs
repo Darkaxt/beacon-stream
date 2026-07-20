@@ -187,6 +187,66 @@ public sealed class StreamWorkerNamedPipeClientTests
     }
 
     [Fact]
+    public async Task SessionVideoFailureEventsRemainTypedWithoutBreakingTheControlPipe()
+    {
+        await using PipePair pipes = await PipePair.CreateAsync();
+        var processExit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = Channel.CreateBounded<StreamWorkerEvent>(2);
+        Task worker = Task.Run(async () =>
+        {
+            await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
+            await WriteAsync(pipes.Worker, Ready(1));
+            await WriteAsync(pipes.Worker, new WorkerIpcEnvelope
+            {
+                ProtocolVersion = ProtocolVersion.Current,
+                SessionId = "session-a",
+                SessionStateChanged = new SessionStateChanged
+                {
+                    State = WorkerSessionState.Failed,
+                    ErrorCode = WorkerErrorCode.OperationFailed
+                }
+            });
+            await WriteAsync(pipes.Worker, new WorkerIpcEnvelope
+            {
+                ProtocolVersion = ProtocolVersion.Current,
+                SessionId = "session-a",
+                WorkerDiagnostic = new WorkerDiagnostic
+                {
+                    Severity = DiagnosticSeverity.Error,
+                    Boundary = DiagnosticBoundary.Capture,
+                    Code = DiagnosticCode.OperationFailed,
+                    PlatformErrorCode = 2,
+                    NumericValue = 17
+                }
+            });
+        });
+        await using var client = new StreamWorkerNamedPipeClient(
+            pipes.Service, processExit.Task, 42, processGeneration: 9, events.Writer);
+        await client.InitializeAsync(CancellationToken.None);
+
+        Task<StreamWorkerEvent> stateRead = events.Reader.ReadAsync().AsTask();
+        Assert.Same(stateRead, await Task.WhenAny(stateRead, client.Completion));
+        StreamWorkerSessionStateChanged state = Assert.IsType<StreamWorkerSessionStateChanged>(
+            await stateRead);
+        Task<StreamWorkerEvent> failureRead = events.Reader.ReadAsync().AsTask();
+        Assert.Same(failureRead, await Task.WhenAny(failureRead, client.Completion));
+        StreamWorkerSessionFailure failure = Assert.IsType<StreamWorkerSessionFailure>(
+            await failureRead);
+
+        Assert.Equal(9, state.ProcessGeneration);
+        Assert.Equal("session-a", state.SessionId);
+        Assert.Equal(WorkerSessionState.Failed, state.State);
+        Assert.Equal(WorkerErrorCode.OperationFailed, state.ErrorCode);
+        Assert.Equal(17UL, failure.WorkerSessionGeneration);
+        Assert.Equal(DiagnosticBoundary.Capture, failure.Boundary);
+        Assert.Equal(2u, failure.PlatformErrorCode);
+        Assert.True(client.IsReady);
+        Assert.Null(client.TerminalError);
+        await worker;
+    }
+
+    [Fact]
     public async Task LegacyConstructorFailsClosedOnFirstUnsolicitedEventWithoutBlockingCommand()
     {
         await using PipePair pipes = await PipePair.CreateAsync();

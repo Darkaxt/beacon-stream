@@ -241,6 +241,26 @@ public sealed class StreamWorkerEventRelay(
                     DiagnosticSeverity.Information,
                     ("workerSessionGeneration", disconnected.WorkerSessionGeneration));
                 break;
+            case StreamWorkerSessionStateChanged state:
+                Publish(
+                    "worker.session_failed",
+                    "Worker streaming session entered a failed state.",
+                    state,
+                    DiagnosticSeverity.Warning,
+                    ("state", state.State),
+                    ("errorCode", state.ErrorCode));
+                break;
+            case StreamWorkerSessionFailure failure:
+                Publish(
+                    "worker.video_failed",
+                    "Worker video pipeline failed.",
+                    failure,
+                    DiagnosticSeverity.Error,
+                    ("workerSessionGeneration", failure.WorkerSessionGeneration),
+                    ("boundary", failure.Boundary),
+                    ("code", failure.Code),
+                    ("platformStatusCode", failure.PlatformErrorCode));
+                break;
             case StreamWorkerProcessExited exited:
                 runtimeEvents.ProcessExited(exited);
                 Publish(

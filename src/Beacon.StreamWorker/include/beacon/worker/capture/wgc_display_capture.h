@@ -43,8 +43,6 @@ struct WgcAdapterSnapshot {
 
 struct WgcCapturePlan {
   std::wstring device_name;
-  std::uint32_t width{};
-  std::uint32_t height{};
 };
 
 enum class WgcCaptureFailure {
