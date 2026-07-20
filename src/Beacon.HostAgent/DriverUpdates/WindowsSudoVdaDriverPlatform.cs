@@ -70,6 +70,7 @@ internal sealed partial class WindowsSudoVdaDriverPlatform(
         PnpUtilResult result = await pnpUtil.RunAsync(
             ["/export-driver", publishedInf, root]).ConfigureAwait(false);
         RequireExitCode(result, 0, "SudoVDA package export failed.");
+        RequireUsableRollbackPackage(root);
     }
 
     public async Task InstallAsync(SudoVdaValidatedPackage package)
@@ -167,6 +168,24 @@ internal sealed partial class WindowsSudoVdaDriverPlatform(
             throw new InvalidDataException("A protected absolute driver package directory is required.");
         }
         return Path.GetFullPath(value);
+    }
+
+    private static void RequireUsableRollbackPackage(string root)
+    {
+        string[] files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Where(path => new FileInfo(path).Length > 0)
+            .ToArray();
+        int infCount = files.Count(path =>
+            string.Equals(Path.GetExtension(path), ".inf", StringComparison.OrdinalIgnoreCase));
+        bool hasCatalog = files.Any(path =>
+            string.Equals(Path.GetExtension(path), ".cat", StringComparison.OrdinalIgnoreCase));
+        bool hasBinary = files.Any(path =>
+            string.Equals(Path.GetExtension(path), ".dll", StringComparison.OrdinalIgnoreCase));
+        if (infCount != 1 || !hasCatalog || !hasBinary)
+        {
+            throw new InvalidDataException(
+                "The exported SudoVDA rollback package is incomplete.");
+        }
     }
 
     private static void RequireExitCode(

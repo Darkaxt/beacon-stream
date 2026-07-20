@@ -3,8 +3,10 @@ namespace Beacon.HostAgent;
 internal static class HostAgentDiagnostics
 {
     private static readonly string Path = System.IO.Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "BeaconStream",
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "Beacon",
+        "HostAgent",
+        "Logs",
         "host-agent.log");
 
     public static void Write(string message)

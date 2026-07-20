@@ -48,8 +48,52 @@ if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
 
 $ownerSid = $identity.User.Value
 $ownerName = $identity.Name
-$installDirectory = Join-Path $env:LOCALAPPDATA "BeaconStream\HostAgent"
+$installDirectory = Join-Path $env:ProgramFiles "BeaconStream\HostAgent"
+$commonApplicationData = [Environment]::GetFolderPath(
+    [Environment+SpecialFolder]::CommonApplicationData)
+$storageRoot = Join-Path $commonApplicationData "Beacon\HostAgent"
 $taskName = "Beacon Stream Host Agent"
+
+function Set-ProtectedDirectoryAcl {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [System.Security.Principal.SecurityIdentifier]$UserSid,
+        [Parameter(Mandatory = $true)]
+        [System.Security.AccessControl.FileSystemRights]$UserRights,
+        [Parameter(Mandatory = $true)]
+        [System.Security.AccessControl.InheritanceFlags]$UserInheritance
+    )
+
+    New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    $administrators = [System.Security.Principal.SecurityIdentifier]::new(
+        [System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid,
+        $null)
+    $localSystem = [System.Security.Principal.SecurityIdentifier]::new(
+        [System.Security.Principal.WellKnownSidType]::LocalSystemSid,
+        $null)
+    $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetAccessRuleProtection($true, $false)
+    $acl.SetOwner($administrators)
+    $containerAndObjects = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+        [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    foreach ($principalSid in @($administrators, $localSystem)) {
+        $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+            $principalSid,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            $containerAndObjects,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow))
+    }
+    $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+        $UserSid,
+        $UserRights,
+        $UserInheritance,
+        [System.Security.AccessControl.PropagationFlags]::None,
+        [System.Security.AccessControl.AccessControlType]::Allow))
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
 
 $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 $runningAgentProcesses = @(Get-Process -Name "Beacon.HostAgent" -ErrorAction SilentlyContinue)
@@ -60,8 +104,37 @@ if ($runningAgentProcesses.Count -gt 0) {
     $runningAgentProcesses | Wait-Process -ErrorAction SilentlyContinue
 }
 
-New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null
+Set-ProtectedDirectoryAcl `
+    -Path $installDirectory `
+    -UserSid $identity.User `
+    -UserRights ([System.Security.AccessControl.FileSystemRights]::ReadAndExecute) `
+    -UserInheritance (
+        [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+        [System.Security.AccessControl.InheritanceFlags]::ObjectInherit)
 Copy-Item -Path (Join-Path $PublishDirectory "*") -Destination $installDirectory -Recurse -Force
+
+Set-ProtectedDirectoryAcl `
+    -Path $storageRoot `
+    -UserSid $identity.User `
+    -UserRights ([System.Security.AccessControl.FileSystemRights]::ReadAndExecute) `
+    -UserInheritance ([System.Security.AccessControl.InheritanceFlags]::None)
+$inboxDirectory = Join-Path $storageRoot "Inbox"
+Set-ProtectedDirectoryAcl `
+    -Path $inboxDirectory `
+    -UserSid $identity.User `
+    -UserRights ([System.Security.AccessControl.FileSystemRights]::Modify) `
+    -UserInheritance (
+        [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+        [System.Security.AccessControl.InheritanceFlags]::ObjectInherit)
+foreach ($name in @("Staged", "InstalledEvidence", "Transactions", "Logs")) {
+    Set-ProtectedDirectoryAcl `
+        -Path (Join-Path $storageRoot $name) `
+        -UserSid $identity.User `
+        -UserRights ([System.Security.AccessControl.FileSystemRights]::ReadAndExecute) `
+        -UserInheritance (
+            [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor `
+            [System.Security.AccessControl.InheritanceFlags]::ObjectInherit)
+}
 
 $installedExecutable = Join-Path $installDirectory "Beacon.HostAgent.exe"
 $action = New-ScheduledTaskAction `
@@ -92,4 +165,5 @@ Start-ScheduledTask -TaskName $taskName
 
 Write-Output "Installed and started $taskName for $ownerName ($ownerSid)."
 Write-Output "Executable: $installedExecutable"
-Write-Output "Diagnostics: $(Join-Path $env:LOCALAPPDATA 'BeaconStream\host-agent.log')"
+Write-Output "Driver inbox: $inboxDirectory"
+Write-Output "Diagnostics: $(Join-Path $storageRoot 'Logs\host-agent.log')"

@@ -80,6 +80,20 @@ public sealed class WindowsSudoVdaDriverPlatformTests
     }
 
     [Fact]
+    public async Task ExportRejectsSuccessWithoutAUsableRollbackPackage()
+    {
+        using var fixture = new PlatformFixture();
+        fixture.Runner.MaterializeExportedPackage = false;
+
+        InvalidDataException error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            fixture.Platform.ExportActivePackageAsync(
+                fixture.PreviousEvidence,
+                Path.Combine(fixture.Root, "export")));
+
+        Assert.Contains("rollback package", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task RollbackRemovesOnlyResolvedCandidateAndInstallsExportedInf()
     {
         using var fixture = new PlatformFixture();
@@ -272,9 +286,21 @@ public sealed class WindowsSudoVdaDriverPlatformTests
     {
         public List<IReadOnlyList<string>> Invocations { get; } = [];
 
+        public bool MaterializeExportedPackage { get; set; } = true;
+
         public Task<PnpUtilResult> RunAsync(IReadOnlyList<string> arguments)
         {
             Invocations.Add(arguments.ToArray());
+            if (MaterializeExportedPackage
+                && arguments.Count == 3
+                && string.Equals(arguments[0], "/export-driver", StringComparison.Ordinal))
+            {
+                string packageRoot = Path.Combine(arguments[2], "sudovda.inf_amd64_test");
+                Directory.CreateDirectory(packageRoot);
+                File.WriteAllText(Path.Combine(packageRoot, "SudoVDA.inf"), "inf");
+                File.WriteAllText(Path.Combine(packageRoot, "SudoVDA.cat"), "cat");
+                File.WriteAllText(Path.Combine(packageRoot, "SudoVDA.dll"), "dll");
+            }
             return Task.FromResult(new PnpUtilResult(0, "ok", string.Empty));
         }
     }
