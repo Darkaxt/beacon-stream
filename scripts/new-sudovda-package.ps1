@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$PackageId,
 
-    [string]$ProtocolVersion = "0.2.0",
+    [Parameter(Mandatory = $true)]
+    [string]$ProtocolVersion,
 
     [string]$InboxRoot = ""
 )

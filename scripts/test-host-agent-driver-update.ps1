@@ -1,6 +1,8 @@
 param(
     [switch]$StaticOnly,
     [string]$CandidateDirectory = "",
+    [Parameter(Mandatory = $true)]
+    [string]$ProtocolVersion,
     [string]$ServerBaseUrl = "https://127.0.0.1:49680"
 )
 
@@ -58,7 +60,7 @@ try {
     $package = & $packageBuilderPath `
         -PackageDirectory $CandidateDirectory `
         -PackageId $packageId `
-        -ProtocolVersion "0.2.0" `
+        -ProtocolVersion $ProtocolVersion `
         -InboxRoot $inbox
 
     $packageRoot = Join-Path $inbox $packageId
@@ -70,7 +72,8 @@ try {
     if ($manifest.hardwareId -ne "ROOT\SudoMaker\SudoVDA") {
         throw "Generated SudoVDA manifest hardware id is invalid."
     }
-    if ($manifest.protocolVersion -ne "0.2.0") {
+    $expectedProtocol = ([Version]$ProtocolVersion).ToString()
+    if ($manifest.protocolVersion -ne $expectedProtocol) {
         throw "Generated SudoVDA manifest protocol is invalid."
     }
     $actualFiles = @(
