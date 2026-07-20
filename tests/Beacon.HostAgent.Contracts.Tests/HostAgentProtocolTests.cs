@@ -53,7 +53,8 @@ public sealed class HostAgentProtocolTests
             HostAgentProtocol.CreatePayload(
                 new InstallStagedSudoVdaPackagePayload(
                     "sudovda-22.48.58.193",
-                    transactionId)));
+                    transactionId,
+                    ReportedActiveLeaseCount: 0)));
 
         HostAgentRequest decoded = HostAgentProtocol.DeserializeRequest(
             HostAgentProtocol.SerializeRequest(request));
@@ -63,8 +64,25 @@ public sealed class HostAgentProtocolTests
         Assert.Equal(HostAgentOperation.InstallStagedSudoVdaPackage, decoded.Operation);
         Assert.Equal("sudovda-22.48.58.193", payload.PackageId);
         Assert.Equal(transactionId, payload.TransactionId);
+        Assert.Equal(0, payload.ReportedActiveLeaseCount);
         Assert.DoesNotContain("path", decoded.Payload.GetRawText(), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("command", decoded.Payload.GetRawText(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DriverUpdateRejectionIsATerminalTypedState()
+    {
+        var value = new SudoVdaUpdatePayload(
+            Guid.NewGuid(),
+            "sudovda-invalid",
+            SudoVdaUpdateState.Rejected,
+            "package-hash-mismatch",
+            PreviousEvidence: null,
+            ActiveEvidence: null);
+
+        JsonElement json = HostAgentProtocol.CreatePayload(value);
+
+        Assert.Equal("rejected", json.GetProperty("state").GetString());
     }
 
     [Fact]

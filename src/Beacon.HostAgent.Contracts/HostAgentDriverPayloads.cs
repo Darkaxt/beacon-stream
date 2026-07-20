@@ -2,7 +2,8 @@ namespace Beacon.HostAgent.Contracts;
 
 public sealed record InstallStagedSudoVdaPackagePayload(
     string PackageId,
-    Guid TransactionId);
+    Guid TransactionId,
+    int ReportedActiveLeaseCount);
 
 public sealed record QuerySudoVdaUpdatePayload(Guid TransactionId);
 
@@ -13,6 +14,7 @@ public enum SudoVdaUpdateState
     Installing,
     Verifying,
     RollingBack,
+    Rejected,
     Succeeded,
     RolledBack,
     Degraded
