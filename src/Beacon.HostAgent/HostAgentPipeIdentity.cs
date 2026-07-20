@@ -1,6 +1,7 @@
 using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using Beacon.HostAgent.Contracts;
 
 namespace Beacon.HostAgent;
 
@@ -9,7 +10,7 @@ internal static class HostAgentPipeIdentity
     public static string CreateName(SecurityIdentifier owner)
     {
         ArgumentNullException.ThrowIfNull(owner);
-        return $"beacon-host-agent-{owner.Value}-v1";
+        return HostAgentPipeName.Create(owner.Value);
     }
 
     public static PipeSecurity CreateSecurity(SecurityIdentifier owner)

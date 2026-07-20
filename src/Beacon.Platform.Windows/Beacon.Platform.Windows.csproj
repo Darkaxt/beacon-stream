@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Beacon.Core\Beacon.Core.csproj" />
+    <ProjectReference Include="..\Beacon.HostAgent.Contracts\Beacon.HostAgent.Contracts.csproj" />
     <ProjectReference Include="..\Beacon.StreamWorker.Contracts\Beacon.StreamWorker.Contracts.csproj" />
   </ItemGroup>
 

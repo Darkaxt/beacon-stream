@@ -8,6 +8,15 @@ namespace Beacon.HostAgent.Contracts.Tests;
 public sealed class HostAgentProtocolTests
 {
     [Fact]
+    public void PipeNameUsesNormalizedOwnerSid()
+    {
+        Assert.Equal(
+            "beacon-host-agent-S-1-5-21-100-200-300-1001-v1",
+            HostAgentPipeName.Create("S-1-5-21-100-200-300-1001"));
+        Assert.Throws<ArgumentException>(() => HostAgentPipeName.Create("  "));
+    }
+
+    [Fact]
     public async Task RequestRoundTripsThroughBoundedFrame()
     {
         Guid requestId = Guid.NewGuid();
