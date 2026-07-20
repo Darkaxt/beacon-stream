@@ -307,6 +307,55 @@ public sealed class StreamWorkerNamedPipeClientTests
     }
 
     [Fact]
+    public async Task BenchmarkDatagramEchoIsTranslatedAsBenchmarkFeedback()
+    {
+        await using PipePair pipes = await PipePair.CreateAsync();
+        var processExit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var events = Channel.CreateBounded<StreamWorkerEvent>(1);
+        Task worker = Task.Run(async () =>
+        {
+            await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
+            await WriteAsync(pipes.Worker, Ready(1));
+            await WriteAsync(pipes.Worker, new WorkerIpcEnvelope
+            {
+                ProtocolVersion = ProtocolVersion.Current,
+                SessionId = "benchmark:run-a",
+                FeedbackReceived = new FeedbackReceived
+                {
+                    SessionGeneration = 17,
+                    Feedback = new StreamContracts.FeedbackStreamEnvelope
+                    {
+                        ProtocolVersion = ProtocolVersion.Current,
+                        SessionId = "benchmark:run-a",
+                        Sequence = 18,
+                        BenchmarkDatagramEcho = new StreamContracts.BenchmarkDatagramEcho
+                        {
+                            RunId = "run-a",
+                            RoundId = 2,
+                            Sequence = 7
+                        }
+                    }
+                }
+            });
+        });
+        await using var client = new StreamWorkerNamedPipeClient(
+            pipes.Service, processExit.Task, 42, processGeneration: 9, events.Writer);
+        await client.InitializeAsync(CancellationToken.None);
+
+        StreamWorkerFeedbackReceived received = Assert.IsType<StreamWorkerFeedbackReceived>(
+            await events.Reader.ReadAsync());
+
+        Assert.Equal(StreamWorkerFeedbackKind.BenchmarkDatagramEcho, received.Kind);
+        Assert.Equal(2UL, received.PrimaryValue);
+        Assert.Equal(7UL, received.SecondaryValue);
+        Assert.Equal(0u, received.Count);
+        Assert.True(client.IsReady);
+        Assert.Null(client.TerminalError);
+        await worker;
+    }
+
+    [Fact]
     public async Task ZeroIdInputIsTranslatedExactlyWithoutProtobufEscaping()
     {
         await using PipePair pipes = await PipePair.CreateAsync();

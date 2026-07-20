@@ -650,7 +650,8 @@ public sealed class StreamWorkerStreamingBackend :
     {
         lock (runtimeGate)
         {
-            return feedback.Kind == StreamWorkerFeedbackKind.Benchmark
+            return feedback.Kind is StreamWorkerFeedbackKind.Benchmark
+                or StreamWorkerFeedbackKind.BenchmarkDatagramEcho
                 ? TryGetBoundBenchmarkRuntime(
                     feedback,
                     feedback.WorkerSessionGeneration,

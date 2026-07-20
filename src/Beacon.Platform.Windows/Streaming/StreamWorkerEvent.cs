@@ -33,6 +33,7 @@ public enum StreamWorkerFeedbackKind
     Decoder,
     QueueDepth,
     Benchmark,
+    BenchmarkDatagramEcho,
 }
 
 public sealed record StreamWorkerFeedbackReceived(

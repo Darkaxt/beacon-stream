@@ -429,11 +429,20 @@ public sealed class StreamWorkerStreamingBackendTests
             PrimaryValue: 1000,
             SecondaryValue: 20,
             Count: 64)));
-        Assert.False(runtimeEvents.IsCurrent(new StreamWorkerFeedbackReceived(
+        Assert.True(runtimeEvents.IsCurrent(new StreamWorkerFeedbackReceived(
             ProcessGeneration: 1,
             plan.SessionId,
             WorkerSessionGeneration: 7,
             Sequence: 2,
+            StreamWorkerFeedbackKind.BenchmarkDatagramEcho,
+            PrimaryValue: 2,
+            SecondaryValue: 7,
+            Count: 0)));
+        Assert.False(runtimeEvents.IsCurrent(new StreamWorkerFeedbackReceived(
+            ProcessGeneration: 1,
+            plan.SessionId,
+            WorkerSessionGeneration: 7,
+            Sequence: 3,
             StreamWorkerFeedbackKind.Decoder,
             PrimaryValue: 0,
             SecondaryValue: 0,

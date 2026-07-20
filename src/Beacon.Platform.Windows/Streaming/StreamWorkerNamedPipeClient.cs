@@ -541,6 +541,11 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
                     feedback.BenchmarkEvidence.SchemaVersion,
                     0UL,
                     checked((uint)feedback.BenchmarkEvidence.Facts.Count)),
+            FeedbackStreamEnvelope.BodyOneofCase.BenchmarkDatagramEcho =>
+                (StreamWorkerFeedbackKind.BenchmarkDatagramEcho,
+                    feedback.BenchmarkDatagramEcho.RoundId,
+                    feedback.BenchmarkDatagramEcho.Sequence,
+                    0u),
             _ => throw new StreamWorkerProtocolException("StreamWorker feedback variant is invalid."),
         };
         return new StreamWorkerFeedbackReceived(
