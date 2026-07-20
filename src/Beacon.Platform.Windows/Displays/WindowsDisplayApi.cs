@@ -118,17 +118,28 @@ public sealed class WindowsDisplayApi :
         {
             return new DisplayDriverStatus(
                 Ready: false,
-                Diagnostic: $"SudoVDA protocol {version.Major}.{version.Minor}.{version.Incremental} is incompatible with Beacon protocol {ExpectedProtocolMajor}.{ExpectedProtocolMinor}.");
+                Diagnostic: $"SudoVDA protocol {version.Major}.{version.Minor}.{version.Incremental} is incompatible with Beacon protocol {ExpectedProtocolMajor}.{ExpectedProtocolMinor}.",
+                version.Major,
+                version.Minor,
+                version.Incremental);
         }
 
         DisplayApiResult ccdAccess = ValidateDisplayConfigAccess();
         string driverDiagnostic =
             $"SudoVDA driver is ready. Protocol {version.Major}.{version.Minor}.{version.Incremental}.";
         return ccdAccess.Success
-            ? new DisplayDriverStatus(Ready: true, Diagnostic: driverDiagnostic)
+            ? new DisplayDriverStatus(
+                Ready: true,
+                Diagnostic: driverDiagnostic,
+                version.Major,
+                version.Minor,
+                version.Incremental)
             : new DisplayDriverStatus(
                 Ready: false,
-                Diagnostic: $"{driverDiagnostic} {ccdAccess.Error}");
+                Diagnostic: $"{driverDiagnostic} {ccdAccess.Error}",
+                version.Major,
+                version.Minor,
+                version.Incremental);
     }
 
     public Task<DisplayApiResult> CreateVirtualDisplayAsync(
