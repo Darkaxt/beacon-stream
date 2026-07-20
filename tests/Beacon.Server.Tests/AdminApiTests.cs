@@ -1,11 +1,14 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Beacon.HostAgent.Contracts;
 using Beacon.Core.Displays;
 using Beacon.Core.Recovery;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
+using Beacon.Platform.Windows.HostAgent;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -13,6 +16,94 @@ namespace Beacon.Server.Tests;
 
 public sealed class AdminApiTests(BeaconServerTestFactory factory) : IClassFixture<BeaconServerTestFactory>
 {
+    [Fact]
+    public async Task AdminCanStartAndQueryDurableSudoVdaUpdate()
+    {
+        var updates = new FakeDriverUpdateClient();
+        using WebApplicationFactory<Program> app = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IHostAgentDriverUpdateClient>();
+                services.AddSingleton<IHostAgentDriverUpdateClient>(updates);
+            }));
+        HttpClient client = app.CreateClient();
+        Guid transactionId = Guid.NewGuid();
+
+        HttpResponseMessage start = await client.PostAsJsonAsync(
+            "/admin/driver/sudovda/updates",
+            new { packageId = "sudovda-22.48.58.193", transactionId });
+        HttpResponseMessage query = await client.GetAsync(
+            $"/admin/driver/sudovda/updates/{transactionId:D}");
+
+        Assert.Equal(HttpStatusCode.Accepted, start.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, query.StatusCode);
+        using JsonDocument accepted = await JsonDocument.ParseAsync(
+            await start.Content.ReadAsStreamAsync());
+        using JsonDocument current = await JsonDocument.ParseAsync(
+            await query.Content.ReadAsStreamAsync());
+        Assert.Equal("Accepted", accepted.RootElement.GetProperty("state").GetString());
+        Assert.Equal(
+            transactionId,
+            current.RootElement.GetProperty("transactionId").GetGuid());
+        Assert.Equal(
+            new[]
+            {
+                $"start:sudovda-22.48.58.193:{transactionId:D}",
+                $"query:{transactionId:D}"
+            },
+            updates.Calls);
+    }
+
+    [Theory]
+    [InlineData("driver-update-busy", HttpStatusCode.Conflict)]
+    [InlineData("service-active-leases", HttpStatusCode.Conflict)]
+    [InlineData("driver-update-not-found", HttpStatusCode.NotFound)]
+    [InlineData("invalid-package-id", HttpStatusCode.BadRequest)]
+    public async Task DriverUpdateDomainFailuresMapToStableHttpStatus(
+        string resultCode,
+        HttpStatusCode expected)
+    {
+        var updates = new FakeDriverUpdateClient
+        {
+            Error = new HostAgentDriverUpdateException(resultCode, "driver update rejected")
+        };
+        using WebApplicationFactory<Program> app = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IHostAgentDriverUpdateClient>();
+                services.AddSingleton<IHostAgentDriverUpdateClient>(updates);
+            }));
+        HttpClient client = app.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/admin/driver/sudovda/updates",
+            new { packageId = "sudovda-next" });
+
+        Assert.Equal(expected, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task HostAgentUnavailableMapsToServiceUnavailable()
+    {
+        var updates = new FakeDriverUpdateClient
+        {
+            Error = new HostAgentUnavailableException("Host Agent unavailable.")
+        };
+        using WebApplicationFactory<Program> app = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IHostAgentDriverUpdateClient>();
+                services.AddSingleton<IHostAgentDriverUpdateClient>(updates);
+            }));
+        HttpClient client = app.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/admin/driver/sudovda/updates",
+            new { packageId = "sudovda-next" });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+    }
+
     [Fact]
     public async Task SnapshotReturnsClientsGamesAndSessions()
     {
@@ -75,6 +166,48 @@ public sealed class AdminApiTests(BeaconServerTestFactory factory) : IClassFixtu
                 .EnumerateArray()
                 .Select(value => value.GetString()));
         Assert.False(root.GetProperty("streamingHealth").TryGetProperty("endpoints", out _));
+    }
+
+    private sealed class FakeDriverUpdateClient : IHostAgentDriverUpdateClient
+    {
+        private readonly Dictionary<Guid, SudoVdaUpdatePayload> values = [];
+
+        public List<string> Calls { get; } = [];
+
+        public Exception? Error { get; init; }
+
+        public Task<SudoVdaUpdatePayload> StartAsync(
+            string packageId,
+            Guid transactionId,
+            CancellationToken cancellationToken)
+        {
+            Calls.Add($"start:{packageId}:{transactionId:D}");
+            if (Error is not null)
+            {
+                return Task.FromException<SudoVdaUpdatePayload>(Error);
+            }
+            var value = new SudoVdaUpdatePayload(
+                transactionId,
+                packageId,
+                SudoVdaUpdateState.Accepted,
+                "driver-update-accepted",
+                PreviousEvidence: null,
+                ActiveEvidence: null);
+            values[transactionId] = value;
+            return Task.FromResult(value);
+        }
+
+        public Task<SudoVdaUpdatePayload> QueryAsync(
+            Guid transactionId,
+            CancellationToken cancellationToken)
+        {
+            Calls.Add($"query:{transactionId:D}");
+            if (Error is not null)
+            {
+                return Task.FromException<SudoVdaUpdatePayload>(Error);
+            }
+            return Task.FromResult(values[transactionId]);
+        }
     }
 
     [Fact]

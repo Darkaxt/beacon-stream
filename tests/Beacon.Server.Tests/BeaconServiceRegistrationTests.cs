@@ -45,6 +45,8 @@ public sealed class BeaconServiceRegistrationTests
         Assert.Same(displayApi, provider.GetRequiredService<IWindowsDisplayLeaseSession>());
         Assert.Same(displayApi, provider.GetRequiredService<IWindowsDisplayNameResolver>());
         Assert.IsType<HostAgentConnection>(provider.GetRequiredService<IHostAgentConnection>());
+        Assert.IsType<HostAgentDriverUpdateClient>(
+            provider.GetRequiredService<IHostAgentDriverUpdateClient>());
         Assert.IsType<WindowsDisplayBackend>(provider.GetRequiredService<IDisplayBackend>());
         Assert.IsType<WindowsRecoveryApi>(provider.GetRequiredService<IWindowsRecoveryApi>());
         Assert.IsType<WindowsRecoveryBackend>(provider.GetRequiredService<IRecoveryBackend>());

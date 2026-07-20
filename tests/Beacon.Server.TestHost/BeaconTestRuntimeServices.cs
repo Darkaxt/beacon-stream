@@ -5,6 +5,7 @@ using Beacon.Core.Input;
 using Beacon.Core.Recovery;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
+using Beacon.HostAgent.Contracts;
 using Beacon.Platform.Windows.Displays;
 using Beacon.Platform.Windows.HostAgent;
 using Beacon.Platform.Windows.Streaming;
@@ -37,6 +38,8 @@ public static class BeaconTestRuntimeServices
         RemoveHostAgentRelay(services);
         services.RemoveAll<BeaconHostOptions>();
         services.RemoveAll<IWindowsDisplayLeaseSession>();
+        services.RemoveAll<HostAgentDriverUpdateClient>();
+        services.RemoveAll<IHostAgentDriverUpdateClient>();
         services.RemoveAll<IWindowsDisplayNameResolver>();
         services.RemoveAll<IDisplayBackend>();
         services.RemoveAll<IRecoveryBackend>();
@@ -77,6 +80,7 @@ public static class BeaconTestRuntimeServices
                 ? nameof(StreamWorkerStreamingBackend)
                 : nameof(FakeStreamingBackend)));
         services.AddSingleton<IDisplayBackend, FakeDisplayBackend>();
+        services.AddSingleton<IHostAgentDriverUpdateClient, FakeHostAgentDriverUpdateClient>();
         services.AddSingleton<IRecoveryBackend, FakeRecoveryBackend>();
         services.AddSingleton<IGameLauncher, FakeGameLauncher>();
         services.AddSingleton<FakeSessionActivityInspector>();
@@ -164,6 +168,36 @@ public static class BeaconTestRuntimeServices
                 return false;
             }
         }
+    }
+
+    private sealed class FakeHostAgentDriverUpdateClient : IHostAgentDriverUpdateClient
+    {
+        private readonly Dictionary<Guid, SudoVdaUpdatePayload> updates = [];
+
+        public Task<SudoVdaUpdatePayload> StartAsync(
+            string packageId,
+            Guid transactionId,
+            CancellationToken cancellationToken)
+        {
+            var value = new SudoVdaUpdatePayload(
+                transactionId,
+                packageId,
+                SudoVdaUpdateState.Accepted,
+                "driver-update-accepted",
+                PreviousEvidence: null,
+                ActiveEvidence: null);
+            updates[transactionId] = value;
+            return Task.FromResult(value);
+        }
+
+        public Task<SudoVdaUpdatePayload> QueryAsync(
+            Guid transactionId,
+            CancellationToken cancellationToken) =>
+            updates.TryGetValue(transactionId, out SudoVdaUpdatePayload? value)
+                ? Task.FromResult(value)
+                : Task.FromException<SudoVdaUpdatePayload>(new HostAgentDriverUpdateException(
+                    "driver-update-not-found",
+                    "Driver update transaction was not found."));
     }
 
     private static void UseHostedBenchmarkWorker(

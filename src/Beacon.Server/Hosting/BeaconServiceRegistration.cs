@@ -142,6 +142,9 @@ public static class BeaconServiceRegistration
             sp.GetRequiredService<HostAgentWindowsDisplayApi>());
         services.AddSingleton<IWindowsDisplayNameResolver>(sp =>
             sp.GetRequiredService<HostAgentWindowsDisplayApi>());
+        services.AddSingleton<HostAgentDriverUpdateClient>();
+        services.AddSingleton<IHostAgentDriverUpdateClient>(sp =>
+            sp.GetRequiredService<HostAgentDriverUpdateClient>());
         services.AddSingleton<IDisplayBackend, WindowsDisplayBackend>();
         services.AddSingleton<IWindowsRecoveryApi, WindowsRecoveryApi>();
         services.AddSingleton<IRecoveryBackend, WindowsRecoveryBackend>();
