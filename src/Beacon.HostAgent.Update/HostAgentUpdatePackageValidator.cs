@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace Beacon.HostAgent.Update;
 
-public sealed partial class HostAgentUpdatePackageValidator
+public sealed partial class HostAgentUpdatePackageValidator : IHostAgentUpdatePackageValidator
 {
     public const int ManifestSchemaVersion = 1;
     public const string ProductTarget = "beacon-host-agent";

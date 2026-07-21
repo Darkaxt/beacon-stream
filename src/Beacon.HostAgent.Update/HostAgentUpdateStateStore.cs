@@ -10,6 +10,7 @@ public sealed record HostAgentPendingUpdate(
     string PackageId,
     string SourceCommit,
     string PreviousVersionId,
+    string PreviousSourceCommit,
     string StagedPackageRoot);
 
 public sealed class HostAgentUpdateStateStore
@@ -74,6 +75,7 @@ public sealed class HostAgentUpdateStateStore
             || string.IsNullOrWhiteSpace(value.PackageId)
             || string.IsNullOrWhiteSpace(value.SourceCommit)
             || string.IsNullOrWhiteSpace(value.PreviousVersionId)
+            || string.IsNullOrWhiteSpace(value.PreviousSourceCommit)
             || string.IsNullOrWhiteSpace(value.StagedPackageRoot)
             || !Path.IsPathFullyQualified(value.StagedPackageRoot))
         {

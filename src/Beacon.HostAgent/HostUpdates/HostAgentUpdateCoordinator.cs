@@ -5,7 +5,7 @@ namespace Beacon.HostAgent.HostUpdates;
 
 internal sealed class HostAgentUpdateCoordinator(
     HostAgentUpdateStorage storage,
-    HostAgentUpdatePackageValidator validator,
+    IHostAgentUpdatePackageValidator validator,
     HostAgentUpdateJournal journal,
     HostAgentUpdateStateStore state) : IHostAgentUpdateExecutor
 {
@@ -124,6 +124,7 @@ internal sealed class HostAgentUpdateCoordinator(
                 accepted.PackageId,
                 source.Manifest.SourceCommit,
                 current.VersionId,
+                current.SourceCommit,
                 finalRoot);
             state.WritePending(pending);
             var staged = validating with

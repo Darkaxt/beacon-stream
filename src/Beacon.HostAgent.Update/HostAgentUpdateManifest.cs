@@ -31,6 +31,13 @@ public sealed record HostAgentValidatedPackage(
     byte[] ManifestBytes,
     IReadOnlyDictionary<string, string> FileHashes);
 
+public interface IHostAgentUpdatePackageValidator
+{
+    Task<HostAgentValidatedPackage> ValidateAsync(
+        string packageRoot,
+        CancellationToken cancellationToken);
+}
+
 public sealed class HostAgentUpdateValidationException : IOException
 {
     public HostAgentUpdateValidationException(string code, string message)

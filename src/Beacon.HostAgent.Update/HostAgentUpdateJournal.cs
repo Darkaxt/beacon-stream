@@ -2,9 +2,9 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Beacon.HostAgent.Contracts;
 
-namespace Beacon.HostAgent.HostUpdates;
+namespace Beacon.HostAgent.Update;
 
-internal sealed class HostAgentUpdateJournal
+public sealed class HostAgentUpdateJournal
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
