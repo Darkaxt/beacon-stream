@@ -21,5 +21,12 @@ internal sealed class WindowsSudoVdaDriverConnection(SafeFileHandle handle) : IS
     public SudoVdaDriverOperationResult Ping() =>
         WindowsDisplayApi.PingSudoVdaDriver(handle);
 
+    public SudoVdaVirtualDisplayCreateResult CreateVirtualDisplay(
+        SudoVdaVirtualDisplayCreateRequest request) =>
+        WindowsDisplayApi.CreateSudoVdaVirtualDisplay(handle, request);
+
+    public SudoVdaDriverOperationResult RemoveVirtualDisplay(Guid monitorGuid) =>
+        WindowsDisplayApi.RemoveSudoVdaVirtualDisplay(handle, monitorGuid);
+
     public void Dispose() => handle.Dispose();
 }

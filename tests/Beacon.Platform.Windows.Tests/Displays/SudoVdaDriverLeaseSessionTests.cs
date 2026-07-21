@@ -43,6 +43,50 @@ public sealed class SudoVdaDriverLeaseSessionTests
     }
 
     [Fact]
+    public async Task VirtualDisplayCreationUsesTheLeaseOwnedHeartbeatConnection()
+    {
+        var connection = new FakeSudoVdaDriverConnection(timeoutSeconds: 3);
+        var factory = new FakeSudoVdaDriverConnectionFactory(connection);
+        var scheduler = new ManualSudoVdaHeartbeatScheduler();
+        await using var session = new SudoVdaDriverLeaseSession(factory, scheduler);
+        await session.HoldAsync("client-one", CancellationToken.None);
+
+        SudoVdaVirtualDisplayCreateResult result = await session.CreateVirtualDisplayAsync(
+            "client-one",
+            new SudoVdaVirtualDisplayCreateRequest(
+                Width: 2560,
+                Height: 1600,
+                RefreshRate: 120,
+                MonitorGuid: Guid.Parse("1a769eb4-8687-4a60-9d18-c7f890736cfc"),
+                DeviceName: "BeaconStream",
+                SerialNumber: "beaconstream"),
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(1, connection.CreateCount);
+        Assert.Equal(1, factory.OpenCount);
+    }
+
+    [Fact]
+    public async Task VirtualDisplayRemovalUsesTheLeaseOwnedHeartbeatConnection()
+    {
+        var connection = new FakeSudoVdaDriverConnection(timeoutSeconds: 3);
+        var factory = new FakeSudoVdaDriverConnectionFactory(connection);
+        var scheduler = new ManualSudoVdaHeartbeatScheduler();
+        await using var session = new SudoVdaDriverLeaseSession(factory, scheduler);
+        await session.HoldAsync("client-one", CancellationToken.None);
+
+        SudoVdaDriverOperationResult result = await session.RemoveVirtualDisplayAsync(
+            "client-one",
+            Guid.Parse("1a769eb4-8687-4a60-9d18-c7f890736cfc"),
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(1, connection.RemoveCount);
+        Assert.Equal(1, factory.OpenCount);
+    }
+
+    [Fact]
     public async Task MultipleLeasesShareOneConnectionAndOneHeartbeat()
     {
         var connection = new FakeSudoVdaDriverConnection(timeoutSeconds: 3);
@@ -290,6 +334,8 @@ public sealed class SudoVdaDriverLeaseSessionTests
 
         public int PingCount { get; private set; }
 
+        public int CreateCount { get; private set; }
+
         public int RemoveCount { get; private set; }
 
         public Exception? PingException { get; set; }
@@ -313,6 +359,19 @@ public sealed class SudoVdaDriverLeaseSessionTests
             return PingResults.TryDequeue(out SudoVdaDriverOperationResult? result)
                 ? result
                 : SudoVdaDriverOperationResult.Ok();
+        }
+
+        public SudoVdaVirtualDisplayCreateResult CreateVirtualDisplay(
+            SudoVdaVirtualDisplayCreateRequest request)
+        {
+            CreateCount++;
+            return SudoVdaVirtualDisplayCreateResult.Ok(1, 2, 3);
+        }
+
+        public SudoVdaDriverOperationResult RemoveVirtualDisplay(Guid monitorGuid)
+        {
+            RemoveCount++;
+            return SudoVdaDriverOperationResult.Ok();
         }
 
         public void Dispose()

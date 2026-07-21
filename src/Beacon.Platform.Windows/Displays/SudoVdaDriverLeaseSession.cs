@@ -144,6 +144,53 @@ internal sealed class SudoVdaDriverLeaseSession(
         }
     }
 
+    internal async Task<SudoVdaVirtualDisplayCreateResult> CreateVirtualDisplayAsync(
+        string displayId,
+        SudoVdaVirtualDisplayCreateRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(displayId);
+        ArgumentNullException.ThrowIfNull(request);
+        await stateGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!displayIds.Contains(displayId) || connection is null)
+            {
+                return SudoVdaVirtualDisplayCreateResult.Fail(
+                    $"No active SudoVDA driver lease owns {displayId}.");
+            }
+
+            return connection.CreateVirtualDisplay(request);
+        }
+        finally
+        {
+            stateGate.Release();
+        }
+    }
+
+    internal async Task<SudoVdaDriverOperationResult> RemoveVirtualDisplayAsync(
+        string displayId,
+        Guid monitorGuid,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(displayId);
+        await stateGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!displayIds.Contains(displayId) || connection is null)
+            {
+                return SudoVdaDriverOperationResult.Fail(
+                    $"No active SudoVDA driver lease owns {displayId}.");
+            }
+
+            return connection.RemoveVirtualDisplay(monitorGuid);
+        }
+        finally
+        {
+            stateGate.Release();
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         await transitionGate.WaitAsync().ConfigureAwait(false);
@@ -399,6 +446,11 @@ internal interface ISudoVdaDriverConnection : IDisposable
     SudoVdaWatchdogQueryResult QueryWatchdog();
 
     SudoVdaDriverOperationResult Ping();
+
+    SudoVdaVirtualDisplayCreateResult CreateVirtualDisplay(
+        SudoVdaVirtualDisplayCreateRequest request);
+
+    SudoVdaDriverOperationResult RemoveVirtualDisplay(Guid monitorGuid);
 }
 
 internal interface ISudoVdaHeartbeatScheduler
@@ -413,6 +465,31 @@ internal interface ISudoVdaHeartbeatRegistration : IAsyncDisposable
 }
 
 internal sealed record SudoVdaWatchdogState(uint TimeoutSeconds, uint CountdownSeconds);
+
+internal sealed record SudoVdaVirtualDisplayCreateRequest(
+    uint Width,
+    uint Height,
+    uint RefreshRate,
+    Guid MonitorGuid,
+    string DeviceName,
+    string SerialNumber);
+
+internal sealed record SudoVdaVirtualDisplayCreateResult(
+    bool Success,
+    uint AdapterLowPart,
+    int AdapterHighPart,
+    uint TargetId,
+    string? Error)
+{
+    public static SudoVdaVirtualDisplayCreateResult Ok(
+        uint adapterLowPart,
+        int adapterHighPart,
+        uint targetId) =>
+        new(true, adapterLowPart, adapterHighPart, targetId, null);
+
+    public static SudoVdaVirtualDisplayCreateResult Fail(string error) =>
+        new(false, 0, 0, 0, error);
+}
 
 internal sealed record SudoVdaWatchdogQueryResult(
     bool Success,

@@ -7,6 +7,9 @@ Beacon's Windows display backend is the real SudoVDA and DisplayConfig integrati
 - SudoVDA is installed and enabled.
 - Beacon owns its SudoVDA control session and heartbeat while Beacon display leases exist. It
   does not require or control Apollo, and it does not rewrite machine-wide SudoVDA settings.
+- The lease-owned SudoVDA handle performs display add, display remove, watchdog query, and
+  heartbeat operations. Add or remove must not open a second short-lived control handle:
+  the driver's watchdog state is associated with the handle that created the display.
 - `dotnet build Beacon.slnx -warnaserror` succeeds.
 - Visual Studio and WDK are only needed for driver rebuild work, not for running the Beacon display probe.
 

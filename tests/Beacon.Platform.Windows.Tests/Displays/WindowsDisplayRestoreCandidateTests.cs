@@ -85,4 +85,57 @@ public sealed class WindowsDisplayRestoreCandidateTests
     {
         Assert.Equal(0x00008060u, WindowsDisplayApi.SuppliedDisplayConfigValidateFlags());
     }
+
+    [Fact]
+    public void DetachedPhysicalRecoveryAttachesBeforeVerifiedPrimaryTransition()
+    {
+        Assert.Equal(0x40000001u, WindowsDisplayApi.PhysicalDisplayResetFlags());
+    }
+
+    [Fact]
+    public void DetachedPhysicalRecoveryAttachesBesideTheActiveVirtualDesktop()
+    {
+        PhysicalDisplayAttachPosition? position =
+            WindowsDisplayDiagnostics.SelectPhysicalAttachPosition(
+                [
+                    new DisplayPathSnapshot(
+                        @"\\.\DISPLAY9",
+                        DisplayPathKind.Virtual,
+                        Width: 2560,
+                        Height: 1600,
+                        RefreshHz: 120,
+                        IsPrimary: true,
+                        X: 0,
+                        Y: 0),
+                ],
+                physicalWidth: 2560);
+
+        Assert.Equal(new PhysicalDisplayAttachPosition(X: -2560, Y: 0), position);
+    }
+
+    [Fact]
+    public void DetachedPhysicalRecoveryPrefersInternalPanelOverLargerExternalMode()
+    {
+        string? selected = WindowsDisplayDiagnostics.SelectPhysicalAttachCandidate(
+            [
+                new(@"\\.\DISPLAY8", Internal: false, Width: 3840, Height: 2160, RefreshHz: 120),
+                new(@"\\.\DISPLAY1", Internal: true, Width: 2560, Height: 1600, RefreshHz: 240),
+                new(@"\\.\DISPLAY2", Internal: true, Width: 1920, Height: 1200, RefreshHz: 60),
+            ]);
+
+        Assert.Equal(@"\\.\DISPLAY1", selected);
+    }
+
+    [Fact]
+    public void DetachedPhysicalRecoveryUsesDeterministicModePriority()
+    {
+        string? selected = WindowsDisplayDiagnostics.SelectPhysicalAttachCandidate(
+            [
+                new(@"\\.\DISPLAY3", Internal: true, Width: 2560, Height: 1600, RefreshHz: 120),
+                new(@"\\.\DISPLAY2", Internal: true, Width: 2560, Height: 1600, RefreshHz: 240),
+                new(@"\\.\DISPLAY1", Internal: true, Width: 2560, Height: 1600, RefreshHz: 240),
+            ]);
+
+        Assert.Equal(@"\\.\DISPLAY1", selected);
+    }
 }
