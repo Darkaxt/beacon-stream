@@ -37,6 +37,24 @@ public sealed class WindowsShellExtendedTopologyActivatorTests
         Assert.Contains("Explorer", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void HostAgentLaunchesItsFixedUserTopologyHelperThroughExplorer()
+    {
+        var executor = new RecordingExplorerShellExecutor();
+        const string hostAgent = @"C:\Program Files\Beacon Stream\Beacon.HostAgent.exe";
+        var activator = new WindowsShellExtendedTopologyActivator(
+            executor,
+            () => hostAgent);
+
+        DisplayApiResult result = activator.Apply();
+
+        Assert.True(result.Success);
+        Assert.Equal(hostAgent, executor.FileName);
+        Assert.Equal(
+            WindowsUserDisplayTopologyTransition.CommandArgument,
+            executor.Arguments);
+    }
+
     private sealed class RecordingExplorerShellExecutor : IWindowsExplorerShellExecutor
     {
         public DisplayApiResult Result { get; init; } = DisplayApiResult.Ok();

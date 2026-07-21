@@ -215,13 +215,27 @@ internal sealed class WindowsExplorerShellExecutor : IWindowsExplorerShellExecut
 }
 
 internal sealed class WindowsShellExtendedTopologyActivator(
-    IWindowsExplorerShellExecutor? shell = null)
+    IWindowsExplorerShellExecutor? shell = null,
+    Func<string?>? processPath = null)
 {
     private readonly IWindowsExplorerShellExecutor shell =
         shell ?? new WindowsExplorerShellExecutor();
+    private readonly Func<string?> processPath = processPath ?? (() => Environment.ProcessPath);
 
     public DisplayApiResult Apply()
     {
+        string? currentProcess = processPath();
+        if (!string.IsNullOrWhiteSpace(currentProcess)
+            && string.Equals(
+                Path.GetFileNameWithoutExtension(currentProcess),
+                "Beacon.HostAgent",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return shell.Execute(
+                currentProcess,
+                WindowsUserDisplayTopologyTransition.CommandArgument);
+        }
+
         string displaySwitch = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.Windows),
             "System32",

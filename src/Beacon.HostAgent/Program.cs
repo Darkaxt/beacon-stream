@@ -13,6 +13,16 @@ internal static class Program
     {
         try
         {
+            if (HostAgentUserDisplayTopologyCommand.TryRun(
+                args,
+                () => new WindowsUserDisplayTopologyTransition().ApplyExtended(),
+                out int userCommandExitCode))
+            {
+                HostAgentDiagnostics.Write(
+                    $"user-display-topology-extend exitCode={userCommandExitCode}");
+                return userCommandExitCode;
+            }
+
             HostAgentOptions options = HostAgentOptions.Parse(args);
             using WindowsIdentity identity = WindowsIdentity.GetCurrent();
             if (identity.User is null || !identity.User.Equals(options.Owner))
