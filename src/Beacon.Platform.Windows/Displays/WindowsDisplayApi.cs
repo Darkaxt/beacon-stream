@@ -280,8 +280,7 @@ public sealed class WindowsDisplayApi :
                         requirement)),
                     _ => inputDesktop.Invoke(() => EnsureDisplayConfigTargetActive(
                         addOutput,
-                        activation.DisplayName!,
-                        baseline.ActivePaths)),
+                        activation.DisplayName!)),
                     cancellationToken).ConfigureAwait(false);
             if (!extendedTopology.Success)
             {
@@ -315,8 +314,7 @@ public sealed class WindowsDisplayApi :
                         refreshHz)
                     : EnsureDisplayConfigTargetActive(
                         addOutput,
-                        activation.DisplayName!,
-                        baseline.ActivePaths)),
+                        activation.DisplayName!)),
                 cancellationToken).ConfigureAwait(false);
             if (!exactTopology.Success)
             {
@@ -337,8 +335,7 @@ public sealed class WindowsDisplayApi :
             width,
             height,
             refreshHz,
-            addOutput,
-            [.. baseline.ActivePaths]));
+            addOutput));
 
         return DisplayApiResult.Ok();
     }
@@ -352,14 +349,13 @@ public sealed class WindowsDisplayApi :
             out _,
             out string topologyDiagnostic))
         {
-            return new VirtualDisplayCreationBaseline(displayNames, [], topologyDiagnostic);
+            return new VirtualDisplayCreationBaseline(displayNames, topologyDiagnostic);
         }
 
         return DescribeDisplayPaths(activePaths).Any(candidate => candidate.Kind == DisplayPathKind.Physical)
-            ? new VirtualDisplayCreationBaseline(displayNames, activePaths, Error: null)
+            ? new VirtualDisplayCreationBaseline(displayNames, Error: null)
             : new VirtualDisplayCreationBaseline(
                 displayNames,
-                activePaths,
                 "Refusing to create a virtual display because no active physical display path can be preserved.");
     }
 
@@ -386,8 +382,7 @@ public sealed class WindowsDisplayApi :
         RememberDisplayName(displayId, displayName);
         DisplayApiResult result = EnsureDisplayConfigTargetActive(
             addOutput,
-            displayName,
-            baseline.ActivePaths);
+            displayName);
         if (!result.Success)
         {
             ForgetDisplayName(displayId);
@@ -675,10 +670,9 @@ public sealed class WindowsDisplayApi :
         return paths;
     }
 
-    private static DisplayApiResult EnsureDisplayConfigTargetActive(
+    private DisplayApiResult EnsureDisplayConfigTargetActive(
         VirtualDisplayAddOut addOutput,
-        string displayName,
-        IReadOnlyList<DisplayConfigPathInfo> preservedActivePaths)
+        string displayName)
     {
         if (!TryQueryDisplayConfig(
             QdcOnlyActivePaths | QdcVirtualModeAware,
@@ -690,12 +684,19 @@ public sealed class WindowsDisplayApi :
         }
 
         IReadOnlyList<DisplayRestoreCandidate> activeDisplays = DescribeDisplayPaths(activePaths);
-        bool hasActivePhysicalPath = activeDisplays.Any(candidate =>
-            candidate.Kind == DisplayPathKind.Physical);
-        if (hasActivePhysicalPath &&
-            !WindowsDisplayDiagnostics.RequiresExtendedTopologyRepair(activeDisplays, displayName))
+        DisplayTargetActivationAction activationAction =
+            WindowsDisplayDiagnostics.PlanTargetActivation(
+                activeDisplays,
+                displayName,
+                QueryActiveTopology().IsMirrorMode);
+        if (activationAction == DisplayTargetActivationAction.None)
         {
             return DisplayApiResult.Ok();
+        }
+
+        if (activationAction == DisplayTargetActivationAction.ApplyExtendedTopology)
+        {
+            return ApplyExtendedTopology();
         }
 
         if (!TryQueryDisplayConfig(
@@ -723,23 +724,6 @@ public sealed class WindowsDisplayApi :
                 IsSameDisplayPath(selectedPath, activePath) ? selectedPath : activePath,
                 groupId++));
         }
-        if (!hasActivePhysicalPath)
-        {
-            DisplayConfigPathInfo physicalPath = preservedActivePaths
-                .FirstOrDefault(IsPhysicalDisplayPath);
-            DisplayConfigPathInfo currentPhysicalPath = allPaths.FirstOrDefault(
-                path => IsSameDisplayPath(path, physicalPath));
-            if (IsSameDisplayPath(currentPhysicalPath, physicalPath))
-            {
-                physicalPath = currentPhysicalPath;
-            }
-            if (IsPhysicalDisplayPath(physicalPath) &&
-                !requestedPaths.Any(path => IsSameDisplayPath(path, physicalPath)))
-            {
-                requestedPaths.Add(PrepareTopologyPath(physicalPath, groupId++));
-            }
-        }
-
         requestedPaths.Add(PrepareTopologyPath(targetPath, groupId));
 
         uint status = NativeMethods.SetDisplayConfigWithoutModes(
@@ -832,8 +816,7 @@ public sealed class WindowsDisplayApi :
         {
             DisplayApiResult pathResult = EnsureDisplayConfigTargetActive(
                 missingPath.AddOutput,
-                missingPath.DisplayName,
-                missingPath.PreservedActivePaths);
+                missingPath.DisplayName);
             return pathResult.Success
                 ? pathResult
                 : DisplayApiResult.Fail(
@@ -1770,7 +1753,6 @@ public sealed class WindowsDisplayApi :
 
     private sealed record VirtualDisplayCreationBaseline(
         IReadOnlyList<string> DisplayNames,
-        DisplayConfigPathInfo[] ActivePaths,
         string? Error);
 
     private sealed record VirtualDisplayActivationOutcome(
@@ -1783,8 +1765,7 @@ public sealed class WindowsDisplayApi :
         int Width,
         int Height,
         int RefreshHz,
-        VirtualDisplayAddOut AddOutput,
-        DisplayConfigPathInfo[] PreservedActivePaths);
+        VirtualDisplayAddOut AddOutput);
 
     private static class NativeMethods
     {

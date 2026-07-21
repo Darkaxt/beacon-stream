@@ -61,6 +61,56 @@ public sealed class WindowsDisplayRestoreCandidateTests
             @"\\.\DISPLAY9"));
     }
 
+    [Fact]
+    public void MissingPhysicalPathUsesWindowsExtendedTopologyDatabase()
+    {
+        DisplayTargetActivationAction action = WindowsDisplayDiagnostics.PlanTargetActivation(
+            [new(@"\\.\DISPLAY9", DisplayPathKind.Virtual, IsPrimary: true, X: 0, Y: 0)],
+            @"\\.\DISPLAY9",
+            mirrorMode: false);
+
+        Assert.Equal(DisplayTargetActivationAction.ApplyExtendedTopology, action);
+    }
+
+    [Fact]
+    public void MirroredPathsUseWindowsExtendedTopologyDatabase()
+    {
+        DisplayTargetActivationAction action = WindowsDisplayDiagnostics.PlanTargetActivation(
+            [
+                new(@"\\.\DISPLAY1", DisplayPathKind.Physical, IsPrimary: true, X: 0, Y: 0),
+                new(@"\\.\DISPLAY9", DisplayPathKind.Virtual, IsPrimary: false, X: 0, Y: 0)
+            ],
+            @"\\.\DISPLAY9",
+            mirrorMode: true);
+
+        Assert.Equal(DisplayTargetActivationAction.ApplyExtendedTopology, action);
+    }
+
+    [Fact]
+    public void MissingVirtualTargetUsesSuppliedPathComposition()
+    {
+        DisplayTargetActivationAction action = WindowsDisplayDiagnostics.PlanTargetActivation(
+            [new(@"\\.\DISPLAY1", DisplayPathKind.Physical, IsPrimary: true, X: 0, Y: 0)],
+            @"\\.\DISPLAY9",
+            mirrorMode: false);
+
+        Assert.Equal(DisplayTargetActivationAction.ApplySuppliedTopology, action);
+    }
+
+    [Fact]
+    public void ActiveExtendedTargetRequiresNoPathTransition()
+    {
+        DisplayTargetActivationAction action = WindowsDisplayDiagnostics.PlanTargetActivation(
+            [
+                new(@"\\.\DISPLAY1", DisplayPathKind.Physical, IsPrimary: true, X: 0, Y: 0),
+                new(@"\\.\DISPLAY9", DisplayPathKind.Virtual, IsPrimary: false, X: 2560, Y: 0)
+            ],
+            @"\\.\DISPLAY9",
+            mirrorMode: false);
+
+        Assert.Equal(DisplayTargetActivationAction.None, action);
+    }
+
     [Theory]
     [InlineData(5u, true)]
     [InlineData(31u, true)]

@@ -1,5 +1,12 @@
 namespace Beacon.Platform.Windows.Displays;
 
+internal enum DisplayTargetActivationAction
+{
+    None,
+    ApplyExtendedTopology,
+    ApplySuppliedTopology
+}
+
 public static class WindowsDisplayDiagnostics
 {
     public const uint AdvancedColorSupported = 0x00000001;
@@ -114,6 +121,22 @@ public static class WindowsDisplayDiagnostics
         !activeDisplays.Any(candidate =>
             string.Equals(candidate.DisplayId, requiredDisplayName, StringComparison.OrdinalIgnoreCase)) ||
         !activeDisplays.Any(candidate => candidate.Kind == DisplayPathKind.Physical);
+
+    internal static DisplayTargetActivationAction PlanTargetActivation(
+        IReadOnlyList<DisplayRestoreCandidate> activeDisplays,
+        string requiredDisplayName,
+        bool mirrorMode)
+    {
+        if (mirrorMode || !activeDisplays.Any(candidate => candidate.Kind == DisplayPathKind.Physical))
+        {
+            return DisplayTargetActivationAction.ApplyExtendedTopology;
+        }
+
+        return activeDisplays.Any(candidate =>
+            string.Equals(candidate.DisplayId, requiredDisplayName, StringComparison.OrdinalIgnoreCase))
+                ? DisplayTargetActivationAction.None
+                : DisplayTargetActivationAction.ApplySuppliedTopology;
+    }
 
     public static bool ShouldRetryWithSuppliedDisplayConfig(uint topologyStatus) =>
         topologyStatus != 0;
