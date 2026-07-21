@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Security.Principal;
 using Beacon.HostAgent.DriverUpdates;
+using Beacon.HostAgent.HostUpdates;
+using Beacon.HostAgent.Update;
 using Beacon.Platform.Windows.Displays;
 
 namespace Beacon.HostAgent;
@@ -51,7 +53,7 @@ internal static class Program
             SudoVdaPackagePolicy policy = new SudoVdaPackagePolicyStore(
                 storage.DriverPolicyPath).LoadOrCreate(
                     signatureVerifier.Verify(activeDriverBinary));
-            var validator = new SudoVdaPackageValidator(
+            var driverValidator = new SudoVdaPackageValidator(
                 new SudoVdaPackagePaths(storage.Inbox, storage.Staged),
                 policy,
                 signatureVerifier);
@@ -61,11 +63,20 @@ internal static class Program
                 new HostAgentSudoVdaDisplayUpdateGuard(executor),
                 new WindowsPnpUtilRunner());
             var driverUpdates = new SudoVdaUpdateCoordinator(
-                validator,
+                driverValidator,
                 new SudoVdaUpdateJournal(storage.Transactions),
                 driverPlatform,
                 storage.InstalledEvidence);
-            var dispatcher = new HostAgentDispatcher(executor, driverUpdates);
+            HostAgentUpdateStorage hostUpdateStorage = HostAgentUpdateStorage.Default;
+            var hostUpdateState = new HostAgentUpdateStateStore(hostUpdateStorage.State);
+            var hostUpdates = new HostAgentUpdateCoordinator(
+                hostUpdateStorage,
+                new HostAgentUpdatePackageValidator(
+                    HostAgentUpdateTrust.PublicKeyPem,
+                    new Version(1, 0, 0)),
+                new HostAgentUpdateJournal(hostUpdateStorage.Transactions),
+                hostUpdateState);
+            var dispatcher = new HostAgentDispatcher(executor, driverUpdates, hostUpdates);
             var server = new HostAgentPipeServer(options.Owner, dispatcher);
             HostAgentDiagnostics.Write(
                 $"started owner={options.Owner.Value} session={Process.GetCurrentProcess().SessionId}");
