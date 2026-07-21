@@ -8,10 +8,12 @@ public sealed class WindowsVirtualDisplayArrivalGateTests
     public async Task TransitionAfterDriverAddWaitsForTheNextHeartbeat()
     {
         var signal = new ManualHeartbeatRevisionSignal();
+        var diagnostics = new List<string>();
         int transitionCount = 0;
         var gate = new WindowsVirtualDisplayArrivalGate(
             () => signal.Revision,
-            signal.WaitAsync);
+            signal.WaitAsync,
+            diagnostics.Add);
 
         Task<DisplayApiResult> transition = gate.ApplyAfterNextHeartbeatAsync(
             () =>
@@ -28,6 +30,8 @@ public sealed class WindowsVirtualDisplayArrivalGateTests
 
         Assert.True((await transition).Success);
         Assert.Equal(1, transitionCount);
+        Assert.Contains(diagnostics, message => message.Contains("heartbeat-observed", StringComparison.Ordinal));
+        Assert.Contains(diagnostics, message => message.Contains("transition-completed success=True", StringComparison.Ordinal));
     }
 
     [Fact]

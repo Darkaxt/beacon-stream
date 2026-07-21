@@ -64,6 +64,7 @@ public sealed class WindowsDisplayApi :
     private readonly WindowsInputDesktopExecutionContext inputDesktop;
     private readonly WindowsDisplayLeaseTopologyReconciler topologyReconciler;
     private readonly WindowsShellExtendedTopologyActivator extendedTopologyActivator = new();
+    private readonly Action<string>? diagnostic;
     private readonly object leasedDisplayStateGate = new();
     private readonly Dictionary<string, LeasedVirtualDisplayState> leasedDisplays =
         new(StringComparer.Ordinal);
@@ -74,16 +75,25 @@ public sealed class WindowsDisplayApi :
     }
 
     public WindowsDisplayApi(WindowsDisplayNameMap displayNameMap)
-        : this(displayNameMap, new WindowsInputDesktopExecutionContext())
+        : this(displayNameMap, new WindowsInputDesktopExecutionContext(), diagnostic: null)
+    {
+    }
+
+    public WindowsDisplayApi(
+        WindowsDisplayNameMap displayNameMap,
+        Action<string> diagnostic)
+        : this(displayNameMap, new WindowsInputDesktopExecutionContext(), diagnostic)
     {
     }
 
     private WindowsDisplayApi(
         WindowsDisplayNameMap displayNameMap,
-        WindowsInputDesktopExecutionContext inputDesktop)
+        WindowsInputDesktopExecutionContext inputDesktop,
+        Action<string>? diagnostic)
     {
         this.displayNameMap = displayNameMap;
         this.inputDesktop = inputDesktop;
+        this.diagnostic = diagnostic;
         topologyReconciler = new WindowsDisplayLeaseTopologyReconciler(
             () => this.inputDesktop.Invoke(QueryActiveTopology),
             SnapshotLeasedDisplayRequirements,
@@ -95,7 +105,8 @@ public sealed class WindowsDisplayApi :
             topologyReconciler.ReconcileAsync);
         virtualDisplayArrivalGate = new WindowsVirtualDisplayArrivalGate(
             () => driverLeaseSession.HeartbeatRevision,
-            driverLeaseSession.WaitForHeartbeatAsync);
+            driverLeaseSession.WaitForHeartbeatAsync,
+            diagnostic);
     }
 
     internal WindowsDisplayApi(
@@ -113,6 +124,7 @@ public sealed class WindowsDisplayApi :
         this.displayNameMap = displayNameMap;
         this.driverLeaseSession = driverLeaseSession;
         this.inputDesktop = inputDesktop;
+        diagnostic = null;
         virtualDisplayArrivalGate = new WindowsVirtualDisplayArrivalGate(
             () => this.driverLeaseSession.HeartbeatRevision,
             this.driverLeaseSession.WaitForHeartbeatAsync);
@@ -225,6 +237,9 @@ public sealed class WindowsDisplayApi :
                 addResult.Error ?? $"SudoVDA create failed for {displayId}.");
         }
 
+        WriteDiagnostic(
+            $"display-create display={displayId} phase=driver-created adapter={addResult.AdapterHighPart}:{addResult.AdapterLowPart} target={addResult.TargetId}");
+
         var addOutput = new VirtualDisplayAddOut
         {
             AdapterLuid = new Luid
@@ -261,6 +276,8 @@ public sealed class WindowsDisplayApi :
                 $"Unable to compose the initial extended topology for {displayId}: {initialTopology.Error}");
         }
 
+        WriteDiagnostic($"display-create display={displayId} phase=initial-topology-complete");
+
         VirtualDisplayTargetArrivalSnapshot stableTarget;
         try
         {
@@ -276,6 +293,9 @@ public sealed class WindowsDisplayApi :
                 CancellationToken.None).ConfigureAwait(false);
             throw;
         }
+
+        WriteDiagnostic(
+            $"display-create display={displayId} phase=target-arrived displayName={stableTarget.DisplayName}");
 
         VirtualDisplayActivationOutcome activation = inputDesktop.Invoke(() => ActivateCreatedVirtualDisplay(
             displayId,
@@ -776,6 +796,17 @@ public sealed class WindowsDisplayApi :
     }
 
     private DisplayApiResult ApplyExtendedTopology() => extendedTopologyActivator.Apply();
+
+    private void WriteDiagnostic(string message)
+    {
+        try
+        {
+            diagnostic?.Invoke(message);
+        }
+        catch
+        {
+        }
+    }
 
     private IReadOnlyList<LeasedDisplayTopologyRequirement> SnapshotLeasedDisplayRequirements()
     {

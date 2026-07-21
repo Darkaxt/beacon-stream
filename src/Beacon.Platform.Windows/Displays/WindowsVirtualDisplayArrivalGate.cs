@@ -9,15 +9,22 @@ internal sealed record VirtualDisplayTargetArrivalSnapshot(
 
 internal sealed class WindowsVirtualDisplayArrivalGate(
     Func<long> heartbeatRevision,
-    Func<long, CancellationToken, Task<long>> waitForHeartbeat)
+    Func<long, CancellationToken, Task<long>> waitForHeartbeat,
+    Action<string>? diagnostic = null)
 {
     public async Task<DisplayApiResult> ApplyAfterNextHeartbeatAsync(
         Func<DisplayApiResult> applyStateTransition,
         CancellationToken cancellationToken)
     {
         long observedRevision = heartbeatRevision();
-        _ = await waitForHeartbeat(observedRevision, cancellationToken).ConfigureAwait(false);
-        return applyStateTransition();
+        WriteDiagnostic($"gate=post-driver-add phase=waiting afterRevision={observedRevision}");
+        observedRevision = await waitForHeartbeat(observedRevision, cancellationToken)
+            .ConfigureAwait(false);
+        WriteDiagnostic($"gate=post-driver-add phase=heartbeat-observed revision={observedRevision}");
+        DisplayApiResult result = applyStateTransition();
+        WriteDiagnostic(
+            $"gate=post-driver-add phase=transition-completed success={result.Success} error={result.Error ?? "none"}");
+        return result;
     }
 
     public async Task<VirtualDisplayTargetArrivalSnapshot> WaitForStableTargetAsync(
@@ -32,6 +39,8 @@ internal sealed class WindowsVirtualDisplayArrivalGate(
             observedRevision = await waitForHeartbeat(observedRevision, cancellationToken)
                 .ConfigureAwait(false);
             VirtualDisplayTargetArrivalSnapshot current = queryTarget();
+            WriteDiagnostic(
+                $"gate=target-arrival phase=observed revision={observedRevision} available={current.Available} display={current.DisplayName ?? "none"} topology={current.TopologyFingerprint}");
             if (current.Available && current == previous)
             {
                 return current;
@@ -75,6 +84,8 @@ internal sealed class WindowsVirtualDisplayArrivalGate(
             observedRevision = await waitForHeartbeat(observedRevision, cancellationToken)
                 .ConfigureAwait(false);
             VirtualDisplayTargetArrivalSnapshot current = queryTarget();
+            WriteDiagnostic(
+                $"gate=desired-topology phase=observed revision={observedRevision} available={current.Available} extended={current.ExtendedTopology} desired={current.DesiredTopology} topology={current.TopologyFingerprint}");
             if (!current.Available)
             {
                 previousDesired = null;
@@ -98,6 +109,20 @@ internal sealed class WindowsVirtualDisplayArrivalGate(
             {
                 return applyResult;
             }
+
+            WriteDiagnostic(
+                $"gate=desired-topology phase=transition-completed success=True topology={current.TopologyFingerprint}");
+        }
+    }
+
+    private void WriteDiagnostic(string message)
+    {
+        try
+        {
+            diagnostic?.Invoke(message);
+        }
+        catch
+        {
         }
     }
 }

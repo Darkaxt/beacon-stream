@@ -51,7 +51,9 @@ internal static class Program
             }
 
             var displayNames = new WindowsDisplayNameMap(WindowsDisplayNameMapStore.Default);
-            await using var displayApi = new WindowsDisplayApi(displayNames);
+            await using var displayApi = new WindowsDisplayApi(
+                displayNames,
+                message => HostAgentDiagnostics.Write($"display {message}"));
             var executor = new WindowsHostAgentDisplayExecutor(displayApi, displayNames);
             HostAgentDriverUpdateStorage storage = HostAgentDriverUpdateStorage.Default;
             var signatureVerifier = new WindowsSudoVdaSignatureVerifier();
