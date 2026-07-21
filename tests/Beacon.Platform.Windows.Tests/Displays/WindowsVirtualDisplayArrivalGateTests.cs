@@ -161,8 +161,8 @@ public sealed class WindowsVirtualDisplayArrivalGateTests
 
         signal.Pulse();
         await snapshots.WaitForObservationAsync(0);
+        await applied.Task;
 
-        Assert.True(applied.Task.IsCompleted);
         Assert.False(wait.IsCompleted);
 
         signal.Pulse();

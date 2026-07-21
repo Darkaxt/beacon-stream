@@ -92,6 +92,7 @@ public sealed class WindowsDisplayLeaseTopologyReconcilerTests
     {
         int applyCount = 0;
         int queryCount = 0;
+        var diagnostics = new List<string>();
         var virtualOnly = new DisplayTopologySnapshot(
             [
                 new DisplayPathSnapshot(
@@ -118,11 +119,19 @@ public sealed class WindowsDisplayLeaseTopologyReconcilerTests
             {
                 applyCount++;
                 return DisplayApiResult.Ok();
-            });
+            },
+            diagnostics.Add);
 
         await reconciler.ReconcileAsync(CancellationToken.None);
 
         Assert.Equal(1, applyCount);
+        Assert.Contains(
+            diagnostics,
+            message => message.Contains("requirements=1", StringComparison.Ordinal)
+                && message.Contains("physical=False", StringComparison.Ordinal));
+        Assert.Contains(
+            diagnostics,
+            message => message.Contains("transition-completed success=True", StringComparison.Ordinal));
         Assert.Contains("next heartbeat", reconciler.Diagnostic, StringComparison.OrdinalIgnoreCase);
     }
 

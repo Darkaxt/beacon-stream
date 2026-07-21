@@ -98,7 +98,8 @@ public sealed class WindowsDisplayApi :
             () => this.inputDesktop.Invoke(QueryActiveTopology),
             SnapshotLeasedDisplayRequirements,
             requirements => this.inputDesktop.Invoke(
-                () => ReactivateLeasedDisplayTopology(requirements)));
+                () => ReactivateLeasedDisplayTopology(requirements)),
+            diagnostic);
         driverLeaseSession = new SudoVdaDriverLeaseSession(
             new WindowsSudoVdaDriverConnectionFactory(),
             new TaskDelaySudoVdaHeartbeatScheduler(),
@@ -830,6 +831,8 @@ public sealed class WindowsDisplayApi :
         LeasedDisplayRecoveryAction action = WindowsDisplayLeaseRecoveryPlanner.Plan(
             current,
             requirements);
+        WriteDiagnostic(
+            $"display-recovery requirements={requirements.Count} action={action} topology={current.Fingerprint}");
         if (action == LeasedDisplayRecoveryAction.None)
         {
             return DisplayApiResult.Ok();
@@ -863,6 +866,8 @@ public sealed class WindowsDisplayApi :
             DisplayApiResult pathResult = EnsureDisplayConfigTargetActive(
                 missingPath.AddOutput,
                 missingPath.DisplayName);
+            WriteDiagnostic(
+                $"display-recovery display={missingPath.DisplayId} phase=path-transition success={pathResult.Success} error={pathResult.Error ?? "none"}");
             return pathResult.Success
                 ? pathResult
                 : DisplayApiResult.Fail(
