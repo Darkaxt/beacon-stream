@@ -11,6 +11,15 @@ internal sealed class WindowsVirtualDisplayArrivalGate(
     Func<long> heartbeatRevision,
     Func<long, CancellationToken, Task<long>> waitForHeartbeat)
 {
+    public async Task<DisplayApiResult> ApplyAfterNextHeartbeatAsync(
+        Func<DisplayApiResult> applyStateTransition,
+        CancellationToken cancellationToken)
+    {
+        long observedRevision = heartbeatRevision();
+        _ = await waitForHeartbeat(observedRevision, cancellationToken).ConfigureAwait(false);
+        return applyStateTransition();
+    }
+
     public async Task<VirtualDisplayTargetArrivalSnapshot> WaitForStableTargetAsync(
         Func<VirtualDisplayTargetArrivalSnapshot> queryTarget,
         CancellationToken cancellationToken)

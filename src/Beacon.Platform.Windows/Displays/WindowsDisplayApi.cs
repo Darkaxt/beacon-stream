@@ -235,6 +235,32 @@ public sealed class WindowsDisplayApi :
             TargetId = addResult.TargetId
         };
 
+        DisplayApiResult initialTopology;
+        try
+        {
+            initialTopology = await virtualDisplayArrivalGate.ApplyAfterNextHeartbeatAsync(
+                () => inputDesktop.Invoke(ApplyExtendedTopology),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await driverLeaseSession.RemoveVirtualDisplayAsync(
+                displayId,
+                monitorGuid,
+                CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+
+        if (!initialTopology.Success)
+        {
+            await driverLeaseSession.RemoveVirtualDisplayAsync(
+                displayId,
+                monitorGuid,
+                CancellationToken.None).ConfigureAwait(false);
+            return DisplayApiResult.Fail(
+                $"Unable to compose the initial extended topology for {displayId}: {initialTopology.Error}");
+        }
+
         VirtualDisplayTargetArrivalSnapshot stableTarget;
         try
         {

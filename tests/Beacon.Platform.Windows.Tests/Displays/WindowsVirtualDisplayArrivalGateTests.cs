@@ -5,6 +5,32 @@ namespace Beacon.Platform.Windows.Tests.Displays;
 public sealed class WindowsVirtualDisplayArrivalGateTests
 {
     [Fact]
+    public async Task TransitionAfterDriverAddWaitsForTheNextHeartbeat()
+    {
+        var signal = new ManualHeartbeatRevisionSignal();
+        int transitionCount = 0;
+        var gate = new WindowsVirtualDisplayArrivalGate(
+            () => signal.Revision,
+            signal.WaitAsync);
+
+        Task<DisplayApiResult> transition = gate.ApplyAfterNextHeartbeatAsync(
+            () =>
+            {
+                transitionCount++;
+                return DisplayApiResult.Ok();
+            },
+            CancellationToken.None);
+
+        Assert.False(transition.IsCompleted);
+        Assert.Equal(0, transitionCount);
+
+        signal.Pulse();
+
+        Assert.True((await transition).Success);
+        Assert.Equal(1, transitionCount);
+    }
+
+    [Fact]
     public async Task RequiresTwoMatchingPostAddHeartbeatObservations()
     {
         var signal = new ManualHeartbeatRevisionSignal();
