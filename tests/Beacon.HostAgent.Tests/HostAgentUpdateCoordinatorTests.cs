@@ -110,6 +110,24 @@ public sealed class HostAgentUpdateCoordinatorTests
         Assert.Null(fixture.State.ReadPending());
     }
 
+    [Fact]
+    public async Task ActiveDisplayStateRejectsUpdateBeforeJournalCreation()
+    {
+        using var fixture = new UpdateFixture(new RejectingUpdateGuard());
+        await fixture.BuildPackageAsync();
+        Guid transactionId = Guid.NewGuid();
+
+        HostAgentUpdateStartException error = await Assert.ThrowsAsync<
+            HostAgentUpdateStartException>(() => fixture.Coordinator.StageAsync(
+                fixture.PackageId,
+                transactionId,
+                CancellationToken.None));
+
+        Assert.Equal("host-agent-active-display", error.Code);
+        Assert.False(fixture.Journal.TryRead(transactionId, out _));
+        Assert.Null(fixture.State.ReadPending());
+    }
+
     private sealed class UpdateFixture : IDisposable
     {
         private readonly string root = Path.Combine(
@@ -117,7 +135,7 @@ public sealed class HostAgentUpdateCoordinatorTests
             $"beacon-host-agent-coordinator-{Guid.NewGuid():N}");
         private readonly ECDsa key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
 
-        public UpdateFixture()
+        public UpdateFixture(IHostAgentUpdateGuard? guard = null)
         {
             Storage = new HostAgentUpdateStorage(Path.Combine(root, "storage"));
             State = new HostAgentUpdateStateStore(Storage.State);
@@ -126,7 +144,7 @@ public sealed class HostAgentUpdateCoordinatorTests
             var validator = new HostAgentUpdatePackageValidator(
                 key.ExportSubjectPublicKeyInfoPem(),
                 new Version(1, 0, 0));
-            Coordinator = new HostAgentUpdateCoordinator(Storage, validator, Journal, State);
+            Coordinator = new HostAgentUpdateCoordinator(Storage, validator, Journal, State, guard);
         }
 
         public string PackageId { get; } = "agent-0123456789abcdef";
@@ -162,5 +180,13 @@ public sealed class HostAgentUpdateCoordinatorTests
                 Directory.Delete(root, recursive: true);
             }
         }
+    }
+
+    private sealed class RejectingUpdateGuard : IHostAgentUpdateGuard
+    {
+        public Task EnsureSafeAsync(CancellationToken cancellationToken) =>
+            throw new HostAgentUpdateStartException(
+                "host-agent-active-display",
+                "Host Agent has active display state.");
     }
 }

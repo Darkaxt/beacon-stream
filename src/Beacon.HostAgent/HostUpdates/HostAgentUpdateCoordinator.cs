@@ -7,9 +7,12 @@ internal sealed class HostAgentUpdateCoordinator(
     HostAgentUpdateStorage storage,
     IHostAgentUpdatePackageValidator validator,
     HostAgentUpdateJournal journal,
-    HostAgentUpdateStateStore state) : IHostAgentUpdateExecutor
+    HostAgentUpdateStateStore state,
+    IHostAgentUpdateGuard? updateGuard = null) : IHostAgentUpdateExecutor
 {
     private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly IHostAgentUpdateGuard updateGuard =
+        updateGuard ?? AllowHostAgentUpdateGuard.Instance;
 
     public async Task<HostAgentUpdatePayload> StageAsync(
         string packageId,
@@ -27,6 +30,7 @@ internal sealed class HostAgentUpdateCoordinator(
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            await updateGuard.EnsureSafeAsync(cancellationToken).ConfigureAwait(false);
             if (journal.TryRead(transactionId, out HostAgentUpdatePayload? existing)
                 && existing is not null)
             {

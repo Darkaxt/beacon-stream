@@ -1,0 +1,59 @@
+name: Host Agent Update
+run-name: Host Agent Update ${{ inputs.request_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: Unique caller-generated artifact correlation id
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  signed-package:
+    runs-on: windows-latest
+    env:
+      BEACON_HOST_AGENT_UPDATE_SIGNING_KEY_PEM_B64: ${{ secrets.BEACON_HOST_AGENT_UPDATE_SIGNING_KEY_PEM_B64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Validate update boundary
+        shell: pwsh
+        run: |
+          dotnet test tests/Beacon.HostAgent.Update.Tests/Beacon.HostAgent.Update.Tests.csproj
+          dotnet test tests/Beacon.HostAgent.Bootstrap.Tests/Beacon.HostAgent.Bootstrap.Tests.csproj
+          dotnet test tests/Beacon.HostAgent.Tests/Beacon.HostAgent.Tests.csproj
+          dotnet test tests/Beacon.HostAgent.Control.Tests/Beacon.HostAgent.Control.Tests.csproj
+          python -m unittest tests.scripts.test_host_agent_update_pipeline
+      - name: Publish Host Agent
+        shell: pwsh
+        run: |
+          dotnet publish src/Beacon.HostAgent/Beacon.HostAgent.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained false `
+            --output artifacts/host-agent/ci-publish
+      - name: Build and independently verify signed package
+        id: package
+        shell: pwsh
+        run: |
+          $packageId = "agent-${{ github.sha }}-${{ inputs.request_id }}"
+          ./scripts/build-host-agent-update.ps1 `
+            -PayloadRoot artifacts/host-agent/ci-publish `
+            -PackageRoot artifacts/host-agent/ci-package `
+            -PackageId $packageId `
+            -SourceCommit "${{ github.sha }}" `
+            -MinimumBootstrapVersion "1.0.0"
+          "package_id=$packageId" >> $env:GITHUB_OUTPUT
+      - name: Upload request-scoped signed package
+        uses: actions/upload-artifact@v4
+        with:
+          name: beacon-host-agent-${{ inputs.request_id }}-${{ github.sha }}
+          path: artifacts/host-agent/ci-package/*
+          if-no-files-found: error
+          retention-days: 7

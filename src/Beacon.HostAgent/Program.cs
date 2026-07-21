@@ -73,9 +73,10 @@ internal static class Program
                 hostUpdateStorage,
                 new HostAgentUpdatePackageValidator(
                     HostAgentUpdateTrust.PublicKeyPem,
-                    new Version(1, 0, 0)),
+                new Version(1, 0, 0)),
                 new HostAgentUpdateJournal(hostUpdateStorage.Transactions),
-                hostUpdateState);
+                hostUpdateState,
+                new HostAgentDisplayUpdateGuard(executor));
             var dispatcher = new HostAgentDispatcher(executor, driverUpdates, hostUpdates);
             var server = new HostAgentPipeServer(options.Owner, dispatcher);
             HostAgentDiagnostics.Write(
