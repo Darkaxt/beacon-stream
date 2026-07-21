@@ -255,9 +255,6 @@ public sealed class WindowsDisplayApi :
             displayId,
             addOutput,
             stableTarget.DisplayName!,
-            width,
-            height,
-            refreshHz,
             baseline));
         if (!activation.Result.Success)
         {
@@ -268,7 +265,6 @@ public sealed class WindowsDisplayApi :
             return activation.Result;
         }
 
-        DisplayApiResult convergence;
         var requirement = new LeasedDisplayTopologyRequirement(
             displayId,
             width,
@@ -276,39 +272,63 @@ public sealed class WindowsDisplayApi :
             refreshHz);
         try
         {
-            convergence = await virtualDisplayArrivalGate.WaitForStableDesiredTopologyAsync(
+            DisplayApiResult extendedTopology =
+                await virtualDisplayArrivalGate.WaitForStableExtendedTopologyAsync(
+                    () => inputDesktop.Invoke(() => QueryVirtualDisplayDesiredTopology(
+                        addOutput,
+                        activation.DisplayName!,
+                        requirement)),
+                    _ => inputDesktop.Invoke(() => EnsureDisplayConfigTargetActive(
+                        addOutput,
+                        activation.DisplayName!,
+                        baseline.ActivePaths)),
+                    cancellationToken).ConfigureAwait(false);
+            if (!extendedTopology.Success)
+            {
+                await RemoveFailedVirtualDisplayAsync(displayId, monitorGuid).ConfigureAwait(false);
+                return DisplayApiResult.Fail(
+                    $"Virtual display path topology did not converge for {displayId}: {extendedTopology.Error}");
+            }
+
+            DisplayApiResult modeResult = inputDesktop.Invoke(() => ApplyDisplayConfigMode(
+                activation.DisplayName!,
+                width,
+                height,
+                refreshHz));
+            if (!modeResult.Success)
+            {
+                await RemoveFailedVirtualDisplayAsync(displayId, monitorGuid).ConfigureAwait(false);
+                return modeResult;
+            }
+
+            DisplayApiResult exactTopology =
+                await virtualDisplayArrivalGate.WaitForStableDesiredTopologyAsync(
                 () => inputDesktop.Invoke(() => QueryVirtualDisplayDesiredTopology(
                     addOutput,
                     activation.DisplayName!,
                     requirement)),
-                () => inputDesktop.Invoke(() => ActivateDisplayMode(
-                    addOutput,
-                    activation.DisplayName!,
-                    width,
-                    height,
-                    refreshHz,
-                    baseline.ActivePaths)),
+                snapshot => inputDesktop.Invoke(() => snapshot.ExtendedTopology
+                    ? ApplyDisplayConfigMode(
+                        activation.DisplayName!,
+                        width,
+                        height,
+                        refreshHz)
+                    : EnsureDisplayConfigTargetActive(
+                        addOutput,
+                        activation.DisplayName!,
+                        baseline.ActivePaths)),
                 cancellationToken).ConfigureAwait(false);
+            if (!exactTopology.Success)
+            {
+                await RemoveFailedVirtualDisplayAsync(displayId, monitorGuid).ConfigureAwait(false);
+                return DisplayApiResult.Fail(
+                    $"Virtual display topology did not converge for {displayId}: {exactTopology.Error}");
+            }
         }
         catch
         {
-            ForgetDisplayName(displayId);
-            await driverLeaseSession.RemoveVirtualDisplayAsync(
-                displayId,
-                monitorGuid,
-                CancellationToken.None).ConfigureAwait(false);
+            await RemoveFailedVirtualDisplayAsync(displayId, monitorGuid).ConfigureAwait(false);
             throw;
-        }
-
-        if (!convergence.Success)
-        {
-            ForgetDisplayName(displayId);
-            await driverLeaseSession.RemoveVirtualDisplayAsync(
-                displayId,
-                monitorGuid,
-                CancellationToken.None).ConfigureAwait(false);
-            return DisplayApiResult.Fail(
-                $"Virtual display topology did not converge for {displayId}: {convergence.Error}");
         }
 
         RememberLeasedDisplayState(new LeasedVirtualDisplayState(
@@ -347,9 +367,6 @@ public sealed class WindowsDisplayApi :
         string displayId,
         VirtualDisplayAddOut addOutput,
         string stableDisplayName,
-        int width,
-        int height,
-        int refreshHz,
         VirtualDisplayCreationBaseline baseline)
     {
         IReadOnlyList<DisplayPathSnapshot> afterDisplayPaths = EnumerateDisplayNamesWithState(activeOnly: false);
@@ -367,12 +384,9 @@ public sealed class WindowsDisplayApi :
         }
 
         RememberDisplayName(displayId, displayName);
-        DisplayApiResult result = ActivateDisplayMode(
+        DisplayApiResult result = EnsureDisplayConfigTargetActive(
             addOutput,
             displayName,
-            width,
-            height,
-            refreshHz,
             baseline.ActivePaths);
         if (!result.Success)
         {
@@ -380,6 +394,15 @@ public sealed class WindowsDisplayApi :
         }
 
         return new VirtualDisplayActivationOutcome(result, displayName);
+    }
+
+    private async Task RemoveFailedVirtualDisplayAsync(string displayId, Guid monitorGuid)
+    {
+        ForgetDisplayName(displayId);
+        await driverLeaseSession.RemoveVirtualDisplayAsync(
+            displayId,
+            monitorGuid,
+            CancellationToken.None).ConfigureAwait(false);
     }
 
     public Task<DisplayTopologySnapshot> QueryTopologyAsync(CancellationToken cancellationToken)
@@ -652,26 +675,6 @@ public sealed class WindowsDisplayApi :
         return paths;
     }
 
-    private static DisplayApiResult ActivateDisplayMode(
-        VirtualDisplayAddOut addOutput,
-        string displayName,
-        int width,
-        int height,
-        int refreshHz,
-        IReadOnlyList<DisplayConfigPathInfo> preservedActivePaths)
-    {
-        DisplayApiResult activeResult = EnsureDisplayConfigTargetActive(
-            addOutput,
-            displayName,
-            preservedActivePaths);
-        if (!activeResult.Success)
-        {
-            return activeResult;
-        }
-
-        return ApplyDisplayConfigMode(displayName, width, height, refreshHz);
-    }
-
     private static DisplayApiResult EnsureDisplayConfigTargetActive(
         VirtualDisplayAddOut addOutput,
         string displayName,
@@ -823,25 +826,53 @@ public sealed class WindowsDisplayApi :
             }
         }
 
-        foreach (LeasedVirtualDisplayState state in states)
+        LeasedVirtualDisplayState? missingPath = states.FirstOrDefault(state =>
+            !HasExtendedVirtualDisplayTopology(current, state.DisplayId));
+        if (missingPath is not null)
         {
-            DisplayApiResult result = ActivateDisplayMode(
-                state.AddOutput,
-                state.DisplayName,
-                state.Width,
-                state.Height,
-                state.RefreshHz,
-                state.PreservedActivePaths);
-            if (!result.Success)
-            {
-                return DisplayApiResult.Fail(
-                    $"Unable to reactivate leased display {state.DisplayId} " +
-                    $"at {state.Width}x{state.Height}@{state.RefreshHz}: {result.Error}");
-            }
+            DisplayApiResult pathResult = EnsureDisplayConfigTargetActive(
+                missingPath.AddOutput,
+                missingPath.DisplayName,
+                missingPath.PreservedActivePaths);
+            return pathResult.Success
+                ? pathResult
+                : DisplayApiResult.Fail(
+                    $"Unable to recompose leased display paths for {missingPath.DisplayId}: {pathResult.Error}");
         }
 
-        return DisplayApiResult.Ok();
+        LeasedVirtualDisplayState? wrongMode = states.FirstOrDefault(state =>
+            WindowsDisplayLeaseRecoveryPlanner.Plan(
+                current,
+                [new LeasedDisplayTopologyRequirement(
+                    state.DisplayId,
+                    state.Width,
+                    state.Height,
+                    state.RefreshHz)]) != LeasedDisplayRecoveryAction.None);
+        if (wrongMode is null)
+        {
+            return DisplayApiResult.Ok();
+        }
+
+        DisplayApiResult modeResult = ApplyDisplayConfigMode(
+            wrongMode.DisplayName,
+            wrongMode.Width,
+            wrongMode.Height,
+            wrongMode.RefreshHz);
+        return modeResult.Success
+            ? modeResult
+            : DisplayApiResult.Fail(
+                $"Unable to restore leased display mode for {wrongMode.DisplayId} " +
+                $"at {wrongMode.Width}x{wrongMode.Height}@{wrongMode.RefreshHz}: {modeResult.Error}");
     }
+
+    private static bool HasExtendedVirtualDisplayTopology(
+        DisplayTopologySnapshot topology,
+        string displayId) =>
+        !topology.IsMirrorMode &&
+        topology.Paths.Any(path => path.Kind == DisplayPathKind.Physical) &&
+        topology.Paths.Any(path =>
+            path.Kind == DisplayPathKind.Virtual &&
+            string.Equals(path.DisplayId, displayId, StringComparison.Ordinal));
 
     private void RememberLeasedDisplayState(LeasedVirtualDisplayState state)
     {
@@ -1109,6 +1140,8 @@ public sealed class WindowsDisplayApi :
         bool available = resolved &&
             targetAvailable &&
             string.Equals(displayName, expectedDisplayName, StringComparison.OrdinalIgnoreCase);
+        bool extendedTopology = available &&
+            HasExtendedVirtualDisplayTopology(topology, requirement.DisplayId);
         bool desiredTopology = available &&
             WindowsDisplayLeaseRecoveryPlanner.Plan(topology, [requirement]) ==
             LeasedDisplayRecoveryAction.None;
@@ -1116,6 +1149,7 @@ public sealed class WindowsDisplayApi :
             available,
             displayName,
             topology.Fingerprint,
+            extendedTopology,
             desiredTopology);
     }
 

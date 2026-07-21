@@ -66,19 +66,9 @@ internal sealed class WindowsDisplayLeaseTopologyReconciler(
             throw new InvalidOperationException(error);
         }
 
-        DisplayTopologySnapshot repaired = queryTopology();
-        if (!IsValidExtendedTopology(repaired, requirements))
-        {
-            string error =
-                "Leased physical and virtual display topology repair was not verified. " +
-                $"LastTopology={repaired.Fingerprint}.";
-            Volatile.Write(ref diagnostic, error);
-            throw new InvalidOperationException(error);
-        }
-
         Volatile.Write(
             ref diagnostic,
-            "Leased physical and virtual display topology reactivated after Windows removed an active path.");
+            "Leased display topology transition requested; awaiting verification on the next heartbeat.");
         return ValueTask.CompletedTask;
     }
 

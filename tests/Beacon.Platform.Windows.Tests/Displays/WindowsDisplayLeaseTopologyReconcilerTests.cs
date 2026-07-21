@@ -84,7 +84,7 @@ public sealed class WindowsDisplayLeaseTopologyReconcilerTests
 
         Assert.Equal(1, applyCount);
         Assert.Equal([RequiredLease], applied);
-        Assert.Contains("reactivated", reconciler.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("next heartbeat", reconciler.Diagnostic, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -123,11 +123,11 @@ public sealed class WindowsDisplayLeaseTopologyReconcilerTests
         await reconciler.ReconcileAsync(CancellationToken.None);
 
         Assert.Equal(1, applyCount);
-        Assert.Contains("reactivated", reconciler.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("next heartbeat", reconciler.Diagnostic, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task UnverifiedExtendedTopologyRepairFailsHeartbeat()
+    public async Task TopologyTransitionIsVerifiedOnNextHeartbeat()
     {
         var virtualOnly = new DisplayTopologySnapshot(
             [
@@ -140,15 +140,34 @@ public sealed class WindowsDisplayLeaseTopologyReconcilerTests
                     IsPrimary: true)
             ],
             IsMirrorMode: false);
+        int queryCount = 0;
+        int applyCount = 0;
         var reconciler = new WindowsDisplayLeaseTopologyReconciler(
-            () => virtualOnly,
+            () => queryCount++ == 0
+                ? virtualOnly
+                : DisplayTopologySnapshot.Extended(
+                    @"\\.\DISPLAY1",
+                    "client-z-fold-7",
+                    2560,
+                    1600,
+                    120,
+                    virtualPrimary: false),
             () => [RequiredLease],
-            _ => DisplayApiResult.Ok());
+            _ =>
+            {
+                applyCount++;
+                return DisplayApiResult.Ok();
+            });
 
-        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => reconciler.ReconcileAsync(CancellationToken.None).AsTask());
+        await reconciler.ReconcileAsync(CancellationToken.None);
+        Assert.Equal(1, queryCount);
+        Assert.Equal(1, applyCount);
+        Assert.Contains("next heartbeat", reconciler.Diagnostic, StringComparison.OrdinalIgnoreCase);
 
-        Assert.Contains("not verified", error.Message, StringComparison.OrdinalIgnoreCase);
+        await reconciler.ReconcileAsync(CancellationToken.None);
+        Assert.Equal(2, queryCount);
+        Assert.Equal(1, applyCount);
+        Assert.Contains("active", reconciler.Diagnostic, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

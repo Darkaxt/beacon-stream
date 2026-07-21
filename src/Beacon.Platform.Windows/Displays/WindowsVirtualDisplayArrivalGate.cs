@@ -4,6 +4,7 @@ internal sealed record VirtualDisplayTargetArrivalSnapshot(
     bool Available,
     string? DisplayName,
     string TopologyFingerprint,
+    bool ExtendedTopology = false,
     bool DesiredTopology = false);
 
 internal sealed class WindowsVirtualDisplayArrivalGate(
@@ -33,7 +34,28 @@ internal sealed class WindowsVirtualDisplayArrivalGate(
 
     public async Task<DisplayApiResult> WaitForStableDesiredTopologyAsync(
         Func<VirtualDisplayTargetArrivalSnapshot> queryTarget,
-        Func<DisplayApiResult> applyDesiredTopology,
+        Func<VirtualDisplayTargetArrivalSnapshot, DisplayApiResult> applyDesiredTopology,
+        CancellationToken cancellationToken) =>
+        await WaitForStableStateAsync(
+            queryTarget,
+            snapshot => snapshot.DesiredTopology,
+            applyDesiredTopology,
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task<DisplayApiResult> WaitForStableExtendedTopologyAsync(
+        Func<VirtualDisplayTargetArrivalSnapshot> queryTarget,
+        Func<VirtualDisplayTargetArrivalSnapshot, DisplayApiResult> applyExtendedTopology,
+        CancellationToken cancellationToken) =>
+        await WaitForStableStateAsync(
+            queryTarget,
+            snapshot => snapshot.ExtendedTopology,
+            applyExtendedTopology,
+            cancellationToken).ConfigureAwait(false);
+
+    private async Task<DisplayApiResult> WaitForStableStateAsync(
+        Func<VirtualDisplayTargetArrivalSnapshot> queryTarget,
+        Func<VirtualDisplayTargetArrivalSnapshot, bool> isDesiredState,
+        Func<VirtualDisplayTargetArrivalSnapshot, DisplayApiResult> applyStateTransition,
         CancellationToken cancellationToken)
     {
         VirtualDisplayTargetArrivalSnapshot? previous = null;
@@ -56,12 +78,12 @@ internal sealed class WindowsVirtualDisplayArrivalGate(
                 continue;
             }
 
-            if (current.DesiredTopology)
+            if (isDesiredState(current))
             {
                 return DisplayApiResult.Ok();
             }
 
-            DisplayApiResult applyResult = applyDesiredTopology();
+            DisplayApiResult applyResult = applyStateTransition(current);
             if (!applyResult.Success)
             {
                 return applyResult;
