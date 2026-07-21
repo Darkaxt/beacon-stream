@@ -227,6 +227,100 @@ public sealed class ArchitectureRecoveryBoundaryTests
     }
 
     [Fact]
+    public void ProductionAcceptanceUsesProductionSecurityPolicy()
+    {
+        string root = FindRepositoryRoot();
+        string acceptance = File.ReadAllText(ToPlatformPath(
+            root,
+            "tests/Beacon.ProductionAcceptance/Program.cs"));
+        string stageServer = File.ReadAllText(ToPlatformPath(
+            root,
+            "scripts/start-emulator-stage-server.ps1"));
+
+        Assert.DoesNotContain("Security__TestHost", acceptance, StringComparison.Ordinal);
+        Assert.DoesNotContain("Security:TestHost", acceptance, StringComparison.Ordinal);
+        Assert.DoesNotContain("Security__TestHost", stageServer, StringComparison.Ordinal);
+        Assert.DoesNotContain("Security:TestHost", stageServer, StringComparison.Ordinal);
+        Assert.Contains(
+            "(Join-Path $StateDirectory \"profiles.json\")",
+            stageServer,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$env:Beacon__Displays__NameMapPath = Join-Path $StateDirectory \"display-name-map.json\"",
+            stageServer,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "new AuthenticationHeaderValue(\"Beacon\", credential)",
+            acceptance,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ProductionAcceptanceSeedsRegistrationAndPreparesDisplayBeforeEmulatorWork()
+    {
+        string root = FindRepositoryRoot();
+        string acceptance = File.ReadAllText(ToPlatformPath(
+            root,
+            "tests/Beacon.ProductionAcceptance/Program.cs"));
+
+        Assert.Contains(
+            "WriteRegisteredProfile(profilePath, clientId);",
+            acceptance,
+            StringComparison.Ordinal);
+        int preparedDisplay = acceptance.IndexOf(
+            "BEACON_GATE5_STAGE prepared-display",
+            StringComparison.Ordinal);
+        int emulatorEnvironment = acceptance.IndexOf(
+            "BEACON_GATE5_STAGE emulator-environment",
+            StringComparison.Ordinal);
+        int certifiedBenchmark = acceptance.IndexOf(
+            "BEACON_GATE5_STAGE certified-benchmark",
+            StringComparison.Ordinal);
+
+        Assert.True(preparedDisplay >= 0, "The production gate has no prepared-display stage.");
+        Assert.True(
+            emulatorEnvironment > preparedDisplay,
+            "The production gate must validate its display before mutating the emulator.");
+        Assert.True(
+            certifiedBenchmark > emulatorEnvironment,
+            "The production gate must validate the emulator environment before benchmarking.");
+        Assert.Contains(
+            "IReadOnlySet<string> activeVirtualDisplaysBefore = CaptureActiveVirtualDisplayNames();",
+            acceptance,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ResolvePreparedDisplayName(activeVirtualDisplaysBefore)",
+            acceptance,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ValidateDisplayNameReleased(preparedDisplayName);",
+            acceptance,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ResolveMappedDisplayName(displayMapPath",
+            acceptance,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Gate5TransportFailureReleasesTheSurfaceEvidenceWaiter()
+    {
+        string root = FindRepositoryRoot();
+        string acceptance = File.ReadAllText(ToPlatformPath(
+            root,
+            "src/Beacon.Android/app/src/androidTest/java/dev/beacon/android/BeaconStreamCoreInstrumentationTest.java"));
+
+        Assert.Contains(
+            "videoRuntime.recordStreamFailure(stage);",
+            acceptance,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "if (activity.isDestroyed())",
+            acceptance,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TestDoublesAreNotCompiledIntoProductionProjects()
     {
         string root = FindRepositoryRoot();
