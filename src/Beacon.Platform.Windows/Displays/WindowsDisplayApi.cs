@@ -63,7 +63,7 @@ public sealed class WindowsDisplayApi :
     private readonly WindowsVirtualDisplayArrivalGate virtualDisplayArrivalGate;
     private readonly WindowsInputDesktopExecutionContext inputDesktop;
     private readonly WindowsDisplayLeaseTopologyReconciler topologyReconciler;
-    private readonly WindowsShellExtendedTopologyActivator extendedTopologyActivator = new();
+    private readonly WindowsShellExtendedTopologyActivator extendedTopologyActivator;
     private readonly Action<string>? diagnostic;
     private readonly object leasedDisplayStateGate = new();
     private readonly Dictionary<string, LeasedVirtualDisplayState> leasedDisplays =
@@ -75,25 +75,49 @@ public sealed class WindowsDisplayApi :
     }
 
     public WindowsDisplayApi(WindowsDisplayNameMap displayNameMap)
-        : this(displayNameMap, new WindowsInputDesktopExecutionContext(), diagnostic: null)
+        : this(
+            displayNameMap,
+            new WindowsInputDesktopExecutionContext(),
+            userTopologyHelperExecutable: null,
+            diagnostic: null)
     {
     }
 
     public WindowsDisplayApi(
         WindowsDisplayNameMap displayNameMap,
         Action<string> diagnostic)
-        : this(displayNameMap, new WindowsInputDesktopExecutionContext(), diagnostic)
+        : this(
+            displayNameMap,
+            new WindowsInputDesktopExecutionContext(),
+            userTopologyHelperExecutable: null,
+            diagnostic)
+    {
+    }
+
+    public WindowsDisplayApi(
+        WindowsDisplayNameMap displayNameMap,
+        string userTopologyHelperExecutable,
+        Action<string>? diagnostic = null)
+        : this(
+            displayNameMap,
+            new WindowsInputDesktopExecutionContext(),
+            userTopologyHelperExecutable,
+            diagnostic)
     {
     }
 
     private WindowsDisplayApi(
         WindowsDisplayNameMap displayNameMap,
         WindowsInputDesktopExecutionContext inputDesktop,
+        string? userTopologyHelperExecutable,
         Action<string>? diagnostic)
     {
         this.displayNameMap = displayNameMap;
         this.inputDesktop = inputDesktop;
         this.diagnostic = diagnostic;
+        extendedTopologyActivator = new WindowsShellExtendedTopologyActivator(
+            userTopologyHelperExecutable: userTopologyHelperExecutable,
+            diagnostic: diagnostic);
         topologyReconciler = new WindowsDisplayLeaseTopologyReconciler(
             () => this.inputDesktop.Invoke(QueryActiveTopology),
             SnapshotLeasedDisplayRequirements,
@@ -126,6 +150,7 @@ public sealed class WindowsDisplayApi :
         this.driverLeaseSession = driverLeaseSession;
         this.inputDesktop = inputDesktop;
         diagnostic = null;
+        extendedTopologyActivator = new WindowsShellExtendedTopologyActivator();
         virtualDisplayArrivalGate = new WindowsVirtualDisplayArrivalGate(
             () => this.driverLeaseSession.HeartbeatRevision,
             this.driverLeaseSession.WaitForHeartbeatAsync);

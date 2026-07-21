@@ -51,8 +51,19 @@ internal static class Program
             }
 
             var displayNames = new WindowsDisplayNameMap(WindowsDisplayNameMapStore.Default);
+            string userTopologyHelperExecutable = Path.Combine(
+                AppContext.BaseDirectory,
+                "Beacon.HostAgent.exe");
+            if (!File.Exists(userTopologyHelperExecutable))
+            {
+                return Fail(
+                    $"Host Agent user display topology helper is missing: {userTopologyHelperExecutable}",
+                    5);
+            }
+
             await using var displayApi = new WindowsDisplayApi(
                 displayNames,
+                userTopologyHelperExecutable,
                 message => HostAgentDiagnostics.Write($"display {message}"));
             var executor = new WindowsHostAgentDisplayExecutor(displayApi, displayNames);
             HostAgentDriverUpdateStorage storage = HostAgentDriverUpdateStorage.Default;

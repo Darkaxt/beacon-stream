@@ -38,13 +38,13 @@ public sealed class WindowsShellExtendedTopologyActivatorTests
     }
 
     [Fact]
-    public void HostAgentLaunchesItsFixedUserTopologyHelperThroughExplorer()
+    public void ExplicitHostAgentPathLaunchesItsFixedUserTopologyHelperThroughExplorer()
     {
         var executor = new RecordingExplorerShellExecutor();
         const string hostAgent = @"C:\Program Files\Beacon Stream\Beacon.HostAgent.exe";
         var activator = new WindowsShellExtendedTopologyActivator(
             executor,
-            () => hostAgent);
+            userTopologyHelperExecutable: hostAgent);
 
         DisplayApiResult result = activator.Apply();
 

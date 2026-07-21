@@ -225,30 +225,42 @@ internal sealed class WindowsExplorerShellExecutor(
 
 internal sealed class WindowsShellExtendedTopologyActivator(
     IWindowsExplorerShellExecutor? shell = null,
-    Func<string?>? processPath = null)
+    string? userTopologyHelperExecutable = null,
+    Action<string>? diagnostic = null)
 {
     private readonly IWindowsExplorerShellExecutor shell =
         shell ?? new WindowsExplorerShellExecutor();
-    private readonly Func<string?> processPath = processPath ?? (() => Environment.ProcessPath);
 
     public DisplayApiResult Apply()
     {
-        string? currentProcess = processPath();
-        if (!string.IsNullOrWhiteSpace(currentProcess)
-            && string.Equals(
-                Path.GetFileNameWithoutExtension(currentProcess),
-                "Beacon.HostAgent",
-                StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrWhiteSpace(userTopologyHelperExecutable))
         {
-            return shell.Execute(
-                currentProcess,
+            DisplayApiResult helperResult = shell.Execute(
+                userTopologyHelperExecutable,
                 WindowsUserDisplayTopologyTransition.CommandArgument);
+            WriteDiagnostic(
+                $"topology-launch command=user-helper executable={userTopologyHelperExecutable} success={helperResult.Success} error={helperResult.Error ?? "none"}");
+            return helperResult;
         }
 
         string displaySwitch = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.Windows),
             "System32",
             "DisplaySwitch.exe");
-        return shell.Execute(displaySwitch, "/extend");
+        DisplayApiResult displaySwitchResult = shell.Execute(displaySwitch, "/extend");
+        WriteDiagnostic(
+            $"topology-launch command=display-switch executable={displaySwitch} success={displaySwitchResult.Success} error={displaySwitchResult.Error ?? "none"}");
+        return displaySwitchResult;
+    }
+
+    private void WriteDiagnostic(string message)
+    {
+        try
+        {
+            diagnostic?.Invoke(message);
+        }
+        catch
+        {
+        }
     }
 }
