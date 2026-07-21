@@ -12,6 +12,7 @@ public sealed class HostAgentUserDisplayTopologyCommandTests
 
         bool handled = HostAgentUserDisplayTopologyCommand.TryRun(
             [WindowsUserDisplayTopologyTransition.CommandArgument],
+            () => false,
             () =>
             {
                 invocationCount++;
@@ -31,6 +32,7 @@ public sealed class HostAgentUserDisplayTopologyCommandTests
 
         bool handled = HostAgentUserDisplayTopologyCommand.TryRun(
             [WindowsUserDisplayTopologyTransition.CommandArgument, "unexpected"],
+            () => false,
             () =>
             {
                 invocationCount++;
@@ -48,10 +50,31 @@ public sealed class HostAgentUserDisplayTopologyCommandTests
     {
         bool handled = HostAgentUserDisplayTopologyCommand.TryRun(
             [WindowsUserDisplayTopologyTransition.CommandArgument],
+            () => false,
             () => DisplayApiResult.Fail("Windows rejected the transition."),
             out int exitCode);
 
         Assert.True(handled);
         Assert.NotEqual(0, exitCode);
+    }
+
+    [Fact]
+    public void ElevatedProcessCannotRunTheUserTopologyTransition()
+    {
+        int invocationCount = 0;
+
+        bool handled = HostAgentUserDisplayTopologyCommand.TryRun(
+            [WindowsUserDisplayTopologyTransition.CommandArgument],
+            () => true,
+            () =>
+            {
+                invocationCount++;
+                return DisplayApiResult.Ok();
+            },
+            out int exitCode);
+
+        Assert.True(handled);
+        Assert.NotEqual(0, exitCode);
+        Assert.Equal(0, invocationCount);
     }
 }

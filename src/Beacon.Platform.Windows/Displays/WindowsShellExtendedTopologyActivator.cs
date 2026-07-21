@@ -8,12 +8,15 @@ internal interface IWindowsExplorerShellExecutor
     DisplayApiResult Execute(string fileName, string arguments);
 }
 
-internal sealed class WindowsExplorerShellExecutor : IWindowsExplorerShellExecutor
+internal sealed class WindowsExplorerShellExecutor(
+    WindowsChildProcessCompletionGate? completionGate = null) : IWindowsExplorerShellExecutor
 {
     private const uint ProcessCreateProcess = 0x00000080;
     private const uint ExtendedStartupInfoPresent = 0x00080000;
     private const uint CreateNoWindow = 0x08000000;
     private static readonly UIntPtr ParentProcessAttribute = new(0x00020000);
+    private readonly WindowsChildProcessCompletionGate completionGate =
+        completionGate ?? new WindowsChildProcessCompletionGate();
 
     public DisplayApiResult Execute(string fileName, string arguments)
     {
@@ -99,8 +102,14 @@ internal sealed class WindowsExplorerShellExecutor : IWindowsExplorerShellExecut
             }
 
             _ = NativeMethods.CloseHandle(process.Thread);
-            _ = NativeMethods.CloseHandle(process.Process);
-            return DisplayApiResult.Ok();
+            try
+            {
+                return completionGate.Wait(process.Process);
+            }
+            finally
+            {
+                _ = NativeMethods.CloseHandle(process.Process);
+            }
         }
         catch (Exception error)
         {

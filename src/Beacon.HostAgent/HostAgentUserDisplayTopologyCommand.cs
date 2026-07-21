@@ -5,9 +5,11 @@ namespace Beacon.HostAgent;
 internal static class HostAgentUserDisplayTopologyCommand
 {
     private const int TransitionFailedExitCode = 5;
+    private const int ElevatedProcessExitCode = 6;
 
     public static bool TryRun(
         string[] args,
+        Func<bool> isElevated,
         Func<DisplayApiResult> applyExtended,
         out int exitCode)
     {
@@ -19,6 +21,12 @@ internal static class HostAgentUserDisplayTopologyCommand
         {
             exitCode = 0;
             return false;
+        }
+
+        if (isElevated())
+        {
+            exitCode = ElevatedProcessExitCode;
+            return true;
         }
 
         DisplayApiResult result = applyExtended();

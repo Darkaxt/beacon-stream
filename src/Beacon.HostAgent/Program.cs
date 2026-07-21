@@ -15,6 +15,7 @@ internal static class Program
         {
             if (HostAgentUserDisplayTopologyCommand.TryRun(
                 args,
+                IsCurrentProcessElevated,
                 () => new WindowsUserDisplayTopologyTransition().ApplyExtended(),
                 out int userCommandExitCode))
             {
@@ -117,5 +118,11 @@ internal static class Program
     {
         HostAgentDiagnostics.Write($"startup-rejected message={message}");
         return exitCode;
+    }
+
+    private static bool IsCurrentProcessElevated()
+    {
+        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+        return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
     }
 }
