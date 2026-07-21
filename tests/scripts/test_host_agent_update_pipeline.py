@@ -13,6 +13,8 @@ class HostAgentUpdatePipelineTests(unittest.TestCase):
         workflow = self.read(".github/workflows/host-agent-update.yml")
 
         self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("push:", workflow)
+        self.assertIn("github.run_id", workflow)
         self.assertIn("request_id:", workflow)
         self.assertIn("BEACON_HOST_AGENT_UPDATE_SIGNING_KEY_PEM_B64", workflow)
         self.assertIn("github.sha", workflow)

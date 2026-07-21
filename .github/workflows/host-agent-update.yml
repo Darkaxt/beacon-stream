@@ -1,7 +1,24 @@
 name: Host Agent Update
-run-name: Host Agent Update ${{ inputs.request_id }}
+run-name: Host Agent Update ${{ inputs.request_id || github.run_id }}
 
 on:
+  push:
+    branches:
+      - 'codex/**'
+    paths:
+      - '.github/workflows/host-agent-update.yml'
+      - 'scripts/build-host-agent-update.ps1'
+      - 'tests/scripts/test_host_agent_update_pipeline.py'
+      - 'src/Beacon.HostAgent/**'
+      - 'src/Beacon.HostAgent.Bootstrap/**'
+      - 'src/Beacon.HostAgent.Contracts/**'
+      - 'src/Beacon.HostAgent.Control/**'
+      - 'src/Beacon.HostAgent.Package/**'
+      - 'src/Beacon.HostAgent.Update/**'
+      - 'tests/Beacon.HostAgent.Bootstrap.Tests/**'
+      - 'tests/Beacon.HostAgent.Control.Tests/**'
+      - 'tests/Beacon.HostAgent.Tests/**'
+      - 'tests/Beacon.HostAgent.Update.Tests/**'
   workflow_dispatch:
     inputs:
       request_id:
@@ -42,7 +59,7 @@ jobs:
         id: package
         shell: pwsh
         run: |
-          $packageId = "agent-${{ github.sha }}-${{ inputs.request_id }}"
+          $packageId = "agent-${{ github.sha }}-${{ inputs.request_id || github.run_id }}"
           ./scripts/build-host-agent-update.ps1 `
             -PayloadRoot artifacts/host-agent/ci-publish `
             -PackageRoot artifacts/host-agent/ci-package `
@@ -53,7 +70,7 @@ jobs:
       - name: Upload request-scoped signed package
         uses: actions/upload-artifact@v4
         with:
-          name: beacon-host-agent-${{ inputs.request_id }}-${{ github.sha }}
+          name: beacon-host-agent-${{ inputs.request_id || github.run_id }}-${{ github.sha }}
           path: artifacts/host-agent/ci-package/*
           if-no-files-found: error
           retention-days: 7
