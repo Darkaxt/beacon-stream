@@ -7,10 +7,11 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.Executors;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
@@ -267,40 +268,44 @@ public final class BeaconViewModelTest {
         RecordingDeviceBenchmarkRunner deviceRunner = new RecordingDeviceBenchmarkRunner();
         BeaconViewModel model = new BeaconViewModel(
             "z-fold-7", "https://server", service, factory);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            CompletableFuture<Void> launch = CompletableFuture.runAsync(() -> {
+                try {
+                    model.preflightBenchmarkAndLaunch(
+                        new BeaconApiClient.ProfilePatch(),
+                        capabilities(),
+                        telemetry(),
+                        benchmarkRequest("sessionPreflight"),
+                        deviceRunner,
+                        BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+                } catch (IOException failure) {
+                    throw new CompletionException(failure);
+                }
+            }, executor);
 
-        CompletableFuture<Void> launch = CompletableFuture.runAsync(() -> {
-            try {
-                model.preflightBenchmarkAndLaunch(
-                    new BeaconApiClient.ProfilePatch(),
-                    capabilities(),
-                    telemetry(),
-                    benchmarkRequest("sessionPreflight"),
-                    deviceRunner,
-                    BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
-            } catch (IOException failure) {
-                throw new CompletionException(failure);
-            }
-        });
+            service.awaitBenchmarkPreparation();
+            assertEquals("patch,capabilities,telemetry,benchmark prepare", service.actions());
+            assertTrue(!launch.isDone());
 
-        service.awaitBenchmarkPreparation();
-        assertEquals("patch,capabilities,telemetry,benchmark prepare", service.actions());
-        assertTrue(!launch.isDone());
+            factory.awaitStartedOrFailure(launch);
+            factory.emitCompletedNetworkResult();
+            deviceRunner.awaitStarted();
+            assertTrue(deviceRunner.plan.decoderRounds().isEmpty());
+            assertTrue(!launch.isDone());
 
-        factory.awaitStarted();
-        factory.emitCompletedNetworkResult();
-        deviceRunner.awaitStarted();
-        assertTrue(deviceRunner.plan.decoderRounds().isEmpty());
-        assertTrue(!launch.isDone());
+            deviceRunner.emitCompleted();
+            launch.get();
 
-        deviceRunner.emitCompleted();
-        launch.get();
-
-        assertEquals(
-            "patch,capabilities,telemetry,benchmark prepare,benchmark complete,launch",
-            service.actions());
-        assertEquals(0, service.lastBenchmarkCompletion.toJson().getAsJsonArray("decoderSamples").size());
-        assertEquals(1, service.lastBenchmarkCompletion.toJson().getAsJsonArray("powerSamples").size());
-        model.close();
+            assertEquals(
+                "patch,capabilities,telemetry,benchmark prepare,benchmark complete,launch",
+                service.actions());
+            assertEquals(0, service.lastBenchmarkCompletion.toJson().getAsJsonArray("decoderSamples").size());
+            assertEquals(1, service.lastBenchmarkCompletion.toJson().getAsJsonArray("powerSamples").size());
+        } finally {
+            model.close();
+            executor.shutdownNow();
+        }
     }
 
     @Test
@@ -708,6 +713,13 @@ public final class BeaconViewModelTest {
             bindings.started.await();
         }
 
+        void awaitStartedOrFailure(CompletableFuture<?> operation) throws Exception {
+            CompletableFuture.anyOf(bindings.startedFuture, operation).get();
+            if (!bindings.startedFuture.isDone()) {
+                operation.get();
+            }
+        }
+
         void emitConnectionLost() {
             bindings.callbacks.onConnectionLost(bindings.generation);
         }
@@ -755,6 +767,7 @@ public final class BeaconViewModelTest {
         private int stopCount;
         private int releaseCount;
         private final CountDownLatch started = new CountDownLatch(1);
+        private final CompletableFuture<Void> startedFuture = new CompletableFuture<>();
 
         @Override public long create(BeaconStreamCore.NativeCallbacks callbacks) {
             this.callbacks = callbacks;
@@ -764,6 +777,7 @@ public final class BeaconViewModelTest {
             startCount++;
             generation = grant.generation;
             started.countDown();
+            startedFuture.complete(null);
             return true;
         }
         @Override public void sendInput(long handle, BeaconApiClient.InputBatch input) { }

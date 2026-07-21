@@ -331,30 +331,37 @@ public final class BeaconStreamCore implements AutoCloseable {
     synchronized long activeGenerationForTest() { return activeGeneration; }
 
     static long createNativeHandleForTest(NativeCallbacks callbacks) {
+        NativeLibrary.ensureLoaded();
         return nativeCreate(callbacks);
     }
 
     static void emitNativeFrameForTest(long handle, byte[] bytes, long presentationTimeUs) {
+        NativeLibrary.ensureLoaded();
         nativeTestEmitFrame(handle, bytes, presentationTimeUs);
     }
 
     static void releaseNativeHandleForTest(long handle) {
+        NativeLibrary.ensureLoaded();
         nativeRelease(handle);
     }
 
     static void awaitNativeRegistryIdleForTest() {
+        NativeLibrary.ensureLoaded();
         nativeTestAwaitRegistryIdle();
     }
 
     static int nativeRegistrySizeForTest() {
+        NativeLibrary.ensureLoaded();
         return nativeTestRegistrySize();
     }
 
     static boolean parseNativeGrantForTest(BeaconStreamSession.NativeGrant grant) {
+        NativeLibrary.ensureLoaded();
         return nativeTestParseGrant(grant);
     }
 
     static void emitNativeBenchmarkResultForTest(long handle, long generation) {
+        NativeLibrary.ensureLoaded();
         nativeTestEmitBenchmarkResult(handle, generation);
     }
 
@@ -729,7 +736,7 @@ public final class BeaconStreamCore implements AutoCloseable {
     }
 
     private static final class JniBindings implements Bindings {
-        static { System.loadLibrary("beacon_streamcore"); }
+        static { NativeLibrary.ensureLoaded(); }
 
         @Override public long create(NativeCallbacks callbacks) { return nativeCreate(callbacks); }
         @Override public boolean start(long handle, BeaconStreamSession.NativeGrant grant) {
@@ -772,6 +779,12 @@ public final class BeaconStreamCore implements AutoCloseable {
         @Override public void replaceSurface(long handle, Object surface) { nativeReplaceSurface(handle, surface); }
         @Override public void stop(long handle) { nativeStop(handle); }
         @Override public void release(long handle) { nativeRelease(handle); }
+    }
+
+    private static final class NativeLibrary {
+        static { System.loadLibrary("beacon_streamcore"); }
+
+        static void ensureLoaded() { }
     }
 
     private static native long nativeCreate(NativeCallbacks callbacks);
