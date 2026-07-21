@@ -32,6 +32,7 @@ public sealed class WindowsDisplayApi :
     private const uint SdcUseSuppliedDisplayConfig = 0x00000020;
     private const uint SdcValidate = 0x00000040;
     private const uint SdcApply = 0x00000080;
+    private const uint SdcNoOptimization = 0x00000100;
     private const uint SdcSaveToDatabase = 0x00000200;
     private const uint SdcAllowChanges = 0x00000400;
     private const uint SdcTopologyExtend = 0x00000004;
@@ -874,7 +875,7 @@ public sealed class WindowsDisplayApi :
     }
 
     internal static uint ExtendedTopologyApplyFlags() =>
-        SdcApply | SdcTopologyExtend;
+        SdcApply | SdcNoOptimization | SdcTopologyExtend;
 
     internal static uint SuppliedDisplayConfigValidateFlags() =>
         SdcValidate | SdcUseSuppliedDisplayConfig | SdcVirtualModeAware;

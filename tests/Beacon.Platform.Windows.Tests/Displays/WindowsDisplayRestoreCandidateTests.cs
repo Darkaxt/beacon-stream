@@ -127,7 +127,7 @@ public sealed class WindowsDisplayRestoreCandidateTests
     [Fact]
     public void ExtendedTopologyApplyUsesOnlyValidDatabaseTopologyFlags()
     {
-        Assert.Equal(0x00000084u, WindowsDisplayApi.ExtendedTopologyApplyFlags());
+        Assert.Equal(0x00000184u, WindowsDisplayApi.ExtendedTopologyApplyFlags());
     }
 
     [Fact]
