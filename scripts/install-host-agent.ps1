@@ -122,6 +122,7 @@ $running = @(
     Get-Process -Name "Beacon.HostAgent", "Beacon.HostAgent.Bootstrap" `
         -ErrorAction SilentlyContinue)
 if ($running.Count -gt 0) {
+    $running | Stop-Process -Force -ErrorAction SilentlyContinue
     $running | Wait-Process -ErrorAction SilentlyContinue
 }
 

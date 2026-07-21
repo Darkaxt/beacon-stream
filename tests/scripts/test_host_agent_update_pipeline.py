@@ -41,6 +41,13 @@ class HostAgentUpdatePipelineTests(unittest.TestCase):
         self.assertIn("New-ScheduledTaskAction", installer)
         self.assertIn("$installedBootstrap", installer)
 
+    def test_installer_terminates_orphaned_host_agent_before_waiting(self) -> None:
+        installer = self.read("scripts/install-host-agent.ps1")
+
+        stop_index = installer.index("Stop-Process")
+        wait_index = installer.index("Wait-Process")
+        self.assertLess(stop_index, wait_index)
+
     def test_bootstrap_has_no_time_owned_startup_or_rollback(self) -> None:
         bootstrap = "\n".join(
             path.read_text(encoding="utf-8")
