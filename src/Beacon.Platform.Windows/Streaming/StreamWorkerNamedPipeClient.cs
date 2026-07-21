@@ -421,7 +421,8 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
             diagnostic.NumericValue,
             diagnostic.Boundary,
             diagnostic.Code,
-            diagnostic.PlatformErrorCode);
+            diagnostic.PlatformErrorCode,
+            diagnostic.FailureStage);
     }
 
     private StreamWorkerEvent TranslateConnectionDiagnostic(WorkerIpcEnvelope envelope)

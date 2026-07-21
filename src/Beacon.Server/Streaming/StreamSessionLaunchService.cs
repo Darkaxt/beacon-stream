@@ -57,21 +57,6 @@ public sealed class StreamSessionLaunchService(
                 prepared.Error ?? "Display preparation failed.");
         }
 
-        StreamingStartResult started = await streaming.StartAsync(plan, cancellationToken);
-        if (!IsActive(started))
-        {
-            string error = started.Error
-                ?? $"Stream session '{plan.SessionId}' has no active streaming runtime.";
-            string cleanup = started.Success
-                ? await StopRuntimeAsync(
-                    plan.SessionId,
-                    started.Session?.RuntimeGeneration ?? Guid.Empty,
-                    "invalid metadata")
-                : string.Empty;
-            return StreamSessionLaunchResult.Fail($"{error}{cleanup}");
-        }
-        StreamingSessionState stream = started.Session!;
-
         DisplayLeaseResult activated;
         try
         {
@@ -80,30 +65,19 @@ public sealed class StreamSessionLaunchService(
         catch (OperationCanceledException)
         {
             await RestorePhysicalAsync("canceled display activation");
-            await StopRuntimeAsync(
-                plan.SessionId,
-                stream.RuntimeGeneration,
-                "canceled display activation");
             throw;
         }
         catch (Exception error)
         {
             string restored = await RestorePhysicalAsync("unexpected display activation failure");
-            string stopped = await StopRuntimeAsync(
-                plan.SessionId,
-                stream.RuntimeGeneration,
-                "unexpected display activation failure");
             return StreamSessionLaunchResult.Fail(
-                $"Display activation failed unexpectedly ({error.GetType().Name}).{restored}{stopped}");
+                $"Display activation failed unexpectedly ({error.GetType().Name}).{restored}");
         }
         if (!activated.Success || activated.Lease is null)
         {
-            string stopped = await StopRuntimeAsync(
-                plan.SessionId,
-                stream.RuntimeGeneration,
-                "display activation failure");
+            string restored = await RestorePhysicalAsync("display activation failure");
             return StreamSessionLaunchResult.Fail(
-                $"{activated.Error ?? "Display activation failed."}{stopped}");
+                $"{activated.Error ?? "Display activation failed."}{restored}");
         }
 
         GameLaunchResult launched;
@@ -116,31 +90,19 @@ public sealed class StreamSessionLaunchService(
         catch (OperationCanceledException)
         {
             await RestorePhysicalAsync("canceled application launch");
-            await StopRuntimeAsync(
-                plan.SessionId,
-                stream.RuntimeGeneration,
-                "canceled application launch");
             throw;
         }
         catch (Exception error)
         {
             string restored = await RestorePhysicalAsync("unexpected application launch failure");
-            string stopped = await StopRuntimeAsync(
-                plan.SessionId,
-                stream.RuntimeGeneration,
-                "unexpected application launch failure");
             return StreamSessionLaunchResult.Fail(
-                $"Application launch failed unexpectedly ({error.GetType().Name}).{restored}{stopped}");
+                $"Application launch failed unexpectedly ({error.GetType().Name}).{restored}");
         }
         if (!launched.Success || launched.State is null)
         {
             string restored = await RestorePhysicalAsync("game launch failure");
-            string stopped = await StopRuntimeAsync(
-                plan.SessionId,
-                stream.RuntimeGeneration,
-                "game launch failure");
             return StreamSessionLaunchResult.Fail(
-                $"{launched.Error ?? "Application launch failed."}{restored}{stopped}");
+                $"{launched.Error ?? "Application launch failed."}{restored}");
         }
 
         try
@@ -154,10 +116,6 @@ public sealed class StreamSessionLaunchService(
                 launched.State,
                 "canceled ownership recording");
             await RestorePhysicalAsync("canceled ownership recording");
-            await StopRuntimeAsync(
-                plan.SessionId,
-                stream.RuntimeGeneration,
-                "canceled ownership recording");
             throw;
         }
         catch (Exception error)
@@ -167,14 +125,49 @@ public sealed class StreamSessionLaunchService(
                 launched.State,
                 "unexpected ownership recording failure");
             string restored = await RestorePhysicalAsync("unexpected ownership recording failure");
-            string stopped = await StopRuntimeAsync(
-                plan.SessionId,
-                stream.RuntimeGeneration,
-                "unexpected ownership recording failure");
             return StreamSessionLaunchResult.Fail(
                 $"Ownership recording failed unexpectedly ({error.GetType().Name})." +
-                $"{terminated}{restored}{stopped}");
+                $"{terminated}{restored}");
         }
+
+        StreamingStartResult started;
+        try
+        {
+            started = await streaming.StartAsync(plan, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            await TerminateOwnedWorkAsync(plan.SessionId, "canceled streaming start");
+            await RestorePhysicalAsync("canceled streaming start");
+            throw;
+        }
+        catch (Exception error)
+        {
+            string terminated = await TerminateOwnedWorkAsync(
+                plan.SessionId,
+                "unexpected streaming start failure");
+            string restored = await RestorePhysicalAsync("unexpected streaming start failure");
+            return StreamSessionLaunchResult.Fail(
+                $"Streaming start failed unexpectedly ({error.GetType().Name})." +
+                $"{terminated}{restored}");
+        }
+        if (!IsActive(started))
+        {
+            string error = started.Error
+                ?? $"Stream session '{plan.SessionId}' has no active streaming runtime.";
+            Guid generation = started.Session?.RuntimeGeneration ?? Guid.Empty;
+            string stopped = generation != Guid.Empty
+                ? await StopRuntimeAsync(plan.SessionId, generation, "invalid metadata")
+                : string.Empty;
+            string terminated = await TerminateOwnedWorkAsync(
+                plan.SessionId,
+                "streaming start failure");
+            string restored = await RestorePhysicalAsync("streaming start failure");
+            return StreamSessionLaunchResult.Fail(
+                $"{error}{stopped}{terminated}{restored}");
+        }
+        StreamingSessionState stream = started.Session!;
+
         StreamTicketProvisioningResult provisioned;
         try
         {
@@ -190,35 +183,35 @@ public sealed class StreamSessionLaunchService(
                 clientId,
                 plan.SessionId,
                 "canceled ticket provisioning");
-            string terminated = await TerminateOwnedWorkAsync(
-                plan.SessionId,
-                "canceled ticket provisioning");
-            string restored = await RestorePhysicalAsync("canceled ticket provisioning");
             string stopped = await StopRuntimeAsync(
                 plan.SessionId,
                 stream.RuntimeGeneration,
                 "canceled ticket provisioning");
+            string terminated = await TerminateOwnedWorkAsync(
+                plan.SessionId,
+                "canceled ticket provisioning");
+            string restored = await RestorePhysicalAsync("canceled ticket provisioning");
             if (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
 
             return StreamSessionLaunchResult.Fail(
-                $"Ticket provisioning canceled unexpectedly.{revoked}{terminated}{restored}{stopped}");
+                $"Ticket provisioning canceled unexpectedly.{revoked}{stopped}{terminated}{restored}");
         }
         if (!provisioned.Success || provisioned.Ticket is null)
         {
-            string terminated = await TerminateOwnedWorkAsync(
-                plan.SessionId,
-                "ticket provisioning failure");
-            string restored = await RestorePhysicalAsync("ticket provisioning failure");
             string stopped = await StopRuntimeAsync(
                 plan.SessionId,
                 stream.RuntimeGeneration,
                 "ticket provisioning failure");
+            string terminated = await TerminateOwnedWorkAsync(
+                plan.SessionId,
+                "ticket provisioning failure");
+            string restored = await RestorePhysicalAsync("ticket provisioning failure");
             return StreamSessionLaunchResult.Fail(
                 $"{provisioned.Error ?? "Stream ticket provisioning failed."}" +
-                $"{terminated}{restored}{stopped}");
+                $"{stopped}{terminated}{restored}");
         }
 
         return StreamSessionLaunchResult.Started(

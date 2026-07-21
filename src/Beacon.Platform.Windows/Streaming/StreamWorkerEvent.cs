@@ -67,7 +67,8 @@ public sealed record StreamWorkerSessionFailure(
     ulong WorkerSessionGeneration,
     DiagnosticBoundary Boundary,
     DiagnosticCode Code,
-    uint PlatformErrorCode) : StreamWorkerEvent(ProcessGeneration, SessionId);
+    uint PlatformErrorCode,
+    string FailureStage) : StreamWorkerEvent(ProcessGeneration, SessionId);
 
 public sealed record StreamWorkerConnectionObserved(
     long ProcessGeneration,

@@ -50,6 +50,54 @@ public sealed class StreamWorkerStreamingBackendTests
     }
 
     [Fact]
+    public async Task StartCancellationAfterDispatchStopsTheUntrackedWorkerGeneration()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var host = new RecordingStreamWorkerHost
+        {
+            StartMediaDispatched = cancellation.Cancel,
+        };
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            backend.StartAsync(CreatePlan(), cancellation.Token));
+
+        Assert.Equal(
+            [
+                WorkerIpcEnvelope.BodyOneofCase.PrepareSession,
+                WorkerIpcEnvelope.BodyOneofCase.StartMedia,
+                WorkerIpcEnvelope.BodyOneofCase.StopMedia,
+            ],
+            host.GenerationBoundCommands.Select(command => command.BodyCase));
+        Assert.Empty(backend.GetSessions());
+        Assert.False(host.MediaStarted);
+    }
+
+    [Fact]
+    public async Task StartIpcFailureAfterDispatchStopsTheUntrackedWorkerGeneration()
+    {
+        var host = new RecordingStreamWorkerHost
+        {
+            StartMediaFailureAfterDispatch = new IOException("simulated response loss"),
+        };
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        IOException failure = await Assert.ThrowsAsync<IOException>(() =>
+            backend.StartAsync(CreatePlan(), CancellationToken.None));
+
+        Assert.Equal("simulated response loss", failure.Message);
+        Assert.Equal(
+            [
+                WorkerIpcEnvelope.BodyOneofCase.PrepareSession,
+                WorkerIpcEnvelope.BodyOneofCase.StartMedia,
+                WorkerIpcEnvelope.BodyOneofCase.StopMedia,
+            ],
+            host.GenerationBoundCommands.Select(command => command.BodyCase));
+        Assert.Empty(backend.GetSessions());
+        Assert.False(host.MediaStarted);
+    }
+
+    [Fact]
     public async Task ProcessExitAfterFinalGenerationCheckCannotLeaveRunningSession()
     {
         var host = new RecordingStreamWorkerHost();
@@ -665,14 +713,31 @@ public sealed class StreamWorkerStreamingBackendTests
         {
             ReadinessError = new StreamWorkerProcessExitedException(23),
         };
+        host.MarkWorkerExited();
         var backend = new StreamWorkerStreamingBackend(host);
 
         StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
 
-        Assert.False(health.Ready);
-        Assert.Equal("unavailable", health.State);
-        Assert.Equal("Beacon StreamWorker failed readiness verification.", health.Diagnostic);
+        Assert.True(health.Ready);
+        Assert.Equal("idle", health.State);
+        Assert.Equal("Beacon StreamWorker is stopped and will start on demand.", health.Diagnostic);
         Assert.DoesNotContain("23", health.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HealthInspectionDoesNotStartDormantWorker()
+    {
+        var host = new RecordingStreamWorkerHost();
+        host.MarkWorkerExited();
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.True(health.Ready);
+        Assert.Equal("idle", health.State);
+        Assert.Contains("on demand", health.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, host.EnsureReadyCalls);
+        Assert.Empty(host.Commands);
     }
 
     [Fact]
@@ -815,6 +880,10 @@ public sealed class StreamWorkerStreamingBackendTests
 
         public bool MediaStarted { get; private set; }
 
+        public Action? StartMediaDispatched { get; set; }
+
+        public Exception? StartMediaFailureAfterDispatch { get; set; }
+
         public int EnsureReadyCalls { get; private set; }
 
         public List<WorkerIpcEnvelope> Commands { get; } = [];
@@ -925,6 +994,16 @@ public sealed class StreamWorkerStreamingBackendTests
             if (command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.StartMedia)
             {
                 MediaStarted = true;
+                StartMediaDispatched?.Invoke();
+                cancellationToken.ThrowIfCancellationRequested();
+                if (StartMediaFailureAfterDispatch is not null)
+                {
+                    throw StartMediaFailureAfterDispatch;
+                }
+            }
+            if (command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.StopMedia)
+            {
+                MediaStarted = false;
             }
             if (ExitAfterPrepare
                 && command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.PrepareSession)

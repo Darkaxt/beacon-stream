@@ -259,7 +259,8 @@ public sealed class StreamWorkerEventRelay(
                     ("workerSessionGeneration", failure.WorkerSessionGeneration),
                     ("boundary", failure.Boundary),
                     ("code", failure.Code),
-                    ("platformStatusCode", failure.PlatformErrorCode));
+                    ("platformStatusCode", failure.PlatformErrorCode),
+                    ("failureStage", failure.FailureStage));
                 break;
             case StreamWorkerProcessExited exited:
                 runtimeEvents.ProcessExited(exited);

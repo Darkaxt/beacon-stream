@@ -70,18 +70,29 @@ public sealed class StreamWorkerStreamingBackend :
         }
     }
 
-    public async Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken)
+    public Task<StreamingBackendHealth> GetHealthAsync(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!host.IsReady)
+        {
+            return Task.FromResult(new StreamingBackendHealth(
+                Ready: true,
+                State: "idle",
+                Diagnostic: "Beacon StreamWorker is stopped and will start on demand.",
+                Capabilities: Capabilities(host.Capabilities),
+                ActiveSessions: GetSessions().Count(session => session.State == "running"),
+                Diagnostics: []));
+        }
+
         try
         {
-            await host.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
             WorkerCapabilities workerCapabilities = host.Capabilities;
             byte[] workerInstanceId = host.WorkerInstanceId.ToArray();
             bool controlReady = host.IsReady
                 && workerInstanceId.Length != 0
                 && workerCapabilities.WorkerInstanceId.Span.SequenceEqual(workerInstanceId);
             bool ready = controlReady && workerCapabilities.VideoAvailable;
-            return new StreamingBackendHealth(
+            return Task.FromResult(new StreamingBackendHealth(
                 Ready: ready,
                 State: ready ? "ready" : "unavailable",
                 Diagnostic: ready
@@ -91,17 +102,17 @@ public sealed class StreamWorkerStreamingBackend :
                         : "Beacon StreamWorker unavailable.",
                 Capabilities: Capabilities(workerCapabilities),
                 ActiveSessions: GetSessions().Count(session => session.State == "running"),
-                Diagnostics: ready ? [] : VideoDiagnostics(workerCapabilities));
+                Diagnostics: ready ? [] : VideoDiagnostics(workerCapabilities)));
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
-            return new StreamingBackendHealth(
+            return Task.FromResult(new StreamingBackendHealth(
                 Ready: false,
                 State: "unavailable",
                 Diagnostic: "Beacon StreamWorker failed readiness verification.",
                 Capabilities: Capabilities(host.Capabilities),
                 ActiveSessions: GetSessions().Count(session => session.State == "running"),
-                Diagnostics: [error.GetType().Name]);
+                Diagnostics: [error.GetType().Name]));
         }
     }
 
@@ -880,9 +891,31 @@ public sealed class StreamWorkerStreamingBackend :
                 },
                 cancellationToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException cancellation)
+        {
+            string? cleanupError = await CleanupUncertainTransportStartAsync(
+                sessionId,
+                processGeneration).ConfigureAwait(false);
+            if (cleanupError is not null)
+            {
+                throw new InvalidOperationException(cleanupError, cancellation);
+            }
+            throw;
+        }
         catch (Exception error) when (IsGenerationFailure(error))
         {
             return WorkerTransportStartResult.Fail(generationFailureError);
+        }
+        catch (Exception failure)
+        {
+            string? cleanupError = await CleanupUncertainTransportStartAsync(
+                sessionId,
+                processGeneration).ConfigureAwait(false);
+            if (cleanupError is not null)
+            {
+                throw new InvalidOperationException(cleanupError, failure);
+            }
+            throw;
         }
         string? startError = CompletionError("start_media", started.Completion.WorkerCompletion);
         if (startError is not null)
@@ -914,6 +947,49 @@ public sealed class StreamWorkerStreamingBackend :
 
         return WorkerTransportStartResult.Started(
             checked((int)transportReady.WorkerTransportReady.ListenerPort));
+    }
+
+    private async Task<string?> CleanupUncertainTransportStartAsync(
+        string sessionId,
+        long processGeneration)
+    {
+        try
+        {
+            StreamWorkerCommandResponse stopped = await host.SendAsync(
+                processGeneration,
+                new WorkerIpcEnvelope
+                {
+                    SessionId = sessionId,
+                    StopMedia = new StopMedia { Reason = StopMediaReason.SessionFailed },
+                },
+                CancellationToken.None).ConfigureAwait(false);
+            if (IsSuccessfulCompletion(stopped.Completion, sessionId))
+            {
+                return null;
+            }
+        }
+        catch (Exception error) when (IsGenerationFailure(error))
+        {
+            return null;
+        }
+        catch (Exception)
+        {
+        }
+
+        try
+        {
+            await ShutdownGenerationAsync(processGeneration).ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception error) when (IsGenerationFailure(error))
+        {
+            return null;
+        }
+        catch (Exception error)
+        {
+            return "StreamWorker start_media cancellation cleanup was not confirmed " +
+                $"({error.GetType().Name}).";
+        }
     }
 
     private async Task<string?> CleanupInvalidTransportReadyAsync(

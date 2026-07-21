@@ -147,7 +147,8 @@ public sealed class StreamWorkerEventRelayTests
             7,
             DiagnosticBoundary.Capture,
             DiagnosticCode.OperationFailed,
-            2));
+            2,
+            "capture-session-create"));
         await host.WriteAsync(new StreamWorkerProcessExited(1, 23));
         await host.WriteAsync(Input(8, ClientInputEvent.StreamKeyboard(1, true)));
         await host.WriteAsync(Input(9, ClientInputEvent.StreamKeyboard(2, false)));
@@ -168,6 +169,7 @@ public sealed class StreamWorkerEventRelayTests
         Assert.Contains("worker.session_failed", rendered, StringComparison.Ordinal);
         Assert.Contains("worker.video_failed", rendered, StringComparison.Ordinal);
         Assert.Contains("boundary=Capture", rendered, StringComparison.Ordinal);
+        Assert.Contains("failureStage=capture-session-create", rendered, StringComparison.Ordinal);
         Assert.Contains("platformStatusCode=2151743494", rendered, StringComparison.Ordinal);
         Assert.Contains("input.dispatch_failed", rendered, StringComparison.Ordinal);
         Assert.Contains("input.rejected", rendered, StringComparison.Ordinal);

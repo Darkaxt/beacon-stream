@@ -613,7 +613,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
     }
 
     [Fact]
-    public async Task LaunchCompensatesWorkerAndDisplayWhenLauncherThrows()
+    public async Task LaunchRestoresDisplayWithoutStartingWorkerWhenLauncherThrows()
     {
         var display = new FakeDisplayBackend();
         var backend = new FakeStreamingBackend();
@@ -635,9 +635,9 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             new { gameId = "steam-shortcut:3767414131" });
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-        StreamingSessionState stream = Assert.IsType<StreamingSessionState>(
-            await backend.GetSessionAsync(sessionId, CancellationToken.None));
-        Assert.Equal("stopped", stream.State);
+        Assert.Null(await backend.GetSessionAsync(sessionId, CancellationToken.None));
+        Assert.Empty(backend.StartCalls);
+        Assert.Empty(backend.StopCalls);
         Assert.Equal("physical-primary", Assert.Single(display.RestoreCalls));
         Assert.Contains(
             "application launch failed unexpectedly",
@@ -646,21 +646,24 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
     }
 
     [Fact]
-    public async Task LaunchOrdersPreparedDisplayWorkerActivationAndApplication()
+    public async Task LaunchOrdersDisplayApplicationOwnershipBeforeWorkerCapture()
     {
         var calls = new List<string>();
         var display = new OrderedDisplayBackend(calls);
         var streaming = new OrderedStreamingBackend(calls);
         var launcher = new OrderedGameLauncher(calls);
+        var ownership = new OrderedOwnershipTracker(calls);
         WebApplicationFactory<Program> orderedFactory = factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
                 services.RemoveAll<IDisplayBackend>();
                 services.RemoveAll<IStreamingBackend>();
                 services.RemoveAll<IGameLauncher>();
+                services.RemoveAll<ISessionOwnershipTracker>();
                 services.AddSingleton<IDisplayBackend>(display);
                 services.AddSingleton<IStreamingBackend>(streaming);
                 services.AddSingleton<IGameLauncher>(launcher);
+                services.AddSingleton<ISessionOwnershipTracker>(ownership);
             }));
         HttpClient client = orderedFactory.CreateClient();
 
@@ -673,28 +676,87 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             [
                 "stream.preflight",
                 "display.prepare",
-                "stream.start",
                 "display.activate",
                 "game.launch",
+                "ownership.record",
+                "stream.start",
             ],
             calls);
     }
 
     [Fact]
-    public async Task LaunchWorkerFailureDoesNotActivateDisplayLaunchApplicationOrIssueTicket()
+    public async Task TicketProvisioningFailureCompensatesInReverseStartupOrder()
+    {
+        var calls = new List<string>();
+        var display = new OrderedDisplayBackend(calls);
+        var streaming = new OrderedStreamingBackend(calls);
+        var launcher = new OrderedGameLauncher(calls);
+        var ownership = new OrderedOwnershipTracker(calls);
+        var authorizer = new RejectingOrderedStreamSessionAuthorizer(calls);
+        WebApplicationFactory<Program> orderedFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.RemoveAll<IStreamingBackend>();
+                services.RemoveAll<IGameLauncher>();
+                services.RemoveAll<ISessionOwnershipTracker>();
+                services.RemoveAll<IStreamSessionAuthorizer>();
+                services.AddSingleton<IDisplayBackend>(display);
+                services.AddSingleton<IStreamingBackend>(streaming);
+                services.AddSingleton<IGameLauncher>(launcher);
+                services.AddSingleton<ISessionOwnershipTracker>(ownership);
+                services.AddSingleton<IStreamSessionAuthorizer>(authorizer);
+            }));
+        HttpClient client = orderedFactory.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/launch",
+            new { gameId = "steam-shortcut:3767414131" });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(
+            [
+                "stream.preflight",
+                "display.prepare",
+                "display.activate",
+                "game.launch",
+                "ownership.record",
+                "stream.start",
+                "ticket.authorize",
+                "stream.stop",
+                "ownership.terminate",
+                "display.restore",
+            ],
+            calls);
+    }
+
+    [Fact]
+    public async Task LaunchWorkerFailureTerminatesOwnedApplicationAndRestoresDisplay()
     {
         var backend = new FakeStreamingBackend { NextStartError = "encoder unavailable" };
         var display = new FakeDisplayBackend();
-        var launcher = new FakeGameLauncher();
+        const string sessionId = "z-fold-7-steam-shortcut:3767414131";
+        var launcher = new FakeGameLauncher { NextProcessId = 4321 };
+        var inspector = new FakeSessionActivityInspector();
+        inspector.SetActivity(
+            sessionId,
+            new SessionActivitySnapshot(true, false, false, [])
+            {
+                OwnedProcessIds = [4321]
+            });
+        var terminator = new FakeSessionOwnedWorkTerminator(inspector);
+        var ownership = new SessionOwnershipTracker(inspector, terminator);
         WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
                 services.RemoveAll<IStreamingBackend>();
                 services.RemoveAll<IDisplayBackend>();
                 services.RemoveAll<IGameLauncher>();
+                services.RemoveAll<ISessionOwnershipTracker>();
                 services.AddSingleton<IStreamingBackend>(backend);
                 services.AddSingleton<IDisplayBackend>(display);
                 services.AddSingleton<IGameLauncher>(launcher);
+                services.AddSingleton<ISessionOwnershipTracker>(ownership);
             }));
         HttpClient client = failingFactory.CreateClient();
 
@@ -711,13 +773,15 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         Assert.Empty(authorizer.Authorizations);
         Assert.Empty(authorizer.Revocations);
         Assert.Single(display.PrepareCalls);
-        Assert.Empty(display.EnsureCalls);
-        Assert.Empty(display.RestoreCalls);
-        Assert.Empty(launcher.Requests);
+        Assert.Single(display.EnsureCalls);
+        Assert.Equal("physical-primary", Assert.Single(display.RestoreCalls));
+        Assert.Single(launcher.Requests);
+        Assert.Equal(sessionId, Assert.Single(terminator.SessionIds));
+        Assert.Null(await ownership.GetSnapshotAsync(sessionId, CancellationToken.None));
     }
 
     [Fact]
-    public async Task LaunchDisplayActivationFailureStopsWorkerBeforeApplicationOrTicket()
+    public async Task LaunchDisplayActivationFailureRestoresBeforeWorkerApplicationOrTicket()
     {
         var backend = new FakeStreamingBackend();
         var display = new FakeDisplayBackend();
@@ -741,7 +805,9 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             new { gameId = "steam-shortcut:3767414131" });
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-        Assert.Single(backend.StopCalls);
+        Assert.Empty(backend.StartCalls);
+        Assert.Empty(backend.StopCalls);
+        Assert.Equal(2, display.RestoreCalls.Count);
         Assert.Empty(launcher.Requests);
         FakeStreamSessionAuthorizer authorizer = Assert.IsType<FakeStreamSessionAuthorizer>(
             failingFactory.Services.GetRequiredService<IStreamSessionAuthorizer>());
@@ -749,7 +815,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
     }
 
     [Fact]
-    public async Task LaunchThrownDisplayActivationFailureRestoresAndStopsWorker()
+    public async Task LaunchThrownDisplayActivationFailureRestoresWithoutStartingWorker()
     {
         var display = new ThrowingActivationDisplayBackend();
         var backend = new FakeStreamingBackend();
@@ -772,9 +838,9 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             new { gameId = "steam-shortcut:3767414131" });
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-        StreamingSessionState stopped = Assert.IsType<StreamingSessionState>(
-            await backend.GetSessionAsync(sessionId, CancellationToken.None));
-        Assert.Equal("stopped", stopped.State);
+        Assert.Null(await backend.GetSessionAsync(sessionId, CancellationToken.None));
+        Assert.Empty(backend.StartCalls);
+        Assert.Empty(backend.StopCalls);
         Assert.Equal("physical-primary", Assert.Single(display.Inner.RestoreCalls));
         Assert.Empty(launcher.Requests);
         Assert.Contains(
@@ -898,9 +964,9 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.Equal(2, ownership.RecordCalls);
         Assert.Equal(1, ownership.TerminationCalls);
-        StreamingSessionState stopped = Assert.IsType<StreamingSessionState>(
-            await backend.GetSessionAsync(sessionId, CancellationToken.None));
-        Assert.Equal("stopped", stopped.State);
+        Assert.Null(await backend.GetSessionAsync(sessionId, CancellationToken.None));
+        Assert.Empty(backend.StartCalls);
+        Assert.Empty(backend.StopCalls);
         Assert.Equal("physical-primary", Assert.Single(display.RestoreCalls));
         Assert.Contains(
             "ownership recording failed unexpectedly",
@@ -1253,6 +1319,100 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             new { });
 
         Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, reconnect.StatusCode);
+        StreamingSessionState compensatedRuntime = Assert.IsType<StreamingSessionState>(
+            await backend.GetSessionAsync(sessionId, CancellationToken.None));
+        Assert.Equal("stopped", compensatedRuntime.State);
+        Assert.Equal(2, backend.StartCalls.Count);
+        Assert.Equal(2, backend.StopCalls.Count);
+        Assert.Single(launcher.Requests);
+        Assert.Empty(display.RestoreCalls);
+        Assert.Empty(display.RemoveCalls);
+    }
+
+    [Fact]
+    public async Task ReconnectStopsRestartedWorkerWhenFreshTicketAuthorizationIsCanceled()
+    {
+        var backend = new FakeStreamingBackend { ActiveListenerPort = 51235 };
+        var display = new FakeDisplayBackend();
+        var launcher = new FakeGameLauncher();
+        var authorizer = new CancelingSecondAuthorizationAuthorizer();
+        WebApplicationFactory<Program> restartFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.RemoveAll<IDisplayBackend>();
+                services.RemoveAll<IGameLauncher>();
+                services.RemoveAll<IStreamSessionAuthorizer>();
+                services.AddSingleton<IStreamingBackend>(backend);
+                services.AddSingleton<IDisplayBackend>(display);
+                services.AddSingleton<IGameLauncher>(launcher);
+                services.AddSingleton<IStreamSessionAuthorizer>(authorizer);
+            }));
+        HttpClient client = restartFactory.CreateClient();
+        const string sessionId = "z-fold-7-steam-shortcut:3767414131";
+
+        HttpResponseMessage launch = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/launch",
+            new { gameId = "steam-shortcut:3767414131" });
+        StreamingSessionState firstRuntime = Assert.IsType<StreamingSessionState>(
+            await backend.GetSessionAsync(sessionId, CancellationToken.None));
+        Assert.True((await backend.StopRuntimeAsync(
+            sessionId,
+            firstRuntime.RuntimeGeneration,
+            CancellationToken.None)).Success);
+
+        HttpResponseMessage reconnect = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/reconnect",
+            new { });
+
+        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, reconnect.StatusCode);
+        StreamingSessionState compensatedRuntime = Assert.IsType<StreamingSessionState>(
+            await backend.GetSessionAsync(sessionId, CancellationToken.None));
+        Assert.Equal("stopped", compensatedRuntime.State);
+        Assert.Equal(2, backend.StartCalls.Count);
+        Assert.Equal(2, backend.StopCalls.Count);
+        Assert.Equal(2, authorizer.Revocations.Count);
+        Assert.Single(launcher.Requests);
+        Assert.Empty(display.RestoreCalls);
+        Assert.Empty(display.RemoveCalls);
+    }
+
+    [Fact]
+    public async Task ReconnectStopsRestartedWorkerWhenRuntimeMetadataIsInvalid()
+    {
+        var backend = new FakeStreamingBackend { ActiveListenerPort = 51235 };
+        var display = new FakeDisplayBackend();
+        var launcher = new FakeGameLauncher();
+        WebApplicationFactory<Program> restartFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IStreamingBackend>();
+                services.RemoveAll<IDisplayBackend>();
+                services.RemoveAll<IGameLauncher>();
+                services.AddSingleton<IStreamingBackend>(backend);
+                services.AddSingleton<IDisplayBackend>(display);
+                services.AddSingleton<IGameLauncher>(launcher);
+            }));
+        HttpClient client = restartFactory.CreateClient();
+        const string sessionId = "z-fold-7-steam-shortcut:3767414131";
+
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(
+            "/clients/z-fold-7/launch",
+            new { gameId = "steam-shortcut:3767414131" })).StatusCode);
+        StreamingSessionState firstRuntime = Assert.IsType<StreamingSessionState>(
+            await backend.GetSessionAsync(sessionId, CancellationToken.None));
+        Assert.True((await backend.StopRuntimeAsync(
+            sessionId,
+            firstRuntime.RuntimeGeneration,
+            CancellationToken.None)).Success);
+        backend.ActiveListenerPort = 0;
+
+        HttpResponseMessage reconnect = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/reconnect",
+            new { });
+
         Assert.Equal(HttpStatusCode.ServiceUnavailable, reconnect.StatusCode);
         StreamingSessionState compensatedRuntime = Assert.IsType<StreamingSessionState>(
             await backend.GetSessionAsync(sessionId, CancellationToken.None));
@@ -2264,6 +2424,36 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             Task.FromResult(StreamRuntimeAuthorizationResult.Accepted);
     }
 
+    private sealed class CancelingSecondAuthorizationAuthorizer : IStreamSessionAuthorizer
+    {
+        private int authorizationCount;
+
+        public List<StreamRuntimeRevocation> Revocations { get; } = [];
+
+        public Task<StreamRuntimeAuthorizationContext> GetContextAsync(
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new StreamRuntimeAuthorizationContext([1, 2, 3, 4], 7));
+
+        public Task<StreamRuntimeAuthorizationResult> AuthorizeAsync(
+            StreamRuntimeAuthorization authorization,
+            CancellationToken cancellationToken)
+        {
+            authorizationCount++;
+            return authorizationCount == 2
+                ? throw new OperationCanceledException(
+                    "simulated replacement ticket authorization cancellation")
+                : Task.FromResult(StreamRuntimeAuthorizationResult.Accepted);
+        }
+
+        public Task<StreamRuntimeAuthorizationResult> RevokeAsync(
+            StreamRuntimeRevocation revocation,
+            CancellationToken cancellationToken)
+        {
+            Revocations.Add(revocation);
+            return Task.FromResult(StreamRuntimeAuthorizationResult.Accepted);
+        }
+    }
+
     private sealed class RejectingRevocationAuthorizer : IStreamSessionAuthorizer
     {
         public Task<StreamRuntimeAuthorizationContext> GetContextAsync(
@@ -2338,8 +2528,11 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         }
 
         public Task<DisplayRestoreResult> RestorePhysicalPrimaryAsync(
-            CancellationToken cancellationToken) =>
-            inner.RestorePhysicalPrimaryAsync(cancellationToken);
+            CancellationToken cancellationToken)
+        {
+            calls.Add("display.restore");
+            return inner.RestorePhysicalPrimaryAsync(cancellationToken);
+        }
 
         public Task<DisplayRemoveResult> RemoveVirtualDisplayAsync(
             string displayId,
@@ -2419,8 +2612,11 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         public Task<StreamingStopResult> StopRuntimeAsync(
             string sessionId,
             Guid expectedGeneration,
-            CancellationToken cancellationToken) =>
-            inner.StopRuntimeAsync(sessionId, expectedGeneration, cancellationToken);
+            CancellationToken cancellationToken)
+        {
+            calls.Add("stream.stop");
+            return inner.StopRuntimeAsync(sessionId, expectedGeneration, cancellationToken);
+        }
 
         public Task<StreamingSessionState?> GetSessionAsync(
             string sessionId,
@@ -2441,6 +2637,60 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             calls.Add("game.launch");
             return inner.LaunchAsync(request, cancellationToken);
         }
+    }
+
+    private sealed class OrderedOwnershipTracker(List<string> calls) : ISessionOwnershipTracker
+    {
+        public Task RecordLaunchAsync(
+            SessionPlan plan,
+            GameLaunchState launchState,
+            CancellationToken cancellationToken)
+        {
+            calls.Add("ownership.record");
+            return Task.CompletedTask;
+        }
+
+        public Task<SessionOwnershipSnapshot?> GetSnapshotAsync(
+            string sessionId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<SessionOwnershipSnapshot?>(null);
+
+        public Task<IReadOnlyList<SessionOwnershipSnapshot>> GetSnapshotsAsync(
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<SessionOwnershipSnapshot>>([]);
+
+        public Task<SessionOwnedWorkTerminationResult> TerminateOwnedWorkAsync(
+            string sessionId,
+            CancellationToken cancellationToken)
+        {
+            calls.Add("ownership.terminate");
+            return Task.FromResult(SessionOwnedWorkTerminationResult.Ok([]));
+        }
+
+        public Task ClearAsync(string sessionId, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class RejectingOrderedStreamSessionAuthorizer(List<string> calls)
+        : IStreamSessionAuthorizer
+    {
+        public Task<StreamRuntimeAuthorizationContext> GetContextAsync(
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new StreamRuntimeAuthorizationContext([1, 2, 3, 4], 7));
+
+        public Task<StreamRuntimeAuthorizationResult> AuthorizeAsync(
+            StreamRuntimeAuthorization authorization,
+            CancellationToken cancellationToken)
+        {
+            calls.Add("ticket.authorize");
+            return Task.FromResult(StreamRuntimeAuthorizationResult.Reject(
+                "simulated ticket authorization failure"));
+        }
+
+        public Task<StreamRuntimeAuthorizationResult> RevokeAsync(
+            StreamRuntimeRevocation revocation,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(StreamRuntimeAuthorizationResult.Accepted);
     }
 
     private sealed class ThrowingGameLauncher : IGameLauncher

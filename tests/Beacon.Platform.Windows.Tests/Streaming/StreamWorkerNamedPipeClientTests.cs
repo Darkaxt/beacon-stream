@@ -217,7 +217,8 @@ public sealed class StreamWorkerNamedPipeClientTests
                     Boundary = DiagnosticBoundary.Capture,
                     Code = DiagnosticCode.OperationFailed,
                     PlatformErrorCode = 2,
-                    NumericValue = 17
+                    NumericValue = 17,
+                    FailureStage = "capture-session-create"
                 }
             });
         });
@@ -241,6 +242,7 @@ public sealed class StreamWorkerNamedPipeClientTests
         Assert.Equal(17UL, failure.WorkerSessionGeneration);
         Assert.Equal(DiagnosticBoundary.Capture, failure.Boundary);
         Assert.Equal(2u, failure.PlatformErrorCode);
+        Assert.Equal("capture-session-create", failure.FailureStage);
         Assert.True(client.IsReady);
         Assert.Null(client.TerminalError);
         await worker;

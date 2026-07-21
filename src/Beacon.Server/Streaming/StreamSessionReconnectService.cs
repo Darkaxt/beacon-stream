@@ -72,20 +72,52 @@ public sealed class StreamSessionReconnectService(
             StreamingStartResult restarted = await streaming.StartAsync(plan, cancellationToken);
             if (!restarted.Success || !IsActiveRuntime(restarted.Session))
             {
-                return StreamSessionReconnectResult.Fail(
-                    restarted.Error
-                    ?? $"Stream session '{plan.SessionId}' restart did not publish an active runtime.");
+                string detail = restarted.Error
+                    ?? $"Stream session '{plan.SessionId}' restart did not publish an active runtime.";
+                if (restarted.Session is { RuntimeGeneration: var generation }
+                    && generation != Guid.Empty)
+                {
+                    detail += await StopRestartedRuntimeAsync(
+                        plan.SessionId,
+                        generation,
+                        "invalid restarted runtime metadata");
+                }
+                return StreamSessionReconnectResult.Fail(detail);
             }
 
             streamingSession = restarted.Session;
         }
         StreamingSessionState activeStreamingSession = streamingSession!;
 
-        StreamTicketProvisioningResult ticketResult = await ticketProvisioning.ProvisionAsync(
-            clientId,
-            plan.SessionId,
-            plan.Revision,
-            cancellationToken);
+        StreamTicketProvisioningResult ticketResult;
+        try
+        {
+            ticketResult = await ticketProvisioning.ProvisionAsync(
+                clientId,
+                plan.SessionId,
+                plan.Revision,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            string detail = "Reconnect ticket provisioning canceled unexpectedly.";
+            detail += await RevokeSessionTicketsAsync(
+                clientId,
+                plan.SessionId,
+                "canceled reconnect ticket provisioning");
+            if (restartRequired)
+            {
+                detail += await StopRestartedRuntimeAsync(
+                    plan.SessionId,
+                    activeStreamingSession.RuntimeGeneration,
+                    "canceled fresh ticket provisioning");
+            }
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            return StreamSessionReconnectResult.Fail(detail);
+        }
         if (!ticketResult.Success || ticketResult.Ticket is null)
         {
             string detail = ticketResult.Error ?? "Reconnect ticket provisioning failed.";
@@ -120,6 +152,27 @@ public sealed class StreamSessionReconnectService(
             leaseResult.Lease,
             confirmedStreamingSession!,
             ticketResult.Ticket);
+    }
+
+    private async Task<string> RevokeSessionTicketsAsync(
+        string clientId,
+        string sessionId,
+        string reason)
+    {
+        try
+        {
+            StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
+                clientId,
+                sessionId,
+                CancellationToken.None);
+            return revoked.Success
+                ? $" Stream tickets revoked after {reason}."
+                : $" Stream ticket revocation failed after {reason}: {revoked.Error}.";
+        }
+        catch (Exception error)
+        {
+            return $" Stream ticket revocation failed after {reason} ({error.GetType().Name}).";
+        }
     }
 
     private async Task<string> StopRestartedRuntimeAsync(
