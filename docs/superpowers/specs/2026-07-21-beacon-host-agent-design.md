@@ -10,7 +10,10 @@ Beacon needs a stable Windows boundary for operations that require an elevated t
 
 The first implementation unblocks verified display control. Driver package staging and updates use the same boundary after the display path is validated.
 
-Version-one scope excludes remote administration, arbitrary elevated command execution, Host Agent self-update, multiple simultaneous Windows users, application/process management, and any streaming responsibility.
+Version-one scope excludes remote administration, arbitrary elevated command execution,
+multiple simultaneous Windows users, application/process management, and any streaming
+responsibility. Signed Host Agent self-update is defined by
+`2026-07-21-host-agent-self-update-design.md` and does not broaden the typed execution surface.
 
 ## Process Model
 

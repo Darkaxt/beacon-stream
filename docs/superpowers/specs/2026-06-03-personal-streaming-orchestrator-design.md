@@ -239,6 +239,16 @@ This register is the implementation contract.
 - `REQ-HOST-012`: Failed driver verification triggers one deterministic rollback to the previously recorded package; unverified rollback is reported as a durable degraded state.
 - `REQ-HOST-013`: No timeout cancels a host operation or owns cleanup. Heartbeats report liveness only.
 - `REQ-HOST-014`: Core, StreamWorker, StreamCore, and the public APK protocol contain no Host Agent implementation contract.
+- `REQ-HOST-015`: One stable elevated bootstrap is the scheduled-task executable and launches the selected versioned Host Agent as its child.
+- `REQ-HOST-016`: Unattended Host Agent updates require an exact manifest signed by the CI update key whose public key is pinned in the installed bootstrap; unsigned local builds are rejected.
+- `REQ-HOST-017`: Host Agent update packages cannot replace the bootstrap, task definition, signing key, ACL policy, or files outside a fresh version directory.
+- `REQ-HOST-018`: Candidate activation occurs only after independent bootstrap validation of signature, package shape, and every payload hash.
+- `REQ-HOST-019`: Host Agent returns and flushes the accepted update response before exiting with the dedicated bootstrap update code.
+- `REQ-HOST-020`: Bootstrap accepts readiness only from the exact launched child process and waits on readiness or process exit without a startup timeout.
+- `REQ-HOST-021`: Candidate exit before readiness causes one deterministic rollback to the previous verified version; failed previous-version readiness is durably degraded.
+- `REQ-HOST-022`: Update transaction state, selected version, pending candidate, source commit, manifests, and activation evidence are durable and queryable after restart.
+- `REQ-HOST-023`: Codex can dispatch, download, stage, request, and verify a CI-signed Host Agent update without interactive UAC after the final bootstrap installation.
+- `REQ-HOST-024`: Updating the stable bootstrap or rotating its pinned update key remains an explicit UAC recovery operation.
 
 ### Network Fingerprint And Benchmark Triggers
 
