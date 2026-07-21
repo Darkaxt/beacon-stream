@@ -1,8 +1,15 @@
 namespace Beacon.Platform.Windows.Displays;
 
+internal sealed record LeasedDisplayTopologyRequirement(
+    string DisplayId,
+    int Width,
+    int Height,
+    int RefreshHz);
+
 internal sealed class WindowsDisplayLeaseTopologyReconciler(
     Func<DisplayTopologySnapshot> queryTopology,
-    Func<DisplayApiResult> applyExtendedTopology)
+    Func<IReadOnlyList<LeasedDisplayTopologyRequirement>> queryRequirements,
+    Func<IReadOnlyList<LeasedDisplayTopologyRequirement>, DisplayApiResult> applyLeasedTopology)
 {
     private string diagnostic = "No leased virtual display topology reconciliation has been required.";
 
@@ -11,14 +18,21 @@ internal sealed class WindowsDisplayLeaseTopologyReconciler(
     public ValueTask ReconcileAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        IReadOnlyList<LeasedDisplayTopologyRequirement> requirements = queryRequirements();
+        if (requirements.Count == 0)
+        {
+            Volatile.Write(ref diagnostic, "No activated leased display topology requires reconciliation.");
+            return ValueTask.CompletedTask;
+        }
+
         DisplayTopologySnapshot topology = queryTopology();
-        if (IsValidExtendedTopology(topology))
+        if (IsValidExtendedTopology(topology, requirements))
         {
             Volatile.Write(ref diagnostic, "Leased physical and virtual display topology is active.");
             return ValueTask.CompletedTask;
         }
 
-        DisplayApiResult result = applyExtendedTopology();
+        DisplayApiResult result = applyLeasedTopology(requirements);
         if (!result.Success)
         {
             string error = result.Error ?? "Unable to reactivate leased virtual display topology.";
@@ -27,7 +41,7 @@ internal sealed class WindowsDisplayLeaseTopologyReconciler(
         }
 
         DisplayTopologySnapshot repaired = queryTopology();
-        if (!IsValidExtendedTopology(repaired))
+        if (!IsValidExtendedTopology(repaired, requirements))
         {
             string error =
                 "Leased physical and virtual display topology repair was not verified. " +
@@ -42,8 +56,15 @@ internal sealed class WindowsDisplayLeaseTopologyReconciler(
         return ValueTask.CompletedTask;
     }
 
-    private static bool IsValidExtendedTopology(DisplayTopologySnapshot topology) =>
+    private static bool IsValidExtendedTopology(
+        DisplayTopologySnapshot topology,
+        IReadOnlyList<LeasedDisplayTopologyRequirement> requirements) =>
         !topology.IsMirrorMode
         && topology.Paths.Any(path => path.Kind == DisplayPathKind.Physical)
-        && topology.Paths.Any(path => path.Kind == DisplayPathKind.Virtual);
+        && requirements.All(requirement => topology.Paths.Any(path =>
+            path.Kind == DisplayPathKind.Virtual
+            && string.Equals(path.DisplayId, requirement.DisplayId, StringComparison.Ordinal)
+            && path.Width == requirement.Width
+            && path.Height == requirement.Height
+            && path.RefreshHz == requirement.RefreshHz));
 }

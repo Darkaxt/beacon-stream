@@ -4,11 +4,18 @@ namespace Beacon.Platform.Windows.Tests.Displays;
 
 public sealed class WindowsDisplayLeaseTopologyReconcilerTests
 {
+    private static readonly LeasedDisplayTopologyRequirement RequiredLease = new(
+        "client-z-fold-7",
+        Width: 2560,
+        Height: 1600,
+        RefreshHz: 120);
+
     [Fact]
-    public async Task MissingVirtualPathReappliesExtendedTopology()
+    public async Task MissingVirtualPathReappliesExactLeasedTopology()
     {
         int applyCount = 0;
         int queryCount = 0;
+        IReadOnlyList<LeasedDisplayTopologyRequirement>? applied = null;
         var reconciler = new WindowsDisplayLeaseTopologyReconciler(
             () => queryCount++ == 0
                 ? DisplayTopologySnapshot.PhysicalOnly(@"\\.\DISPLAY1", 2560, 1600, 240)
@@ -19,15 +26,18 @@ public sealed class WindowsDisplayLeaseTopologyReconcilerTests
                     1600,
                     120,
                     virtualPrimary: false),
-            () =>
+            () => [RequiredLease],
+            requirements =>
             {
                 applyCount++;
+                applied = requirements;
                 return DisplayApiResult.Ok();
             });
 
         await reconciler.ReconcileAsync(CancellationToken.None);
 
         Assert.Equal(1, applyCount);
+        Assert.Equal([RequiredLease], applied);
         Assert.Contains("reactivated", reconciler.Diagnostic, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -57,7 +67,8 @@ public sealed class WindowsDisplayLeaseTopologyReconcilerTests
                     1600,
                     120,
                     virtualPrimary: false),
-            () =>
+            () => [RequiredLease],
+            _ =>
             {
                 applyCount++;
                 return DisplayApiResult.Ok();
@@ -85,7 +96,8 @@ public sealed class WindowsDisplayLeaseTopologyReconcilerTests
             IsMirrorMode: false);
         var reconciler = new WindowsDisplayLeaseTopologyReconciler(
             () => virtualOnly,
-            () => DisplayApiResult.Ok());
+            () => [RequiredLease],
+            _ => DisplayApiResult.Ok());
 
         InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
             () => reconciler.ReconcileAsync(CancellationToken.None).AsTask());
@@ -105,7 +117,8 @@ public sealed class WindowsDisplayLeaseTopologyReconcilerTests
                 1600,
                 120,
                 virtualPrimary: true),
-            () =>
+            () => [RequiredLease],
+            _ =>
             {
                 applyCount++;
                 return DisplayApiResult.Ok();
@@ -121,11 +134,78 @@ public sealed class WindowsDisplayLeaseTopologyReconcilerTests
     {
         var reconciler = new WindowsDisplayLeaseTopologyReconciler(
             () => DisplayTopologySnapshot.PhysicalOnly(@"\\.\DISPLAY1", 2560, 1600, 240),
-            () => DisplayApiResult.Fail("SetDisplayConfig Result=87"));
+            () => [RequiredLease],
+            _ => DisplayApiResult.Fail("SetDisplayConfig Result=87"));
 
         InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
             () => reconciler.ReconcileAsync(CancellationToken.None).AsTask());
 
         Assert.Contains("Result=87", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task WrongLeasedModeReappliesExactLeasedTopology()
+    {
+        int applyCount = 0;
+        int queryCount = 0;
+        var reconciler = new WindowsDisplayLeaseTopologyReconciler(
+            () => queryCount++ == 0
+                ? DisplayTopologySnapshot.Extended(
+                    @"\\.\DISPLAY1",
+                    "client-z-fold-7",
+                    2560,
+                    1440,
+                    60,
+                    virtualPrimary: false)
+                : DisplayTopologySnapshot.Extended(
+                    @"\\.\DISPLAY1",
+                    "client-z-fold-7",
+                    2560,
+                    1600,
+                    120,
+                    virtualPrimary: false),
+            () => [RequiredLease],
+            _ =>
+            {
+                applyCount++;
+                return DisplayApiResult.Ok();
+            });
+
+        await reconciler.ReconcileAsync(CancellationToken.None);
+
+        Assert.Equal(1, applyCount);
+    }
+
+    [Fact]
+    public async Task UnrelatedVirtualPathDoesNotSatisfyLeasedTopology()
+    {
+        int applyCount = 0;
+        int queryCount = 0;
+        var reconciler = new WindowsDisplayLeaseTopologyReconciler(
+            () => queryCount++ == 0
+                ? DisplayTopologySnapshot.Extended(
+                    @"\\.\DISPLAY1",
+                    "client-other",
+                    2560,
+                    1600,
+                    120,
+                    virtualPrimary: false)
+                : DisplayTopologySnapshot.Extended(
+                    @"\\.\DISPLAY1",
+                    "client-z-fold-7",
+                    2560,
+                    1600,
+                    120,
+                    virtualPrimary: false),
+            () => [RequiredLease],
+            _ =>
+            {
+                applyCount++;
+                return DisplayApiResult.Ok();
+            });
+
+        await reconciler.ReconcileAsync(CancellationToken.None);
+
+        Assert.Equal(1, applyCount);
     }
 }

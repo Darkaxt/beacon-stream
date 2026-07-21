@@ -63,6 +63,9 @@ public sealed class WindowsDisplayApi :
     private readonly SudoVdaDriverLeaseSession driverLeaseSession;
     private readonly WindowsInputDesktopExecutionContext inputDesktop;
     private readonly WindowsDisplayLeaseTopologyReconciler topologyReconciler;
+    private readonly object leasedDisplayStateGate = new();
+    private readonly Dictionary<string, LeasedVirtualDisplayState> leasedDisplays =
+        new(StringComparer.Ordinal);
 
     public WindowsDisplayApi()
         : this(new WindowsDisplayNameMap(WindowsDisplayNameMapStore.Default))
@@ -82,7 +85,9 @@ public sealed class WindowsDisplayApi :
         this.inputDesktop = inputDesktop;
         topologyReconciler = new WindowsDisplayLeaseTopologyReconciler(
             () => this.inputDesktop.Invoke(QueryActiveTopology),
-            () => this.inputDesktop.Invoke(ApplyExtendedTopology));
+            SnapshotLeasedDisplayRequirements,
+            requirements => this.inputDesktop.Invoke(
+                () => ReactivateLeasedDisplayTopology(requirements)));
         driverLeaseSession = new SudoVdaDriverLeaseSession(
             new WindowsSudoVdaDriverConnectionFactory(),
             new TaskDelaySudoVdaHeartbeatScheduler(),
@@ -106,7 +111,9 @@ public sealed class WindowsDisplayApi :
         this.inputDesktop = inputDesktop;
         topologyReconciler = new WindowsDisplayLeaseTopologyReconciler(
             () => this.inputDesktop.Invoke(QueryActiveTopology),
-            () => this.inputDesktop.Invoke(ApplyExtendedTopology));
+            SnapshotLeasedDisplayRequirements,
+            requirements => this.inputDesktop.Invoke(
+                () => ReactivateLeasedDisplayTopology(requirements)));
     }
 
     public SudoVdaDriverLeaseSessionSnapshot Snapshot => driverLeaseSession.Snapshot;
@@ -237,6 +244,15 @@ public sealed class WindowsDisplayApi :
             return activation.Result;
         }
 
+        RememberLeasedDisplayState(new LeasedVirtualDisplayState(
+            displayId,
+            activation.DisplayName!,
+            width,
+            height,
+            refreshHz,
+            addOutput,
+            [.. baseline.ActivePaths]));
+
         return DisplayApiResult.Ok();
     }
 
@@ -278,7 +294,8 @@ public sealed class WindowsDisplayApi :
         if (displayName is null)
         {
             return new VirtualDisplayActivationOutcome(DisplayApiResult.Fail(
-                $"SudoVDA create succeeded for {displayId}, but Windows did not expose a mappable virtual display name. Before=[{string.Join(", ", baseline.DisplayNames)}] After=[{string.Join(", ", afterDisplayNames)}]."));
+                $"SudoVDA create succeeded for {displayId}, but Windows did not expose a mappable virtual display name. Before=[{string.Join(", ", baseline.DisplayNames)}] After=[{string.Join(", ", afterDisplayNames)}]."),
+                DisplayName: null);
         }
 
         RememberDisplayName(displayId, displayName);
@@ -294,7 +311,7 @@ public sealed class WindowsDisplayApi :
             ForgetDisplayName(displayId);
         }
 
-        return new VirtualDisplayActivationOutcome(result);
+        return new VirtualDisplayActivationOutcome(result, displayName);
     }
 
     public Task<DisplayTopologySnapshot> QueryTopologyAsync(CancellationToken cancellationToken)
@@ -380,6 +397,7 @@ public sealed class WindowsDisplayApi :
 
         if (result.Success)
         {
+            ForgetLeasedDisplayState(displayId);
             ForgetDisplayName(displayId);
         }
 
@@ -684,6 +702,81 @@ public sealed class WindowsDisplayApi :
         return status == ErrorSuccess
             ? DisplayApiResult.Ok()
             : DisplayApiResult.Fail($"Unable to apply an extended display topology. Result={status}.");
+    }
+
+    private IReadOnlyList<LeasedDisplayTopologyRequirement> SnapshotLeasedDisplayRequirements()
+    {
+        lock (leasedDisplayStateGate)
+        {
+            return leasedDisplays.Values
+                .OrderBy(state => state.DisplayId, StringComparer.Ordinal)
+                .Select(state => new LeasedDisplayTopologyRequirement(
+                    state.DisplayId,
+                    state.Width,
+                    state.Height,
+                    state.RefreshHz))
+                .ToArray();
+        }
+    }
+
+    private DisplayApiResult ReactivateLeasedDisplayTopology(
+        IReadOnlyList<LeasedDisplayTopologyRequirement> requirements)
+    {
+        LeasedVirtualDisplayState[] states;
+        lock (leasedDisplayStateGate)
+        {
+            states = new LeasedVirtualDisplayState[requirements.Count];
+            for (int index = 0; index < requirements.Count; index++)
+            {
+                LeasedDisplayTopologyRequirement requirement = requirements[index];
+                if (!leasedDisplays.TryGetValue(requirement.DisplayId, out LeasedVirtualDisplayState? state)
+                    || state.Width != requirement.Width
+                    || state.Height != requirement.Height
+                    || state.RefreshHz != requirement.RefreshHz)
+                {
+                    return DisplayApiResult.Fail(
+                        $"Leased display recovery state is unavailable for {requirement.DisplayId} " +
+                        $"at {requirement.Width}x{requirement.Height}@{requirement.RefreshHz}.");
+                }
+
+                states[index] = state;
+            }
+        }
+
+        foreach (LeasedVirtualDisplayState state in states)
+        {
+            DisplayApiResult result = ActivateDisplayMode(
+                state.AddOutput,
+                state.DisplayName,
+                state.Width,
+                state.Height,
+                state.RefreshHz,
+                state.PreservedActivePaths);
+            if (!result.Success)
+            {
+                return DisplayApiResult.Fail(
+                    $"Unable to reactivate leased display {state.DisplayId} " +
+                    $"at {state.Width}x{state.Height}@{state.RefreshHz}: {result.Error}");
+            }
+        }
+
+        return DisplayApiResult.Ok();
+    }
+
+    private void RememberLeasedDisplayState(LeasedVirtualDisplayState state)
+    {
+        lock (leasedDisplayStateGate)
+        {
+            leasedDisplays[state.DisplayId] = state;
+        }
+    }
+
+    private void ForgetLeasedDisplayState(string displayId)
+    {
+        lock (leasedDisplayStateGate)
+        {
+            leasedDisplays.Remove(displayId);
+        }
     }
 
     internal static uint ExtendedTopologyApplyFlags() =>
@@ -1525,7 +1618,18 @@ public sealed class WindowsDisplayApi :
         DisplayConfigPathInfo[] ActivePaths,
         string? Error);
 
-    private sealed record VirtualDisplayActivationOutcome(DisplayApiResult Result);
+    private sealed record VirtualDisplayActivationOutcome(
+        DisplayApiResult Result,
+        string? DisplayName);
+
+    private sealed record LeasedVirtualDisplayState(
+        string DisplayId,
+        string DisplayName,
+        int Width,
+        int Height,
+        int RefreshHz,
+        VirtualDisplayAddOut AddOutput,
+        DisplayConfigPathInfo[] PreservedActivePaths);
 
     private static class NativeMethods
     {
