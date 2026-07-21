@@ -723,7 +723,15 @@ public sealed class WindowsDisplayApi :
         IReadOnlyList<LeasedDisplayTopologyRequirement> requirements)
     {
         DisplayTopologySnapshot current = QueryActiveTopology();
-        if (!current.Paths.Any(path => path.Kind == DisplayPathKind.Physical))
+        LeasedDisplayRecoveryAction action = WindowsDisplayLeaseRecoveryPlanner.Plan(
+            current,
+            requirements);
+        if (action == LeasedDisplayRecoveryAction.None)
+        {
+            return DisplayApiResult.Ok();
+        }
+
+        if (action == LeasedDisplayRecoveryAction.ReattachPhysical)
         {
             DisplayApiResult physical = ForceAttachRegisteredPhysicalDisplay();
             if (!physical.Success)
@@ -731,6 +739,10 @@ public sealed class WindowsDisplayApi :
                 return DisplayApiResult.Fail(
                     $"Unable to reattach a physical display beside the leased desktop: {physical.Error}");
             }
+
+            // The next watchdog heartbeat must observe the physical CCD path before
+            // another topology transition can be requested.
+            return DisplayApiResult.Ok();
         }
 
         LeasedVirtualDisplayState[] states;

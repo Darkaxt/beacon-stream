@@ -11,6 +11,52 @@ public sealed class WindowsDisplayLeaseTopologyReconcilerTests
         RefreshHz: 120);
 
     [Fact]
+    public void VirtualOnlyRecoveryStopsAfterRequestingPhysicalPath()
+    {
+        var topology = new DisplayTopologySnapshot(
+            [
+                new DisplayPathSnapshot(
+                    "client-z-fold-7",
+                    DisplayPathKind.Virtual,
+                    2560,
+                    1600,
+                    120,
+                    IsPrimary: true)
+            ],
+            IsMirrorMode: false);
+
+        Assert.Equal(
+            LeasedDisplayRecoveryAction.ReattachPhysical,
+            WindowsDisplayLeaseRecoveryPlanner.Plan(topology, [RequiredLease]));
+    }
+
+    [Fact]
+    public void PhysicalOnlyRecoveryWaitsForPhysicalBeforeRequestingLeasedPath()
+    {
+        Assert.Equal(
+            LeasedDisplayRecoveryAction.ReactivateLeasedDisplays,
+            WindowsDisplayLeaseRecoveryPlanner.Plan(
+                DisplayTopologySnapshot.PhysicalOnly(@"\\.\DISPLAY1", 2560, 1600, 240),
+                [RequiredLease]));
+    }
+
+    [Fact]
+    public void ExactExtendedTopologyRequiresNoRecoveryTransition()
+    {
+        Assert.Equal(
+            LeasedDisplayRecoveryAction.None,
+            WindowsDisplayLeaseRecoveryPlanner.Plan(
+                DisplayTopologySnapshot.Extended(
+                    @"\\.\DISPLAY1",
+                    "client-z-fold-7",
+                    2560,
+                    1600,
+                    120,
+                    virtualPrimary: true),
+                [RequiredLease]));
+    }
+
+    [Fact]
     public async Task MissingVirtualPathReappliesExactLeasedTopology()
     {
         int applyCount = 0;

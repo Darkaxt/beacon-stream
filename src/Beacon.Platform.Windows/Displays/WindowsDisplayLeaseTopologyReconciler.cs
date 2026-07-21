@@ -6,6 +6,37 @@ internal sealed record LeasedDisplayTopologyRequirement(
     int Height,
     int RefreshHz);
 
+internal enum LeasedDisplayRecoveryAction
+{
+    None,
+    ReattachPhysical,
+    ReactivateLeasedDisplays
+}
+
+internal static class WindowsDisplayLeaseRecoveryPlanner
+{
+    public static LeasedDisplayRecoveryAction Plan(
+        DisplayTopologySnapshot topology,
+        IReadOnlyList<LeasedDisplayTopologyRequirement> requirements)
+    {
+        if (!topology.Paths.Any(path => path.Kind == DisplayPathKind.Physical))
+        {
+            return LeasedDisplayRecoveryAction.ReattachPhysical;
+        }
+
+        bool exactLeasedTopology = !topology.IsMirrorMode
+            && requirements.All(requirement => topology.Paths.Any(path =>
+                path.Kind == DisplayPathKind.Virtual
+                && string.Equals(path.DisplayId, requirement.DisplayId, StringComparison.Ordinal)
+                && path.Width == requirement.Width
+                && path.Height == requirement.Height
+                && path.RefreshHz == requirement.RefreshHz));
+        return exactLeasedTopology
+            ? LeasedDisplayRecoveryAction.None
+            : LeasedDisplayRecoveryAction.ReactivateLeasedDisplays;
+    }
+}
+
 internal sealed class WindowsDisplayLeaseTopologyReconciler(
     Func<DisplayTopologySnapshot> queryTopology,
     Func<IReadOnlyList<LeasedDisplayTopologyRequirement>> queryRequirements,
@@ -59,12 +90,6 @@ internal sealed class WindowsDisplayLeaseTopologyReconciler(
     private static bool IsValidExtendedTopology(
         DisplayTopologySnapshot topology,
         IReadOnlyList<LeasedDisplayTopologyRequirement> requirements) =>
-        !topology.IsMirrorMode
-        && topology.Paths.Any(path => path.Kind == DisplayPathKind.Physical)
-        && requirements.All(requirement => topology.Paths.Any(path =>
-            path.Kind == DisplayPathKind.Virtual
-            && string.Equals(path.DisplayId, requirement.DisplayId, StringComparison.Ordinal)
-            && path.Width == requirement.Width
-            && path.Height == requirement.Height
-            && path.RefreshHz == requirement.RefreshHz));
+        WindowsDisplayLeaseRecoveryPlanner.Plan(topology, requirements) ==
+        LeasedDisplayRecoveryAction.None;
 }
