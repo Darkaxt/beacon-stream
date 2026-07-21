@@ -178,6 +178,25 @@ public sealed class SudoVdaDriverLeaseSessionTests
     }
 
     [Fact]
+    public async Task HeartbeatRevisionWaitCompletesOnlyAfterLaterScheduledTick()
+    {
+        var connection = new FakeSudoVdaDriverConnection(timeoutSeconds: 3);
+        var factory = new FakeSudoVdaDriverConnectionFactory(connection);
+        var scheduler = new ManualSudoVdaHeartbeatScheduler();
+        await using var session = new SudoVdaDriverLeaseSession(factory, scheduler);
+        await session.HoldAsync("client-one", CancellationToken.None);
+        long observedRevision = session.HeartbeatRevision;
+
+        Task<long> wait = session.WaitForHeartbeatAsync(
+            observedRevision,
+            CancellationToken.None);
+
+        Assert.False(wait.IsCompleted);
+        await scheduler.TickAsync();
+        Assert.True(await wait > observedRevision);
+    }
+
+    [Fact]
     public async Task FailedTopologyReconciliationMarksLeaseSessionUnhealthy()
     {
         var connection = new FakeSudoVdaDriverConnection(timeoutSeconds: 3);
@@ -258,6 +277,23 @@ public sealed class SudoVdaDriverLeaseSessionTests
         Assert.Equal(0, scheduler.ScheduleCount);
         Assert.False(session.Snapshot.HeartbeatActive);
         Assert.Equal(1, session.Snapshot.LeaseCount);
+    }
+
+    [Fact]
+    public async Task DisabledDriverWatchdogCannotOpenAHeartbeatArrivalGate()
+    {
+        var connection = new FakeSudoVdaDriverConnection(timeoutSeconds: 0);
+        var factory = new FakeSudoVdaDriverConnectionFactory(connection);
+        var scheduler = new ManualSudoVdaHeartbeatScheduler();
+        await using var session = new SudoVdaDriverLeaseSession(factory, scheduler);
+        await session.HoldAsync("client-one", CancellationToken.None);
+
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => session.WaitForHeartbeatAsync(
+                session.HeartbeatRevision,
+                new CancellationToken(canceled: true)));
+
+        Assert.Contains("monitoring heartbeat", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

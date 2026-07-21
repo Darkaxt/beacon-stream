@@ -61,6 +61,7 @@ public sealed class WindowsDisplayApi :
     private static readonly Guid SudoVdaInterfaceGuid = new("e5bcc234-1e0c-418a-a0d4-ef8b7501414d");
     private readonly WindowsDisplayNameMap displayNameMap;
     private readonly SudoVdaDriverLeaseSession driverLeaseSession;
+    private readonly WindowsVirtualDisplayArrivalGate virtualDisplayArrivalGate;
     private readonly WindowsInputDesktopExecutionContext inputDesktop;
     private readonly WindowsDisplayLeaseTopologyReconciler topologyReconciler;
     private readonly object leasedDisplayStateGate = new();
@@ -92,6 +93,9 @@ public sealed class WindowsDisplayApi :
             new WindowsSudoVdaDriverConnectionFactory(),
             new TaskDelaySudoVdaHeartbeatScheduler(),
             topologyReconciler.ReconcileAsync);
+        virtualDisplayArrivalGate = new WindowsVirtualDisplayArrivalGate(
+            () => driverLeaseSession.HeartbeatRevision,
+            driverLeaseSession.WaitForHeartbeatAsync);
     }
 
     internal WindowsDisplayApi(
@@ -109,6 +113,9 @@ public sealed class WindowsDisplayApi :
         this.displayNameMap = displayNameMap;
         this.driverLeaseSession = driverLeaseSession;
         this.inputDesktop = inputDesktop;
+        virtualDisplayArrivalGate = new WindowsVirtualDisplayArrivalGate(
+            () => this.driverLeaseSession.HeartbeatRevision,
+            this.driverLeaseSession.WaitForHeartbeatAsync);
         topologyReconciler = new WindowsDisplayLeaseTopologyReconciler(
             () => this.inputDesktop.Invoke(QueryActiveTopology),
             SnapshotLeasedDisplayRequirements,
@@ -228,9 +235,26 @@ public sealed class WindowsDisplayApi :
             TargetId = addResult.TargetId
         };
 
+        VirtualDisplayTargetArrivalSnapshot stableTarget;
+        try
+        {
+            stableTarget = await virtualDisplayArrivalGate.WaitForStableTargetAsync(
+                () => inputDesktop.Invoke(() => QueryVirtualDisplayTargetArrival(addOutput)),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await driverLeaseSession.RemoveVirtualDisplayAsync(
+                displayId,
+                monitorGuid,
+                CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+
         VirtualDisplayActivationOutcome activation = inputDesktop.Invoke(() => ActivateCreatedVirtualDisplay(
             displayId,
             addOutput,
+            stableTarget.DisplayName!,
             width,
             height,
             refreshHz,
@@ -279,6 +303,7 @@ public sealed class WindowsDisplayApi :
     private VirtualDisplayActivationOutcome ActivateCreatedVirtualDisplay(
         string displayId,
         VirtualDisplayAddOut addOutput,
+        string stableDisplayName,
         int width,
         int height,
         int refreshHz,
@@ -286,10 +311,10 @@ public sealed class WindowsDisplayApi :
     {
         IReadOnlyList<DisplayPathSnapshot> afterDisplayPaths = EnumerateDisplayNamesWithState(activeOnly: false);
         IReadOnlyList<string> afterDisplayNames = afterDisplayPaths.Select(path => path.DisplayId).ToArray();
-        string? displayName = TryGetDisplayNameForTarget(addOutput, out string? targetDisplayName)
-            ? targetDisplayName
+        string? displayName = afterDisplayNames.Contains(stableDisplayName, StringComparer.OrdinalIgnoreCase)
+            ? stableDisplayName
             : SelectAddedDisplayName(baseline.DisplayNames, afterDisplayNames) ??
-            SelectSingleVirtualDisplayName(afterDisplayPaths);
+              SelectSingleVirtualDisplayName(afterDisplayPaths);
 
         if (displayName is null)
         {
@@ -1026,9 +1051,26 @@ public sealed class WindowsDisplayApi :
         return DisplayApiResult.Fail($"DisplayConfig did not expose active source {displayName} after SudoVDA activation.");
     }
 
-    private static bool TryGetDisplayNameForTarget(VirtualDisplayAddOut addOutput, out string? displayName)
+    private VirtualDisplayTargetArrivalSnapshot QueryVirtualDisplayTargetArrival(
+        VirtualDisplayAddOut addOutput)
+    {
+        bool resolved = TryGetDisplayNameForTarget(
+            addOutput,
+            out string? displayName,
+            out bool targetAvailable);
+        return new VirtualDisplayTargetArrivalSnapshot(
+            resolved && targetAvailable && displayName is not null,
+            displayName,
+            QueryActiveTopology().Fingerprint);
+    }
+
+    private static bool TryGetDisplayNameForTarget(
+        VirtualDisplayAddOut addOutput,
+        out string? displayName,
+        out bool targetAvailable)
     {
         displayName = null;
+        targetAvailable = false;
         uint pathCount = 0;
         uint modeCount = 0;
         uint flags = QdcAllPaths | QdcVirtualModeAware;
@@ -1067,6 +1109,7 @@ public sealed class WindowsDisplayApi :
             }
 
             displayName = sourceDisplayName;
+            targetAvailable = path.TargetInfo.TargetAvailable;
             return true;
         }
 

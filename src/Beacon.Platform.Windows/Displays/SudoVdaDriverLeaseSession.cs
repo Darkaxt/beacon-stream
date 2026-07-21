@@ -7,16 +7,46 @@ internal sealed class SudoVdaDriverLeaseSession(
     : IWindowsDisplayLeaseSession, IDisposable, IAsyncDisposable
 {
     private const int ErrorNotFound = 1168;
+    private readonly object heartbeatSignalGate = new();
     private readonly SemaphoreSlim transitionGate = new(1, 1);
     private readonly SemaphoreSlim stateGate = new(1, 1);
     private readonly HashSet<string> displayIds = new(StringComparer.OrdinalIgnoreCase);
     private ISudoVdaDriverConnection? connection;
     private ISudoVdaHeartbeatRegistration? heartbeatRegistration;
     private long heartbeatIntervalTicks;
+    private long heartbeatRevision;
+    private TaskCompletionSource<long> heartbeatChanged = NewHeartbeatSignal();
     private bool disposed;
     private SudoVdaDriverLeaseSessionSnapshot snapshot = IdleSnapshot("No Beacon display leases are active.");
 
     public SudoVdaDriverLeaseSessionSnapshot Snapshot => Volatile.Read(ref snapshot);
+
+    internal long HeartbeatRevision => Volatile.Read(ref heartbeatRevision);
+
+    internal Task<long> WaitForHeartbeatAsync(
+        long afterRevision,
+        CancellationToken cancellationToken)
+    {
+        if (!Snapshot.HeartbeatActive)
+        {
+            throw new InvalidOperationException(
+                "A SudoVDA monitoring heartbeat is required before waiting for display arrival.");
+        }
+
+        Task<long> wait;
+        lock (heartbeatSignalGate)
+        {
+            long current = heartbeatRevision;
+            if (current > afterRevision)
+            {
+                return Task.FromResult(current);
+            }
+
+            wait = heartbeatChanged.Task;
+        }
+
+        return wait.WaitAsync(cancellationToken);
+    }
 
     public async Task<SudoVdaDriverLeaseHoldResult> HoldAsync(
         string displayId,
@@ -168,6 +198,23 @@ internal sealed class SudoVdaDriverLeaseSession(
             stateGate.Release();
         }
     }
+
+    private void PublishHeartbeat()
+    {
+        TaskCompletionSource<long> previous;
+        long next;
+        lock (heartbeatSignalGate)
+        {
+            next = checked(++heartbeatRevision);
+            previous = heartbeatChanged;
+            heartbeatChanged = NewHeartbeatSignal();
+        }
+
+        previous.TrySetResult(next);
+    }
+
+    private static TaskCompletionSource<long> NewHeartbeatSignal() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     internal async Task<SudoVdaDriverOperationResult> RemoveVirtualDisplayAsync(
         string displayId,
@@ -335,6 +382,7 @@ internal sealed class SudoVdaDriverLeaseSession(
         finally
         {
             stateGate.Release();
+            PublishHeartbeat();
         }
     }
 
