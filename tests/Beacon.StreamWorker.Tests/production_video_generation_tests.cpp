@@ -34,6 +34,8 @@ struct CaptureTrace {
   std::size_t starts{};
   std::size_t stops{};
   std::wstring device_name;
+  bool start_result{true};
+  capture::WgcCapturePlatformFailure start_failure{};
 };
 
 class FakeCapturePlatform final : public capture::IWgcCapturePlatform {
@@ -62,11 +64,18 @@ public:
   [[nodiscard]] bool start_capture(
       const capture::WgcDisplayTargetSnapshot &target,
       const capture::WgcAdapterSnapshot &,
-      FrameCallback callback) override {
+      FrameCallback callback,
+      FailureCallback failure) override {
     ++trace_->starts;
     trace_->device_name = target.device_name;
     callback_ = std::move(callback);
-    return true;
+    failure_callback_ = std::move(failure);
+    return trace_->start_result;
+  }
+
+  [[nodiscard]] capture::WgcCapturePlatformFailure
+  capture_failure() const noexcept override {
+    return trace_->start_failure;
   }
 
   [[nodiscard]] bool recreate_frame_pool(std::uint32_t,
@@ -77,6 +86,7 @@ public:
   void stop_capture() noexcept override {
     ++trace_->stops;
     callback_ = {};
+    failure_callback_ = {};
   }
 
   void emit(std::int64_t timestamp) {
@@ -91,9 +101,16 @@ public:
     });
   }
 
+  void fail(capture::WgcCapturePlatformFailure failure) {
+    auto callback = failure_callback_;
+    BEACON_TEST_REQUIRE(static_cast<bool>(callback));
+    callback(failure);
+  }
+
 private:
   std::shared_ptr<CaptureTrace> trace_;
   FrameCallback callback_;
+  FailureCallback failure_callback_;
 };
 
 struct ProcessorTrace {
@@ -414,6 +431,47 @@ void conversion_failure_is_typed_and_disconnects_only_the_active_client() {
   fixture.generation->stop();
 }
 
+void capture_start_failure_preserves_platform_stage_and_hresult() {
+  Fixture fixture;
+  fixture.capture_trace->start_result = false;
+  fixture.capture_trace->start_failure = {
+      .stage = capture::WgcCapturePlatformStage::capture_session_creation,
+      .native_code = 0x80070005U,
+  };
+
+  BEACON_TEST_REQUIRE(!fixture.generation->start(10, 1232));
+  fixture.transport.wait_for_disconnect();
+
+  BEACON_TEST_REQUIRE(fixture.failures.size() == 1);
+  BEACON_TEST_REQUIRE(fixture.failures[0].boundary ==
+                      video::VideoPipelineFailureBoundary::capture);
+  BEACON_TEST_REQUIRE(fixture.failures[0].failure_stage ==
+                      "capture-session-create");
+  BEACON_TEST_REQUIRE(fixture.failures[0].native_code == 0x80070005U);
+}
+
+void capture_runtime_failure_disconnects_and_preserves_platform_diagnostic() {
+  Fixture fixture;
+  BEACON_TEST_REQUIRE(fixture.generation->start(11, 1232));
+
+  fixture.capture_platform->fail({
+      .stage = capture::WgcCapturePlatformStage::frame_texture_access,
+      .native_code = 0x887A0005U,
+  });
+  fixture.wait_for_failure();
+  fixture.transport.wait_for_disconnect();
+
+  BEACON_TEST_REQUIRE(fixture.failures.size() == 1);
+  BEACON_TEST_REQUIRE(fixture.failures[0].session_generation == 11);
+  BEACON_TEST_REQUIRE(fixture.failures[0].boundary ==
+                      video::VideoPipelineFailureBoundary::capture);
+  BEACON_TEST_REQUIRE(fixture.failures[0].failure_stage ==
+                      "frame-texture-access");
+  BEACON_TEST_REQUIRE(fixture.failures[0].native_code == 0x887A0005U);
+  BEACON_TEST_REQUIRE(fixture.transport.disconnects == 1);
+  fixture.generation->stop();
+}
+
 void production_capability_failures_are_boundary_specific() {
   const auto missing_adapter = video::classify_production_video_capabilities(
       false, video::NvencH264Failure::none);
@@ -449,6 +507,8 @@ int main() {
     one_captured_frame_reaches_the_generation_bound_transport();
     feedback_applies_server_bounded_bitrate_and_forces_the_next_idr();
     conversion_failure_is_typed_and_disconnects_only_the_active_client();
+    capture_start_failure_preserves_platform_stage_and_hresult();
+    capture_runtime_failure_disconnects_and_preserves_platform_diagnostic();
     production_capability_failures_are_boundary_specific();
   });
 }

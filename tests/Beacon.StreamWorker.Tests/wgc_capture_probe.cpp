@@ -251,9 +251,12 @@ int wmain(int argc, wchar_t** argv) {
     bool hash_failed = false;
     D3d11VideoProcessorFailure conversion_failure{
         D3d11VideoProcessorFailure::none};
+    std::wcerr << L"WGC probe starting capture.\n";
     const bool started = capture.start(
         WgcCapturePlan{.device_name = device_name},
         [&](CapturedD3d11Frame frame) {
+          std::wcerr << L"WGC probe received frame " << frame.width << L"x"
+                     << frame.height << L".\n";
           const auto converted = processor.convert(
               frame, D3d11VideoProcessorPlan{.output_width = width,
                                              .output_height = height,
@@ -277,9 +280,17 @@ int wmain(int argc, wchar_t** argv) {
             changed.notify_all();
           }
         });
+    std::wcerr << L"WGC probe capture start returned "
+               << (started ? L"true" : L"false") << L".\n";
     if (!started) {
+      const auto platform_failure = capture.platform_failure();
       std::wcerr << L"WGC start failed code="
-                 << static_cast<int>(capture.failure()) << L"\n";
+                 << static_cast<int>(capture.failure())
+                 << L" stage="
+                 << beacon::worker::capture::wgc_capture_platform_stage_name(
+                        platform_failure.stage)
+                 << L" platform=0x" << std::hex
+                 << platform_failure.native_code << std::dec << L"\n";
       return 4;
     }
     {

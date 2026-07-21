@@ -21,9 +21,13 @@ using beacon::worker::capture::D3d11Texture;
 using beacon::worker::capture::IWgcCapturePlatform;
 using beacon::worker::capture::WgcAdapterSnapshot;
 using beacon::worker::capture::WgcCaptureFailure;
+using beacon::worker::capture::WgcCapturePlatformFailure;
+using beacon::worker::capture::WgcCapturePlatformStage;
 using beacon::worker::capture::WgcCapturePlan;
 using beacon::worker::capture::WgcDisplayCapture;
 using beacon::worker::capture::WgcDisplayTargetSnapshot;
+using beacon::worker::capture::detail::resolve_capture_item_failure;
+using beacon::worker::capture::wgc_capture_platform_stage_name;
 
 class FakeTexture final : public D3d11Texture {
  public:
@@ -48,6 +52,7 @@ class FakePlatform final : public IWgcCapturePlatform {
        .software = false,
        .description = L"NVIDIA RTX"}};
   bool start_result{true};
+  WgcCapturePlatformFailure start_failure{};
   bool throw_during_start{};
   bool recreate_result{true};
   int start_count{};
@@ -58,6 +63,7 @@ class FakePlatform final : public IWgcCapturePlatform {
   std::uint32_t recreated_width{};
   std::uint32_t recreated_height{};
   FrameCallback callback;
+  FailureCallback failure_callback;
   std::function<void()> during_start;
 
   [[nodiscard]] std::vector<WgcDisplayTargetSnapshot>
@@ -72,11 +78,13 @@ class FakePlatform final : public IWgcCapturePlatform {
   [[nodiscard]] bool start_capture(
       const WgcDisplayTargetSnapshot& target,
       const WgcAdapterSnapshot& adapter,
-      FrameCallback value) override {
+      FrameCallback value,
+      FailureCallback failure) override {
     ++start_count;
     selected_monitor = target.monitor;
     selected_adapter = adapter.luid;
     callback = std::move(value);
+    failure_callback = std::move(failure);
     if (throw_during_start) {
       throw std::runtime_error{"capture startup failed"};
     }
@@ -94,9 +102,14 @@ class FakePlatform final : public IWgcCapturePlatform {
     return recreate_result;
   }
 
+  [[nodiscard]] WgcCapturePlatformFailure capture_failure() const noexcept override {
+    return start_failure;
+  }
+
   void stop_capture() noexcept override {
     ++stop_count;
     callback = {};
+    failure_callback = {};
   }
 
   void emit(std::uint32_t width, std::uint32_t height,
@@ -107,6 +120,13 @@ class FakePlatform final : public IWgcCapturePlatform {
               .width = width,
               .height = height,
               .qpc_timestamp = qpc_timestamp});
+    }
+  }
+
+  void fail(WgcCapturePlatformFailure failure) {
+    auto target = failure_callback;
+    if (target) {
+      target(failure);
     }
   }
 };
@@ -163,6 +183,69 @@ void missing_nvidia_adapter_and_platform_start_failure_are_truthful() {
     BEACON_TEST_REQUIRE(!capture.start(plan(), [](CapturedD3d11Frame) {}));
     BEACON_TEST_REQUIRE(capture.failure() == WgcCaptureFailure::capture_start_failed);
   }
+}
+
+void platform_start_failure_preserves_stage_and_hresult() {
+  auto platform = std::make_unique<FakePlatform>();
+  platform->start_result = false;
+  platform->start_failure = {
+      .stage = WgcCapturePlatformStage::capture_session_creation,
+      .native_code = 0x80070005U,
+  };
+  WgcDisplayCapture capture{std::move(platform)};
+
+  BEACON_TEST_REQUIRE(!capture.start(plan(), [](CapturedD3d11Frame) {}));
+  const auto failure = capture.platform_failure();
+  BEACON_TEST_REQUIRE(
+      failure.stage == WgcCapturePlatformStage::capture_session_creation);
+  BEACON_TEST_REQUIRE(failure.native_code == 0x80070005U);
+}
+
+void capture_item_failure_stage_names_distinguish_stale_monitor_handles() {
+  BEACON_TEST_REQUIRE(std::string{wgc_capture_platform_stage_name(
+                          WgcCapturePlatformStage::capture_item_display_id_runtime)} ==
+                      "capture-item-display-id-runtime");
+  BEACON_TEST_REQUIRE(std::string{wgc_capture_platform_stage_name(
+                          WgcCapturePlatformStage::capture_item_display_id_access)} ==
+                      "capture-item-display-id-access");
+  BEACON_TEST_REQUIRE(std::string{wgc_capture_platform_stage_name(
+                          WgcCapturePlatformStage::capture_item_display_id_mapping)} ==
+                      "capture-item-display-id-mapping");
+  BEACON_TEST_REQUIRE(std::string{wgc_capture_platform_stage_name(
+                          WgcCapturePlatformStage::capture_item_display_id_creation)} ==
+                      "capture-item-display-id-create");
+  BEACON_TEST_REQUIRE(std::string{wgc_capture_platform_stage_name(
+                          WgcCapturePlatformStage::capture_item_stale_monitor)} ==
+                      "capture-item-stale-monitor");
+  BEACON_TEST_REQUIRE(std::string{wgc_capture_platform_stage_name(
+                          WgcCapturePlatformStage::capture_item_current_monitor_rejected)} ==
+                      "capture-item-current-monitor-rejected");
+}
+
+void display_id_failure_is_not_hidden_by_monitor_fallback_failure() {
+  const auto display_id_failure = resolve_capture_item_failure(
+      {.stage = WgcCapturePlatformStage::capture_item_display_id_creation,
+       .native_code = 0x80070057U},
+      0x80004005U, true);
+  BEACON_TEST_REQUIRE(
+      display_id_failure.stage ==
+      WgcCapturePlatformStage::capture_item_display_id_creation);
+  BEACON_TEST_REQUIRE(display_id_failure.native_code == 0x80070057U);
+
+  const auto missing_result = resolve_capture_item_failure(
+      {.stage = WgcCapturePlatformStage::capture_item_display_id_creation,
+       .native_code = 0},
+      0x80070057U, true);
+  BEACON_TEST_REQUIRE(
+      missing_result.stage ==
+      WgcCapturePlatformStage::capture_item_display_id_creation);
+  BEACON_TEST_REQUIRE(missing_result.native_code == 0x8000FFFFU);
+
+  const auto fallback_failure = resolve_capture_item_failure(
+      {}, 0x80070057U, false);
+  BEACON_TEST_REQUIRE(fallback_failure.stage ==
+                      WgcCapturePlatformStage::capture_item_stale_monitor);
+  BEACON_TEST_REQUIRE(fallback_failure.native_code == 0x80070057U);
 }
 
 void throwing_platform_start_fails_transactionally_and_allows_retry() {
@@ -268,6 +351,34 @@ void frame_sink_never_runs_on_the_platform_callback_thread() {
   BEACON_TEST_REQUIRE(sink_thread != producer_thread);
 }
 
+void asynchronous_platform_failure_is_reported_once() {
+  auto platform = std::make_unique<FakePlatform>();
+  auto* observed = platform.get();
+  std::vector<std::pair<WgcCaptureFailure, WgcCapturePlatformFailure>> failures;
+  WgcDisplayCapture capture{std::move(platform)};
+  BEACON_TEST_REQUIRE(capture.start(
+      plan(), [](CapturedD3d11Frame) {},
+      [&](WgcCaptureFailure failure, WgcCapturePlatformFailure platform_failure) {
+        failures.emplace_back(failure, platform_failure);
+      }));
+
+  const WgcCapturePlatformFailure platform_failure{
+      .stage = WgcCapturePlatformStage::frame_texture_access,
+      .native_code = 0x887A0005U,
+  };
+  observed->fail(platform_failure);
+  observed->fail(platform_failure);
+
+  BEACON_TEST_REQUIRE(failures.size() == 1);
+  BEACON_TEST_REQUIRE(failures[0].first == WgcCaptureFailure::callback_failed);
+  BEACON_TEST_REQUIRE(failures[0].second.stage ==
+                      WgcCapturePlatformStage::frame_texture_access);
+  BEACON_TEST_REQUIRE(failures[0].second.native_code == 0x887A0005U);
+  BEACON_TEST_REQUIRE(capture.failure() == WgcCaptureFailure::callback_failed);
+  BEACON_TEST_REQUIRE(capture.platform_failure().native_code == 0x887A0005U);
+  capture.stop();
+}
+
 void stop_waits_for_inflight_callback_and_releases_once() {
   auto platform = std::make_unique<FakePlatform>();
   auto* observed = platform.get();
@@ -316,10 +427,14 @@ int main() {
     exact_active_display_and_nvidia_adapter_are_selected();
     missing_and_inactive_targets_fail_before_capture();
     missing_nvidia_adapter_and_platform_start_failure_are_truthful();
+    platform_start_failure_preserves_stage_and_hresult();
+    capture_item_failure_stage_names_distinguish_stale_monitor_handles();
+    display_id_failure_is_not_hidden_by_monitor_fallback_failure();
     throwing_platform_start_fails_transactionally_and_allows_retry();
     stop_requested_during_platform_start_wins_and_allows_retry();
     frame_callback_preserves_qpc_and_recreates_on_content_size_change();
     frame_sink_never_runs_on_the_platform_callback_thread();
+    asynchronous_platform_failure_is_reported_once();
     stop_waits_for_inflight_callback_and_releases_once();
   });
 }

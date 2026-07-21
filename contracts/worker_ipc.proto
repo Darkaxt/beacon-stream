@@ -221,6 +221,7 @@ message WorkerDiagnostic {
   DiagnosticCode code = 3;
   uint32 platform_error_code = 4;
   uint64 numeric_value = 5;
+  string failure_stage = 6;
 }
 
 message WorkerTransportReady {

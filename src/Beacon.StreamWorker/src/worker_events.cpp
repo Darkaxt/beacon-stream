@@ -138,6 +138,7 @@ std::vector<v1::WorkerIpcEnvelope> make_video_pipeline_failure_events(
   body->set_code(v1::DIAGNOSTIC_CODE_OPERATION_FAILED);
   body->set_platform_error_code(failure.native_code);
   body->set_numeric_value(failure.session_generation);
+  body->set_failure_stage(failure.failure_stage);
   return {std::move(state), std::move(diagnostic)};
 }
 

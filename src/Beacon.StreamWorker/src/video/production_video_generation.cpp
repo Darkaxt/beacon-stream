@@ -53,13 +53,34 @@ bool ProductionVideoGeneration::start(
         if (const auto generation = weak.lock()) {
           generation->process_frame(std::move(frame));
         }
+      },
+      [weak](capture::WgcCaptureFailure capture_failure,
+             capture::WgcCapturePlatformFailure platform_failure) {
+        if (const auto generation = weak.lock()) {
+          generation->fail(
+              VideoPipelineFailureBoundary::capture,
+              platform_failure.native_code != 0
+                  ? platform_failure.native_code
+                  : static_cast<std::uint32_t>(capture_failure),
+              platform_failure.stage != capture::WgcCapturePlatformStage::none
+                  ? capture::wgc_capture_platform_stage_name(
+                        platform_failure.stage)
+                  : "capture-runtime");
+        }
       });
   if (!capture_started) {
+    const auto platform_failure = capture_.platform_failure();
+    const auto capture_failure = capture_.failure();
     fail(VideoPipelineFailureBoundary::capture,
-         static_cast<std::uint32_t>(capture_.failure()));
+         platform_failure.native_code != 0
+             ? platform_failure.native_code
+             : static_cast<std::uint32_t>(capture_failure),
+         platform_failure.stage != capture::WgcCapturePlatformStage::none
+             ? capture::wgc_capture_platform_stage_name(platform_failure.stage)
+             : "capture-validation");
     return false;
   }
-  return true;
+  return !failed_.load(std::memory_order_acquire);
 }
 
 void ProductionVideoGeneration::handle_media_event(
@@ -151,7 +172,8 @@ void ProductionVideoGeneration::process_frame(
 }
 
 void ProductionVideoGeneration::fail(VideoPipelineFailureBoundary boundary,
-                                     std::uint32_t native_code) noexcept {
+                                     std::uint32_t native_code,
+                                     std::string failure_stage) noexcept {
   if (failed_.exchange(true, std::memory_order_acq_rel)) {
     return;
   }
@@ -162,6 +184,7 @@ void ProductionVideoGeneration::fail(VideoPipelineFailureBoundary boundary,
           .session_generation =
               session_generation_.load(std::memory_order_acquire),
           .boundary = boundary,
+          .failure_stage = std::move(failure_stage),
           .native_code = native_code,
       });
     }

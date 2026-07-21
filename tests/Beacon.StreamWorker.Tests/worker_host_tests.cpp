@@ -1,4 +1,5 @@
 #include "beacon/worker/worker_host.h"
+#include "beacon/worker/worker_events.h"
 #include "beacon/worker/video/worker_video_pipeline.h"
 
 #include "../Beacon.StreamProtocol.Tests/test_failure.h"
@@ -504,6 +505,21 @@ void explicit_shutdown_is_acknowledged_and_releases_once() {
   BEACON_TEST_REQUIRE(pipeline.reset_count == 1);
 }
 
+void video_failure_events_preserve_stage_and_platform_status() {
+  const auto events = beacon::worker::make_video_pipeline_failure_events({
+      .session_id = "session-a",
+      .session_generation = 31,
+      .boundary = video::VideoPipelineFailureBoundary::capture,
+      .failure_stage = "capture-session-create",
+      .native_code = 0x80070005U,
+  });
+
+  BEACON_TEST_REQUIRE(events.size() == 2);
+  const auto& diagnostic = events[1].worker_diagnostic();
+  BEACON_TEST_REQUIRE(diagnostic.failure_stage() == "capture-session-create");
+  BEACON_TEST_REQUIRE(diagnostic.platform_error_code() == 0x80070005U);
+}
+
 }  // namespace
 
 int main() {
@@ -519,5 +535,6 @@ int main() {
     bitrate_order_and_pipeline_prepare_failures_are_rejected();
     idr_stop_and_shutdown_follow_pipeline_lifecycle_order();
     explicit_shutdown_is_acknowledged_and_releases_once();
+    video_failure_events_preserve_stage_and_platform_status();
   });
 }

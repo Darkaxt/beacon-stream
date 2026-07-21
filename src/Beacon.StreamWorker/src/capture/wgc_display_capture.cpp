@@ -12,6 +12,75 @@ constexpr std::uint32_t nvidia_vendor_id{0x10de};
 
 }  // namespace
 
+const char* wgc_capture_platform_stage_name(
+    WgcCapturePlatformStage stage) noexcept {
+  switch (stage) {
+    case WgcCapturePlatformStage::none:
+      return "none";
+    case WgcCapturePlatformStage::request_validation:
+      return "request-validation";
+    case WgcCapturePlatformStage::winrt_apartment:
+      return "winrt-apartment";
+    case WgcCapturePlatformStage::adapter_lookup:
+      return "adapter-lookup";
+    case WgcCapturePlatformStage::d3d_device_creation:
+      return "d3d-device-create";
+    case WgcCapturePlatformStage::winrt_device_creation:
+      return "winrt-device-create";
+    case WgcCapturePlatformStage::capture_item_creation:
+      return "capture-item-create";
+    case WgcCapturePlatformStage::capture_item_display_id_runtime:
+      return "capture-item-display-id-runtime";
+    case WgcCapturePlatformStage::capture_item_display_id_access:
+      return "capture-item-display-id-access";
+    case WgcCapturePlatformStage::capture_item_display_id_mapping:
+      return "capture-item-display-id-mapping";
+    case WgcCapturePlatformStage::capture_item_display_id_creation:
+      return "capture-item-display-id-create";
+    case WgcCapturePlatformStage::capture_item_stale_monitor:
+      return "capture-item-stale-monitor";
+    case WgcCapturePlatformStage::capture_item_current_monitor_rejected:
+      return "capture-item-current-monitor-rejected";
+    case WgcCapturePlatformStage::content_size_read:
+      return "content-size-read";
+    case WgcCapturePlatformStage::frame_pool_creation:
+      return "frame-pool-create";
+    case WgcCapturePlatformStage::capture_session_creation:
+      return "capture-session-create";
+    case WgcCapturePlatformStage::frame_event_registration:
+      return "frame-event-register";
+    case WgcCapturePlatformStage::capture_start:
+      return "capture-start";
+    case WgcCapturePlatformStage::frame_acquisition:
+      return "frame-acquisition";
+    case WgcCapturePlatformStage::frame_surface_access:
+      return "frame-surface-access";
+    case WgcCapturePlatformStage::frame_texture_access:
+      return "frame-texture-access";
+    case WgcCapturePlatformStage::frame_metadata:
+      return "frame-metadata";
+  }
+  return "unknown";
+}
+
+WgcCapturePlatformFailure detail::resolve_capture_item_failure(
+    WgcCapturePlatformFailure display_id_failure,
+    std::uint32_t fallback_native_code,
+    bool fallback_monitor_is_current) noexcept {
+  if (display_id_failure.stage != WgcCapturePlatformStage::none) {
+    if (display_id_failure.native_code == 0) {
+      display_id_failure.native_code = 0x8000FFFFU;
+    }
+    return display_id_failure;
+  }
+  return {
+      .stage = fallback_monitor_is_current
+                   ? WgcCapturePlatformStage::capture_item_current_monitor_rejected
+                   : WgcCapturePlatformStage::capture_item_stale_monitor,
+      .native_code = fallback_native_code,
+  };
+}
+
 WgcDisplayCapture::WgcDisplayCapture(
     std::unique_ptr<IWgcCapturePlatform> platform)
     : platform_(std::move(platform)) {
@@ -22,7 +91,9 @@ WgcDisplayCapture::WgcDisplayCapture(
 
 WgcDisplayCapture::~WgcDisplayCapture() { stop(); }
 
-bool WgcDisplayCapture::start(const WgcCapturePlan& plan, FrameSink sink) {
+bool WgcDisplayCapture::start(const WgcCapturePlan& plan,
+                              FrameSink sink,
+                              FailureSink failure_sink) {
   if (plan.device_name.empty() || !sink) {
     set_failure(WgcCaptureFailure::invalid_plan);
     return false;
@@ -37,6 +108,9 @@ bool WgcDisplayCapture::start(const WgcCapturePlan& plan, FrameSink sink) {
     stop_requested_ = false;
     start_thread_ = std::this_thread::get_id();
     failure_ = WgcCaptureFailure::none;
+    platform_failure_ = {};
+    failure_sink_ = std::move(failure_sink);
+    failure_reported_ = false;
     pending_frame_.reset();
     consumer_stopping_ = false;
   }
@@ -86,16 +160,27 @@ bool WgcDisplayCapture::start(const WgcCapturePlan& plan, FrameSink sink) {
         *target, *adapter,
         [this](CapturedD3d11Frame frame) {
           receive_frame(std::move(frame));
+        },
+        [this](WgcCapturePlatformFailure failure) {
+          report_async_failure(WgcCaptureFailure::callback_failed, failure);
         });
     if (!platform_started) {
+      {
+        std::lock_guard lock{mutex_};
+        platform_failure_ = platform_->capture_failure();
+      }
       return fail_start(WgcCaptureFailure::capture_start_failed, false);
     }
 
     bool stop_requested = false;
+    bool runtime_failure = false;
+    WgcCaptureFailure runtime_failure_kind = WgcCaptureFailure::none;
     {
       std::lock_guard lock{mutex_};
       stop_requested = stop_requested_;
-      if (!stop_requested) {
+      runtime_failure = failure_reported_;
+      runtime_failure_kind = failure_;
+      if (!stop_requested && !runtime_failure) {
         platform_started_ = true;
         starting_ = false;
         stop_requested_ = false;
@@ -104,6 +189,9 @@ bool WgcDisplayCapture::start(const WgcCapturePlan& plan, FrameSink sink) {
     }
     if (stop_requested) {
       return fail_start(WgcCaptureFailure::capture_start_failed, true);
+    }
+    if (runtime_failure) {
+      return fail_start(runtime_failure_kind, true);
     }
     start_finished_.notify_all();
     return true;
@@ -119,6 +207,7 @@ void WgcDisplayCapture::stop() noexcept {
       std::unique_lock lock{mutex_};
       active_ = false;
       sink_ = {};
+      failure_sink_ = {};
       pending_frame_.reset();
       consumer_stopping_ = true;
       if (starting_) {
@@ -152,6 +241,7 @@ bool WgcDisplayCapture::fail_start(WgcCaptureFailure failure,
       std::lock_guard lock{mutex_};
       active_ = false;
       sink_ = {};
+      failure_sink_ = {};
       pending_frame_.reset();
       consumer_stopping_ = true;
       platform_started_ = false;
@@ -185,6 +275,11 @@ WgcCaptureFailure WgcDisplayCapture::failure() const noexcept {
   return failure_;
 }
 
+WgcCapturePlatformFailure WgcDisplayCapture::platform_failure() const noexcept {
+  std::lock_guard lock{mutex_};
+  return platform_failure_;
+}
+
 std::wstring WgcDisplayCapture::selected_adapter_description() const {
   std::lock_guard lock{mutex_};
   return selected_adapter_description_;
@@ -206,14 +301,14 @@ void WgcDisplayCapture::receive_frame(CapturedD3d11Frame frame) noexcept {
   try {
     if (!frame.texture || frame.width == 0 || frame.height == 0 ||
         frame.qpc_timestamp <= 0) {
-      set_failure(WgcCaptureFailure::frame_invalid);
+      report_async_failure(WgcCaptureFailure::frame_invalid);
     } else if (frame.width != pool_width || frame.height != pool_height) {
       if (platform_->recreate_frame_pool(frame.width, frame.height)) {
         std::lock_guard lock{mutex_};
         pool_width_ = frame.width;
         pool_height_ = frame.height;
       } else {
-        set_failure(WgcCaptureFailure::frame_pool_recreate_failed);
+        report_async_failure(WgcCaptureFailure::frame_pool_recreate_failed);
       }
     } else {
       std::lock_guard lock{mutex_};
@@ -223,7 +318,7 @@ void WgcDisplayCapture::receive_frame(CapturedD3d11Frame frame) noexcept {
       }
     }
   } catch (...) {
-    set_failure(WgcCaptureFailure::callback_failed);
+    report_async_failure(WgcCaptureFailure::callback_failed);
   }
 
   {
@@ -253,9 +348,35 @@ void WgcDisplayCapture::consume_frames() noexcept {
       try {
         sink(std::move(frame));
       } catch (...) {
-        set_failure(WgcCaptureFailure::callback_failed);
+        report_async_failure(WgcCaptureFailure::callback_failed);
       }
     }
+  }
+}
+
+void WgcDisplayCapture::report_async_failure(
+    WgcCaptureFailure failure,
+    WgcCapturePlatformFailure platform_failure) noexcept {
+  FailureSink failure_sink;
+  {
+    std::lock_guard lock{mutex_};
+    if (failure_reported_ || !active_) {
+      return;
+    }
+    failure_reported_ = true;
+    failure_ = failure;
+    platform_failure_ = platform_failure;
+    active_ = false;
+    pending_frame_.reset();
+    consumer_stopping_ = true;
+    failure_sink = failure_sink_;
+  }
+  frame_available_.notify_all();
+  try {
+    if (failure_sink) {
+      failure_sink(failure, platform_failure);
+    }
+  } catch (...) {
   }
 }
 

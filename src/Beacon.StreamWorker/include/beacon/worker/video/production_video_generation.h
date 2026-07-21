@@ -38,7 +38,8 @@ public:
 private:
   void process_frame(capture::CapturedD3d11Frame frame) noexcept;
   void fail(VideoPipelineFailureBoundary boundary,
-            std::uint32_t native_code) noexcept;
+            std::uint32_t native_code,
+            std::string failure_stage = {}) noexcept;
 
   WorkerVideoPlan plan_;
   IWorkerMediaTransport &transport_;

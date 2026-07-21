@@ -18,6 +18,7 @@ struct VideoPipelineFailureEvent {
   std::string session_id;
   std::uint64_t session_generation{};
   VideoPipelineFailureBoundary boundary{VideoPipelineFailureBoundary::capture};
+  std::string failure_stage;
   std::uint32_t native_code{};
 };
 

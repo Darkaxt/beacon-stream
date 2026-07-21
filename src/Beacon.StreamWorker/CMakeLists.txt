@@ -72,16 +72,19 @@ if(WIN32)
     PUBLIC Beacon::StreamWorkerPortableCore
     PRIVATE
       d3d11
+      dwmapi
       dxgi
       runtimeobject
       windowsapp
   )
   target_compile_options(BeaconStreamWorkerCore PRIVATE /W4 /WX /permissive-)
+  beacon_use_windows_app_sdk(BeaconStreamWorkerCore)
   add_library(Beacon::StreamWorkerCore ALIAS BeaconStreamWorkerCore)
 
   add_executable(BeaconStreamWorker src/main.cpp)
   set_target_properties(BeaconStreamWorker PROPERTIES OUTPUT_NAME "Beacon.StreamWorker")
   target_link_libraries(BeaconStreamWorker PRIVATE Beacon::StreamWorkerCore bcrypt)
   target_compile_options(BeaconStreamWorker PRIVATE /W4 /WX /permissive-)
+  beacon_use_windows_app_sdk(BeaconStreamWorker)
   add_executable(Beacon::StreamWorker ALIAS BeaconStreamWorker)
 endif()

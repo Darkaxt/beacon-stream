@@ -7,6 +7,7 @@ $nativeRoot = Join-Path $repositoryRoot 'native'
 
 & (Join-Path $PSScriptRoot 'bootstrap-native-dependencies.ps1') `
     -Name msquic,xdp-for-windows,protobuf,abseil-cpp
+& (Join-Path $PSScriptRoot 'install-windows-app-sdk.ps1') | Out-Null
 
 $env:BEACON_PROTOC_EXECUTABLE = (& (Join-Path $PSScriptRoot 'install-protoc.ps1')).Trim()
 if (-not (Test-Path -LiteralPath $env:BEACON_PROTOC_EXECUTABLE)) {

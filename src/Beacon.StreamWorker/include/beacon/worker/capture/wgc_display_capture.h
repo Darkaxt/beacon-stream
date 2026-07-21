@@ -58,9 +58,52 @@ enum class WgcCaptureFailure {
   callback_failed,
 };
 
+enum class WgcCapturePlatformStage {
+  none,
+  request_validation,
+  winrt_apartment,
+  adapter_lookup,
+  d3d_device_creation,
+  winrt_device_creation,
+  capture_item_creation,
+  capture_item_display_id_runtime,
+  capture_item_display_id_access,
+  capture_item_display_id_mapping,
+  capture_item_display_id_creation,
+  capture_item_stale_monitor,
+  capture_item_current_monitor_rejected,
+  content_size_read,
+  frame_pool_creation,
+  capture_session_creation,
+  frame_event_registration,
+  capture_start,
+  frame_acquisition,
+  frame_surface_access,
+  frame_texture_access,
+  frame_metadata,
+};
+
+struct WgcCapturePlatformFailure {
+  WgcCapturePlatformStage stage{WgcCapturePlatformStage::none};
+  std::uint32_t native_code{};
+};
+
+[[nodiscard]] const char* wgc_capture_platform_stage_name(
+    WgcCapturePlatformStage stage) noexcept;
+
+namespace detail {
+
+[[nodiscard]] WgcCapturePlatformFailure resolve_capture_item_failure(
+    WgcCapturePlatformFailure display_id_failure,
+    std::uint32_t fallback_native_code,
+    bool fallback_monitor_is_current) noexcept;
+
+}  // namespace detail
+
 class IWgcCapturePlatform {
  public:
   using FrameCallback = std::function<void(CapturedD3d11Frame)>;
+  using FailureCallback = std::function<void(WgcCapturePlatformFailure)>;
 
   virtual ~IWgcCapturePlatform() = default;
   [[nodiscard]] virtual std::vector<WgcDisplayTargetSnapshot>
@@ -70,15 +113,20 @@ class IWgcCapturePlatform {
   [[nodiscard]] virtual bool start_capture(
       const WgcDisplayTargetSnapshot& target,
       const WgcAdapterSnapshot& adapter,
-      FrameCallback callback) = 0;
+      FrameCallback callback,
+      FailureCallback failure_callback) = 0;
   [[nodiscard]] virtual bool recreate_frame_pool(std::uint32_t width,
                                                  std::uint32_t height) = 0;
+  [[nodiscard]] virtual WgcCapturePlatformFailure
+  capture_failure() const noexcept = 0;
   virtual void stop_capture() noexcept = 0;
 };
 
 class WgcDisplayCapture final {
  public:
   using FrameSink = std::function<void(CapturedD3d11Frame)>;
+  using FailureSink =
+      std::function<void(WgcCaptureFailure, WgcCapturePlatformFailure)>;
 
   explicit WgcDisplayCapture(std::unique_ptr<IWgcCapturePlatform> platform);
   ~WgcDisplayCapture();
@@ -86,9 +134,12 @@ class WgcDisplayCapture final {
   WgcDisplayCapture(const WgcDisplayCapture&) = delete;
   WgcDisplayCapture& operator=(const WgcDisplayCapture&) = delete;
 
-  [[nodiscard]] bool start(const WgcCapturePlan& plan, FrameSink sink);
+  [[nodiscard]] bool start(const WgcCapturePlan& plan,
+                           FrameSink sink,
+                           FailureSink failure_sink = {});
   void stop() noexcept;
   [[nodiscard]] WgcCaptureFailure failure() const noexcept;
+  [[nodiscard]] WgcCapturePlatformFailure platform_failure() const noexcept;
   [[nodiscard]] std::wstring selected_adapter_description() const;
 
  private:
@@ -96,6 +147,9 @@ class WgcDisplayCapture final {
   void consume_frames() noexcept;
   [[nodiscard]] bool fail_start(WgcCaptureFailure failure,
                                 bool stop_platform) noexcept;
+  void report_async_failure(
+      WgcCaptureFailure failure,
+      WgcCapturePlatformFailure platform_failure = {}) noexcept;
   void stop_consumer() noexcept;
   void set_failure(WgcCaptureFailure value) noexcept;
 
@@ -105,9 +159,11 @@ class WgcDisplayCapture final {
   std::condition_variable frame_available_;
   std::condition_variable start_finished_;
   FrameSink sink_;
+  FailureSink failure_sink_;
   std::optional<CapturedD3d11Frame> pending_frame_;
   std::thread consumer_thread_;
   WgcCaptureFailure failure_{WgcCaptureFailure::none};
+  WgcCapturePlatformFailure platform_failure_{};
   std::wstring selected_adapter_description_;
   std::uint32_t pool_width_{};
   std::uint32_t pool_height_{};
@@ -115,6 +171,7 @@ class WgcDisplayCapture final {
   bool active_{};
   bool platform_started_{};
   bool consumer_stopping_{};
+  bool failure_reported_{};
   bool starting_{};
   bool stop_requested_{};
   std::thread::id start_thread_{};

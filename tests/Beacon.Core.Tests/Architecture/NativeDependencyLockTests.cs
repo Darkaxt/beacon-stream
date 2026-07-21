@@ -74,6 +74,21 @@ public sealed class NativeDependencyLockTests
             "e9c129c176bb7df02546c4cd6185126ca53c89e7d2f09511e209319704b5dd7e",
             protobufCompiler.GetProperty("linuxSha256").GetString());
 
+        JsonElement windowsAppSdk = rootElement.GetProperty("toolchains").GetProperty("windowsAppSdk");
+        Assert.Equal("2.3.1", windowsAppSdk.GetProperty("releaseVersion").GetString());
+        Assert.Equal("2.3.5", windowsAppSdk.GetProperty("foundationVersion").GetString());
+        Assert.Equal(
+            "15d78449c8566f889e0f95ae6ebc0610d79b32f95ce296b621f54b8ec8f496cb",
+            windowsAppSdk.GetProperty("foundationSha256").GetString());
+        Assert.Equal("2.1.3", windowsAppSdk.GetProperty("interactiveExperiencesVersion").GetString());
+        Assert.Equal(
+            "e8063437eb853b5abe4dc6b6bdb2ecfb82f49ec281764c82cd04b4d94e144f68",
+            windowsAppSdk.GetProperty("interactiveExperiencesSha256").GetString());
+        Assert.Equal("2.3.1", windowsAppSdk.GetProperty("runtimeVersion").GetString());
+        Assert.Equal(
+            "f15c6c682a81a019e13beaee512de9fb83ffd5a1f3e83b99209b6860a7aebba2",
+            windowsAppSdk.GetProperty("runtimeSha256").GetString());
+
         JsonElement dependencies = rootElement.GetProperty("dependencies");
         Assert.Equal(ExpectedDependencies.Count, dependencies.EnumerateObject().Count());
         foreach ((string name, ExpectedDependency expected) in ExpectedDependencies)
@@ -112,6 +127,30 @@ public sealed class NativeDependencyLockTests
         Assert.Equal("8776FDDCB8FEBC6AEC4D73989B1F21831EB30306BC583DA55B4BF0C14A1DC228", hash);
         Assert.Contains("Copyright (c) 2010-2026 NVIDIA Corporation", File.ReadAllText(licensePath));
         Assert.Contains("Permission is hereby granted, free of charge", File.ReadAllText(licensePath));
+    }
+
+    [Fact]
+    public void WindowsAppSdkInstallerAlwaysRemovesTransientArchives()
+    {
+        string root = FindRepositoryRoot();
+        string installer = File.ReadAllText(Path.Combine(
+            root,
+            "scripts",
+            "install-windows-app-sdk.ps1"));
+
+        Assert.Contains("finally", installer, StringComparison.Ordinal);
+        Assert.Contains(
+            "Remove-Item -LiteralPath $staging -Recurse -Force",
+            installer,
+            StringComparison.Ordinal);
+        Assert.Contains("Nuspec", installer, StringComparison.Ordinal);
+        Assert.Contains("ExpectedId", installer, StringComparison.Ordinal);
+        Assert.Contains("$Package.Version", installer, StringComparison.Ordinal);
+        Assert.Contains(".projection-version", installer, StringComparison.Ordinal);
+        Assert.Contains(
+            "Split-Path (Split-Path (Split-Path $cppwinrt -Parent) -Parent) -Leaf",
+            installer,
+            StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()
