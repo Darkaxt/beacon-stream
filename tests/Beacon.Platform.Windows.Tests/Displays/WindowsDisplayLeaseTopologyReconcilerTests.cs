@@ -180,6 +180,75 @@ public sealed class WindowsDisplayLeaseTopologyReconcilerTests
     }
 
     [Fact]
+    public async Task UnchangedTopologyKeepsTransitionGateOwnedWithoutReapplying()
+    {
+        int applyCount = 0;
+        var virtualOnly = new DisplayTopologySnapshot(
+            [
+                new DisplayPathSnapshot(
+                    "client-z-fold-7",
+                    DisplayPathKind.Virtual,
+                    2560,
+                    1600,
+                    120,
+                    IsPrimary: true)
+            ],
+            IsMirrorMode: false);
+        var reconciler = new WindowsDisplayLeaseTopologyReconciler(
+            () => virtualOnly,
+            () => [RequiredLease],
+            _ =>
+            {
+                applyCount++;
+                return DisplayApiResult.Ok();
+            });
+
+        await reconciler.ReconcileAsync(CancellationToken.None);
+        await reconciler.ReconcileAsync(CancellationToken.None);
+
+        Assert.Equal(1, applyCount);
+        Assert.Contains("awaiting Windows topology change", reconciler.Diagnostic, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ChangedInvalidTopologyMustStabilizeBeforeAnotherTransition()
+    {
+        int applyCount = 0;
+        int queryCount = 0;
+        var virtualOnly = new DisplayTopologySnapshot(
+            [
+                new DisplayPathSnapshot(
+                    "client-z-fold-7",
+                    DisplayPathKind.Virtual,
+                    2560,
+                    1600,
+                    120,
+                    IsPrimary: true)
+            ],
+            IsMirrorMode: false);
+        DisplayTopologySnapshot physicalOnly =
+            DisplayTopologySnapshot.PhysicalOnly(@"\\.\DISPLAY1", 2560, 1600, 240);
+        var reconciler = new WindowsDisplayLeaseTopologyReconciler(
+            () => queryCount++ == 0 ? virtualOnly : physicalOnly,
+            () => [RequiredLease],
+            _ =>
+            {
+                applyCount++;
+                return DisplayApiResult.Ok();
+            });
+
+        await reconciler.ReconcileAsync(CancellationToken.None);
+        await reconciler.ReconcileAsync(CancellationToken.None);
+
+        Assert.Equal(1, applyCount);
+        Assert.Contains("stabilize", reconciler.Diagnostic, StringComparison.OrdinalIgnoreCase);
+
+        await reconciler.ReconcileAsync(CancellationToken.None);
+
+        Assert.Equal(2, applyCount);
+    }
+
+    [Fact]
     public async Task ActiveVirtualPathDoesNotChangeTopology()
     {
         int applyCount = 0;
