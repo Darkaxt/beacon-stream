@@ -72,7 +72,6 @@ public sealed class WindowsVirtualDisplayArrivalGateTests
         var snapshots = new ObservedSnapshotSequence(
         [
             new(true, @"\\.\DISPLAY34", "virtual-only", ExtendedTopology: false, DesiredTopology: false),
-            new(true, @"\\.\DISPLAY34", "virtual-only", ExtendedTopology: false, DesiredTopology: false),
             new(true, @"\\.\DISPLAY34", "extended", ExtendedTopology: true, DesiredTopology: true),
             new(true, @"\\.\DISPLAY34", "extended", ExtendedTopology: true, DesiredTopology: true)
         ]);
@@ -93,20 +92,55 @@ public sealed class WindowsVirtualDisplayArrivalGateTests
             CancellationToken.None);
 
         signal.Pulse();
-        await snapshots.WaitForObservationAsync(0);
-        Assert.False(wait.IsCompleted);
-        signal.Pulse();
         await applied.Task;
         Assert.Equal(1, applyCount);
         Assert.False(wait.IsCompleted);
 
         signal.Pulse();
-        await snapshots.WaitForObservationAsync(2);
+        await snapshots.WaitForObservationAsync(1);
         Assert.False(wait.IsCompleted);
         signal.Pulse();
 
         Assert.True((await wait).Success);
         Assert.Equal(1, applyCount);
+    }
+
+    [Fact]
+    public async Task StableTargetWithWrongTopologyTransitionsOnTheFirstHeartbeat()
+    {
+        var signal = new ManualHeartbeatRevisionSignal();
+        var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var snapshots = new ObservedSnapshotSequence(
+        [
+            new(true, @"\\.\DISPLAY34", "virtual-only-a", ExtendedTopology: false),
+            new(true, @"\\.\DISPLAY34", "extended", ExtendedTopology: true),
+            new(true, @"\\.\DISPLAY34", "extended", ExtendedTopology: true)
+        ]);
+        var gate = new WindowsVirtualDisplayArrivalGate(
+            () => signal.Revision,
+            signal.WaitAsync);
+
+        Task<DisplayApiResult> wait = gate.WaitForStableExtendedTopologyAsync(
+            snapshots.Query,
+            _ =>
+            {
+                applied.SetResult();
+                return DisplayApiResult.Ok();
+            },
+            CancellationToken.None);
+
+        signal.Pulse();
+        await snapshots.WaitForObservationAsync(0);
+
+        Assert.True(applied.Task.IsCompleted);
+        Assert.False(wait.IsCompleted);
+
+        signal.Pulse();
+        await snapshots.WaitForObservationAsync(1);
+        Assert.False(wait.IsCompleted);
+        signal.Pulse();
+
+        Assert.True((await wait).Success);
     }
 
     [Fact]
@@ -147,7 +181,6 @@ public sealed class WindowsVirtualDisplayArrivalGateTests
         var signal = new ManualHeartbeatRevisionSignal();
         var snapshots = new ObservedSnapshotSequence(
         [
-            new(true, @"\\.\DISPLAY34", "virtual-only", ExtendedTopology: false, DesiredTopology: false),
             new(true, @"\\.\DISPLAY34", "virtual-only", ExtendedTopology: false, DesiredTopology: false)
         ]);
         var gate = new WindowsVirtualDisplayArrivalGate(
@@ -159,8 +192,6 @@ public sealed class WindowsVirtualDisplayArrivalGateTests
             _ => DisplayApiResult.Fail("SetDisplayConfig Result=87"),
             CancellationToken.None);
 
-        signal.Pulse();
-        await snapshots.WaitForObservationAsync(0);
         signal.Pulse();
 
         DisplayApiResult result = await wait;
@@ -175,7 +206,6 @@ public sealed class WindowsVirtualDisplayArrivalGateTests
         var pathsApplied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var snapshots = new ObservedSnapshotSequence(
         [
-            new(true, @"\\.\DISPLAY34", "virtual-only", ExtendedTopology: false),
             new(true, @"\\.\DISPLAY34", "virtual-only", ExtendedTopology: false),
             new(true, @"\\.\DISPLAY34", "extended-default-mode", ExtendedTopology: true),
             new(true, @"\\.\DISPLAY34", "extended-default-mode", ExtendedTopology: true)
@@ -197,13 +227,11 @@ public sealed class WindowsVirtualDisplayArrivalGateTests
             CancellationToken.None);
 
         signal.Pulse();
-        await snapshots.WaitForObservationAsync(0);
-        signal.Pulse();
         await pathsApplied.Task;
         Assert.False(wait.IsCompleted);
 
         signal.Pulse();
-        await snapshots.WaitForObservationAsync(2);
+        await snapshots.WaitForObservationAsync(1);
         signal.Pulse();
 
         Assert.True((await wait).Success);

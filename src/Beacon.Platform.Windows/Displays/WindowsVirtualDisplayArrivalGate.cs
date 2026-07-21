@@ -58,7 +58,7 @@ internal sealed class WindowsVirtualDisplayArrivalGate(
         Func<VirtualDisplayTargetArrivalSnapshot, DisplayApiResult> applyStateTransition,
         CancellationToken cancellationToken)
     {
-        VirtualDisplayTargetArrivalSnapshot? previous = null;
+        VirtualDisplayTargetArrivalSnapshot? previousDesired = null;
         long observedRevision = heartbeatRevision();
 
         while (true)
@@ -68,28 +68,27 @@ internal sealed class WindowsVirtualDisplayArrivalGate(
             VirtualDisplayTargetArrivalSnapshot current = queryTarget();
             if (!current.Available)
             {
-                previous = null;
-                continue;
-            }
-
-            if (current != previous)
-            {
-                previous = current;
+                previousDesired = null;
                 continue;
             }
 
             if (isDesiredState(current))
             {
-                return DisplayApiResult.Ok();
+                if (current == previousDesired)
+                {
+                    return DisplayApiResult.Ok();
+                }
+
+                previousDesired = current;
+                continue;
             }
 
+            previousDesired = null;
             DisplayApiResult applyResult = applyStateTransition(current);
             if (!applyResult.Success)
             {
                 return applyResult;
             }
-
-            previous = null;
         }
     }
 }
