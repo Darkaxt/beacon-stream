@@ -162,6 +162,39 @@ public sealed class DisplayProbeAppTests
         Assert.Empty(api.ReleasedDisplayIds);
     }
 
+    [Fact]
+    public async Task RemoveCommandReleasesTheDriverLeaseAfterNativeRemoval()
+    {
+        var api = new ProbeWindowsDisplayApi
+        {
+            CurrentTopology = DisplayTopologySnapshot.Extended(
+                physicalDisplayId: "physical-laptop-panel",
+                virtualDisplayId: "client-z-fold-7",
+                width: 2560,
+                height: 1600,
+                refreshHz: 120,
+                virtualPrimary: false),
+            AfterRemoveTopology = DisplayTopologySnapshot.PhysicalOnly(
+                physicalDisplayId: "physical-laptop-panel",
+                width: 2560,
+                height: 1600,
+                refreshHz: 120)
+        };
+        api.HeldDisplayIds.Add("client-z-fold-7");
+        using var output = new StringWriter();
+
+        int exitCode = await DisplayProbeApp.RunAsync(
+            api,
+            ["remove", "--client", "z-fold-7"],
+            output,
+            TextWriter.Null);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("remove: success", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("client-z-fold-7", Assert.Single(api.RemovedDisplays));
+        Assert.Equal("client-z-fold-7", Assert.Single(api.ReleasedDisplayIds));
+    }
+
     private sealed class ProbeWindowsDisplayApi : IWindowsDisplayApi, IWindowsDisplayLeaseSession
     {
         public DisplayTopologySnapshot CurrentTopology { get; set; } =

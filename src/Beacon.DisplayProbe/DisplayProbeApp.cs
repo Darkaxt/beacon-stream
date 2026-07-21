@@ -143,10 +143,13 @@ public static class DisplayProbeApp
                     return recoveryResult.Success ? 0 : 2;
 
                 case RemoveDisplayProbeCommand remove:
-                    DisplayApiResult removeResult = await api.RemoveVirtualDisplayAsync(
+                    var removeBackend = new WindowsDisplayBackend(api);
+                    DisplayRemoveResult removeResult = await removeBackend.RemoveVirtualDisplayAsync(
                         ToDisplayId(remove.ClientId),
                         CancellationToken.None);
-                    output.WriteLine(DisplayProbeFormatter.FormatApiResult("remove", removeResult));
+                    output.WriteLine(removeResult.Success
+                        ? "remove: success"
+                        : $"remove: failed: {removeResult.Error}");
                     return removeResult.Success ? 0 : 2;
 
                 default:
