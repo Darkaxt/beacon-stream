@@ -7,18 +7,25 @@ on:
       - 'codex/**'
     paths:
       - '.github/workflows/host-agent-update.yml'
+      - 'Directory.Build.props'
+      - 'global.json'
+      - 'contracts/**'
       - 'scripts/build-host-agent-update.ps1'
       - 'tests/scripts/test_host_agent_update_pipeline.py'
+      - 'src/Beacon.Core/**'
       - 'src/Beacon.HostAgent/**'
       - 'src/Beacon.HostAgent.Bootstrap/**'
       - 'src/Beacon.HostAgent.Contracts/**'
       - 'src/Beacon.HostAgent.Control/**'
       - 'src/Beacon.HostAgent.Package/**'
       - 'src/Beacon.HostAgent.Update/**'
+      - 'src/Beacon.Platform.Windows/**'
+      - 'src/Beacon.StreamWorker.Contracts/**'
       - 'tests/Beacon.HostAgent.Bootstrap.Tests/**'
       - 'tests/Beacon.HostAgent.Control.Tests/**'
       - 'tests/Beacon.HostAgent.Tests/**'
       - 'tests/Beacon.HostAgent.Update.Tests/**'
+      - 'tests/Beacon.Platform.Windows.Tests/**'
   workflow_dispatch:
     inputs:
       request_id:
@@ -46,6 +53,7 @@ jobs:
           dotnet test tests/Beacon.HostAgent.Bootstrap.Tests/Beacon.HostAgent.Bootstrap.Tests.csproj
           dotnet test tests/Beacon.HostAgent.Tests/Beacon.HostAgent.Tests.csproj
           dotnet test tests/Beacon.HostAgent.Control.Tests/Beacon.HostAgent.Control.Tests.csproj
+          dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj
           python -m unittest tests.scripts.test_host_agent_update_pipeline
       - name: Publish Host Agent
         shell: pwsh

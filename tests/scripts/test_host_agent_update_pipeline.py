@@ -21,6 +21,25 @@ class HostAgentUpdatePipelineTests(unittest.TestCase):
         self.assertIn("actions/upload-artifact", workflow)
         self.assertNotIn("timeout-minutes", workflow)
 
+    def test_workflow_rebuilds_for_every_packaged_runtime_dependency(self) -> None:
+        workflow = self.read(".github/workflows/host-agent-update.yml")
+
+        required_paths = (
+            "Directory.Build.props",
+            "global.json",
+            "contracts/**",
+            "src/Beacon.Core/**",
+            "src/Beacon.Platform.Windows/**",
+            "src/Beacon.StreamWorker.Contracts/**",
+        )
+        for required_path in required_paths:
+            with self.subTest(required_path=required_path):
+                self.assertIn(f"- '{required_path}'", workflow)
+        self.assertIn(
+            "dotnet test tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj",
+            workflow,
+        )
+
     def test_unattended_updater_has_no_uac_or_protected_write_fallback(self) -> None:
         updater = self.read("scripts/update-host-agent.ps1").lower()
 
