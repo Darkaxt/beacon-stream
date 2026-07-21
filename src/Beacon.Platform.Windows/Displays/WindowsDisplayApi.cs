@@ -722,6 +722,17 @@ public sealed class WindowsDisplayApi :
     private DisplayApiResult ReactivateLeasedDisplayTopology(
         IReadOnlyList<LeasedDisplayTopologyRequirement> requirements)
     {
+        DisplayTopologySnapshot current = QueryActiveTopology();
+        if (!current.Paths.Any(path => path.Kind == DisplayPathKind.Physical))
+        {
+            DisplayApiResult physical = ForceAttachRegisteredPhysicalDisplay();
+            if (!physical.Success)
+            {
+                return DisplayApiResult.Fail(
+                    $"Unable to reattach a physical display beside the leased desktop: {physical.Error}");
+            }
+        }
+
         LeasedVirtualDisplayState[] states;
         lock (leasedDisplayStateGate)
         {
