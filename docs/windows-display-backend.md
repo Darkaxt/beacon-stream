@@ -48,6 +48,23 @@ Use `restore-physical` before `remove` when recovering from an active virtual-pr
 
 `restore-physical` uses the verified backend path, not the raw one-shot API call. The command can fail even after Windows accepts the DisplayConfig apply if the follow-up topology query still shows a virtual primary or no physical primary.
 
+## Signed Runtime Evidence - 2026-07-21
+
+- Source: `4a27d6e30720f8fe239ab80e0b88b62dbe8c422d`
+- Signed workflow: `29829298958`
+- Update transaction: `f0ef9810-7ffd-41a3-acaa-d6da7cacd004`
+- Installed package: `agent-4a27d6e30720f8fe239ab80e0b88b62dbe8c422d-4f4caed3dd7d480e8ace8d654ceb0291`
+- The unattended bootstrap update completed without a consent process. Host Agent status reported
+  SudoVDA protocol `0.2.1`, CCD ready, zero initial leases, and the physical panel primary at
+  `2560x1600@240`.
+- `prepare` created `client-codex-z-fold-7` at `2560x1600@120`, retained the physical panel as
+  primary, and kept mirror mode disabled. A separate probe after seven seconds still found the
+  same extended virtual display while the three-second driver watchdog reported an active,
+  healthy heartbeat.
+- `primary` made the virtual display primary while retaining the physical display as extended.
+  `restore-physical` then restored the physical panel as primary without removing the virtual
+  lease. `remove` finally returned to one physical display, zero leases, and no heartbeat.
+
 ## Server Composition
 
 Beacon Server has one production composition:
