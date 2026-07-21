@@ -131,6 +131,67 @@ public sealed class HostAgentProtocolTests
     }
 
     [Fact]
+    public void HostAgentUpdateRequestRoundTripsWithIdentifiersOnly()
+    {
+        Guid transactionId = Guid.NewGuid();
+        HostAgentRequest request = new(
+            HostAgentProtocol.CurrentVersion,
+            Guid.NewGuid(),
+            HostAgentOperation.InstallStagedHostAgentPackage,
+            HostAgentProtocol.CreatePayload(
+                new InstallStagedHostAgentPackagePayload(
+                    "agent-0123456789abcdef",
+                    transactionId)));
+
+        HostAgentRequest decoded = HostAgentProtocol.DeserializeRequest(
+            HostAgentProtocol.SerializeRequest(request));
+        InstallStagedHostAgentPackagePayload payload =
+            HostAgentProtocol.ReadPayload<InstallStagedHostAgentPackagePayload>(decoded.Payload);
+
+        Assert.Equal("agent-0123456789abcdef", payload.PackageId);
+        Assert.Equal(transactionId, payload.TransactionId);
+        Assert.DoesNotContain("path", decoded.Payload.GetRawText(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("command", decoded.Payload.GetRawText(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void HostAgentUpdatePayloadRoundTripsEveryDurableState()
+    {
+        foreach (HostAgentUpdateState state in Enum.GetValues<HostAgentUpdateState>())
+        {
+            var value = new HostAgentUpdatePayload(
+                Guid.NewGuid(),
+                "agent-0123456789abcdef",
+                state,
+                "update-state",
+                new string('A', 40),
+                "agent-previous",
+                state == HostAgentUpdateState.Succeeded ? "agent-0123456789abcdef" : null);
+
+            HostAgentUpdatePayload decoded = HostAgentProtocol.ReadPayload<HostAgentUpdatePayload>(
+                HostAgentProtocol.CreatePayload(value));
+
+            Assert.Equal(state, decoded.State);
+        }
+    }
+
+    [Fact]
+    public void HostAgentUpdateRejectsArbitraryExecutionFields()
+    {
+        using JsonDocument document = JsonDocument.Parse($$"""
+            {
+              "packageId": "agent-0123456789abcdef",
+              "transactionId": "{{Guid.NewGuid():D}}",
+              "executablePath": "C:\\malware.exe"
+            }
+            """);
+
+        Assert.Throws<JsonException>(() =>
+            HostAgentProtocol.ReadPayload<InstallStagedHostAgentPackagePayload>(
+                document.RootElement));
+    }
+
+    [Fact]
     public async Task ResponseRoundTripsThroughBoundedFrame()
     {
         Guid requestId = Guid.NewGuid();

@@ -286,6 +286,70 @@ public sealed class HostAgentDispatcherTests
         Assert.Equal("Another driver update transaction is active.", response.Diagnostic);
     }
 
+    [Fact]
+    public async Task HostAgentUpdateStartReturnsStagedTransaction()
+    {
+        var updates = new FakeHostAgentUpdateExecutor();
+        var dispatcher = new HostAgentDispatcher(
+            new FakeDisplayExecutor(),
+            hostUpdates: updates);
+        Guid transactionId = Guid.NewGuid();
+        updates.StageResult = new HostAgentUpdatePayload(
+            transactionId,
+            "agent-0123456789abcdef",
+            HostAgentUpdateState.Staged,
+            "host-agent-update-staged",
+            new string('A', 40),
+            "agent-current",
+            ActiveVersionId: null);
+
+        HostAgentResponse response = await dispatcher.DispatchAsync(
+            Request(
+                HostAgentOperation.InstallStagedHostAgentPackage,
+                new InstallStagedHostAgentPackagePayload(
+                    "agent-0123456789abcdef",
+                    transactionId)),
+            CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.Equal(
+            HostAgentUpdateState.Staged,
+            HostAgentProtocol.ReadPayload<HostAgentUpdatePayload>(response.Payload).State);
+        Assert.Equal(
+            new[] { $"stage:agent-0123456789abcdef:{transactionId:D}" },
+            updates.Calls);
+    }
+
+    [Fact]
+    public async Task HostAgentUpdateQueryReturnsDurableBootstrapState()
+    {
+        var updates = new FakeHostAgentUpdateExecutor();
+        var dispatcher = new HostAgentDispatcher(
+            new FakeDisplayExecutor(),
+            hostUpdates: updates);
+        Guid transactionId = Guid.NewGuid();
+        updates.QueryResult = new HostAgentUpdatePayload(
+            transactionId,
+            "agent-0123456789abcdef",
+            HostAgentUpdateState.Succeeded,
+            "host-agent-update-succeeded",
+            new string('A', 40),
+            "agent-current",
+            "agent-0123456789abcdef");
+
+        HostAgentResponse response = await dispatcher.DispatchAsync(
+            Request(
+                HostAgentOperation.QueryHostAgentUpdate,
+                new QueryHostAgentUpdatePayload(transactionId)),
+            CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.Equal(
+            HostAgentUpdateState.Succeeded,
+            HostAgentProtocol.ReadPayload<HostAgentUpdatePayload>(response.Payload).State);
+        Assert.Equal(new[] { $"query:{transactionId:D}" }, updates.Calls);
+    }
+
     private static HostAgentRequest Request<T>(HostAgentOperation operation, T payload) =>
         new(
             HostAgentProtocol.CurrentVersion,
@@ -414,6 +478,33 @@ public sealed class HostAgentDispatcherTests
         }
 
         public bool TryGet(Guid transactionId, out SudoVdaUpdatePayload? value)
+        {
+            Calls.Add($"query:{transactionId:D}");
+            value = QueryResult;
+            return value is not null;
+        }
+    }
+
+    private sealed class FakeHostAgentUpdateExecutor : IHostAgentUpdateExecutor
+    {
+        public List<string> Calls { get; } = [];
+
+        public HostAgentUpdatePayload? StageResult { get; set; }
+
+        public HostAgentUpdatePayload? QueryResult { get; set; }
+
+        public Task<HostAgentUpdatePayload> StageAsync(
+            string packageId,
+            Guid transactionId,
+            CancellationToken cancellationToken)
+        {
+            Calls.Add($"stage:{packageId}:{transactionId:D}");
+            return Task.FromResult(
+                StageResult
+                ?? throw new InvalidOperationException("Stage result is not configured."));
+        }
+
+        public bool TryGet(Guid transactionId, out HostAgentUpdatePayload? value)
         {
             Calls.Add($"query:{transactionId:D}");
             value = QueryResult;

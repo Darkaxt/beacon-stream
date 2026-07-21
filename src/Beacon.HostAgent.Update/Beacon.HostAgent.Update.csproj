@@ -10,4 +10,8 @@
     <InternalsVisibleTo Include="Beacon.HostAgent.Update.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Beacon.HostAgent.Contracts\Beacon.HostAgent.Contracts.csproj" />
+  </ItemGroup>
+
 </Project>

@@ -1,16 +1,20 @@
 using System.Text.Json;
 using Beacon.HostAgent.Contracts;
 using Beacon.HostAgent.DriverUpdates;
+using Beacon.HostAgent.HostUpdates;
 using Beacon.Platform.Windows.Displays;
 
 namespace Beacon.HostAgent;
 
 internal sealed class HostAgentDispatcher(
     IHostAgentDisplayExecutor displays,
-    IHostAgentDriverUpdateExecutor? driverUpdates = null)
+    IHostAgentDriverUpdateExecutor? driverUpdates = null,
+    IHostAgentUpdateExecutor? hostUpdates = null)
 {
     private readonly IHostAgentDriverUpdateExecutor driverUpdates =
         driverUpdates ?? UnavailableDriverUpdateExecutor.Instance;
+    private readonly IHostAgentUpdateExecutor hostUpdates =
+        hostUpdates ?? UnavailableHostAgentUpdateExecutor.Instance;
 
     public async Task<HostAgentResponse> DispatchAsync(
         HostAgentRequest request,
@@ -45,6 +49,10 @@ internal sealed class HostAgentDispatcher(
                     .ConfigureAwait(false),
                 HostAgentOperation.InstallStagedSudoVdaPackage => StartDriverUpdate(request),
                 HostAgentOperation.QuerySudoVdaUpdate => QueryDriverUpdate(request),
+                HostAgentOperation.InstallStagedHostAgentPackage => await StartHostAgentUpdateAsync(
+                    request,
+                    cancellationToken).ConfigureAwait(false),
+                HostAgentOperation.QueryHostAgentUpdate => QueryHostAgentUpdate(request),
                 _ => Failure(request, "unsupported-operation", "Unsupported Host Agent operation.")
             };
         }
@@ -57,6 +65,10 @@ internal sealed class HostAgentDispatcher(
             return Failure(request, "invalid-payload", "Host Agent request payload is invalid.");
         }
         catch (SudoVdaUpdateStartException error)
+        {
+            return Failure(request, error.Code, error.Message);
+        }
+        catch (HostAgentUpdateStartException error)
         {
             return Failure(request, error.Code, error.Message);
         }
@@ -233,6 +245,36 @@ internal sealed class HostAgentDispatcher(
                     "Driver update transaction was not found.");
     }
 
+    private async Task<HostAgentResponse> StartHostAgentUpdateAsync(
+        HostAgentRequest request,
+        CancellationToken cancellationToken)
+    {
+        InstallStagedHostAgentPackagePayload payload =
+            HostAgentProtocol.ReadPayload<InstallStagedHostAgentPackagePayload>(request.Payload);
+        HostAgentUpdatePayload result = await hostUpdates.StageAsync(
+            payload.PackageId,
+            payload.TransactionId,
+            cancellationToken).ConfigureAwait(false);
+        return Success(request, result);
+    }
+
+    private HostAgentResponse QueryHostAgentUpdate(HostAgentRequest request)
+    {
+        QueryHostAgentUpdatePayload payload =
+            HostAgentProtocol.ReadPayload<QueryHostAgentUpdatePayload>(request.Payload);
+        if (payload.TransactionId == Guid.Empty)
+        {
+            throw new ArgumentException("Host Agent update transaction id is required.");
+        }
+        return hostUpdates.TryGet(payload.TransactionId, out HostAgentUpdatePayload? result)
+            && result is not null
+                ? Success(request, result)
+                : Failure(
+                    request,
+                    "host-agent-update-not-found",
+                    "Host Agent update transaction was not found.");
+    }
+
     private static HostAgentLeaseSnapshotPayload ToPayload(
         SudoVdaDriverLeaseSessionSnapshot snapshot) =>
         new(
@@ -313,6 +355,25 @@ internal sealed class HostAgentDispatcher(
                 "Host Agent driver updates are unavailable.");
 
         public bool TryGet(Guid transactionId, out SudoVdaUpdatePayload? value)
+        {
+            value = null;
+            return false;
+        }
+    }
+
+    private sealed class UnavailableHostAgentUpdateExecutor : IHostAgentUpdateExecutor
+    {
+        public static UnavailableHostAgentUpdateExecutor Instance { get; } = new();
+
+        public Task<HostAgentUpdatePayload> StageAsync(
+            string packageId,
+            Guid transactionId,
+            CancellationToken cancellationToken) =>
+            throw new HostAgentUpdateStartException(
+                "host-agent-update-unavailable",
+                "Host Agent self-update is unavailable.");
+
+        public bool TryGet(Guid transactionId, out HostAgentUpdatePayload? value)
         {
             value = null;
             return false;

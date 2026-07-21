@@ -15,7 +15,9 @@ public enum HostAgentOperation
     RemoveVirtualDisplay,
     QueryHdrCapability,
     InstallStagedSudoVdaPackage,
-    QuerySudoVdaUpdate
+    QuerySudoVdaUpdate,
+    InstallStagedHostAgentPackage,
+    QueryHostAgentUpdate
 }
 
 public sealed record HostAgentRequest(

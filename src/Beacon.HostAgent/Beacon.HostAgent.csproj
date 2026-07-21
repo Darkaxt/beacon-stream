@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Beacon.HostAgent.Contracts\Beacon.HostAgent.Contracts.csproj" />
+    <ProjectReference Include="..\Beacon.HostAgent.Update\Beacon.HostAgent.Update.csproj" />
     <ProjectReference Include="..\Beacon.Platform.Windows\Beacon.Platform.Windows.csproj" />
   </ItemGroup>
 
