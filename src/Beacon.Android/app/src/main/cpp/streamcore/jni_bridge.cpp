@@ -789,16 +789,21 @@ stream::v1::InputBatch parse_input(JNIEnv *environment, jobject input) {
     const std::string action = java_string(environment, event, "action");
     if (type == "keyboard" && action == "press") {
       const std::string code = java_string(environment, event, "code");
-      if (code != "Escape") {
+      std::uint32_t scan_code{};
+      if (code == "Escape") {
+        scan_code = 0x01;
+      } else if (code == "F12") {
+        scan_code = 0x58;
+      } else {
         environment->DeleteLocalRef(event);
         environment->DeleteLocalRef(events);
         throw std::invalid_argument("Unsupported Beacon keyboard input.");
       }
       auto *pressed = result.add_events()->mutable_keyboard();
-      pressed->set_scan_code(1);
+      pressed->set_scan_code(scan_code);
       pressed->set_pressed(true);
       auto *released = result.add_events()->mutable_keyboard();
-      released->set_scan_code(1);
+      released->set_scan_code(scan_code);
       released->set_pressed(false);
     } else if (type == "pointer" &&
                (action == "tap" || action == "down" ||

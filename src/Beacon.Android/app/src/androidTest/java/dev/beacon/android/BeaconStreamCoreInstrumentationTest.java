@@ -7,6 +7,7 @@ import android.graphics.SurfaceTexture;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.Surface;
+import android.view.SurfaceView;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -382,6 +383,101 @@ public final class BeaconStreamCoreInstrumentationTest {
         assertTrue(evidence.transportClosed());
         evidence.clearPersistedReconnect();
         emit("BEACON_GATE3_RECONNECT_FRESH_TICKET");
+    }
+
+    @Test
+    public void gate5ProductionConnectSendAndDisconnect() throws Exception {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        Bundle arguments = requireGate3Arguments();
+        String serverUrl = requireArgument(arguments, "serverUrl");
+        String clientId = requireArgument(arguments, "clientId");
+        String gameId = requireArgument(arguments, "gameId");
+        installCredential(instrumentation, clientId);
+        Gate3SessionEvidence evidence = Gate3SessionEvidence.startFirstInvocation(
+            instrumentation.getTargetContext(), clientId);
+        AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
+        Gate5VideoRuntime videoRuntime = new Gate5VideoRuntime(instrumentation, evidence);
+        BeaconApiClient api = new BeaconApiClient(
+            instrumentation.getTargetContext(), productionClientConfig(arguments, serverUrl, clientId));
+        BeaconViewModel model = new BeaconViewModel(
+            clientId,
+            serverUrl,
+            api,
+            gate5StreamCoreFactory(evidence, videoRuntime, coreReference),
+            videoRuntime::createSession);
+        try {
+            registerAndLaunch(model, BeaconApiClient.GameSelection.byGameId(gameId));
+            evidence.recordGrant(model.latestStream());
+            videoRuntime.awaitChangingFrames();
+            model.sendInput(BeaconApiClient.InputBatch.keyboardPress(1, "F12", "F12"));
+            evidence.recordInputSent();
+            evidence.persistForReconnect();
+            model.disconnect();
+            assertSuccessful(model);
+        } finally {
+            try {
+                model.close();
+                BeaconStreamCore.awaitNativeRegistryIdleForTest();
+                evidence.recordTransportClosedAfterNativeDrain();
+            } finally {
+                videoRuntime.close();
+            }
+        }
+
+        assertFirstInvocationEvidence(evidence);
+        emit("BEACON_GATE5_MOVING_FRAMES " + videoRuntime.frameCount());
+        emit("BEACON_GATE5_PIXEL_VARIANTS " + videoRuntime.pixelVariantCount());
+        emit("BEACON_GATE5_INPUT_SENT F12");
+        emit("BEACON_GATE5_ACTIVE_DISCONNECT");
+    }
+
+    @Test
+    public void gate5ProductionReconnectAndQuit() throws Exception {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        Bundle arguments = requireGate3Arguments();
+        String serverUrl = requireArgument(arguments, "serverUrl");
+        String clientId = requireArgument(arguments, "clientId");
+        installCredential(instrumentation, clientId);
+        Gate3SessionEvidence.PreviousInvocation previous = Gate3SessionEvidence.loadPrevious(
+            instrumentation.getTargetContext(), clientId);
+        Gate3SessionEvidence evidence = Gate3SessionEvidence.startReconnect(
+            instrumentation.getTargetContext(), clientId);
+        AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
+        Gate5VideoRuntime videoRuntime = new Gate5VideoRuntime(instrumentation, evidence);
+        BeaconApiClient api = new BeaconApiClient(
+            instrumentation.getTargetContext(), productionClientConfig(arguments, serverUrl, clientId));
+        BeaconViewModel model = new BeaconViewModel(
+            clientId,
+            serverUrl,
+            api,
+            gate5StreamCoreFactory(evidence, videoRuntime, coreReference),
+            videoRuntime::createSession);
+        try {
+            model.reconnect();
+            assertSuccessful(model);
+            evidence.recordGrant(model.latestStream());
+            videoRuntime.awaitChangingFrames();
+            evidence.assertFreshReconnect(previous);
+            model.quit(new BeaconApiClient.QuitState(false));
+            assertSuccessful(model);
+        } finally {
+            try {
+                model.close();
+                BeaconStreamCore.awaitNativeRegistryIdleForTest();
+                evidence.recordTransportClosedAfterNativeDrain();
+            } finally {
+                videoRuntime.close();
+            }
+        }
+
+        assertTrue(evidence.transportConnected());
+        assertTrue(evidence.receivedFrameCount() >= 1L);
+        assertTrue(evidence.feedbackSent());
+        assertTrue(evidence.surfacePresented());
+        assertTrue(evidence.transportClosed());
+        evidence.clearPersistedReconnect();
+        emit("BEACON_GATE5_RECONNECT_FRESH_TICKET");
+        emit("BEACON_GATE5_QUIT_INACTIVE");
     }
 
     @Test
@@ -794,6 +890,12 @@ public final class BeaconStreamCoreInstrumentationTest {
     }
 
     private static void registerAndLaunch(BeaconViewModel model) throws Exception {
+        registerAndLaunch(model, gate3Game());
+    }
+
+    private static void registerAndLaunch(
+        BeaconViewModel model,
+        BeaconApiClient.GameSelection game) throws Exception {
         model.refresh();
         assertSuccessful(model);
         model.beacon(true);
@@ -802,9 +904,9 @@ public final class BeaconStreamCoreInstrumentationTest {
         assertSuccessful(model);
         model.reportTelemetry(gate3Telemetry());
         assertSuccessful(model);
-        model.requestPlan(gate3Game());
+        model.requestPlan(game);
         assertSuccessful(model);
-        model.launch(gate3Game());
+        model.launch(game);
         assertSuccessful(model);
     }
 
@@ -817,6 +919,25 @@ public final class BeaconStreamCoreInstrumentationTest {
                 () -> { },
                 stage -> {
                     evidence.recordStreamFailure(stage);
+                    failureObserver.onFailure(stage);
+                },
+                benchmarkObserver);
+            coreReference.set(core);
+            return core;
+        };
+    }
+
+    private static BeaconViewModel.StreamCoreFactory gate5StreamCoreFactory(
+        Gate3SessionEvidence evidence,
+        Gate5VideoRuntime videoRuntime,
+        AtomicReference<BeaconStreamCore> coreReference) {
+        return (sink, failureObserver, benchmarkObserver) -> {
+            BeaconStreamCore core = new BeaconStreamCore(
+                sink,
+                () -> { },
+                stage -> {
+                    evidence.recordStreamFailure(stage);
+                    videoRuntime.recordStreamFailure(stage);
                     failureObserver.onFailure(stage);
                 },
                 benchmarkObserver);
@@ -867,6 +988,95 @@ public final class BeaconStreamCoreInstrumentationTest {
         @Override
         public void close() {
             presentationSurface.close();
+        }
+    }
+
+    private static final class Gate5VideoRuntime implements AutoCloseable {
+        private final Instrumentation instrumentation;
+        private final Gate3SessionEvidence sessionEvidence;
+        private final BeaconActivity activity;
+        private final AndroidSurfaceViewProvider surfaceProvider;
+        private final Gate5SurfaceEvidence surfaceEvidence;
+
+        Gate5VideoRuntime(
+            Instrumentation instrumentation,
+            Gate3SessionEvidence sessionEvidence) {
+            this.instrumentation = instrumentation;
+            this.sessionEvidence = sessionEvidence;
+            Intent intent = new Intent(
+                instrumentation.getTargetContext(), BeaconActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            activity = (BeaconActivity) instrumentation.startActivitySync(intent);
+            instrumentation.waitForIdleSync();
+            AtomicReference<SurfaceView> surface = new AtomicReference<>();
+            AtomicReference<AndroidSurfaceViewProvider> provider = new AtomicReference<>();
+            instrumentation.runOnMainSync(() -> {
+                surface.set(activity.videoSurfaceViewForInstrumentation());
+                provider.set(activity.videoSurfaceProviderForInstrumentation());
+            });
+            if (surface.get() == null || provider.get() == null) {
+                throw new IllegalStateException("Beacon Gate 5 SurfaceView is unavailable.");
+            }
+            surfaceProvider = provider.get();
+            surfaceEvidence = new Gate5SurfaceEvidence(surface.get(), sessionEvidence);
+        }
+
+        BeaconViewModel.VideoSession createSession(
+            BeaconVideoFeedbackBridge.FailureObserver failureObserver) {
+            return new BeaconVideoSession(
+                surfaceProvider,
+                failure -> {
+                    surfaceEvidence.recordFailure(failure);
+                    sessionEvidence.recordVideoFailure(failure);
+                    failureObserver.onFailure(failure);
+                },
+                surfaceEvidence);
+        }
+
+        void awaitChangingFrames() throws InterruptedException {
+            surfaceEvidence.awaitChangingFrames();
+        }
+
+        int frameCount() {
+            return surfaceEvidence.frameCount();
+        }
+
+        long pixelVariantCount() {
+            return surfaceEvidence.pixelVariantCount();
+        }
+
+        void recordStreamFailure(String stage) {
+            surfaceEvidence.recordFailure(new AssertionError(
+                "Gate 5 stream failed before Surface evidence completed: " + stage));
+        }
+
+        @Override
+        public void close() {
+            surfaceEvidence.close();
+            CountDownLatch destroyed = new CountDownLatch(1);
+            ActivityLifecycleMonitor monitor = ActivityLifecycleMonitorRegistry.getInstance();
+            ActivityLifecycleCallback callback = (candidate, stage) -> {
+                if (candidate == activity && stage == Stage.DESTROYED) {
+                    destroyed.countDown();
+                }
+            };
+            monitor.addLifecycleCallback(callback);
+            instrumentation.runOnMainSync(() -> {
+                if (activity.isDestroyed()) {
+                    destroyed.countDown();
+                } else {
+                    activity.finish();
+                }
+            });
+            try {
+                destroyed.await();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(
+                    "Interrupted while closing the Beacon Gate 5 activity.", interrupted);
+            } finally {
+                monitor.removeLifecycleCallback(callback);
+            }
         }
     }
 
