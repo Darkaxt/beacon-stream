@@ -11,7 +11,7 @@ public sealed class WindowsDisplayLeaseTopologyReconcilerTests
         RefreshHz: 120);
 
     [Fact]
-    public void VirtualOnlyRecoveryStopsAfterRequestingPhysicalPath()
+    public void VirtualOnlyRecoveryReappliesCompleteLeasedTopology()
     {
         var topology = new DisplayTopologySnapshot(
             [
@@ -26,7 +26,7 @@ public sealed class WindowsDisplayLeaseTopologyReconcilerTests
             IsMirrorMode: false);
 
         Assert.Equal(
-            LeasedDisplayRecoveryAction.ReattachPhysical,
+            LeasedDisplayRecoveryAction.ReactivateLeasedDisplays,
             WindowsDisplayLeaseRecoveryPlanner.Plan(topology, [RequiredLease]));
     }
 

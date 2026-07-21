@@ -9,7 +9,6 @@ internal sealed record LeasedDisplayTopologyRequirement(
 internal enum LeasedDisplayRecoveryAction
 {
     None,
-    ReattachPhysical,
     ReactivateLeasedDisplays
 }
 
@@ -19,12 +18,8 @@ internal static class WindowsDisplayLeaseRecoveryPlanner
         DisplayTopologySnapshot topology,
         IReadOnlyList<LeasedDisplayTopologyRequirement> requirements)
     {
-        if (!topology.Paths.Any(path => path.Kind == DisplayPathKind.Physical))
-        {
-            return LeasedDisplayRecoveryAction.ReattachPhysical;
-        }
-
         bool exactLeasedTopology = !topology.IsMirrorMode
+            && topology.Paths.Any(path => path.Kind == DisplayPathKind.Physical)
             && requirements.All(requirement => topology.Paths.Any(path =>
                 path.Kind == DisplayPathKind.Virtual
                 && string.Equals(path.DisplayId, requirement.DisplayId, StringComparison.Ordinal)
