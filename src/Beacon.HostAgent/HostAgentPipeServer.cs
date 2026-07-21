@@ -8,19 +8,34 @@ internal sealed class HostAgentPipeServer
 {
     private readonly SecurityIdentifier owner;
     private readonly string pipeName;
-    private readonly Func<HostAgentRequest, CancellationToken, Task<HostAgentResponse>> dispatch;
+    private readonly Func<HostAgentRequest, CancellationToken, Task<HostAgentDispatchOutcome>> dispatch;
     private readonly IHostAgentCallerVerifier callerVerifier;
 
     public HostAgentPipeServer(
         SecurityIdentifier owner,
         HostAgentDispatcher dispatcher)
-        : this(owner, dispatcher.DispatchAsync, new WindowsHostAgentCallerVerifier(owner))
+        : this(owner, dispatcher.DispatchWithOutcomeAsync, new WindowsHostAgentCallerVerifier(owner))
     {
     }
 
     internal HostAgentPipeServer(
         SecurityIdentifier owner,
         Func<HostAgentRequest, CancellationToken, Task<HostAgentResponse>> dispatch,
+        IHostAgentCallerVerifier? callerVerifier = null,
+        string? pipeName = null)
+        : this(
+            owner,
+            async (request, cancellationToken) => new HostAgentDispatchOutcome(
+                await dispatch(request, cancellationToken).ConfigureAwait(false),
+                HostAgentPostResponseAction.None),
+            callerVerifier,
+            pipeName)
+    {
+    }
+
+    internal HostAgentPipeServer(
+        SecurityIdentifier owner,
+        Func<HostAgentRequest, CancellationToken, Task<HostAgentDispatchOutcome>> dispatch,
         IHostAgentCallerVerifier? callerVerifier = null,
         string? pipeName = null)
     {
@@ -32,30 +47,46 @@ internal sealed class HostAgentPipeServer
         this.callerVerifier = callerVerifier ?? new WindowsHostAgentCallerVerifier(owner);
     }
 
-    public async Task RunAsync(CancellationToken cancellationToken)
+    public Task<HostAgentServerExitReason> RunAsync(CancellationToken cancellationToken) =>
+        RunAsync(onListening: null, cancellationToken);
+
+    public async Task<HostAgentServerExitReason> RunAsync(
+        Func<CancellationToken, Task>? onListening,
+        CancellationToken cancellationToken)
     {
+        bool listeningSignaled = false;
         while (!cancellationToken.IsCancellationRequested)
         {
             await using NamedPipeServerStream pipe = CreatePipe();
             try
             {
+                if (!listeningSignaled && onListening is not null)
+                {
+                    await onListening(cancellationToken).ConfigureAwait(false);
+                    listeningSignaled = true;
+                }
                 await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
                 HostAgentCallerVerification caller = callerVerifier.Verify(pipe);
                 var session = new HostAgentConnectionSession(dispatch);
-                await session.RunAsync(
+                HostAgentPostResponseAction action = await session.RunAsync(
                     pipe,
                     pipe,
                     caller.Accepted,
                     cancellationToken).ConfigureAwait(false);
+                if (action == HostAgentPostResponseAction.ApplyUpdate)
+                {
+                    return HostAgentServerExitReason.ApplyUpdate;
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                return;
+                return HostAgentServerExitReason.Stopped;
             }
             catch (IOException)
             {
             }
         }
+        return HostAgentServerExitReason.Stopped;
     }
 
     private NamedPipeServerStream CreatePipe() =>
@@ -70,4 +101,10 @@ internal sealed class HostAgentPipeServer
             HostAgentPipeIdentity.CreateSecurity(owner),
             HandleInheritability.None,
             additionalAccessRights: 0);
+}
+
+internal enum HostAgentServerExitReason
+{
+    Stopped,
+    ApplyUpdate
 }

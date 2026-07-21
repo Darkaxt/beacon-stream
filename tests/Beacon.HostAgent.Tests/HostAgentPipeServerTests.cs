@@ -66,6 +66,60 @@ public sealed class HostAgentPipeServerTests
         Assert.Equal(0, dispatchCount);
     }
 
+    [Fact]
+    public async Task ApplyUpdateActionStopsServerAfterSendingResponse()
+    {
+        SecurityIdentifier owner = CurrentOwner();
+        string pipeName = $"beacon-host-agent-test-{Guid.NewGuid():N}";
+        var server = new HostAgentPipeServer(
+            owner,
+            (request, _) => Task.FromResult(new HostAgentDispatchOutcome(
+                Success(request),
+                HostAgentPostResponseAction.ApplyUpdate)),
+            pipeName: pipeName);
+        Task<HostAgentServerExitReason> serving = server.RunAsync(CancellationToken.None);
+        await using var client = CreateClient(pipeName);
+        await client.ConnectAsync(CancellationToken.None);
+        HostAgentRequest request = Request();
+
+        await HostAgentFrameCodec.WriteRequestAsync(client, request, CancellationToken.None);
+        HostAgentResponse response = await HostAgentFrameCodec.ReadResponseAsync(
+            client,
+            CancellationToken.None);
+        HostAgentServerExitReason reason = await serving;
+
+        Assert.True(response.Success);
+        Assert.Equal(HostAgentServerExitReason.ApplyUpdate, reason);
+    }
+
+    [Fact]
+    public async Task ListeningCallbackCompletesBeforeClientConnection()
+    {
+        SecurityIdentifier owner = CurrentOwner();
+        string pipeName = $"beacon-host-agent-test-{Guid.NewGuid():N}";
+        var listening = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = new HostAgentPipeServer(
+            owner,
+            (request, _) => Task.FromResult(Success(request)),
+            pipeName: pipeName);
+        using var shutdown = new CancellationTokenSource();
+
+        Task<HostAgentServerExitReason> serving = server.RunAsync(
+            _ =>
+            {
+                listening.TrySetResult();
+                return Task.CompletedTask;
+            },
+            shutdown.Token);
+        await listening.Task;
+        await using var client = CreateClient(pipeName);
+        await client.ConnectAsync(CancellationToken.None);
+        shutdown.Cancel();
+        HostAgentServerExitReason reason = await serving;
+
+        Assert.Equal(HostAgentServerExitReason.Stopped, reason);
+    }
+
     private static NamedPipeClientStream CreateClient(string pipeName) =>
         new(
             ".",

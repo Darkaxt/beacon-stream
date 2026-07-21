@@ -69,9 +69,20 @@ internal static class Program
             var server = new HostAgentPipeServer(options.Owner, dispatcher);
             HostAgentDiagnostics.Write(
                 $"started owner={options.Owner.Value} session={Process.GetCurrentProcess().SessionId}");
-            await server.RunAsync(CancellationToken.None).ConfigureAwait(false);
+            Func<CancellationToken, Task>? readiness = options.BootstrapReadyPipe is not null
+                && options.VersionId is not null
+                    ? cancellationToken => BootstrapReadinessClient.SignalAsync(
+                        options.BootstrapReadyPipe,
+                        options.VersionId,
+                        cancellationToken)
+                    : null;
+            HostAgentServerExitReason reason = await server.RunAsync(
+                readiness,
+                CancellationToken.None).ConfigureAwait(false);
             GC.KeepAlive(instance);
-            return 0;
+            return reason == HostAgentServerExitReason.ApplyUpdate
+                ? HostAgentExitCodes.ApplyUpdate
+                : 0;
         }
         catch (Exception error)
         {

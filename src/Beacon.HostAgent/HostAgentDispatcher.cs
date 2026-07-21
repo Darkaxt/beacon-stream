@@ -74,6 +74,26 @@ internal sealed class HostAgentDispatcher(
         }
     }
 
+    public async Task<HostAgentDispatchOutcome> DispatchWithOutcomeAsync(
+        HostAgentRequest request,
+        CancellationToken cancellationToken)
+    {
+        HostAgentResponse response = await DispatchAsync(request, cancellationToken)
+            .ConfigureAwait(false);
+        HostAgentPostResponseAction action = HostAgentPostResponseAction.None;
+        if (request.Operation == HostAgentOperation.InstallStagedHostAgentPackage
+            && response.Success)
+        {
+            HostAgentUpdatePayload update =
+                HostAgentProtocol.ReadPayload<HostAgentUpdatePayload>(response.Payload);
+            if (update.State == HostAgentUpdateState.Staged)
+            {
+                action = HostAgentPostResponseAction.ApplyUpdate;
+            }
+        }
+        return new HostAgentDispatchOutcome(response, action);
+    }
+
     private HostAgentResponse GetStatus(HostAgentRequest request)
     {
         _ = HostAgentProtocol.ReadPayload<EmptyHostAgentPayload>(request.Payload);
