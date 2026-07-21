@@ -312,6 +312,15 @@ public sealed class WindowsDisplayApi :
             return activation.Result;
         }
 
+        RememberLeasedDisplayState(new LeasedVirtualDisplayState(
+            displayId,
+            activation.DisplayName!,
+            width,
+            height,
+            refreshHz,
+            addOutput));
+        WriteDiagnostic($"display-create display={displayId} phase=provisional-lease-registered");
+
         var requirement = new LeasedDisplayTopologyRequirement(
             displayId,
             width,
@@ -376,14 +385,6 @@ public sealed class WindowsDisplayApi :
             throw;
         }
 
-        RememberLeasedDisplayState(new LeasedVirtualDisplayState(
-            displayId,
-            activation.DisplayName!,
-            width,
-            height,
-            refreshHz,
-            addOutput));
-
         return DisplayApiResult.Ok();
     }
 
@@ -440,6 +441,7 @@ public sealed class WindowsDisplayApi :
 
     private async Task RemoveFailedVirtualDisplayAsync(string displayId, Guid monitorGuid)
     {
+        ForgetLeasedDisplayState(displayId);
         ForgetDisplayName(displayId);
         await driverLeaseSession.RemoveVirtualDisplayAsync(
             displayId,
