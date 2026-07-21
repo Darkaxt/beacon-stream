@@ -87,6 +87,29 @@ public sealed class SudoVdaDriverLeaseSessionTests
     }
 
     [Fact]
+    public async Task MissingVirtualDisplayRemovalIsIdempotent()
+    {
+        var connection = new FakeSudoVdaDriverConnection(timeoutSeconds: 3)
+        {
+            RemoveResult = SudoVdaDriverOperationResult.Fail(
+                "SudoVDA remove failed. Win32=1168.",
+                nativeErrorCode: 1168)
+        };
+        var factory = new FakeSudoVdaDriverConnectionFactory(connection);
+        var scheduler = new ManualSudoVdaHeartbeatScheduler();
+        await using var session = new SudoVdaDriverLeaseSession(factory, scheduler);
+        await session.HoldAsync("client-one", CancellationToken.None);
+
+        SudoVdaDriverOperationResult result = await session.RemoveVirtualDisplayAsync(
+            "client-one",
+            Guid.Parse("1a769eb4-8687-4a60-9d18-c7f890736cfc"),
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(1, connection.RemoveCount);
+    }
+
+    [Fact]
     public async Task MultipleLeasesShareOneConnectionAndOneHeartbeat()
     {
         var connection = new FakeSudoVdaDriverConnection(timeoutSeconds: 3);
@@ -340,6 +363,8 @@ public sealed class SudoVdaDriverLeaseSessionTests
 
         public Exception? PingException { get; set; }
 
+        public SudoVdaDriverOperationResult RemoveResult { get; set; } = SudoVdaDriverOperationResult.Ok();
+
         public bool Disposed { get; private set; }
 
         public SudoVdaWatchdogQueryResult QueryWatchdog()
@@ -371,7 +396,7 @@ public sealed class SudoVdaDriverLeaseSessionTests
         public SudoVdaDriverOperationResult RemoveVirtualDisplay(Guid monitorGuid)
         {
             RemoveCount++;
-            return SudoVdaDriverOperationResult.Ok();
+            return RemoveResult;
         }
 
         public void Dispose()

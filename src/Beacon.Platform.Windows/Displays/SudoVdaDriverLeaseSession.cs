@@ -6,6 +6,7 @@ internal sealed class SudoVdaDriverLeaseSession(
     Func<CancellationToken, ValueTask>? reconcileLeasedDisplayTopology = null)
     : IWindowsDisplayLeaseSession, IDisposable, IAsyncDisposable
 {
+    private const int ErrorNotFound = 1168;
     private readonly SemaphoreSlim transitionGate = new(1, 1);
     private readonly SemaphoreSlim stateGate = new(1, 1);
     private readonly HashSet<string> displayIds = new(StringComparer.OrdinalIgnoreCase);
@@ -183,7 +184,10 @@ internal sealed class SudoVdaDriverLeaseSession(
                     $"No active SudoVDA driver lease owns {displayId}.");
             }
 
-            return connection.RemoveVirtualDisplay(monitorGuid);
+            SudoVdaDriverOperationResult result = connection.RemoveVirtualDisplay(monitorGuid);
+            return !result.Success && result.NativeErrorCode == ErrorNotFound
+                ? SudoVdaDriverOperationResult.Ok()
+                : result;
         }
         finally
         {
@@ -501,11 +505,15 @@ internal sealed record SudoVdaWatchdogQueryResult(
     public static SudoVdaWatchdogQueryResult Fail(string error) => new(false, null, error);
 }
 
-internal sealed record SudoVdaDriverOperationResult(bool Success, string? Error)
+internal sealed record SudoVdaDriverOperationResult(
+    bool Success,
+    string? Error,
+    int? NativeErrorCode = null)
 {
-    public static SudoVdaDriverOperationResult Ok() => new(true, null);
+    public static SudoVdaDriverOperationResult Ok() => new(true, null, null);
 
-    public static SudoVdaDriverOperationResult Fail(string error) => new(false, error);
+    public static SudoVdaDriverOperationResult Fail(string error, int? nativeErrorCode = null) =>
+        new(false, error, nativeErrorCode);
 }
 
 internal sealed record SudoVdaDriverConnectionOpenResult(

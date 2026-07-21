@@ -10,6 +10,11 @@ Beacon's Windows display backend is the real SudoVDA and DisplayConfig integrati
 - The lease-owned SudoVDA handle performs display add, display remove, watchdog query, and
   heartbeat operations. Add or remove must not open a second short-lived control handle:
   the driver's watchdog state is associated with the handle that created the display.
+- DisplayConfig work runs on a fresh thread bound to the current Windows input desktop. This
+  preserves CCD access when Windows switches from `Default` to `Screen-saver` without weakening
+  secure-desktop boundaries.
+- Removing a lease whose driver monitor is already absent is idempotent. Win32 `1168`
+  (`ERROR_NOT_FOUND`) still releases Beacon's lease and heartbeat ownership.
 - `dotnet build Beacon.slnx -warnaserror` succeeds.
 - Visual Studio and WDK are only needed for driver rebuild work, not for running the Beacon display probe.
 

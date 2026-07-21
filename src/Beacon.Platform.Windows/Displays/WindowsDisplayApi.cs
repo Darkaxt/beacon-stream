@@ -61,6 +61,7 @@ public sealed class WindowsDisplayApi :
     private static readonly Guid SudoVdaInterfaceGuid = new("e5bcc234-1e0c-418a-a0d4-ef8b7501414d");
     private readonly WindowsDisplayNameMap displayNameMap;
     private readonly SudoVdaDriverLeaseSession driverLeaseSession;
+    private readonly WindowsInputDesktopExecutionContext inputDesktop;
     private readonly WindowsDisplayLeaseTopologyReconciler topologyReconciler;
 
     public WindowsDisplayApi()
@@ -69,11 +70,19 @@ public sealed class WindowsDisplayApi :
     }
 
     public WindowsDisplayApi(WindowsDisplayNameMap displayNameMap)
+        : this(displayNameMap, new WindowsInputDesktopExecutionContext())
+    {
+    }
+
+    private WindowsDisplayApi(
+        WindowsDisplayNameMap displayNameMap,
+        WindowsInputDesktopExecutionContext inputDesktop)
     {
         this.displayNameMap = displayNameMap;
+        this.inputDesktop = inputDesktop;
         topologyReconciler = new WindowsDisplayLeaseTopologyReconciler(
-            QueryActiveTopology,
-            ApplyExtendedTopology);
+            () => this.inputDesktop.Invoke(QueryActiveTopology),
+            () => this.inputDesktop.Invoke(ApplyExtendedTopology));
         driverLeaseSession = new SudoVdaDriverLeaseSession(
             new WindowsSudoVdaDriverConnectionFactory(),
             new TaskDelaySudoVdaHeartbeatScheduler(),
@@ -83,12 +92,21 @@ public sealed class WindowsDisplayApi :
     internal WindowsDisplayApi(
         WindowsDisplayNameMap displayNameMap,
         SudoVdaDriverLeaseSession driverLeaseSession)
+        : this(displayNameMap, driverLeaseSession, new WindowsInputDesktopExecutionContext())
+    {
+    }
+
+    internal WindowsDisplayApi(
+        WindowsDisplayNameMap displayNameMap,
+        SudoVdaDriverLeaseSession driverLeaseSession,
+        WindowsInputDesktopExecutionContext inputDesktop)
     {
         this.displayNameMap = displayNameMap;
         this.driverLeaseSession = driverLeaseSession;
+        this.inputDesktop = inputDesktop;
         topologyReconciler = new WindowsDisplayLeaseTopologyReconciler(
-            QueryActiveTopology,
-            ApplyExtendedTopology);
+            () => this.inputDesktop.Invoke(QueryActiveTopology),
+            () => this.inputDesktop.Invoke(ApplyExtendedTopology));
     }
 
     public SudoVdaDriverLeaseSessionSnapshot Snapshot => driverLeaseSession.Snapshot;
@@ -106,6 +124,20 @@ public sealed class WindowsDisplayApi :
     public void Dispose() => driverLeaseSession.Dispose();
 
     public DisplayDriverStatus GetDriverStatus()
+    {
+        try
+        {
+            return inputDesktop.Invoke(GetDriverStatusOnInputDesktop);
+        }
+        catch (WindowsInputDesktopException error)
+        {
+            return new DisplayDriverStatus(
+                Ready: false,
+                Diagnostic: $"Windows display access is unavailable: {error.Message}");
+        }
+    }
+
+    private static DisplayDriverStatus GetDriverStatusOnInputDesktop()
     {
         using SafeFileHandle? handle = OpenSudoVdaDevice(out string openDiagnostic);
         if (handle is null)
@@ -155,20 +187,10 @@ public sealed class WindowsDisplayApi :
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        IReadOnlyList<string> beforeDisplayNames = EnumerateDisplayNames(activeOnly: false);
-        if (!TryQueryDisplayConfig(
-            QdcOnlyActivePaths | QdcVirtualModeAware,
-            out DisplayConfigPathInfo[] beforeActivePaths,
-            out _,
-            out string beforeTopologyDiagnostic))
+        VirtualDisplayCreationBaseline baseline = inputDesktop.Invoke(CaptureVirtualDisplayCreationBaseline);
+        if (baseline.Error is not null)
         {
-            return DisplayApiResult.Fail(beforeTopologyDiagnostic);
-        }
-        if (!DescribeDisplayPaths(beforeActivePaths).Any(
-            candidate => candidate.Kind == DisplayPathKind.Physical))
-        {
-            return DisplayApiResult.Fail(
-                "Refusing to create a virtual display because no active physical display path can be preserved.");
+            return DisplayApiResult.Fail(baseline.Error);
         }
 
         Guid monitorGuid = CreateDeterministicDisplayGuid(displayId);
@@ -199,61 +221,105 @@ public sealed class WindowsDisplayApi :
             TargetId = addResult.TargetId
         };
 
-        IReadOnlyList<DisplayPathSnapshot> afterDisplayPaths = EnumerateDisplayNamesWithState(activeOnly: false);
-        IReadOnlyList<string> afterDisplayNames = afterDisplayPaths.Select(path => path.DisplayId).ToArray();
-        string? displayName = TryGetDisplayNameForTarget(addOutput, out string? targetDisplayName)
-            ? targetDisplayName
-            : SelectAddedDisplayName(beforeDisplayNames, afterDisplayNames) ??
-            SelectSingleVirtualDisplayName(afterDisplayPaths);
-
-        if (displayName is null)
-        {
-            await driverLeaseSession.RemoveVirtualDisplayAsync(
-                displayId,
-                monitorGuid,
-                CancellationToken.None).ConfigureAwait(false);
-            return DisplayApiResult.Fail(
-                $"SudoVDA create succeeded for {displayId}, but Windows did not expose a mappable virtual display name. Before=[{string.Join(", ", beforeDisplayNames)}] After=[{string.Join(", ", afterDisplayNames)}].");
-        }
-
-        RememberDisplayName(displayId, displayName);
-        DisplayApiResult activationResult = ActivateDisplayMode(
+        VirtualDisplayActivationOutcome activation = inputDesktop.Invoke(() => ActivateCreatedVirtualDisplay(
+            displayId,
             addOutput,
-            displayName,
             width,
             height,
             refreshHz,
-            beforeActivePaths);
-        if (!activationResult.Success)
+            baseline));
+        if (!activation.Result.Success)
         {
             await driverLeaseSession.RemoveVirtualDisplayAsync(
                 displayId,
                 monitorGuid,
                 CancellationToken.None).ConfigureAwait(false);
-            ForgetDisplayName(displayId);
-            return activationResult;
+            return activation.Result;
         }
 
         return DisplayApiResult.Ok();
     }
 
+    private static VirtualDisplayCreationBaseline CaptureVirtualDisplayCreationBaseline()
+    {
+        IReadOnlyList<string> displayNames = EnumerateDisplayNames(activeOnly: false);
+        if (!TryQueryDisplayConfig(
+            QdcOnlyActivePaths | QdcVirtualModeAware,
+            out DisplayConfigPathInfo[] activePaths,
+            out _,
+            out string topologyDiagnostic))
+        {
+            return new VirtualDisplayCreationBaseline(displayNames, [], topologyDiagnostic);
+        }
+
+        return DescribeDisplayPaths(activePaths).Any(candidate => candidate.Kind == DisplayPathKind.Physical)
+            ? new VirtualDisplayCreationBaseline(displayNames, activePaths, Error: null)
+            : new VirtualDisplayCreationBaseline(
+                displayNames,
+                activePaths,
+                "Refusing to create a virtual display because no active physical display path can be preserved.");
+    }
+
+    private VirtualDisplayActivationOutcome ActivateCreatedVirtualDisplay(
+        string displayId,
+        VirtualDisplayAddOut addOutput,
+        int width,
+        int height,
+        int refreshHz,
+        VirtualDisplayCreationBaseline baseline)
+    {
+        IReadOnlyList<DisplayPathSnapshot> afterDisplayPaths = EnumerateDisplayNamesWithState(activeOnly: false);
+        IReadOnlyList<string> afterDisplayNames = afterDisplayPaths.Select(path => path.DisplayId).ToArray();
+        string? displayName = TryGetDisplayNameForTarget(addOutput, out string? targetDisplayName)
+            ? targetDisplayName
+            : SelectAddedDisplayName(baseline.DisplayNames, afterDisplayNames) ??
+            SelectSingleVirtualDisplayName(afterDisplayPaths);
+
+        if (displayName is null)
+        {
+            return new VirtualDisplayActivationOutcome(DisplayApiResult.Fail(
+                $"SudoVDA create succeeded for {displayId}, but Windows did not expose a mappable virtual display name. Before=[{string.Join(", ", baseline.DisplayNames)}] After=[{string.Join(", ", afterDisplayNames)}]."));
+        }
+
+        RememberDisplayName(displayId, displayName);
+        DisplayApiResult result = ActivateDisplayMode(
+            addOutput,
+            displayName,
+            width,
+            height,
+            refreshHz,
+            baseline.ActivePaths);
+        if (!result.Success)
+        {
+            ForgetDisplayName(displayId);
+        }
+
+        return new VirtualDisplayActivationOutcome(result);
+    }
+
     public Task<DisplayTopologySnapshot> QueryTopologyAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(QueryActiveTopology());
+        return Task.FromResult(inputDesktop.Invoke(QueryActiveTopology));
     }
 
     public Task<DisplayApiResult> SetVirtualPrimaryAsync(string displayId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(TrySetPrimaryDisplay(displayId, out string diagnostic)
-            ? DisplayApiResult.Ok()
-            : DisplayApiResult.Fail(diagnostic));
+        return Task.FromResult(inputDesktop.Invoke(() =>
+            TrySetPrimaryDisplay(displayId, out string diagnostic)
+                ? DisplayApiResult.Ok()
+                : DisplayApiResult.Fail(diagnostic)));
     }
 
     public Task<DisplayApiResult> RestorePhysicalPrimaryAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(inputDesktop.Invoke(RestorePhysicalPrimaryOnInputDesktop));
+    }
+
+    private DisplayApiResult RestorePhysicalPrimaryOnInputDesktop()
+    {
         DisplayPathSnapshot? physicalDisplay = EnumerateActiveDisplayPaths(displayIdByDisplayName: null)
             .FirstOrDefault(path => path.Kind == DisplayPathKind.Physical);
 
@@ -274,8 +340,7 @@ public sealed class WindowsDisplayApi :
                     string extendedDiagnostic = extended.Success
                         ? "Extended topology did not expose a physical display."
                         : extended.Error ?? "Extended topology apply failed.";
-                    return Task.FromResult(DisplayApiResult.Fail(
-                        $"{extendedDiagnostic} {forced.Error}"));
+                    return DisplayApiResult.Fail($"{extendedDiagnostic} {forced.Error}");
                 }
 
                 physicalDisplay = EnumerateActiveDisplayPaths(displayIdByDisplayName: null)
@@ -295,12 +360,12 @@ public sealed class WindowsDisplayApi :
         }
         else
         {
-            return Task.FromResult(DisplayApiResult.Fail(restoreDiagnostic));
+            return DisplayApiResult.Fail(restoreDiagnostic);
         }
 
-        return Task.FromResult(TrySetPrimaryDisplay(displayName, out string diagnostic)
+        return TrySetPrimaryDisplay(displayName, out string diagnostic)
             ? DisplayApiResult.Ok()
-            : DisplayApiResult.Fail(diagnostic));
+            : DisplayApiResult.Fail(diagnostic);
     }
 
     public async Task<DisplayApiResult> RemoveVirtualDisplayAsync(
@@ -327,39 +392,44 @@ public sealed class WindowsDisplayApi :
     public Task<DisplayHdrCapability> QueryHdrCapabilityAsync(string displayId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(inputDesktop.Invoke(() => QueryHdrCapabilityOnInputDesktop(displayId)));
+    }
+
+    private DisplayHdrCapability QueryHdrCapabilityOnInputDesktop(string displayId)
+    {
         if (!TryResolveDisplayName(displayId, out string? displayName) || displayName is null)
         {
-            return Task.FromResult(new DisplayHdrCapability(
+            return new DisplayHdrCapability(
                 Supported: false,
                 Enabled: false,
-                Reason: $"Unable to resolve Windows display name for HDR query on {displayId}."));
+                Reason: $"Unable to resolve Windows display name for HDR query on {displayId}.");
         }
 
         if (!TryFindActiveDisplayConfigPath(displayName, out DisplayConfigPathInfo path, out string pathDiagnostic))
         {
-            return Task.FromResult(new DisplayHdrCapability(
+            return new DisplayHdrCapability(
                 Supported: false,
                 Enabled: false,
-                Reason: pathDiagnostic));
+                Reason: pathDiagnostic);
         }
 
         if (TryQueryAdvancedColorInfo2(path.TargetInfo.AdapterId, path.TargetInfo.Id, out DisplayHdrCapability capability, out string info2Diagnostic))
         {
-            return Task.FromResult(capability);
+            return capability;
         }
 
         if (TryQueryLegacyAdvancedColorInfo(path.TargetInfo.AdapterId, path.TargetInfo.Id, out capability, out string legacyDiagnostic))
         {
-            return Task.FromResult(capability with
+            return capability with
             {
                 Reason = $"{capability.Reason} AdvancedColorInfo2 unavailable: {info2Diagnostic}"
-            });
+            };
         }
 
-        return Task.FromResult(new DisplayHdrCapability(
+        return new DisplayHdrCapability(
             Supported: false,
             Enabled: false,
-            Reason: $"Windows Advanced Color query failed for {displayName}. Info2={info2Diagnostic}; Legacy={legacyDiagnostic}."));
+            Reason: $"Windows Advanced Color query failed for {displayName}. Info2={info2Diagnostic}; Legacy={legacyDiagnostic}.");
     }
 
     public static DisplayPathKind ClassifyDisplayKind(string deviceString, string deviceId)
@@ -1437,11 +1507,25 @@ public sealed class WindowsDisplayApi :
 
     internal static SudoVdaDriverOperationResult RemoveSudoVdaVirtualDisplay(
         SafeFileHandle handle,
-        Guid monitorGuid) =>
-        RemoveVirtualDisplay(handle, monitorGuid)
-            ? SudoVdaDriverOperationResult.Ok()
-            : SudoVdaDriverOperationResult.Fail(
-                $"SudoVDA remove failed. Win32={Marshal.GetLastWin32Error()}.");
+        Guid monitorGuid)
+    {
+        if (RemoveVirtualDisplay(handle, monitorGuid))
+        {
+            return SudoVdaDriverOperationResult.Ok();
+        }
+
+        int nativeError = Marshal.GetLastWin32Error();
+        return SudoVdaDriverOperationResult.Fail(
+            $"SudoVDA remove failed. Win32={nativeError}.",
+            nativeError);
+    }
+
+    private sealed record VirtualDisplayCreationBaseline(
+        IReadOnlyList<string> DisplayNames,
+        DisplayConfigPathInfo[] ActivePaths,
+        string? Error);
+
+    private sealed record VirtualDisplayActivationOutcome(DisplayApiResult Result);
 
     private static class NativeMethods
     {
