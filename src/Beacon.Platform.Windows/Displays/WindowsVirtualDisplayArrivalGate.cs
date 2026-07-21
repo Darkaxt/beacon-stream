@@ -60,6 +60,15 @@ internal sealed class WindowsVirtualDisplayArrivalGate(
             applyDesiredTopology,
             cancellationToken).ConfigureAwait(false);
 
+    public async Task<DisplayApiResult> WaitForStableDesiredTopologyAsync(
+        Func<VirtualDisplayTargetArrivalSnapshot> queryTarget,
+        CancellationToken cancellationToken) =>
+        await WaitForStableStateAsync(
+            queryTarget,
+            snapshot => snapshot.DesiredTopology,
+            applyStateTransition: null,
+            cancellationToken).ConfigureAwait(false);
+
     public async Task<DisplayApiResult> WaitForStableExtendedTopologyAsync(
         Func<VirtualDisplayTargetArrivalSnapshot> queryTarget,
         Func<VirtualDisplayTargetArrivalSnapshot, DisplayApiResult> applyExtendedTopology,
@@ -70,10 +79,19 @@ internal sealed class WindowsVirtualDisplayArrivalGate(
             applyExtendedTopology,
             cancellationToken).ConfigureAwait(false);
 
+    public async Task<DisplayApiResult> WaitForStableExtendedTopologyAsync(
+        Func<VirtualDisplayTargetArrivalSnapshot> queryTarget,
+        CancellationToken cancellationToken) =>
+        await WaitForStableStateAsync(
+            queryTarget,
+            snapshot => snapshot.ExtendedTopology,
+            applyStateTransition: null,
+            cancellationToken).ConfigureAwait(false);
+
     private async Task<DisplayApiResult> WaitForStableStateAsync(
         Func<VirtualDisplayTargetArrivalSnapshot> queryTarget,
         Func<VirtualDisplayTargetArrivalSnapshot, bool> isDesiredState,
-        Func<VirtualDisplayTargetArrivalSnapshot, DisplayApiResult> applyStateTransition,
+        Func<VirtualDisplayTargetArrivalSnapshot, DisplayApiResult>? applyStateTransition,
         CancellationToken cancellationToken)
     {
         VirtualDisplayTargetArrivalSnapshot? previousDesired = null;
@@ -104,6 +122,13 @@ internal sealed class WindowsVirtualDisplayArrivalGate(
             }
 
             previousDesired = null;
+            if (applyStateTransition is null)
+            {
+                WriteDiagnostic(
+                    $"gate=desired-topology phase=awaiting-heartbeat-owner topology={current.TopologyFingerprint}");
+                continue;
+            }
+
             DisplayApiResult applyResult = applyStateTransition(current);
             if (!applyResult.Success)
             {

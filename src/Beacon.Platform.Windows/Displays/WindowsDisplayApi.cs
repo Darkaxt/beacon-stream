@@ -334,9 +334,6 @@ public sealed class WindowsDisplayApi :
                         addOutput,
                         activation.DisplayName!,
                         requirement)),
-                    _ => inputDesktop.Invoke(() => EnsureDisplayConfigTargetActive(
-                        addOutput,
-                        activation.DisplayName!)),
                     cancellationToken).ConfigureAwait(false);
             if (!extendedTopology.Success)
             {
@@ -362,15 +359,6 @@ public sealed class WindowsDisplayApi :
                     addOutput,
                     activation.DisplayName!,
                     requirement)),
-                snapshot => inputDesktop.Invoke(() => snapshot.ExtendedTopology
-                    ? ApplyDisplayConfigMode(
-                        activation.DisplayName!,
-                        width,
-                        height,
-                        refreshHz)
-                    : EnsureDisplayConfigTargetActive(
-                        addOutput,
-                        activation.DisplayName!)),
                 cancellationToken).ConfigureAwait(false);
             if (!exactTopology.Success)
             {

@@ -206,6 +206,37 @@ public sealed class WindowsVirtualDisplayArrivalGateTests
     }
 
     [Fact]
+    public async Task ObservationOnlyGateLeavesRecoveryMutationToTheHeartbeatOwner()
+    {
+        var signal = new ManualHeartbeatRevisionSignal();
+        var snapshots = new ObservedSnapshotSequence(
+        [
+            new(true, @"\\.\DISPLAY34", "virtual-only", ExtendedTopology: false, DesiredTopology: false),
+            new(true, @"\\.\DISPLAY34", "extended", ExtendedTopology: true, DesiredTopology: true),
+            new(true, @"\\.\DISPLAY34", "extended", ExtendedTopology: true, DesiredTopology: true)
+        ]);
+        var gate = new WindowsVirtualDisplayArrivalGate(
+            () => signal.Revision,
+            signal.WaitAsync);
+
+        Task<DisplayApiResult> wait = gate.WaitForStableDesiredTopologyAsync(
+            snapshots.Query,
+            CancellationToken.None);
+
+        signal.Pulse();
+        await snapshots.WaitForObservationAsync(0);
+        Assert.False(wait.IsCompleted);
+
+        signal.Pulse();
+        await snapshots.WaitForObservationAsync(1);
+        Assert.False(wait.IsCompleted);
+
+        signal.Pulse();
+
+        Assert.True((await wait).Success);
+    }
+
+    [Fact]
     public async Task FailedTopologyReapplyClosesGateWithDiagnostic()
     {
         var signal = new ManualHeartbeatRevisionSignal();
