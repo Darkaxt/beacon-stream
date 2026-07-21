@@ -10,6 +10,32 @@
 
 ---
 
+## Implementation Status
+
+Validated on 2026-07-21 through the signed branch-package path:
+
+- the one-time migration changed `Beacon Stream Host Agent` from the legacy direct Agent action
+  to `C:\Program Files\BeaconStream\Bootstrap\Beacon.HostAgent.Bootstrap.exe`;
+- the installer now terminates an orphaned Host Agent before waiting, preventing a repeated
+  migration from blocking indefinitely;
+- GitHub Actions run `29826141307` signed package
+  `agent-f07ff2a7cb11f23cd851070718a7547b9d39c1c8-29826141307` from source
+  `f07ff2a7cb11f23cd851070718a7547b9d39c1c8`;
+- local public-key verification accepted the 21-file package before staging;
+- unelevated transaction `de94071e-f43d-44eb-b177-3a3ffb5059db` reached durable state
+  `succeeded` with diagnostic `host-agent-update-succeeded` and no new consent process;
+- Bootstrap PID `71160` remained stable while the Agent changed from PID `86868` to PID
+  `79420`, whose verified parent remained PID `71160`; and
+- all 21 protected installed files matched the signed manifest after activation, and the
+  restarted Agent accepted a status request with zero active display leases.
+
+Static validation passed 754 managed tests, `dotnet format --verify-no-changes`, PowerShell
+parser validation, and `git diff --check`. Deterministic live rollback and the subsequent
+display/emulator/stream sequence remain pending. The unchecked task boxes below preserve the
+original TDD execution recipe; this section is the authoritative completion record.
+
+---
+
 ## File Structure
 
 - `src/Beacon.HostAgent.Update/`: shared manifest, signature, package-tree, journal, state-file, and path-confinement primitives. The bootstrap embeds this code into its stable single-file publish; the Agent uses it only for early validation and staging.
