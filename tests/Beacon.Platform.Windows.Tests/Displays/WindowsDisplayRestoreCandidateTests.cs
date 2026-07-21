@@ -125,12 +125,6 @@ public sealed class WindowsDisplayRestoreCandidateTests
     }
 
     [Fact]
-    public void ExtendedTopologyApplyUsesOnlyValidDatabaseTopologyFlags()
-    {
-        Assert.Equal(0x00000184u, WindowsDisplayApi.ExtendedTopologyApplyFlags());
-    }
-
-    [Fact]
     public void DisplayConfigAccessValidationUsesSuppliedVirtualAwareConfiguration()
     {
         Assert.Equal(0x00008060u, WindowsDisplayApi.SuppliedDisplayConfigValidateFlags());

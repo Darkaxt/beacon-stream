@@ -1,0 +1,55 @@
+using Beacon.Platform.Windows.Displays;
+
+namespace Beacon.Platform.Windows.Tests.Displays;
+
+public sealed class WindowsShellExtendedTopologyActivatorTests
+{
+    [Fact]
+    public void RequestsFixedDisplaySwitchExtendCommandThroughExplorer()
+    {
+        var executor = new RecordingExplorerShellExecutor();
+        var activator = new WindowsShellExtendedTopologyActivator(executor);
+
+        DisplayApiResult result = activator.Apply();
+
+        Assert.True(result.Success);
+        Assert.Equal(
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                "System32",
+                "DisplaySwitch.exe"),
+            executor.FileName);
+        Assert.Equal("/extend", executor.Arguments);
+    }
+
+    [Fact]
+    public void ExplorerLaunchFailureIsReturnedToTopologyGate()
+    {
+        var activator = new WindowsShellExtendedTopologyActivator(
+            new RecordingExplorerShellExecutor
+            {
+                Result = DisplayApiResult.Fail("Explorer shell unavailable.")
+            });
+
+        DisplayApiResult result = activator.Apply();
+
+        Assert.False(result.Success);
+        Assert.Contains("Explorer", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class RecordingExplorerShellExecutor : IWindowsExplorerShellExecutor
+    {
+        public DisplayApiResult Result { get; init; } = DisplayApiResult.Ok();
+
+        public string? FileName { get; private set; }
+
+        public string? Arguments { get; private set; }
+
+        public DisplayApiResult Execute(string fileName, string arguments)
+        {
+            FileName = fileName;
+            Arguments = arguments;
+            return Result;
+        }
+    }
+}

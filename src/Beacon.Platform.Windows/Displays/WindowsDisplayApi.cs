@@ -32,10 +32,8 @@ public sealed class WindowsDisplayApi :
     private const uint SdcUseSuppliedDisplayConfig = 0x00000020;
     private const uint SdcValidate = 0x00000040;
     private const uint SdcApply = 0x00000080;
-    private const uint SdcNoOptimization = 0x00000100;
     private const uint SdcSaveToDatabase = 0x00000200;
     private const uint SdcAllowChanges = 0x00000400;
-    private const uint SdcTopologyExtend = 0x00000004;
     private const uint SdcTopologySupplied = 0x00000010;
     private const uint SdcAllowPathOrderChanges = 0x00002000;
     private const uint SdcVirtualModeAware = 0x00008000;
@@ -65,6 +63,7 @@ public sealed class WindowsDisplayApi :
     private readonly WindowsVirtualDisplayArrivalGate virtualDisplayArrivalGate;
     private readonly WindowsInputDesktopExecutionContext inputDesktop;
     private readonly WindowsDisplayLeaseTopologyReconciler topologyReconciler;
+    private readonly WindowsShellExtendedTopologyActivator extendedTopologyActivator = new();
     private readonly object leasedDisplayStateGate = new();
     private readonly Dictionary<string, LeasedVirtualDisplayState> leasedDisplays =
         new(StringComparer.Ordinal);
@@ -750,18 +749,7 @@ public sealed class WindowsDisplayApi :
                 $"Unable to activate DisplayConfig target for {displayName}. Adapter={FormatLuid(addOutput.AdapterLuid)} Target={addOutput.TargetId} Result={status}.");
     }
 
-    private static DisplayApiResult ApplyExtendedTopology()
-    {
-        uint status = NativeMethods.SetDisplayConfigWithoutPaths(
-            0,
-            IntPtr.Zero,
-            0,
-            IntPtr.Zero,
-            ExtendedTopologyApplyFlags());
-        return status == ErrorSuccess
-            ? DisplayApiResult.Ok()
-            : DisplayApiResult.Fail($"Unable to apply an extended display topology. Result={status}.");
-    }
+    private DisplayApiResult ApplyExtendedTopology() => extendedTopologyActivator.Apply();
 
     private IReadOnlyList<LeasedDisplayTopologyRequirement> SnapshotLeasedDisplayRequirements()
     {
@@ -873,9 +861,6 @@ public sealed class WindowsDisplayApi :
             leasedDisplays.Remove(displayId);
         }
     }
-
-    internal static uint ExtendedTopologyApplyFlags() =>
-        SdcApply | SdcNoOptimization | SdcTopologyExtend;
 
     internal static uint SuppliedDisplayConfigValidateFlags() =>
         SdcValidate | SdcUseSuppliedDisplayConfig | SdcVirtualModeAware;
@@ -1933,13 +1918,6 @@ public sealed class WindowsDisplayApi :
             IntPtr modeInfoArray,
             uint flags);
 
-        [DllImport("user32.dll", EntryPoint = "SetDisplayConfig")]
-        public static extern uint SetDisplayConfigWithoutPaths(
-            uint numPathArrayElements,
-            IntPtr pathArray,
-            uint numModeInfoArrayElements,
-            IntPtr modeInfoArray,
-            uint flags);
     }
 
     [StructLayout(LayoutKind.Sequential)]
