@@ -1,5 +1,11 @@
 # Beacon Stream Gates 3–5 Implementation Plan
 
+> **Historical implementation record (superseded 2026-08-01):** Completed items remain valid
+> implementation and regression evidence. Unchecked items are not an active backlog and must not be
+> executed independently. Current work is governed by
+> `2026-08-01-beacon-release-outcome-gates.md` and
+> `../specs/2026-08-01-beacon-80-20-release-execution-design.md`.
+
 > **Execution rule:** implement each task test-first, run its focused validation, commit and
 > push the slice, then continue. At every gate: implement, validate static/dynamic, sync,
 > refactor from evidence, validate static/dynamic again, and sync again.

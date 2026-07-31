@@ -10,6 +10,24 @@ The Windows server knows registered clients before launch, measures their curren
 
 This document replaces compatibility-first assumptions introduced during the first 120 pull requests. Where an older plan, README statement, test, or implementation contradicts this document, this document wins.
 
+## Execution Authority
+
+The architecture in this document remains authoritative. Delivery priority, progress reporting,
+and release claims are governed by
+`2026-08-01-beacon-80-20-release-execution-design.md` and
+`../plans/2026-08-01-beacon-release-outcome-gates.md`.
+
+The release sequence is:
+
+1. R1 proves one complete H.264 SDR transaction in the Android emulator.
+2. R2 adds only audio, controller input, physical-client benchmarking, and a playable Z Fold 7
+   transaction.
+3. R3 packages the proven system and publishes a clean-machine-validated prerelease.
+
+Older unchecked milestone items are historical evidence, not parallel requirements. This execution
+reset does not weaken Beacon's architecture, security, server-owned policy, virtual-display
+lifecycle, or inactive **AND** no-owned-work invariants.
+
 ## Core Thesis
 
 The product must not accumulate layers around Apollo, Sunshine, GameStream, Moonlight, wrappers, runtime descriptor files, or alternate Android routes. Those approaches duplicate ownership and retain failure modes that Beacon exists to remove.

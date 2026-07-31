@@ -8,8 +8,9 @@ device facts, game selection, and control requests.
 
 ## Current State
 
-Architecture Recovery Gates 0-3 and the Gate 4 evidence model define the current repository
-state:
+Architecture Recovery Gates 0-4 and the production-video implementation define the current
+repository state. Delivery now follows the outcome-driven
+[`R1/R2/R3` execution plan](docs/superpowers/plans/2026-08-01-beacon-release-outcome-gates.md):
 
 - Core, Server, Cockpit, Client Lab, FakeEndpoint, and Android expose protocol-neutral
   Beacon session state.
@@ -18,18 +19,21 @@ state:
 - Fake host mode provides deterministic end-to-end control-plane testing.
 - A Beacon-owned C++ StreamWorker runs behind typed named-pipe IPC and carries authenticated
   control, input, feedback, and media datagrams over MsQuic.
-- The APK has one JNI StreamCore route. Gate 3 proves it against the real Server and Worker on
-  the Android emulator with a deterministic, non-decodable access-unit marker.
+- The APK has one JNI StreamCore route. The hosted emulator fixture has rendered changing frames,
+  and production WGC, D3D11, NVENC H.264, MsQuic, and MediaCodec components exist behind that route.
 - Versioned network/hardware fingerprints, raw benchmark samples, server-side scoring,
   automatic reuse decisions, manual always-new runs, history, and persisted plan evidence are
   implemented. Planning rejects missing or stale evidence instead of reverting to telemetry
   heuristics.
-- Gate 3 does not claim real video. WGC capture, D3D11 conversion, NVENC H.264, and MediaCodec
-  presentation remain Gate 5 work behind the existing Worker/StreamCore contract.
+- R1 remains open because those production components have not yet completed one retained
+  display-to-stream-to-reconnect-to-physical-restore transaction. Component success is regression
+  evidence, not a release claim.
 
-The approved Gates 3-5 implementation is a source-audited Beacon StreamWorker/StreamCore
-vertical slice: fake transport proof first, benchmark traffic through the production
-transport, then real H.264 video to the Android emulator.
+The immediate target is deliberately narrow: one stable `2560x1600` virtual display, one catalog
+application, moving H.264 SDR video in `emulator-5554`, minimal authenticated input, reconnect, quit,
+and verified physical-primary restore through
+`scripts/test-gate5-production-session.ps1`. Audio, controller support, HDR, additional codecs,
+physical-phone qualification, packaging, and UI polish are later release outcomes.
 
 ## Architecture
 
@@ -157,8 +161,9 @@ adb shell am start -W -n dev.beacon.android/.BeaconActivity
 
 For the standard Android emulator, the APK server URL is `http://10.0.2.2:5000`.
 Validate catalog selection, local settings persistence, capability and telemetry reports,
-input controls, stop/disconnect/quit, and emergency restore. Gate 3 instrumentation drives
-the production JNI route; the normal APK still has no claim of moving video before Gate 5.
+input controls, stop/disconnect/quit, and emergency restore. Individual production video boundaries
+are implemented; R1 requires the normal APK to complete the full production acceptance transaction
+before Beacon claims an integrated stream.
 
 ## Validation
 
@@ -230,9 +235,11 @@ instead of maintaining an exception ledger.
 ## Authority
 
 - Authoritative requirements: `docs/superpowers/specs/2026-06-03-personal-streaming-orchestrator-design.md`
+- Authoritative execution policy: `docs/superpowers/specs/2026-08-01-beacon-80-20-release-execution-design.md`
+- Active release-outcome plan: `docs/superpowers/plans/2026-08-01-beacon-release-outcome-gates.md`
 - Recovery inventory: `docs/source-audits/2026-07-10-beacon-architecture-recovery-inventory.md`
 - Gates 0-2 plan: `docs/superpowers/plans/2026-07-10-beacon-stream-architecture-recovery-gates-0-2.md`
 - Native streaming source audit: `docs/source-audits/2026-07-10-beacon-streamworker-streamcore.md`
-- Gates 3-5 plan: `docs/superpowers/plans/2026-07-10-beacon-stream-gates-3-5.md`
+- Historical Gates 3-5 record: `docs/superpowers/plans/2026-07-10-beacon-stream-gates-3-5.md`
 - Source provenance: `docs/extraction-map.md`
 - Windows display boundary: `docs/windows-display-backend.md`
