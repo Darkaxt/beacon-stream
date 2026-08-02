@@ -946,7 +946,7 @@ public sealed class WindowsDisplayApi :
     }
 
     internal static uint SuppliedDisplayConfigValidateFlags() =>
-        SdcValidate | SdcUseSuppliedDisplayConfig | SdcVirtualModeAware;
+        SdcValidate | SdcUseSuppliedDisplayConfig | SdcAllowChanges | SdcVirtualModeAware;
 
     internal static uint PhysicalDisplayResetFlags() =>
         CdsUpdateRegistry | CdsReset;
@@ -1459,17 +1459,56 @@ public sealed class WindowsDisplayApi :
 
         Array.Resize(ref paths, checked((int)pathCount));
         Array.Resize(ref modes, checked((int)modeCount));
+        bool inferredActivePaths = false;
         if (filteredAllPaths)
         {
+            DisplayConfigPathInfo[] allPaths = paths;
             paths = paths
                 .Where(path => (path.Flags & DisplayConfigPathActive) != 0)
                 .ToArray();
+            if (paths.Length == 0)
+            {
+                paths = SelectAvailablePathsForActiveGdiDisplays(allPaths);
+                inferredActivePaths = paths.Length > 0;
+            }
             CompactVirtualModeInfo(ref paths, ref modes);
         }
-        diagnostic = filteredAllPaths
+        diagnostic = inferredActivePaths
+            ? "DisplayConfig queried through the all-path fallback and inferred active paths from GDI."
+            : filteredAllPaths
             ? "DisplayConfig queried through the all-path fallback and filtered to active paths."
             : "DisplayConfig queried.";
         return true;
+    }
+
+    private static DisplayConfigPathInfo[] SelectAvailablePathsForActiveGdiDisplays(
+        DisplayConfigPathInfo[] allPaths)
+    {
+        string[] activeDisplayNames = EnumerateDisplayNamesWithState(activeOnly: true)
+            .Select(display => display.DisplayId)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var selectedPaths = new List<DisplayConfigPathInfo>();
+
+        foreach (string activeDisplayName in activeDisplayNames)
+        {
+            foreach (DisplayConfigPathInfo path in allPaths)
+            {
+                if (!path.TargetInfo.TargetAvailable ||
+                    !TryGetSourceDisplayName(path, out string? sourceDisplayName) ||
+                    !string.Equals(sourceDisplayName, activeDisplayName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                DisplayConfigPathInfo activePath = path;
+                activePath.Flags |= DisplayConfigPathActive;
+                selectedPaths.Add(activePath);
+                break;
+            }
+        }
+
+        return selectedPaths.ToArray();
     }
 
     private static void CompactVirtualModeInfo(

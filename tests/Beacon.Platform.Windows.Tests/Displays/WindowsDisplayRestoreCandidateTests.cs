@@ -127,7 +127,7 @@ public sealed class WindowsDisplayRestoreCandidateTests
     [Fact]
     public void DisplayConfigAccessValidationUsesSuppliedVirtualAwareConfiguration()
     {
-        Assert.Equal(0x00008060u, WindowsDisplayApi.SuppliedDisplayConfigValidateFlags());
+        Assert.Equal(0x00008460u, WindowsDisplayApi.SuppliedDisplayConfigValidateFlags());
     }
 
     [Fact]
