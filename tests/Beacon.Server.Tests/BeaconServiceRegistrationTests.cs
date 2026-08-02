@@ -32,6 +32,24 @@ namespace Beacon.Server.Tests;
 public sealed class BeaconServiceRegistrationTests
 {
     [Fact]
+    public void WindowsHostBoundaryDefersPlatformAccessUntilResolution()
+    {
+        var services = new ServiceCollection();
+
+        services.AddBeaconServices(
+            CreateConfiguration(),
+            environmentClientProfilesPath: null,
+            environmentStreamWorkerPath: null,
+            environmentBenchmarkEvidencePath: null);
+
+        ServiceDescriptor connection = Assert.Single(
+            services,
+            descriptor => descriptor.ServiceType == typeof(HostAgentConnection));
+        Assert.Null(connection.ImplementationInstance);
+        Assert.NotNull(connection.ImplementationFactory);
+    }
+
+    [Fact]
     public async Task ProductionRegistrationUsesWindowsHostAndWorkerStreaming()
     {
         await using ServiceProvider provider = BuildProvider();

@@ -128,10 +128,13 @@ public static class BeaconServiceRegistration
     private static IServiceCollection AddWindowsHostBoundaries(
         this IServiceCollection services)
     {
-        using WindowsIdentity identity = WindowsIdentity.GetCurrent();
-        SecurityIdentifier owner = identity.User
-            ?? throw new InvalidOperationException("The Beacon server user has no Windows SID.");
-        services.AddSingleton(new HostAgentConnection(owner));
+        services.AddSingleton(_ =>
+        {
+            using WindowsIdentity identity = WindowsIdentity.GetCurrent();
+            SecurityIdentifier owner = identity.User
+                ?? throw new InvalidOperationException("The Beacon server user has no Windows SID.");
+            return new HostAgentConnection(owner);
+        });
         services.AddSingleton<IHostAgentConnection>(sp =>
             sp.GetRequiredService<HostAgentConnection>());
         services.AddHostedService<HostAgentConnectionHostedService>();
