@@ -55,6 +55,30 @@ public sealed class WindowsShellExtendedTopologyActivatorTests
             executor.Arguments);
     }
 
+    [Fact]
+    public void ExplorerFallbackSelectsOldestProcessFromCurrentSession()
+    {
+        uint? selected = WindowsExplorerShellExecutor.SelectExplorerProcessId(
+            currentSessionId: 7,
+            [
+                new(301, SessionId: 8, StartTimeUtc: new DateTime(2026, 8, 2, 8, 0, 0, DateTimeKind.Utc)),
+                new(302, SessionId: 7, StartTimeUtc: new DateTime(2026, 8, 2, 9, 0, 0, DateTimeKind.Utc)),
+                new(303, SessionId: 7, StartTimeUtc: new DateTime(2026, 8, 2, 7, 0, 0, DateTimeKind.Utc))
+            ]);
+
+        Assert.Equal((uint)303, selected);
+    }
+
+    [Fact]
+    public void ExplorerFallbackRejectsAnotherSession()
+    {
+        uint? selected = WindowsExplorerShellExecutor.SelectExplorerProcessId(
+            currentSessionId: 7,
+            [new(301, SessionId: 8, StartTimeUtc: DateTime.UnixEpoch)]);
+
+        Assert.Null(selected);
+    }
+
     private sealed class RecordingExplorerShellExecutor : IWindowsExplorerShellExecutor
     {
         public DisplayApiResult Result { get; init; } = DisplayApiResult.Ok();

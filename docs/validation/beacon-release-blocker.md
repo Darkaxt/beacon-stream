@@ -47,6 +47,12 @@ probe and the full WGC capture probe both succeed against the same `DISPLAY34` a
 WGC probe receives changing `2560x1600` frames through the NVIDIA capture device. Cleanup restores
 physical-only topology and releases the lease successfully.
 
+The first unattended post-update validation attempts failed earlier during display preparation
+because the active Windows desktop was `Screen-saver`. `GetShellWindow()` is desktop-local, so the
+elevated HostAgent could not resolve Explorer even though the owning user's Explorer process was
+healthy in the same interactive session. The topology helper now falls back to the oldest Explorer
+process in the current session; it never selects an Explorer process from another session.
+
 ## Current Hypothesis
 
 `WindowsDisplayApi.SetVirtualPrimaryAsync` returns immediately after requesting the primary

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -7,6 +8,11 @@ internal interface IWindowsExplorerShellExecutor
 {
     DisplayApiResult Execute(string fileName, string arguments);
 }
+
+internal sealed record WindowsExplorerProcessCandidate(
+    uint ProcessId,
+    int SessionId,
+    DateTime StartTimeUtc);
 
 internal sealed class WindowsExplorerShellExecutor(
     WindowsChildProcessCompletionGate? completionGate = null) : IWindowsExplorerShellExecutor
@@ -20,17 +26,17 @@ internal sealed class WindowsExplorerShellExecutor(
 
     public DisplayApiResult Execute(string fileName, string arguments)
     {
-        IntPtr shellWindow = NativeMethods.GetShellWindow();
-        if (shellWindow == IntPtr.Zero)
+        uint? shellProcessId = ResolveExplorerProcessId();
+        if (shellProcessId is null)
         {
-            return DisplayApiResult.Fail("Windows Explorer shell window is unavailable.");
+            return DisplayApiResult.Fail(
+                "Windows Explorer shell process is unavailable in the Host Agent session.");
         }
 
-        _ = NativeMethods.GetWindowThreadProcessId(shellWindow, out uint shellProcessId);
         IntPtr shellProcess = NativeMethods.OpenProcess(
             ProcessCreateProcess,
             inheritHandle: false,
-            shellProcessId);
+            shellProcessId.Value);
         if (shellProcess == IntPtr.Zero)
         {
             return DisplayApiResult.Fail(
@@ -126,6 +132,52 @@ internal sealed class WindowsExplorerShellExecutor(
 
             _ = NativeMethods.CloseHandle(shellProcess);
         }
+    }
+
+    internal static uint? SelectExplorerProcessId(
+        int currentSessionId,
+        IReadOnlyList<WindowsExplorerProcessCandidate> candidates) =>
+        candidates
+            .Where(candidate => candidate.SessionId == currentSessionId)
+            .OrderBy(candidate => candidate.StartTimeUtc)
+            .ThenBy(candidate => candidate.ProcessId)
+            .Select(candidate => (uint?)candidate.ProcessId)
+            .FirstOrDefault();
+
+    private static uint? ResolveExplorerProcessId()
+    {
+        IntPtr shellWindow = NativeMethods.GetShellWindow();
+        if (shellWindow != IntPtr.Zero)
+        {
+            _ = NativeMethods.GetWindowThreadProcessId(shellWindow, out uint shellProcessId);
+            if (shellProcessId != 0)
+            {
+                return shellProcessId;
+            }
+        }
+
+        int currentSessionId = Process.GetCurrentProcess().SessionId;
+        var candidates = new List<WindowsExplorerProcessCandidate>();
+        foreach (Process process in Process.GetProcessesByName("explorer"))
+        {
+            try
+            {
+                candidates.Add(new WindowsExplorerProcessCandidate(
+                    checked((uint)process.Id),
+                    process.SessionId,
+                    process.StartTime.ToUniversalTime()));
+            }
+            catch (Exception error) when (
+                error is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
+
+        return SelectExplorerProcessId(currentSessionId, candidates);
     }
 
     private static class NativeMethods
