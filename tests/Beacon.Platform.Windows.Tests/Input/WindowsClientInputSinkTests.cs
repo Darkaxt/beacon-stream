@@ -153,10 +153,8 @@ public sealed class WindowsClientInputSinkTests
         Assert.Empty(inputApi.Commands);
     }
 
-    [Theory]
-    [InlineData(true, "Unsupported input category: controller.")]
-    [InlineData(false, "Unsupported input category: touch.")]
-    public async Task UnsupportedStreamCategoriesReturnFixedSanitizedErrors(bool controller, string expected)
+    [Fact]
+    public async Task UnsupportedTouchCategoryReturnsFixedSanitizedError()
     {
         var displayApi = new FakeWindowsDisplayApi
         {
@@ -165,19 +163,85 @@ public sealed class WindowsClientInputSinkTests
         };
         var inputApi = new FakeWindowsInputApi();
         var sink = new WindowsClientInputSink(displayApi, inputApi);
-        ClientInputEvent input = controller
-            ? ClientInputEvent.StreamController(938475, 123456, -654321)
-            : ClientInputEvent.StreamTouch(938475, ClientTouchAction.Down, 123456, 2, 3, 4, 5);
+        ClientInputEvent input =
+            ClientInputEvent.StreamTouch(938475, ClientTouchAction.Down, 123456, 2, 3, 4, 5);
 
         ClientInputResult result = await sink.ForwardAsync(
             new ClientInputBatch("client", "session", "client-z", 1, [input]),
             CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Equal(expected, result.Error);
+        Assert.Equal("Unsupported input category: touch.", result.Error);
         Assert.DoesNotContain("938475", result.Error, StringComparison.Ordinal);
         Assert.DoesNotContain("123456", result.Error, StringComparison.Ordinal);
         Assert.Empty(inputApi.Commands);
+    }
+
+    [Fact]
+    public async Task ControllerBatchActivatesSessionAndUsesVirtualControllerOnly()
+    {
+        var displayApi = new FakeWindowsDisplayApi
+        {
+            CurrentTopology = DisplayTopologySnapshot.Extended(
+                "physical", "client-z", 100, 80, 60, virtualPrimary: true)
+        };
+        var operations = new List<string>();
+        var inputApi = new FakeWindowsInputApi(operations);
+        var target = new FakeWindowsSessionInputTargetActivator(operations);
+        var controller = new FakeWindowsVirtualControllerApi(operations);
+        var sink = new WindowsClientInputSink(displayApi, inputApi, target, controller);
+
+        ClientInputResult result = await sink.ForwardAsync(
+            new ClientInputBatch(
+                "client",
+                "session",
+                "client-z",
+                1,
+                [
+                    ClientInputEvent.StreamController(0, 12, 1),
+                    ClientInputEvent.StreamController(0, 18, -32768),
+                ]),
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(2, result.EventCount);
+        Assert.Equal(["activate:session:client-z", "controller:session:2"], operations);
+        Assert.Empty(inputApi.Commands);
+        Assert.Equal(2, Assert.Single(controller.Batches).Count);
+    }
+
+    [Fact]
+    public async Task VirtualControllerFailurePreservesActionableResultCode()
+    {
+        var displayApi = new FakeWindowsDisplayApi
+        {
+            CurrentTopology = DisplayTopologySnapshot.Extended(
+                "physical", "client-z", 100, 80, 60, virtualPrimary: true)
+        };
+        var controller = new FakeWindowsVirtualControllerApi([])
+        {
+            Result = WindowsVirtualControllerResult.Fail(
+                "ViGEmBus is unavailable.",
+                "vigem-unavailable"),
+        };
+        var sink = new WindowsClientInputSink(
+            displayApi,
+            new FakeWindowsInputApi(),
+            new FakeWindowsSessionInputTargetActivator([]),
+            controller);
+
+        ClientInputResult result = await sink.ForwardAsync(
+            new ClientInputBatch(
+                "client",
+                "session",
+                "client-z",
+                1,
+                [ClientInputEvent.StreamController(0, 12, 1)]),
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("vigem-unavailable", result.ResultCode);
+        Assert.Contains("ViGEmBus", result.Error, StringComparison.Ordinal);
     }
     [Fact]
     public async Task PointerTapTargetsTheLeasedDisplay()
@@ -510,5 +574,29 @@ public sealed class WindowsClientInputSinkTests
             operations.Add($"activate:{batch.SessionId}:{batch.DisplayId}");
             return Task.FromResult(Result);
         }
+    }
+
+    private sealed class FakeWindowsVirtualControllerApi(List<string> operations)
+        : IWindowsVirtualControllerApi
+    {
+        public WindowsVirtualControllerResult Result { get; init; } =
+            WindowsVirtualControllerResult.Ok();
+
+        public List<IReadOnlyList<ClientControllerInput>> Batches { get; } = [];
+
+        public Task<WindowsVirtualControllerResult> ApplyAsync(
+            string sessionId,
+            IReadOnlyList<ClientControllerInput> events,
+            CancellationToken cancellationToken)
+        {
+            Batches.Add(events);
+            operations.Add($"controller:{sessionId}:{events.Count}");
+            return Task.FromResult(Result);
+        }
+
+        public Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

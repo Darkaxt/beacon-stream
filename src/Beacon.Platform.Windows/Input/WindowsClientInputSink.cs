@@ -5,27 +5,42 @@ namespace Beacon.Platform.Windows.Input;
 
 public sealed class WindowsClientInputSink : IClientInputSink, IClientInputHealthProvider
 {
-    private static readonly string[] EventTypes = ["pointer", "keyboard"];
+    private static readonly string[] EventTypes = ["pointer", "keyboard", "controller"];
     private static readonly string[] PointerActions = ["move", "down", "up", "tap"];
     private static readonly string[] KeyboardActions = ["down", "up", "press"];
     private readonly IWindowsDisplayApi displayApi;
     private readonly IWindowsInputApi inputApi;
     private readonly IWindowsSessionInputTargetActivator targetActivator;
+    private readonly IWindowsVirtualControllerApi controllerApi;
 
     public WindowsClientInputSink(
         IWindowsDisplayApi displayApi,
         IWindowsInputApi inputApi,
-        IWindowsSessionInputTargetActivator targetActivator)
+        IWindowsSessionInputTargetActivator targetActivator,
+        IWindowsVirtualControllerApi controllerApi)
     {
         this.displayApi = displayApi;
         this.inputApi = inputApi;
         this.targetActivator = targetActivator;
+        this.controllerApi = controllerApi;
     }
 
     internal WindowsClientInputSink(
         IWindowsDisplayApi displayApi,
         IWindowsInputApi inputApi)
-        : this(displayApi, inputApi, TestSessionInputTargetActivator.Instance)
+        : this(
+            displayApi,
+            inputApi,
+            TestSessionInputTargetActivator.Instance,
+            TestWindowsVirtualControllerApi.Instance)
+    {
+    }
+
+    internal WindowsClientInputSink(
+        IWindowsDisplayApi displayApi,
+        IWindowsInputApi inputApi,
+        IWindowsSessionInputTargetActivator targetActivator)
+        : this(displayApi, inputApi, targetActivator, TestWindowsVirtualControllerApi.Instance)
     {
     }
 
@@ -51,9 +66,15 @@ public sealed class WindowsClientInputSink : IClientInputSink, IClientInputHealt
         }
 
         List<WindowsInputCommand> commands = [];
+        List<ClientControllerInput> controllerEvents = [];
         foreach (ClientInputEvent inputEvent in batch.Events)
         {
-            if (!TryAppendCommands(inputEvent, display, commands, out string? error))
+            if (!TryAppendCommands(
+                    inputEvent,
+                    display,
+                    commands,
+                    controllerEvents,
+                    out string? error))
             {
                 return ClientInputResult.Fail(error, "input-invalid");
             }
@@ -69,19 +90,37 @@ public sealed class WindowsClientInputSink : IClientInputSink, IClientInputHealt
                 "session-target-activation-failed");
         }
 
-        WindowsInputResult send = await inputApi.SendAsync(commands, cancellationToken);
-        return send.Success
-            ? ClientInputResult.Ok(batch.Events.Count)
-            : ClientInputResult.Fail(
+        if (commands.Count > 0)
+        {
+            WindowsInputResult send = await inputApi.SendAsync(commands, cancellationToken);
+            if (!send.Success)
+            {
+                return ClientInputResult.Fail(
                 send.Error ?? "Windows input dispatch failed.",
                 "sendinput-failed");
+            }
+        }
+        if (controllerEvents.Count > 0)
+        {
+            WindowsVirtualControllerResult controller = await controllerApi.ApplyAsync(
+                batch.SessionId,
+                controllerEvents,
+                cancellationToken).ConfigureAwait(false);
+            if (!controller.Success)
+            {
+                return ClientInputResult.Fail(
+                    controller.Error ?? "Windows virtual controller dispatch failed.",
+                    controller.ResultCode);
+            }
+        }
+        return ClientInputResult.Ok(batch.Events.Count);
     }
 
     public ClientInputHealth GetHealth() =>
         new(
             Ready: true,
             Backend: "windows-sendinput",
-            Diagnostic: "Session-targeted Windows SendInput pointer and keyboard sink ready.",
+            Diagnostic: "Session-targeted Windows input sink ready; Xbox controller targets are created lazily through ViGEm.",
             SupportedEventTypes: EventTypes,
             SupportedPointerActions: PointerActions,
             SupportedKeyboardActions: KeyboardActions);
@@ -90,6 +129,7 @@ public sealed class WindowsClientInputSink : IClientInputSink, IClientInputHealt
         ClientInputEvent inputEvent,
         DisplayPathSnapshot display,
         List<WindowsInputCommand> commands,
+        List<ClientControllerInput> controllerEvents,
         out string error)
     {
         if (inputEvent.Pointer is not null)
@@ -106,8 +146,9 @@ public sealed class WindowsClientInputSink : IClientInputSink, IClientInputHealt
         }
         if (inputEvent.Controller is not null)
         {
-            error = "Unsupported input category: controller.";
-            return false;
+            controllerEvents.Add(inputEvent.Controller);
+            error = string.Empty;
+            return true;
         }
         if (inputEvent.Touch is not null)
         {
@@ -353,5 +394,21 @@ public sealed class WindowsClientInputSink : IClientInputSink, IClientInputHealt
             ClientInputBatch batch,
             CancellationToken cancellationToken) =>
             Task.FromResult(WindowsSessionInputTargetResult.Activated(0, 0));
+    }
+
+    private sealed class TestWindowsVirtualControllerApi : IWindowsVirtualControllerApi
+    {
+        public static TestWindowsVirtualControllerApi Instance { get; } = new();
+
+        public Task<WindowsVirtualControllerResult> ApplyAsync(
+            string sessionId,
+            IReadOnlyList<ClientControllerInput> events,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(WindowsVirtualControllerResult.Ok());
+
+        public Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
