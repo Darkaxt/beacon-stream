@@ -8,9 +8,9 @@ R1 Integrated Streaming Proof, Checkpoint 3: production media start.
 
 ## Last Verified Checkpoint
 
-- Checkout `dd7be1984d08f40dfba951ab16ed40aed2786d57` is synchronized with
+- Checkout `d8c3bf7a3e31afb91b340d4551c29ba332616f53` is synchronized with
   `origin/codex/beacon-production-benchmarks`.
-- Installed HostAgent source is `0f6e3d02271c98b1ccdd200a2f46d571669fef12`, supervised by the elevated
+- Installed HostAgent source is `d8c3bf7a3e31afb91b340d4551c29ba332616f53`, supervised by the elevated
   `Beacon Stream Host Agent` scheduled task.
 - HostAgent reports SudoVDA protocol `0.2.1`, zero retained leases, and healthy final-session
   closure before the run.
@@ -23,14 +23,23 @@ R1 Integrated Streaming Proof, Checkpoint 3: production media start.
 - The production transaction passes prepared-display validation, emulator validation, TCP
   preflight, certified benchmark, session preflight, application launch, virtual-primary
   activation, transport authentication, and Android MediaCodec startup.
+- The post-primary heartbeat gate is deployed. It requires consecutive observations of the
+  intended virtual-primary/physical-extended topology before media start.
+- Locked-session display preparation now fails cleanly and releases its lease instead of falling
+  back to `DisplaySwitch.exe`, which was proven to detach the physical panel.
 
-## Current Blocker
+## Current Validation Constraint
 
-The production acceptance runner fails when the authenticated APK asks StreamWorker to start the
-first production video generation. `GraphicsCaptureItem::TryCreateFromDisplayId` rejects the newly
-primary virtual output with Win32 `0x80070490` (`ERROR_NOT_FOUND`) at failure stage
-`capture-item-display-id-create`, so StreamWorker closes the authenticated transport before media
-evidence is produced.
+The post-primary heartbeat gate still needs one unlocked production rerun. The active Windows input
+desktop is currently `Screen-saver`; Windows rejects the signed helper's direct `SetDisplayConfig`
+request in that state, and Beacon intentionally refuses the unsafe `DisplaySwitch.exe` fallback.
+Production validation therefore requires the owning Windows session on the `Default` desktop.
+
+The last unlocked production acceptance run failed when the authenticated APK asked StreamWorker to
+start the first production video generation. `GraphicsCaptureItem::TryCreateFromDisplayId` rejected
+the newly primary virtual output with Win32 `0x80070490` (`ERROR_NOT_FOUND`) at failure stage
+`capture-item-display-id-create`, so StreamWorker closed the authenticated transport before media
+evidence was produced.
 
 Evidence:
 
@@ -58,18 +67,18 @@ the session is locked. R1 therefore fails display preparation and cleans up in t
 not fall back to `DisplaySwitch.exe`, which was proven to detach the physical panel while reporting
 success. Emulator-backed production validation requires the owning Windows session on `Default`.
 
-## Current Hypothesis
+## Hypothesis Under Test
 
-`WindowsDisplayApi.SetVirtualPrimaryAsync` returns immediately after requesting the primary
-transition, while virtual-display creation waits for consecutive post-heartbeat topology evidence.
-The APK can therefore authenticate and request media while Windows Graphics Capture still rejects
-the newly-primary DisplayId even though CCD and EnumDisplayDevices already report the intended
-topology.
+Before `d8c3bf7`, `WindowsDisplayApi.SetVirtualPrimaryAsync` returned immediately after requesting
+the primary transition, while virtual-display creation already waited for consecutive
+post-heartbeat topology evidence. The deployed gate tests whether that timing gap let the APK
+authenticate and request media while Windows Graphics Capture still rejected the newly-primary
+DisplayId, even though CCD and EnumDisplayDevices already reported the intended topology.
 
 ## Next Falsifiable Proof
 
-Deploy the post-primary heartbeat gate, rerun the same production command, and inspect whether WGC
-opens without the transient DisplayId failure:
+Unlock the owning Windows session, confirm its input desktop is `Default`, rerun the same production
+command, and inspect whether WGC opens without the transient DisplayId failure:
 
 ```powershell
 .\scripts\test-gate5-production-session.ps1 -Serial emulator-5554 -ArtifactsReady
