@@ -1167,6 +1167,38 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
     }
 
     [Fact]
+    public async Task DisconnectRetainsControllerButExplicitQuitReleasesExactSession()
+    {
+        var lifecycle = new RecordingClientInputSessionLifecycle();
+        using WebApplicationFactory<Program> app = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IClientInputSessionLifecycle>();
+                services.AddSingleton<IClientInputSessionLifecycle>(lifecycle);
+            }));
+        HttpClient client = app.CreateClient();
+        const string sessionId = "z-fold-7-steam-shortcut:3767414131";
+
+        HttpResponseMessage launch = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/launch",
+            new { gameId = "steam-shortcut:3767414131" });
+        HttpResponseMessage disconnect = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/disconnect",
+            new { });
+
+        Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, disconnect.StatusCode);
+        Assert.Empty(lifecycle.SessionIds);
+
+        HttpResponseMessage quit = await client.PostAsJsonAsync(
+            "/clients/z-fold-7/quit",
+            new { clientActive = false });
+
+        Assert.Equal(HttpStatusCode.OK, quit.StatusCode);
+        Assert.Equal([sessionId], lifecycle.SessionIds);
+    }
+
+    [Fact]
     public async Task ReconnectReplacesUnusedStreamTicketWithoutStoppingSession()
     {
         FakeStreamingBackend backend = Assert.IsType<FakeStreamingBackend>(
@@ -2848,5 +2880,16 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             inner.GetSessionAsync(sessionId, cancellationToken);
 
         public IReadOnlyList<StreamingSessionState> GetSessions() => inner.GetSessions();
+    }
+
+    private sealed class RecordingClientInputSessionLifecycle : IClientInputSessionLifecycle
+    {
+        public List<string> SessionIds { get; } = [];
+
+        public Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken)
+        {
+            SessionIds.Add(sessionId);
+            return Task.CompletedTask;
+        }
     }
 }

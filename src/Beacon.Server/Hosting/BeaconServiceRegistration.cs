@@ -163,6 +163,8 @@ public static class BeaconServiceRegistration
             sp.GetRequiredService<WindowsClientInputSink>());
         services.AddSingleton<IClientInputHealthProvider>(sp =>
             sp.GetRequiredService<WindowsClientInputSink>());
+        services.AddSingleton<IClientInputSessionLifecycle>(sp =>
+            sp.GetRequiredService<WindowsClientInputSink>());
         return services;
     }
 

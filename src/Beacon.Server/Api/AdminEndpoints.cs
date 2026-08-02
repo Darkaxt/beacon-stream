@@ -340,6 +340,7 @@ public static class AdminEndpoints
             InMemorySessionStore sessions,
             IStreamingBackend streaming,
             StreamTicketProvisioningService ticketProvisioning,
+            IClientInputSessionLifecycle inputLifecycle,
             CancellationToken cancellationToken) =>
         {
             SessionPlan? plan = sessions.Get(clientId);
@@ -357,9 +358,14 @@ public static class AdminEndpoints
                 clientId,
                 plan.SessionId,
                 cancellationToken);
-            return revoked.Success
-                ? Results.Ok(new { clientId, stream = stop.Session })
-                : Results.Problem(revoked.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+            if (!revoked.Success)
+            {
+                return Results.Problem(
+                    revoked.Error,
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            await inputLifecycle.ReleaseSessionAsync(plan.SessionId, cancellationToken);
+            return Results.Ok(new { clientId, stream = stop.Session });
         });
 
         admin.MapPatch("/clients/{clientId}/profile", (

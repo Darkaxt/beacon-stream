@@ -178,3 +178,8 @@ public interface IClientInputHealthProvider
 {
     ClientInputHealth GetHealth();
 }
+
+public interface IClientInputSessionLifecycle
+{
+    Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken);
+}

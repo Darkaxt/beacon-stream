@@ -108,8 +108,7 @@ public sealed class WindowsVirtualControllerApi : IWindowsVirtualControllerApi
         {
             if (targets.Remove(sessionId, out IWindowsXboxController? target))
             {
-                target.Disconnect();
-                target.Dispose();
+                TryDispose(target);
             }
         }
         finally

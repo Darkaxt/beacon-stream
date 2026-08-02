@@ -876,6 +876,7 @@ public static class ClientEndpoints
             ISessionOwnershipTracker ownership,
             IStreamingBackend streaming,
             StreamTicketProvisioningService ticketProvisioning,
+            IClientInputSessionLifecycle inputLifecycle,
             CancellationToken cancellationToken) =>
         {
             SessionPlan? plan = sessions.Get(clientId);
@@ -908,6 +909,7 @@ public static class ClientEndpoints
                         revoked.Error,
                         statusCode: StatusCodes.Status503ServiceUnavailable);
                 }
+                await inputLifecycle.ReleaseSessionAsync(plan.SessionId, cancellationToken);
                 ownershipSnapshot = await ownership.GetSnapshotAsync(plan.SessionId, cancellationToken);
                 if (ownershipSnapshot?.HasOwnedWork == true)
                 {

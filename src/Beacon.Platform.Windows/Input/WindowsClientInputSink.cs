@@ -3,7 +3,10 @@ using Beacon.Platform.Windows.Displays;
 
 namespace Beacon.Platform.Windows.Input;
 
-public sealed class WindowsClientInputSink : IClientInputSink, IClientInputHealthProvider
+public sealed class WindowsClientInputSink :
+    IClientInputSink,
+    IClientInputHealthProvider,
+    IClientInputSessionLifecycle
 {
     private static readonly string[] EventTypes = ["pointer", "keyboard", "controller"];
     private static readonly string[] PointerActions = ["move", "down", "up", "tap"];
@@ -124,6 +127,9 @@ public sealed class WindowsClientInputSink : IClientInputSink, IClientInputHealt
             SupportedEventTypes: EventTypes,
             SupportedPointerActions: PointerActions,
             SupportedKeyboardActions: KeyboardActions);
+
+    public Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+        controllerApi.ReleaseSessionAsync(sessionId, cancellationToken);
 
     private static bool TryAppendCommands(
         ClientInputEvent inputEvent,

@@ -1,6 +1,9 @@
 namespace Beacon.Core.Input;
 
-public sealed class NoOpClientInputSink : IClientInputSink, IClientInputHealthProvider
+public sealed class NoOpClientInputSink :
+    IClientInputSink,
+    IClientInputHealthProvider,
+    IClientInputSessionLifecycle
 {
     private static readonly string[] EventTypes = ["pointer", "keyboard"];
     private static readonly string[] PointerActions = ["move", "down", "up", "tap"];
@@ -22,4 +25,7 @@ public sealed class NoOpClientInputSink : IClientInputSink, IClientInputHealthPr
             SupportedEventTypes: EventTypes,
             SupportedPointerActions: PointerActions,
             SupportedKeyboardActions: KeyboardActions);
+
+    public Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
 }

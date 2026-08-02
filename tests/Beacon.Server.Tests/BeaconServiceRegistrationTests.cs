@@ -73,7 +73,10 @@ public sealed class BeaconServiceRegistrationTests
         Assert.IsType<WindowsSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
         Assert.IsType<WindowsSessionOwnedWorkTerminator>(provider.GetRequiredService<ISessionOwnedWorkTerminator>());
         Assert.IsType<WindowsInputApi>(provider.GetRequiredService<IWindowsInputApi>());
-        Assert.IsType<WindowsClientInputSink>(provider.GetRequiredService<IClientInputSink>());
+        WindowsClientInputSink input = Assert.IsType<WindowsClientInputSink>(
+            provider.GetRequiredService<IClientInputSink>());
+        Assert.Same(input, provider.GetRequiredService<IClientInputHealthProvider>());
+        Assert.Same(input, provider.GetRequiredService<IClientInputSessionLifecycle>());
         Assert.IsType<StreamWorkerStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
         Assert.Same(
             provider.GetRequiredService<StreamWorkerProcessHost>(),
@@ -119,7 +122,10 @@ public sealed class BeaconServiceRegistrationTests
         Assert.IsType<FakeGameLauncher>(provider.GetRequiredService<IGameLauncher>());
         Assert.IsType<FakeSessionActivityInspector>(provider.GetRequiredService<ISessionActivityInspector>());
         Assert.IsType<FakeSessionOwnedWorkTerminator>(provider.GetRequiredService<ISessionOwnedWorkTerminator>());
-        Assert.IsType<NoOpClientInputSink>(provider.GetRequiredService<IClientInputSink>());
+        NoOpClientInputSink input = Assert.IsType<NoOpClientInputSink>(
+            provider.GetRequiredService<IClientInputSink>());
+        Assert.Same(input, provider.GetRequiredService<IClientInputHealthProvider>());
+        Assert.Same(input, provider.GetRequiredService<IClientInputSessionLifecycle>());
         Assert.IsType<FakeStreamingBackend>(provider.GetRequiredService<IStreamingBackend>());
         Assert.IsType<FakeBenchmarkRuntime>(provider.GetRequiredService<IBenchmarkRuntime>());
         Assert.Empty(provider.GetServices<IStreamWorkerHost>());

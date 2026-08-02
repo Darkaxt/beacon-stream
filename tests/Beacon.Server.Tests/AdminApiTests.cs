@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Beacon.HostAgent.Contracts;
 using Beacon.Core.Displays;
+using Beacon.Core.Input;
 using Beacon.Core.Recovery;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
@@ -459,6 +460,30 @@ public sealed class AdminApiTests(BeaconServerTestFactory factory) : IClassFixtu
     }
 
     [Fact]
+    public async Task AdminStopReleasesExactSessionController()
+    {
+        var lifecycle = new RecordingClientInputSessionLifecycle();
+        using WebApplicationFactory<Program> app = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IClientInputSessionLifecycle>();
+                services.AddSingleton<IClientInputSessionLifecycle>(lifecycle);
+            }));
+        HttpClient client = app.CreateClient();
+        const string sessionId = "z-fold-7-steam-shortcut:3767414131";
+        await client.PostAsJsonAsync(
+            "/clients/z-fold-7/launch",
+            new { gameId = "steam-shortcut:3767414131" });
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/admin/clients/z-fold-7/stream/stop",
+            new { });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal([sessionId], lifecycle.SessionIds);
+    }
+
+    [Fact]
     public async Task AdminStopSelectedClientStreamReturnsServiceUnavailableWhenBackendStopFails()
     {
         WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
@@ -628,5 +653,16 @@ public sealed class AdminApiTests(BeaconServerTestFactory factory) : IClassFixtu
             Task.FromResult<StreamingSessionState?>(null);
 
         public IReadOnlyList<StreamingSessionState> GetSessions() => [];
+    }
+
+    private sealed class RecordingClientInputSessionLifecycle : IClientInputSessionLifecycle
+    {
+        public List<string> SessionIds { get; } = [];
+
+        public Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken)
+        {
+            SessionIds.Add(sessionId);
+            return Task.CompletedTask;
+        }
     }
 }

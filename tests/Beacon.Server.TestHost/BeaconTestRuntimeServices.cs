@@ -48,6 +48,7 @@ public static class BeaconTestRuntimeServices
         services.RemoveAll<ISessionOwnedWorkTerminator>();
         services.RemoveAll<IClientInputSink>();
         services.RemoveAll<IClientInputHealthProvider>();
+        services.RemoveAll<IClientInputSessionLifecycle>();
         services.RemoveAll<NoOpClientInputSink>();
         if (useProductionStreamWorker)
         {
@@ -93,6 +94,8 @@ public static class BeaconTestRuntimeServices
         services.AddSingleton<IClientInputSink>(sp =>
             sp.GetRequiredService<NoOpClientInputSink>());
         services.AddSingleton<IClientInputHealthProvider>(sp =>
+            sp.GetRequiredService<NoOpClientInputSink>());
+        services.AddSingleton<IClientInputSessionLifecycle>(sp =>
             sp.GetRequiredService<NoOpClientInputSink>());
         if (useProductionStreamWorker)
         {
