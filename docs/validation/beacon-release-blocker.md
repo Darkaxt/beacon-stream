@@ -51,7 +51,9 @@ The first unattended post-update validation attempts failed earlier during displ
 because the active Windows desktop was `Screen-saver`. `GetShellWindow()` is desktop-local, so the
 elevated HostAgent could not resolve Explorer even though the owning user's Explorer process was
 healthy in the same interactive session. The topology helper now falls back to the oldest Explorer
-process in the current session; it never selects an Explorer process from another session.
+process in the current session, never selects an Explorer process from another session, and binds
+the de-elevated helper explicitly to `winsta0\default` instead of inheriting the locked
+`Screen-saver` desktop.
 
 ## Current Hypothesis
 

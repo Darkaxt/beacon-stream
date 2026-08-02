@@ -17,6 +17,7 @@ internal sealed record WindowsExplorerProcessCandidate(
 internal sealed class WindowsExplorerShellExecutor(
     WindowsChildProcessCompletionGate? completionGate = null) : IWindowsExplorerShellExecutor
 {
+    internal const string InteractiveDesktopName = @"winsta0\default";
     private const uint ProcessCreateProcess = 0x00000080;
     private const uint ExtendedStartupInfoPresent = 0x00080000;
     private const uint CreateNoWindow = 0x08000000;
@@ -86,7 +87,8 @@ internal sealed class WindowsExplorerShellExecutor(
             {
                 StartupInfo = new StartupInfo
                 {
-                    Size = Marshal.SizeOf<StartupInfoEx>()
+                    Size = Marshal.SizeOf<StartupInfoEx>(),
+                    Desktop = InteractiveDesktopName
                 },
                 AttributeList = attributeList
             };

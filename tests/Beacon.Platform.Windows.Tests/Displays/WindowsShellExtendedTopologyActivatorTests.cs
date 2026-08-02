@@ -79,6 +79,14 @@ public sealed class WindowsShellExtendedTopologyActivatorTests
         Assert.Null(selected);
     }
 
+    [Fact]
+    public void ExplorerChildUsesTheDefaultInteractiveDesktop()
+    {
+        Assert.Equal(
+            @"winsta0\default",
+            WindowsExplorerShellExecutor.InteractiveDesktopName);
+    }
+
     private sealed class RecordingExplorerShellExecutor : IWindowsExplorerShellExecutor
     {
         public DisplayApiResult Result { get; init; } = DisplayApiResult.Ok();
