@@ -198,13 +198,14 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
             Task winner = await Task.WhenAny(operation.Task, processExit)
                 .WaitAsync(cancellationToken)
                 .ConfigureAwait(false);
-            if (winner == processExit)
+            if (winner == processExit
+                && command.BodyCase != WorkerIpcEnvelope.BodyOneofCase.ShutdownWorker)
             {
                 int exitCode = await processExit.ConfigureAwait(false);
                 throw new StreamWorkerProcessExitedException(exitCode);
             }
 
-            return await operation.Task.ConfigureAwait(false);
+            return await operation.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {

@@ -720,6 +720,33 @@ public sealed class StreamWorkerNamedPipeClientTests
     }
 
     [Fact]
+    public async Task ShutdownDrainsCorrelatedCompletionObservedAfterProcessExit()
+    {
+        await using PipePair pipes = await PipePair.CreateAsync();
+        var processExit = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task worker = Task.Run(async () =>
+        {
+            await WriteAsync(pipes.Worker, Hello(42, 1));
+            await WriteAsync(pipes.Worker, Capabilities(1));
+            await WriteAsync(pipes.Worker, Ready(1));
+            WorkerIpcEnvelope shutdown = await ReadAsync(pipes.Worker);
+            Assert.Equal(WorkerIpcEnvelope.BodyOneofCase.ShutdownWorker, shutdown.BodyCase);
+            processExit.SetResult(0);
+            await Task.Yield();
+            await WriteAsync(pipes.Worker, Completion(shutdown, succeeded: true));
+        });
+        await using var client = new StreamWorkerNamedPipeClient(pipes.Service, processExit.Task, 42);
+        await client.InitializeAsync(CancellationToken.None);
+
+        StreamWorkerCommandResponse response = await client.SendAsync(
+            new WorkerIpcEnvelope { ShutdownWorker = new ShutdownWorker() },
+            CancellationToken.None);
+
+        Assert.True(response.Completion.WorkerCompletion.Succeeded);
+        await worker;
+    }
+
+    [Fact]
     public async Task ProtocolFaultClearsReadinessAndCompletesLifecycleSignal()
     {
         await using PipePair pipes = await PipePair.CreateAsync();
