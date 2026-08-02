@@ -1464,11 +1464,56 @@ public sealed class WindowsDisplayApi :
             paths = paths
                 .Where(path => (path.Flags & DisplayConfigPathActive) != 0)
                 .ToArray();
+            CompactVirtualModeInfo(ref paths, ref modes);
         }
         diagnostic = filteredAllPaths
             ? "DisplayConfig queried through the all-path fallback and filtered to active paths."
             : "DisplayConfig queried.";
         return true;
+    }
+
+    private static void CompactVirtualModeInfo(
+        ref DisplayConfigPathInfo[] paths,
+        ref DisplayConfigModeInfo[] modes)
+    {
+        DisplayConfigModeInfo[] sourceModes = modes;
+        var remappedModes = new List<DisplayConfigModeInfo>();
+        var modeIndexes = new Dictionary<uint, uint>();
+
+        uint Remap(uint index)
+        {
+            if (index == DisplayConfigPathSourceModeIdxInvalid)
+            {
+                return DisplayConfigPathSourceModeIdxInvalid;
+            }
+            if (index >= sourceModes.Length)
+            {
+                return DisplayConfigPathSourceModeIdxInvalid;
+            }
+            if (modeIndexes.TryGetValue(index, out uint remapped))
+            {
+                return remapped;
+            }
+            remapped = checked((uint)remappedModes.Count);
+            modeIndexes.Add(index, remapped);
+            remappedModes.Add(sourceModes[index]);
+            return remapped;
+        }
+
+        for (int index = 0; index < paths.Length; index++)
+        {
+            DisplayConfigPathInfo path = paths[index];
+            uint cloneGroupId = path.SourceInfo.ModeInfoIdx & 0xFFFF;
+            uint sourceModeIndex = Remap(path.SourceInfo.ModeInfoIdx >> 16);
+            path.SourceInfo.ModeInfoIdx = (sourceModeIndex << 16) | cloneGroupId;
+
+            uint targetModeIndex = Remap(path.TargetInfo.ModeInfoIdx & 0xFFFF);
+            uint desktopModeIndex = Remap(path.TargetInfo.ModeInfoIdx >> 16);
+            path.TargetInfo.ModeInfoIdx = (desktopModeIndex << 16) | targetModeIndex;
+            paths[index] = path;
+        }
+
+        modes = remappedModes.ToArray();
     }
 
     private static uint SuppliedDisplayConfigApplyFlags() =>
