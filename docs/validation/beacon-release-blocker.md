@@ -8,8 +8,8 @@ R1 Integrated Streaming Proof, Checkpoint 3: production media start.
 
 ## Last Verified Checkpoint
 
-- Checkout `d8c3bf7a3e31afb91b340d4551c29ba332616f53` is synchronized with
-  `origin/codex/beacon-production-benchmarks`.
+- Deployed code checkpoint `d8c3bf7a3e31afb91b340d4551c29ba332616f53` is recorded on the synchronized
+  `codex/beacon-production-benchmarks` branch.
 - Installed HostAgent source is `d8c3bf7a3e31afb91b340d4551c29ba332616f53`, supervised by the elevated
   `Beacon Stream Host Agent` scheduled task.
 - HostAgent reports SudoVDA protocol `0.2.1`, zero retained leases, and healthy final-session
