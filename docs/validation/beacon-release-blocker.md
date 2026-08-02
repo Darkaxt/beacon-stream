@@ -53,9 +53,10 @@ elevated HostAgent could not resolve Explorer even though the owning user's Expl
 healthy in the same interactive session. The topology helper now falls back to the oldest Explorer
 process in the current session, never selects an Explorer process from another session, and binds
 the de-elevated helper explicitly to `winsta0\default` instead of inheriting the locked
-`Screen-saver` desktop. If the signed helper's direct `SetDisplayConfig` request is rejected while
-locked, HostAgent invokes the fixed Windows `DisplaySwitch.exe /extend` command and still requires
-the normal post-heartbeat topology verification before continuing.
+`Screen-saver` desktop. Windows still rejects the helper's direct `SetDisplayConfig` request while
+the session is locked. R1 therefore fails display preparation and cleans up in that state; it does
+not fall back to `DisplaySwitch.exe`, which was proven to detach the physical panel while reporting
+success. Emulator-backed production validation requires the owning Windows session on `Default`.
 
 ## Current Hypothesis
 

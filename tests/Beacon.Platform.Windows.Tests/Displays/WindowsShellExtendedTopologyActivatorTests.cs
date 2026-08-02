@@ -88,11 +88,12 @@ public sealed class WindowsShellExtendedTopologyActivatorTests
     }
 
     [Fact]
-    public void FailedSignedHelperFallsBackToFixedDisplaySwitchCommand()
+    public void FailedSignedHelperDoesNotTryAnotherTopologyMutation()
     {
-        var executor = new RecordingExplorerShellExecutor();
-        executor.Results.Enqueue(DisplayApiResult.Fail("SetDisplayConfig failed."));
-        executor.Results.Enqueue(DisplayApiResult.Ok());
+        var executor = new RecordingExplorerShellExecutor
+        {
+            Result = DisplayApiResult.Fail("SetDisplayConfig failed.")
+        };
         const string hostAgent = @"C:\Program Files\Beacon Stream\Beacon.HostAgent.exe";
         var activator = new WindowsShellExtendedTopologyActivator(
             executor,
@@ -100,31 +101,15 @@ public sealed class WindowsShellExtendedTopologyActivatorTests
 
         DisplayApiResult result = activator.Apply();
 
-        Assert.True(result.Success);
-        Assert.Collection(
-            executor.Calls,
-            call =>
-            {
-                Assert.Equal(hostAgent, call.FileName);
-                Assert.Equal(WindowsUserDisplayTopologyTransition.CommandArgument, call.Arguments);
-            },
-            call =>
-            {
-                Assert.Equal(
-                    Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.Windows),
-                        "System32",
-                        "DisplaySwitch.exe"),
-                    call.FileName);
-                Assert.Equal("/extend", call.Arguments);
-            });
+        Assert.False(result.Success);
+        (string fileName, string arguments) = Assert.Single(executor.Calls);
+        Assert.Equal(hostAgent, fileName);
+        Assert.Equal(WindowsUserDisplayTopologyTransition.CommandArgument, arguments);
     }
 
     private sealed class RecordingExplorerShellExecutor : IWindowsExplorerShellExecutor
     {
         public DisplayApiResult Result { get; init; } = DisplayApiResult.Ok();
-
-        public Queue<DisplayApiResult> Results { get; } = new();
 
         public List<(string FileName, string Arguments)> Calls { get; } = [];
 
@@ -137,7 +122,7 @@ public sealed class WindowsShellExtendedTopologyActivatorTests
             FileName = fileName;
             Arguments = arguments;
             Calls.Add((fileName, arguments));
-            return Results.TryDequeue(out DisplayApiResult? result) ? result : Result;
+            return Result;
         }
     }
 }
