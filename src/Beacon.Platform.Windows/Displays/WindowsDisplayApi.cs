@@ -468,13 +468,18 @@ public sealed class WindowsDisplayApi :
         return Task.FromResult(inputDesktop.Invoke(QueryActiveTopology));
     }
 
-    public Task<DisplayApiResult> SetVirtualPrimaryAsync(string displayId, CancellationToken cancellationToken)
+    public async Task<DisplayApiResult> SetVirtualPrimaryAsync(
+        string displayId,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(inputDesktop.Invoke(() =>
-            TrySetPrimaryDisplay(displayId, out string diagnostic)
-                ? DisplayApiResult.Ok()
-                : DisplayApiResult.Fail(diagnostic)));
+        return await virtualDisplayArrivalGate.ApplyAndWaitForStableDesiredTopologyAsync(
+            () => inputDesktop.Invoke(() =>
+                TrySetPrimaryDisplay(displayId, out string diagnostic)
+                    ? DisplayApiResult.Ok()
+                    : DisplayApiResult.Fail(diagnostic)),
+            () => inputDesktop.Invoke(() => QueryVirtualPrimaryTopology(displayId)),
+            cancellationToken).ConfigureAwait(false);
     }
 
     public Task<DisplayApiResult> RestorePhysicalPrimaryAsync(CancellationToken cancellationToken)
@@ -1197,6 +1202,22 @@ public sealed class WindowsDisplayApi :
             topology.Fingerprint,
             extendedTopology,
             desiredTopology);
+    }
+
+    private VirtualDisplayTargetArrivalSnapshot QueryVirtualPrimaryTopology(string displayId)
+    {
+        DisplayTopologySnapshot topology = QueryActiveTopology();
+        DisplayPathSnapshot? virtualPath = topology.Paths.FirstOrDefault(path =>
+            path.Kind == DisplayPathKind.Virtual &&
+            string.Equals(path.DisplayId, displayId, StringComparison.Ordinal));
+        bool available = virtualPath is not null;
+        bool extendedTopology = available && HasExtendedVirtualDisplayTopology(topology, displayId);
+        return new VirtualDisplayTargetArrivalSnapshot(
+            available,
+            virtualPath?.DisplayId,
+            topology.Fingerprint,
+            extendedTopology,
+            DesiredTopology: extendedTopology && virtualPath!.IsPrimary);
     }
 
     private static bool TryGetDisplayNameForTarget(

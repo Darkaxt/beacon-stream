@@ -35,6 +35,47 @@ public sealed class WindowsVirtualDisplayArrivalGateTests
     }
 
     [Fact]
+    public async Task PrimaryTransitionWaitsForTwoStablePostApplyHeartbeatObservations()
+    {
+        var signal = new ManualHeartbeatRevisionSignal();
+        var snapshots = new ObservedSnapshotSequence(
+        [
+            new(true, @"\\.\DISPLAY34", "physical-primary", ExtendedTopology: true, DesiredTopology: false),
+            new(true, @"\\.\DISPLAY34", "virtual-primary", ExtendedTopology: true, DesiredTopology: true),
+            new(true, @"\\.\DISPLAY34", "virtual-primary", ExtendedTopology: true, DesiredTopology: true)
+        ]);
+        int applyCount = 0;
+        var gate = new WindowsVirtualDisplayArrivalGate(
+            () => signal.Revision,
+            signal.WaitAsync);
+
+        Task<DisplayApiResult> transition = gate.ApplyAndWaitForStableDesiredTopologyAsync(
+            () =>
+            {
+                applyCount++;
+                return DisplayApiResult.Ok();
+            },
+            snapshots.Query,
+            CancellationToken.None);
+
+        Assert.Equal(1, applyCount);
+        Assert.False(transition.IsCompleted);
+
+        signal.Pulse();
+        await snapshots.WaitForObservationAsync(0);
+        Assert.False(transition.IsCompleted);
+
+        signal.Pulse();
+        await snapshots.WaitForObservationAsync(1);
+        Assert.False(transition.IsCompleted);
+
+        signal.Pulse();
+
+        Assert.True((await transition).Success);
+        Assert.Equal(1, applyCount);
+    }
+
+    [Fact]
     public async Task RequiresTwoMatchingPostAddHeartbeatObservations()
     {
         var signal = new ManualHeartbeatRevisionSignal();

@@ -149,6 +149,7 @@ internal static partial class Program
             clientDisplayId = RequiredString(activeBeacon, "displayId");
             JsonElement preparedSnapshot = await GetJsonAsync(http, "/admin/snapshot")
                 .ConfigureAwait(false);
+            WriteJson(Path.Combine(evidenceDirectory, "prepared-snapshot.json"), preparedSnapshot);
             ValidatePreparedDisplaySnapshot(preparedSnapshot, clientDisplayId);
             string preparedDisplayName = ResolvePreparedDisplayName(activeVirtualDisplaysBefore);
             Console.WriteLine($"BEACON_GATE5_PREPARED_DISPLAY_OK {preparedDisplayName}");

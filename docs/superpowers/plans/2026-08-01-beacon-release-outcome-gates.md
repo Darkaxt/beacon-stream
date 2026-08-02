@@ -76,8 +76,9 @@ repository matrix.
 1. Start from verified physical-primary topology.
 2. Use the production acceptance runner's existing pre-connect stage to request the client display.
 3. Prove through driver heartbeats and DisplayConfig generations that the intended virtual display
-   exists at `2560x1600`, is extended, is the stream target, and remains the same display across the
-   preparation transaction.
+   exists at the R1 fixture profile's `2560x1600` mode, is extended, is the stream target, and
+   remains the same display across the preparation transaction. This expectation belongs to the R1
+   client fixture and must not become a global virtual-display default.
 4. If preparation fails, change only the first demonstrated ownership, privilege, or synchronization
    boundary. Add a focused regression before the fix.
 5. Repeat the staged preparation and verify that no Apollo, Sunshine, mirror, or physical-capture
@@ -164,7 +165,9 @@ these vertical slices:
 2. **Controller:** one Android controller input path terminating in one Windows virtual-controller
    sink through the existing authenticated input contract.
 3. **Physical benchmark:** automatic network/hardware change detection and manual benchmark on the
-   Z Fold 7, producing a server-owned executable plan.
+   Z Fold 7, producing a server-owned executable plan. Add the generic per-client mode selector at
+   this boundary: exact reported client mode when supported, otherwise the closest same-aspect
+   supported mode, with no independent width/height clamping.
 4. **Playable transaction:** catalog launch, moving video, audio, controller input, reconnect, quit,
    and physical restore during one sustained gameplay session.
 

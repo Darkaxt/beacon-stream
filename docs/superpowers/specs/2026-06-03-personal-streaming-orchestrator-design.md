@@ -309,12 +309,15 @@ This register is the implementation contract.
 ### Session Planning
 
 - `REQ-PLAN-001`: The plan includes client id, app id, display identity, display mode, resolution, refresh rate, stream FPS, codec/profile/bit depth, bitrate, HDR state, audio mode, transport parameters, input capabilities, benchmark evidence revision, and recovery policy.
-- `REQ-PLAN-002`: The Z Fold 7 policy may target `2560x1600` and `120 Hz`; the planner must never silently replace 16:10 intent with `2560x1440`.
-- `REQ-PLAN-003`: Stream resolution and game render resolution are separate concepts; Beacon does not force a game's internal rendering setting.
-- `REQ-PLAN-004`: The planner chooses settings from server capabilities, client policy, current benchmark evidence, application constraints, and server load.
-- `REQ-PLAN-005`: The plan records a human-readable reason for every downgrade or fallback.
-- `REQ-PLAN-006`: If an explicitly required capability cannot be provided, launch fails before display or application side effects.
-- `REQ-PLAN-007`: The APK receives the executable plan for display and diagnostics but cannot modify it.
+- `REQ-PLAN-002`: Virtual-display resolution is selected per client from reported display geometry and supported modes; Beacon has no universal `2560x1600` default for every client.
+- `REQ-PLAN-003`: The server selects the exact client mode when the complete path supports it, otherwise the closest supported mode with the same aspect ratio before considering a different aspect ratio. It must never clamp width and height independently or silently convert 16:10 intent to 16:9.
+- `REQ-PLAN-004`: The Z Fold 7 policy may target `2560x1600` and `120 Hz`; an AYN Thor or another Full HD 16:9 client should normally target `1920x1080`, subject to the modes that client actually reports.
+- `REQ-PLAN-005`: Client display geometry and supported modes are hardware facts. The server owns the selected virtual-display mode and persists the resulting per-client policy.
+- `REQ-PLAN-006`: Stream resolution and game render resolution are separate concepts; Beacon does not force a game's internal rendering setting.
+- `REQ-PLAN-007`: The planner chooses settings from server capabilities, client policy, current benchmark evidence, application constraints, and server load.
+- `REQ-PLAN-008`: The plan records a human-readable reason for every downgrade or fallback.
+- `REQ-PLAN-009`: If an explicitly required capability cannot be provided, launch fails before display or application side effects.
+- `REQ-PLAN-010`: The APK receives the executable plan for display and diagnostics but cannot modify it.
 
 ### Virtual Display Lifecycle
 

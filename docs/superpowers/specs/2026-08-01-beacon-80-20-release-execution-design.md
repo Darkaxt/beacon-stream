@@ -56,8 +56,8 @@ R1 uses the existing production acceptance runner as the sole product-progress m
 
 R1 passes when that runner proves all of the following in one transaction:
 
-- a stable `2560x1600` per-client virtual display is prepared without mirror mode or physical
-  capture fallback;
+- a stable virtual display is prepared at the R1 fixture client's planned `2560x1600` mode without
+  mirror mode or physical capture fallback; this is fixture-specific, not a global client default;
 - a deterministic application selected from the real server catalog is launched on that display;
 - the standard APK on `emulator-5554` renders moving H.264 SDR video from that display;
 - one authenticated keyboard/input action reaches the launched application;
@@ -82,6 +82,11 @@ R1 intentionally does not require:
 
 A defect discovered on the R1 path is part of R1. A capability outside that path is deferred even
 when it appears easy to add.
+
+Production display planning remains per client. The client reports its display geometry and
+supported modes as hardware facts; the server selects the exact mode when supported or the closest
+same-aspect mode otherwise. A Full HD 16:9 client is not assigned the R1 fixture's `2560x1600`
+display.
 
 ## R2: Playable Personal Build
 

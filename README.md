@@ -29,11 +29,16 @@ repository state. Delivery now follows the outcome-driven
   display-to-stream-to-reconnect-to-physical-restore transaction. Component success is regression
   evidence, not a release claim.
 
-The immediate target is deliberately narrow: one stable `2560x1600` virtual display, one catalog
-application, moving H.264 SDR video in `emulator-5554`, minimal authenticated input, reconnect, quit,
-and verified physical-primary restore through
+The immediate target is deliberately narrow: one stable virtual display at the R1 fixture's
+`2560x1600` mode, one catalog application, moving H.264 SDR video in `emulator-5554`, minimal
+authenticated input, reconnect, quit, and verified physical-primary restore through
 `scripts/test-gate5-production-session.ps1`. Audio, controller support, HDR, additional codecs,
 physical-phone qualification, packaging, and UI polish are later release outcomes.
+
+`2560x1600` is not a universal client default. Production planning uses each client's reported
+display geometry and supported modes, preferring an exact match and then the closest same-aspect
+mode. A Full HD 16:9 client should therefore normally receive `1920x1080`, while a 16:10 client
+retains 16:10.
 
 ## Architecture
 

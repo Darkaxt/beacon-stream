@@ -27,6 +27,23 @@ internal sealed class WindowsVirtualDisplayArrivalGate(
         return result;
     }
 
+    public async Task<DisplayApiResult> ApplyAndWaitForStableDesiredTopologyAsync(
+        Func<DisplayApiResult> applyStateTransition,
+        Func<VirtualDisplayTargetArrivalSnapshot> queryTarget,
+        CancellationToken cancellationToken)
+    {
+        DisplayApiResult result = applyStateTransition();
+        WriteDiagnostic(
+            $"gate=post-primary phase=transition-completed success={result.Success} error={result.Error ?? "none"}");
+        if (!result.Success)
+        {
+            return result;
+        }
+
+        return await WaitForStableDesiredTopologyAsync(queryTarget, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     public async Task<VirtualDisplayTargetArrivalSnapshot> WaitForStableTargetAsync(
         Func<VirtualDisplayTargetArrivalSnapshot> queryTarget,
         CancellationToken cancellationToken)
