@@ -1496,6 +1496,7 @@ public sealed class WindowsDisplayApi :
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var selectedPaths = new List<DisplayConfigPathInfo>();
+        uint groupId = 0;
 
         foreach (string activeDisplayName in activeDisplayNames)
         {
@@ -1508,9 +1509,7 @@ public sealed class WindowsDisplayApi :
                     continue;
                 }
 
-                DisplayConfigPathInfo activePath = path;
-                activePath.Flags |= DisplayConfigPathActive;
-                selectedPaths.Add(activePath);
+                selectedPaths.Add(PrepareTopologyPath(path, groupId++));
                 break;
             }
         }
