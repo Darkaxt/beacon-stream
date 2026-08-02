@@ -35,19 +35,34 @@ R2 Playable Personal Build: complete one sustained game session from the Z Fold 
 Beacon-owned path, with synchronized audio, production controller input, physical-client benchmarking,
 a sustainable server-owned plan, reconnect, quit, and verified physical restore.
 
+The controller slice is implemented end to end. Retained evidence in
+`.artifacts/gate5-production-4988126f3e98478baab10bbe5fc6a477/` shows the normal APK path delivering
+Xbox A through StreamCore, StreamWorker, and the Windows ViGEm sink to XInput, while also preserving
+moving video, F12, disconnect/reconnect, explicit quit, controller release, and a restored snapshot
+with `activeControllerSessions=0`. A late queued controller packet that initially recreated the target
+after quit is now fenced by session lifecycle.
+
+The display guard failure following that transaction was isolated from the product path. On this
+machine, Windows can reject `QDC_ONLY_ACTIVE_PATHS` while exposing the active GDI display as an
+available all-path CCD route. Beacon now reconstructs and validates that route with normalized mode
+indexes. Signed HostAgent update workflow `30770997316` deployed source `2f1bd48`; the installed agent
+reports `driverReady=true`, physical `DISPLAY5` primary at `2560x1600@240`, mirror disabled, and zero
+leases. The final guarded controller rerun was not started because the Windows input desktop was
+`Screen-saver`, so the existing fail-closed topology gate remained intact.
+
 ## Current Blocker
 
-No R2 implementation blocker has been established yet. The first task is to trace the existing Worker,
-protocol, server, and APK boundaries for audio and controller data and choose the smallest end-to-end
-slice that produces an observable phone result. This is implementation discovery, not authorization
-for broad refactoring or deferred codec, HDR, packaging, or UI work.
+No R2 implementation blocker has been established. The next product slice is synchronized audio:
+one Windows capture source, one Opus transport path, and one Android playback sink bound to the
+existing Beacon session. The guarded controller transaction is retained for the final integrated
+confirmation when the Windows input desktop is `Default`; it does not block audio implementation.
 
 ## Next Falsifiable Proof
 
-The next proof must add one missing playable capability through the production transaction without
-changing the established display, video, reconnect, quit, or recovery behavior. Select the first slice
-from direct code evidence, implement it end to end, validate its narrow contract, and then rerun the
-guarded transaction with the physical display restored and verified afterward.
+The next proof must carry audible, ordered Opus audio from one Windows session capture source through
+the authenticated Worker/StreamCore connection to Android playback, then stop and release capture,
+decoder, and playback ownership on explicit quit. It must not change the established display, video,
+controller, reconnect, quit, or recovery behavior.
 
 ## Prior Evidence
 
