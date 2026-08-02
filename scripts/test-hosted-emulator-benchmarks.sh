@@ -314,6 +314,15 @@ run_instrumentation() {
     echo "Hosted benchmark instrumentation '${method}' did not pass." >&2
     return 1
   fi
+  local marker_output
+  if ! marker_output="$(
+      "${adb_command}" -s "${serial}" logcat -d -v raw -s BeaconGate3:I '*:S'
+    )"; then
+    emit_transport_diagnostics
+    echo "Hosted benchmark instrumentation '${method}' marker log is unavailable." >&2
+    return 1
+  fi
+  printf '%s\n' "${marker_output}" | tee -a "${output_file}"
   local marker
   for marker in "$@"; do
     if ! grep -Fq "${marker}" "${output_file}"; then

@@ -22,6 +22,7 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
         self.call_log = self.root / "calls.log"
         self.credential_capture = self.root / "credential.txt"
         self.snapshot_counter = self.root / "snapshot-counter.txt"
+        self.last_instrumentation = self.root / "last-instrumentation.txt"
         self.server_stopped = self.root / "server-stopped.txt"
         self.server_child_pid = self.root / "server-child.pid"
         self.worker = self._touch("BeaconHostedBenchmarkWorker")
@@ -75,18 +76,21 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
                 printf 'FAILURES!!!\n'
                 exit 0
               fi
-              if [[ "${arguments}" == *"#gate4NetworkAndHardwareBenchmark"* ]]; then
+              printf '%s\n' "${arguments}" > "${BEACON_FAKE_LAST_INSTRUMENTATION}"
+              printf 'OK (1 test)\n'
+            elif [[ "${arguments}" == *"logcat -d -v raw -s BeaconGate3:I"* ]]; then
+              last_instrumentation="$(cat "${BEACON_FAKE_LAST_INSTRUMENTATION}")"
+              if [[ "${last_instrumentation}" == *"#gate4NetworkAndHardwareBenchmark"* ]]; then
                 printf 'BEACON_GATE4_NATIVE_NETWORK_COMPLETE\n'
                 printf 'BEACON_GATE4_REAL_HARDWARE_CAPABILITY_REJECTED\n'
                 printf 'BEACON_GATE4_REAL_HARDWARE_OBSERVED\n'
-              elif [[ "${arguments}" == *"#gate4CertifiedBenchmarkEvidence"* ]]; then
+              elif [[ "${last_instrumentation}" == *"#gate4CertifiedBenchmarkEvidence"* ]]; then
                 if [[ "${BEACON_FAKE_FAIL_MARKER:-}" != "manual" ]]; then
                   printf 'BEACON_GATE4_CERTIFIED_MANUAL_COMPLETE\n'
                 fi
-              elif [[ "${arguments}" == *"#gate4CertifiedSessionPreflight"* ]]; then
+              elif [[ "${last_instrumentation}" == *"#gate4CertifiedSessionPreflight"* ]]; then
                 printf 'BEACON_GATE4_CERTIFIED_PREFLIGHT_COMPLETE\n'
               fi
-              printf 'OK (1 test)\n'
             elif [[ "${arguments}" == *"logcat -d -s BeaconStreamCore:I"* ]]; then
               printf 'BEACON_STREAMCORE_TRANSPORT shutdown generation=1 value=1234\n'
             fi
@@ -288,6 +292,7 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
             "BEACON_FAKE_CALL_LOG": self.call_log,
             "BEACON_FAKE_CREDENTIAL_CAPTURE": self.credential_capture,
             "BEACON_FAKE_SNAPSHOT_COUNTER": self.snapshot_counter,
+            "BEACON_FAKE_LAST_INSTRUMENTATION": self.last_instrumentation,
             "BEACON_FAKE_SERVER_STOPPED": self.server_stopped,
             "BEACON_FAKE_SERVER_CHILD_PID": self.server_child_pid,
             "HOME": self.root / "home",
