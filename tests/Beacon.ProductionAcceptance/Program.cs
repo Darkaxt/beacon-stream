@@ -744,13 +744,18 @@ internal static partial class Program
         Require(!snapshot.GetProperty("ownership").EnumerateArray().Any(value =>
             RequiredClientId(value) == clientId),
             "Session ownership remained after owned work termination.");
-        Require(!snapshot.GetProperty("streams").EnumerateArray().Any(value =>
-            RequiredString(value, "clientId") == clientId),
-            "The streaming runtime remained after inactive quit.");
+        Require(!HasActiveStreamingRuntime(snapshot, clientId),
+            "An active streaming runtime remained after inactive quit.");
         Require(snapshot.GetProperty("diagnostics").EnumerateArray().Any(value =>
             RequiredString(value, "operation") == "lease.cleanup.removed"),
             "The inactive AND no-owned-work cleanup decision was not journaled.");
     }
+
+    internal static bool HasActiveStreamingRuntime(JsonElement snapshot, string clientId) =>
+        snapshot.GetProperty("streams").EnumerateArray().Any(value =>
+            RequiredString(value, "clientId") == clientId &&
+            (!string.Equals(RequiredString(value, "state"), "stopped", StringComparison.Ordinal) ||
+             value.GetProperty("activeListenerPort").ValueKind != JsonValueKind.Null));
 
     private static void ValidateDisplayHealth(JsonElement display)
     {

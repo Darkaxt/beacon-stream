@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Beacon.ProductionAcceptance;
 
 namespace Beacon.Server.Tests;
@@ -20,6 +21,22 @@ public sealed class ProductionDisplayGuardTests
             @"C:\repo\conhost.exe",
             worker,
             probe));
+    }
+
+    [Fact]
+    public void RestoredSnapshotTreatsStoppedStreamHistoryAsTerminal()
+    {
+        using JsonDocument stopped = JsonDocument.Parse(
+            """{"streams":[{"clientId":"client-a","state":"stopped","activeListenerPort":null}]}""");
+        using JsonDocument running = JsonDocument.Parse(
+            """{"streams":[{"clientId":"client-a","state":"running","activeListenerPort":51234}]}""");
+
+        Assert.False(Beacon.ProductionAcceptance.Program.HasActiveStreamingRuntime(
+            stopped.RootElement,
+            "client-a"));
+        Assert.True(Beacon.ProductionAcceptance.Program.HasActiveStreamingRuntime(
+            running.RootElement,
+            "client-a"));
     }
 
     [Fact]
