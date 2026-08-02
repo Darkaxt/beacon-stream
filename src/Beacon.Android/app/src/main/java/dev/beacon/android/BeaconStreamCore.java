@@ -313,6 +313,10 @@ public final class BeaconStreamCore implements AutoCloseable {
 
     public synchronized boolean isOpen() { return open; }
 
+    public synchronized boolean isStreaming() {
+        return open && !stopped && !lifecycleBusy && activeGrant != null && activeGeneration > 0;
+    }
+
     boolean callbackExecutorShutdown() { return callbackExecutor.isShutdown(); }
 
     synchronized int connectionLossCountForTest() { return connectionLossCount; }

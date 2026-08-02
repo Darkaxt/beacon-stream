@@ -15,6 +15,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertThrows;
 
@@ -93,6 +94,33 @@ public final class BeaconViewModelTest {
         assertEquals(1, bindings.startCount);
         assertEquals(1, bindings.inputCount);
         assertEquals(1, bindings.releaseCount);
+    }
+
+    @Test
+    public void activeStreamQueryDoesNotAllocateAndTracksLaunchLifecycle() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(200, grantBody());
+        AtomicInteger allocations = new AtomicInteger();
+        BeaconViewModel model = new BeaconViewModel(
+            "z-fold-7",
+            "https://server",
+            service,
+            (sink, failureObserver, benchmarkObserver) -> {
+                allocations.incrementAndGet();
+                return new BeaconStreamCore(
+                    new RecordingCoreBindings(),
+                    sink,
+                    Executors.newSingleThreadExecutor());
+            });
+
+        assertFalse(model.hasActiveStream());
+        assertEquals(0, allocations.get());
+        model.launch(BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131"));
+        assertTrue(model.hasActiveStream());
+        assertEquals(1, allocations.get());
+        model.disconnect();
+        assertFalse(model.hasActiveStream());
+        model.close();
     }
 
     @Test

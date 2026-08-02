@@ -238,6 +238,15 @@ public final class BeaconViewModel implements AutoCloseable {
         latestError = "";
     }
 
+    public boolean hasActiveStream() {
+        BeaconStreamCore current;
+        synchronized (this) {
+            if (closed) return false;
+            current = streamCore;
+        }
+        return current != null && current.isStreaming();
+    }
+
     public void preflightBenchmarkAndLaunch(
         BeaconApiClient.ProfilePatch patch,
         BeaconApiClient.ClientCapabilities capabilities,

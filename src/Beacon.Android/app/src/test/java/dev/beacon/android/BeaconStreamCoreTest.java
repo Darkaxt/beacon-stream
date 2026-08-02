@@ -21,6 +21,23 @@ import static org.junit.Assert.assertTrue;
 
 public final class BeaconStreamCoreTest {
     @Test
+    public void reportsStreamingOnlyBetweenAcceptedStartAndStop() {
+        RecordingBindings bindings = new RecordingBindings();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings,
+            frame -> { },
+            Executors.newSingleThreadExecutor());
+
+        assertFalse(core.isStreaming());
+        core.start(session("active-state"));
+        assertTrue(core.isStreaming());
+        core.stop();
+        assertFalse(core.isStreaming());
+        core.close();
+        assertFalse(core.isStreaming());
+    }
+
+    @Test
     public void completeAccessUnitMetadataReachesFrameSink() throws Exception {
         RecordingBindings bindings = new RecordingBindings();
         ExecutorService executor = Executors.newSingleThreadExecutor();

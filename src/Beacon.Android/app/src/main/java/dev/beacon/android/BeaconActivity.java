@@ -6,6 +6,8 @@ import android.os.Bundle;
 import android.view.Display;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
+import android.view.InputDevice;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -35,6 +37,7 @@ public final class BeaconActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final List<BeaconGameCatalog.GameEntry> gameEntries = new ArrayList<>();
     private final BeaconTouchInputMapper touchInputMapper = new BeaconTouchInputMapper();
+    private final AndroidGamepadMapper gamepadInputMapper = new AndroidGamepadMapper();
     private final AndroidDeviceCapabilityProbe capabilityProbe = AndroidDeviceCapabilityProbe.system();
     private final AutomaticBenchmarkGate automaticBenchmarkGate = new AutomaticBenchmarkGate();
 
@@ -117,6 +120,78 @@ public final class BeaconActivity extends Activity {
 
         executor.shutdown();
         super.onDestroy();
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (modelSession == null || !isGamepadSource(event.getSource())) {
+            return super.dispatchKeyEvent(event);
+        }
+
+        boolean pressed;
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            pressed = true;
+        } else if (event.getAction() == KeyEvent.ACTION_UP) {
+            pressed = false;
+        } else {
+            return super.dispatchKeyEvent(event);
+        }
+
+        BeaconApiClient.InputBatch batch = gamepadInputMapper.mapButton(
+            event.getKeyCode(),
+            pressed);
+        if (batch == null || !currentModel().hasActiveStream()) {
+            return super.dispatchKeyEvent(event);
+        }
+        if (event.getRepeatCount() == 0) {
+            sendGamepadInput(batch);
+        }
+        return true;
+    }
+
+    @Override
+    public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        if (modelSession == null || event.getActionMasked() != MotionEvent.ACTION_MOVE ||
+            !isGamepadSource(event.getSource())) {
+            return super.dispatchGenericMotionEvent(event);
+        }
+
+        BeaconViewModel model = currentModel();
+        if (!model.hasActiveStream()) {
+            return super.dispatchGenericMotionEvent(event);
+        }
+
+        InputDevice device = event.getDevice();
+        float leftTrigger = Math.max(
+            event.getAxisValue(MotionEvent.AXIS_LTRIGGER),
+            event.getAxisValue(MotionEvent.AXIS_BRAKE));
+        float rightTrigger = Math.max(
+            event.getAxisValue(MotionEvent.AXIS_RTRIGGER),
+            event.getAxisValue(MotionEvent.AXIS_GAS));
+        float stickFlat = maxFlat(
+            device,
+            event.getSource(),
+            MotionEvent.AXIS_X,
+            MotionEvent.AXIS_Y,
+            MotionEvent.AXIS_Z,
+            MotionEvent.AXIS_RZ);
+        float triggerFlat = maxFlat(
+            device,
+            event.getSource(),
+            MotionEvent.AXIS_LTRIGGER,
+            MotionEvent.AXIS_BRAKE,
+            MotionEvent.AXIS_RTRIGGER,
+            MotionEvent.AXIS_GAS);
+        sendGamepadInput(gamepadInputMapper.mapAxes(
+            event.getAxisValue(MotionEvent.AXIS_X),
+            event.getAxisValue(MotionEvent.AXIS_Y),
+            event.getAxisValue(MotionEvent.AXIS_Z),
+            event.getAxisValue(MotionEvent.AXIS_RZ),
+            leftTrigger,
+            rightTrigger,
+            stickFlat,
+            triggerFlat));
+        return true;
     }
 
     private View createContent() {
@@ -488,6 +563,37 @@ public final class BeaconActivity extends Activity {
             clientId.getText().toString(),
             publicKeyFingerprint.getText().toString());
         return modelSession.get(config.clientId(), config.serverUrl());
+    }
+
+    private void sendGamepadInput(BeaconApiClient.InputBatch batch) {
+        BeaconViewModel model = currentModel();
+        executor.execute(() -> {
+            try {
+                if (model.hasActiveStream()) {
+                    model.sendInput(batch);
+                }
+            } catch (RuntimeException failure) {
+                setStatus("Controller input failed: " + failure.getMessage());
+            }
+        });
+    }
+
+    private static boolean isGamepadSource(int source) {
+        return (source & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
+            (source & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+    }
+
+    private static float maxFlat(
+        InputDevice device,
+        int source,
+        int... axes) {
+        float flat = 0f;
+        if (device == null) return flat;
+        for (int axis : axes) {
+            InputDevice.MotionRange range = device.getMotionRange(axis, source);
+            if (range != null) flat = Math.max(flat, range.getFlat());
+        }
+        return flat;
     }
 
     private void setStatus(String value) {
