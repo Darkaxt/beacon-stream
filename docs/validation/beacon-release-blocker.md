@@ -2,91 +2,52 @@
 
 Updated: 2026-08-02
 
+## Last Complete Outcome
+
+R1 Integrated Streaming Proof is complete. The guarded production runner passed one retained,
+emulator-backed transaction from physical-primary baseline through production streaming and back to
+verified physical-only topology.
+
+## Last Verified Transaction
+
+- `.artifacts/gate5-production-b6bd2b1e73a946d49e5195e613d4da96/` contains the prepared, active,
+  and restored server snapshots, Android instrumentation log, SessionProbe evidence, Server output,
+  and independent display-guard log.
+- The prepared snapshot shows `DISPLAY1` physical-primary at `2560x1600@240`, the per-client virtual
+  display extended at `2560x1600@120`, and mirror mode disabled.
+- The active snapshot shows that same virtual display primary at `2560x1600`, the physical panel still
+  extended, and a separately planned H.264 SDR stream at `1280x720@60`.
+- The APK rendered 12 moving frames with 11 pixel variants. Authenticated input reached only the
+  session-owned SessionProbe window, which recorded F12.
+- The transaction retained the session across active disconnect, reconnected with a fresh ticket,
+  handled explicit quit, observed the owned process exit, and removed the exact display lease.
+- The runner emitted `BEACON_GATE5_PRODUCTION_SESSION_OK`. The external guard and outer `finally`
+  cleanup both completed, ending with physical `DISPLAY1` primary, mirror mode disabled, no virtual
+  output, zero HostAgent leases, and no active heartbeat.
+- The R1 closeout matrix passes solution restore and format, warning-as-error build, all managed test
+  projects, 28 Windows native tests, Android unit tests and debug assembly, and Client Lab lint plus 16
+  tests. Android validation used the healthy installed Temurin 21 JDK because the local Zulu 21 image
+  reports a modified `lib/modules` file.
+
 ## Active Outcome
 
-R1 Integrated Streaming Proof: complete one guarded emulator-backed production transaction through
-session-owned input, reconnect, explicit quit, and verified physical-display restoration.
+R2 Playable Personal Build: complete one sustained game session from the Z Fold 7 through the existing
+Beacon-owned path, with synchronized audio, production controller input, physical-client benchmarking,
+a sustainable server-owned plan, reconnect, quit, and verified physical restore.
 
-## Last Verified Checkpoint
+## Current Blocker
 
-- The current worktree passes `dotnet format --verify-no-changes`, a warning-as-error solution build,
-  and the complete affected suites: 166 Core, 259 Windows Platform, and 187 Server tests.
-- Every validation command ended by invoking `restore-physical` and proving the physical panel at
-  `2560x1600@240`, primary, with mirror mode disabled, no virtual output, zero HostAgent leases, and
-  no active lease heartbeat.
-- The guarded production evidence in
-  `.artifacts/gate5-production-fdff6aec04c8479a9d4c3efeff3b083c/` retains the prepared snapshot,
-  failure snapshot, Android logcat, SessionProbe evidence, capture probes, Server output, and display
-  guard log.
-- The prepared snapshot proves the physical panel remained primary at `2560x1600@240` while the
-  per-client virtual display was extended at `2560x1600@120`. The active failure snapshot proves the
-  same virtual display became primary while the physical panel remained extended and mirror mode
-  remained disabled.
-- The run proves authenticated H.264 SDR media at `1280x720@60`, 12 moving-frame variants, repeated
-  emulator `RenderedFrame` feedback, `input-forwarded`, and F12 recorded by the launched SessionProbe.
-  Session-owned input targeting therefore closes the prior wrong-foreground failure.
-- Input dispatch now resolves the requested session ownership record, verifies the client and display,
-  selects only a visible owned window intersecting the leased display, activates that exact window,
-  and refuses injection when activation cannot be verified. Diagnostics expose a sanitized result code
-  without leaking raw worker errors.
-- Gate 5 now arms a separate display-guard process before display preparation. The guard monitors
-  acceptance exit, successful completion, power resume, Windows-session unlock, and the global
-  `Ctrl+Alt+Shift+F12` emergency action. Recovery forces the internal output, performs exact lease
-  cleanup, and does not exit until it proves physical-only primary topology, mirror mode disabled,
-  zero leases, and no heartbeat.
-- The PowerShell entry point independently repeats and verifies physical restoration in `finally`.
-  Cleanup is idempotent when the guard already removed the exact per-run lease.
-- The run stopped on a planning-model contradiction: the prepared virtual display correctly remained
-  `2560x1600`, but the immutable display plan had been independently clamped to the benchmark-certified
-  `1280x720` stream mode. Display geometry and stream output are now separate plan fields. Worker
-  preparation and the APK connection grant consume the certified stream dimensions, while display
-  lifecycle continues to consume the registered per-client geometry.
-
-## Current Validation Constraint
-
-R1 is still incomplete. The latest guarded run proved media and session-owned input, but validation
-stopped before reconnect, explicit quit, the owned process exit, and the restored snapshot. No
-topology-changing production run may be used as evidence unless all of the following are true:
-
-1. The owning Windows session is unlocked and its input desktop is `Default`.
-2. The runner emits `BEACON_GATE5_DISPLAY_GUARD_ARMED` before `prepared-display`.
-3. The run ends with both guard recovery evidence and
-   `BEACON_MANDATORY_POST_TEST_RESTORE_END ... topology=True agent=True`.
-4. An independent final status proves physical primary, mirror mode disabled, and zero leases.
-
-The guard deliberately does not use a cancellation timeout. Process exit, completion, resume, unlock,
-or the emergency hotkey are explicit recovery gates, and failed cleanup is retried only on a monitoring
-heartbeat until the final state is proven. The latest failure exercised normal completion-triggered
-guard recovery and independently verified physical-only topology and zero leases.
-
-## Hypothesis Under Test
-
-Media, APK rendering, and session-owned F12 input are now retained facts. The next falsifiable question
-is whether separating client display geometry from benchmark-certified stream output lets the same
-transaction pass active-state validation and continue through fresh-ticket reconnect, explicit quit,
-owned-process exit, and restored-state verification. Independently, every outcome must continue to
-prove that the external guard and outer runner restore physical-only topology.
+No R2 implementation blocker has been established yet. The first task is to trace the existing Worker,
+protocol, server, and APK boundaries for audio and controller data and choose the smallest end-to-end
+slice that produces an observable phone result. This is implementation discovery, not authorization
+for broad refactoring or deferred codec, HDR, packaging, or UI work.
 
 ## Next Falsifiable Proof
 
-With the owning Windows session on the `Default` desktop, run only the guarded production entry point:
-
-```powershell
-.\scripts\test-gate5-production-session.ps1 -Serial emulator-5554 -ArtifactsReady
-```
-
-Success requires one retained evidence set proving:
-
-- prepared per-client extended display;
-- authenticated media with moving frames and APK render feedback;
-- F12 received by the launched SessionProbe;
-- active disconnect without premature session destruction;
-- fresh-ticket reconnect and explicit quit;
-- owned application exit;
-- restored server snapshot and released virtual display;
-- guard recovery plus outer physical-only, mirror-off, zero-lease verification.
-
-Any earlier failure becomes the next R1 blocker. It does not authorize product-feature work.
+The next proof must add one missing playable capability through the production transaction without
+changing the established display, video, reconnect, quit, or recovery behavior. Select the first slice
+from direct code evidence, implement it end to end, validate its narrow contract, and then rerun the
+guarded transaction with the physical display restored and verified afterward.
 
 ## Prior Evidence
 

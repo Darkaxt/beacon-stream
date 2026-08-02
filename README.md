@@ -8,8 +8,8 @@ device facts, game selection, and control requests.
 
 ## Current State
 
-Architecture Recovery Gates 0-4 and the production-video implementation define the current
-repository state. Delivery now follows the outcome-driven
+Architecture Recovery Gates 0-4 and the R1 integrated production transaction define the current
+repository state. Delivery follows the outcome-driven
 [`R1/R2/R3` execution plan](docs/superpowers/plans/2026-08-01-beacon-release-outcome-gates.md):
 
 - Core, Server, Cockpit, Client Lab, FakeEndpoint, and Android expose protocol-neutral
@@ -19,21 +19,21 @@ repository state. Delivery now follows the outcome-driven
 - Fake host mode provides deterministic end-to-end control-plane testing.
 - A Beacon-owned C++ StreamWorker runs behind typed named-pipe IPC and carries authenticated
   control, input, feedback, and media datagrams over MsQuic.
-- The APK has one JNI StreamCore route. The hosted emulator fixture has rendered changing frames,
-  and production WGC, D3D11, NVENC H.264, MsQuic, and MediaCodec components exist behind that route.
+- The APK has one JNI StreamCore route. The normal APK on `emulator-5554` has rendered moving video
+  from the production WGC, D3D11, NVENC H.264, MsQuic, and MediaCodec path.
 - Versioned network/hardware fingerprints, raw benchmark samples, server-side scoring,
   automatic reuse decisions, manual always-new runs, history, and persisted plan evidence are
   implemented. Planning rejects missing or stale evidence instead of reverting to telemetry
   heuristics.
-- R1 remains open because those production components have not yet completed one retained
-  display-to-stream-to-reconnect-to-physical-restore transaction. Component success is regression
-  evidence, not a release claim.
+- R1 is complete. One retained transaction prepared the client-owned display, launched the catalog
+  probe, rendered moving H.264 SDR video, delivered authenticated F12 input, survived an active
+  disconnect and fresh-ticket reconnect, quit, released ownership, and verified physical-only
+  restoration. R1 is integration evidence, not a playable user release.
 
-The immediate target is deliberately narrow: one stable virtual display at the R1 fixture's
-`2560x1600` mode, one catalog application, moving H.264 SDR video in `emulator-5554`, minimal
-authenticated input, reconnect, quit, and verified physical-primary restore through
-`scripts/test-gate5-production-session.ps1`. Audio, controller support, HDR, additional codecs,
-physical-phone qualification, packaging, and UI polish are later release outcomes.
+The immediate target is R2: one playable Z Fold 7 transaction using the existing Beacon-owned path.
+R2 adds synchronized audio, one production controller route, automatic and manual physical-client
+benchmarking, a sustainable server-owned plan, and a sustained catalog-to-restore gameplay session.
+HDR, additional codecs, multi-client work, packaging, and broad UI polish remain deferred.
 
 `2560x1600` is not a universal client default. Production planning uses each client's reported
 display geometry and supported modes, preferring an exact match and then the closest same-aspect
