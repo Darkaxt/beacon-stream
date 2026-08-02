@@ -87,9 +87,46 @@ public sealed class WindowsShellExtendedTopologyActivatorTests
             WindowsExplorerShellExecutor.InteractiveDesktopName);
     }
 
+    [Fact]
+    public void FailedSignedHelperFallsBackToFixedDisplaySwitchCommand()
+    {
+        var executor = new RecordingExplorerShellExecutor();
+        executor.Results.Enqueue(DisplayApiResult.Fail("SetDisplayConfig failed."));
+        executor.Results.Enqueue(DisplayApiResult.Ok());
+        const string hostAgent = @"C:\Program Files\Beacon Stream\Beacon.HostAgent.exe";
+        var activator = new WindowsShellExtendedTopologyActivator(
+            executor,
+            userTopologyHelperExecutable: hostAgent);
+
+        DisplayApiResult result = activator.Apply();
+
+        Assert.True(result.Success);
+        Assert.Collection(
+            executor.Calls,
+            call =>
+            {
+                Assert.Equal(hostAgent, call.FileName);
+                Assert.Equal(WindowsUserDisplayTopologyTransition.CommandArgument, call.Arguments);
+            },
+            call =>
+            {
+                Assert.Equal(
+                    Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                        "System32",
+                        "DisplaySwitch.exe"),
+                    call.FileName);
+                Assert.Equal("/extend", call.Arguments);
+            });
+    }
+
     private sealed class RecordingExplorerShellExecutor : IWindowsExplorerShellExecutor
     {
         public DisplayApiResult Result { get; init; } = DisplayApiResult.Ok();
+
+        public Queue<DisplayApiResult> Results { get; } = new();
+
+        public List<(string FileName, string Arguments)> Calls { get; } = [];
 
         public string? FileName { get; private set; }
 
@@ -99,7 +136,8 @@ public sealed class WindowsShellExtendedTopologyActivatorTests
         {
             FileName = fileName;
             Arguments = arguments;
-            return Result;
+            Calls.Add((fileName, arguments));
+            return Results.TryDequeue(out DisplayApiResult? result) ? result : Result;
         }
     }
 }

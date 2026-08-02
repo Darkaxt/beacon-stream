@@ -294,9 +294,23 @@ internal sealed class WindowsShellExtendedTopologyActivator(
                 WindowsUserDisplayTopologyTransition.CommandArgument);
             WriteDiagnostic(
                 $"topology-launch command=user-helper executable={userTopologyHelperExecutable} success={helperResult.Success} error={helperResult.Error ?? "none"}");
-            return helperResult;
+            if (helperResult.Success)
+            {
+                return helperResult;
+            }
+
+            DisplayApiResult fallbackResult = ApplyDisplaySwitch();
+            return fallbackResult.Success
+                ? fallbackResult
+                : DisplayApiResult.Fail(
+                    $"{helperResult.Error} DisplaySwitch fallback failed: {fallbackResult.Error}");
         }
 
+        return ApplyDisplaySwitch();
+    }
+
+    private DisplayApiResult ApplyDisplaySwitch()
+    {
         string displaySwitch = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.Windows),
             "System32",
