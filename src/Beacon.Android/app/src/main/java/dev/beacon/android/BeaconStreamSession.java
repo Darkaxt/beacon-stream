@@ -19,6 +19,7 @@ public final class BeaconStreamSession {
     private final int port;
     private final String publicKeyFingerprint;
     private final SelectedVideo selectedVideo;
+    private final SelectedAudio selectedAudio;
     private final Benchmark benchmark;
     private byte[] ticket;
     private boolean ticketConsumed;
@@ -35,6 +36,7 @@ public final class BeaconStreamSession {
         int port,
         String publicKeyFingerprint,
         SelectedVideo selectedVideo,
+        SelectedAudio selectedAudio,
         Benchmark benchmark) {
         this.host = host;
         this.clientId = clientId;
@@ -47,6 +49,7 @@ public final class BeaconStreamSession {
         this.port = port;
         this.publicKeyFingerprint = publicKeyFingerprint;
         this.selectedVideo = selectedVideo;
+        this.selectedAudio = selectedAudio;
         this.benchmark = benchmark;
     }
 
@@ -85,6 +88,9 @@ public final class BeaconStreamSession {
             SelectedVideo selectedVideo = hasVideo
                 ? parseSelectedVideo(connection.getAsJsonObject("selectedVideo"))
                 : null;
+            SelectedAudio selectedAudio = hasVideo
+                ? parseSelectedAudio(connection.getAsJsonObject("selectedAudio"))
+                : null;
             Benchmark benchmark = hasBenchmark
                 ? parseBenchmark(connection.getAsJsonObject("benchmark"))
                 : null;
@@ -100,6 +106,7 @@ public final class BeaconStreamSession {
                 port,
                 fingerprint,
                 selectedVideo,
+                selectedAudio,
                 benchmark);
         } catch (IllegalArgumentException error) {
             throw error;
@@ -112,6 +119,7 @@ public final class BeaconStreamSession {
     public int port() { return port; }
     public String sessionId() { return sessionId; }
     public SelectedVideo selectedVideo() { return selectedVideo; }
+    public SelectedAudio selectedAudio() { return selectedAudio; }
     public Benchmark benchmark() { return benchmark; }
 
     public synchronized byte[] consumeTicket() {
@@ -132,7 +140,8 @@ public final class BeaconStreamSession {
         }
         return new NativeGrant(
             host, clientId, protocolVersion, consumeTicket(), expiresAt, planRevision,
-            planExplanation, sessionId, port, publicKeyFingerprint, selectedVideo, benchmark, generation);
+            planExplanation, sessionId, port, publicKeyFingerprint, selectedVideo, selectedAudio,
+            benchmark, generation);
     }
 
     private static SelectedVideo parseSelectedVideo(JsonObject video) {
@@ -143,6 +152,18 @@ public final class BeaconStreamSession {
             requiredInt(video, "framesPerSecondNumerator"),
             requiredInt(video, "framesPerSecondDenominator"),
             requireText(video.get("dynamicRange").getAsString(), "selectedVideo.dynamicRange"));
+    }
+
+    private static SelectedAudio parseSelectedAudio(JsonObject audio) {
+        if (audio == null) {
+            throw new IllegalArgumentException("selectedAudio is required for a stream grant.");
+        }
+        return new SelectedAudio(
+            requireText(audio.get("codec").getAsString(), "selectedAudio.codec"),
+            requiredInt(audio, "sampleRateHz"),
+            requiredInt(audio, "channelCount"),
+            requiredInt(audio, "frameDurationUs"),
+            requiredInt(audio, "bitrateBps"));
     }
 
     private static Benchmark parseBenchmark(JsonObject value) {
@@ -225,6 +246,33 @@ public final class BeaconStreamSession {
         public String dynamicRange() { return dynamicRange; }
     }
 
+    public static final class SelectedAudio {
+        private final String codec;
+        private final int sampleRateHz;
+        private final int channelCount;
+        private final int frameDurationUs;
+        private final int bitrateBps;
+
+        SelectedAudio(
+            String codec,
+            int sampleRateHz,
+            int channelCount,
+            int frameDurationUs,
+            int bitrateBps) {
+            this.codec = codec;
+            this.sampleRateHz = sampleRateHz;
+            this.channelCount = channelCount;
+            this.frameDurationUs = frameDurationUs;
+            this.bitrateBps = bitrateBps;
+        }
+
+        public String codec() { return codec; }
+        public int sampleRateHz() { return sampleRateHz; }
+        public int channelCount() { return channelCount; }
+        public int frameDurationUs() { return frameDurationUs; }
+        public int bitrateBps() { return bitrateBps; }
+    }
+
     public static final class Benchmark {
         private final String runId;
         private final int schemaVersion;
@@ -282,13 +330,14 @@ public final class BeaconStreamSession {
         final int port;
         final String publicKeyFingerprint;
         final SelectedVideo selectedVideo;
+        final SelectedAudio selectedAudio;
         final Benchmark benchmark;
         final long generation;
 
         NativeGrant(String host, String clientId, int protocolVersion, byte[] ticket, String expiresAt,
                     long planRevision, String planExplanation, String sessionId, int port,
                     String publicKeyFingerprint, SelectedVideo selectedVideo,
-                    Benchmark benchmark, long generation) {
+                    SelectedAudio selectedAudio, Benchmark benchmark, long generation) {
             this.host = host;
             this.clientId = clientId;
             this.protocolVersion = protocolVersion;
@@ -300,6 +349,7 @@ public final class BeaconStreamSession {
             this.port = port;
             this.publicKeyFingerprint = publicKeyFingerprint;
             this.selectedVideo = selectedVideo;
+            this.selectedAudio = selectedAudio;
             this.benchmark = benchmark;
             this.generation = generation;
         }

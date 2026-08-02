@@ -520,6 +520,12 @@ bool StreamCore::send_start() {
   video->set_frames_per_second_numerator(grant_.video.fps_numerator);
   video->set_frames_per_second_denominator(grant_.video.fps_denominator);
   video->set_dynamic_range(grant_.video.dynamic_range);
+  auto *audio = envelope.mutable_start_session()->mutable_selected_audio();
+  audio->set_codec(grant_.audio.codec);
+  audio->set_sample_rate_hz(grant_.audio.sample_rate_hz);
+  audio->set_channel_count(grant_.audio.channel_count);
+  audio->set_frame_duration_us(grant_.audio.frame_duration_us);
+  audio->set_bitrate_bps(grant_.audio.bitrate_bps);
   if (!transport_.send(StreamRole::session, frame_message(envelope))) {
     fail();
     return false;

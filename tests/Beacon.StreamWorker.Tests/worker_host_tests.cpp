@@ -149,6 +149,11 @@ WorkerIpcEnvelope prepare_video(std::uint64_t request_id = 20) {
   plan->set_frames_per_second_numerator(120);
   plan->set_frames_per_second_denominator(1);
   plan->set_dynamic_range(beacon::worker::v1::WORKER_DYNAMIC_RANGE_SDR);
+  plan->set_audio_codec(beacon::worker::v1::WORKER_AUDIO_CODEC_OPUS);
+  plan->set_audio_sample_rate_hz(48'000);
+  plan->set_audio_channel_count(2);
+  plan->set_audio_frame_duration_us(20'000);
+  plan->set_audio_bitrate_bps(96'000);
   plan->set_minimum_bitrate_kbps(8'000);
   plan->set_initial_bitrate_kbps(24'000);
   plan->set_maximum_bitrate_kbps(40'000);
@@ -193,6 +198,16 @@ void hello_capabilities_and_ready_are_typed_and_instance_bound() {
   BEACON_TEST_REQUIRE(
       capabilities.worker_capabilities().maximum_frames_per_second() == 120);
   BEACON_TEST_REQUIRE(capabilities.worker_capabilities().video_available());
+  BEACON_TEST_REQUIRE(capabilities.worker_capabilities().audio_codecs_size() == 1);
+  BEACON_TEST_REQUIRE(
+      capabilities.worker_capabilities().audio_codecs(0) ==
+      beacon::worker::v1::WORKER_AUDIO_CODEC_OPUS);
+  BEACON_TEST_REQUIRE(
+      capabilities.worker_capabilities().audio_capture_methods_size() == 1);
+  BEACON_TEST_REQUIRE(
+      capabilities.worker_capabilities().audio_capture_methods(0) ==
+      beacon::worker::v1::WORKER_AUDIO_CAPTURE_METHOD_WASAPI_LOOPBACK);
+  BEACON_TEST_REQUIRE(!capabilities.worker_capabilities().audio_available());
   BEACON_TEST_REQUIRE(
       capabilities.worker_capabilities().video_unavailable_boundary() ==
       beacon::worker::v1::DIAGNOSTIC_BOUNDARY_UNSPECIFIED);
@@ -417,6 +432,10 @@ void ticket_authorization_is_hash_only_and_worker_bound() {
   BEACON_TEST_REQUIRE(consumed.selected_video.has_value());
   BEACON_TEST_REQUIRE(consumed.selected_video->width() == 2560);
   BEACON_TEST_REQUIRE(consumed.selected_video->height() == 1600);
+  BEACON_TEST_REQUIRE(consumed.selected_audio.has_value());
+  BEACON_TEST_REQUIRE(consumed.selected_audio->codec() ==
+                      beacon::stream::v1::AUDIO_CODEC_OPUS);
+  BEACON_TEST_REQUIRE(consumed.selected_audio->sample_rate_hz() == 48'000);
   BEACON_TEST_REQUIRE(completion(revoked).worker_completion().succeeded());
   BEACON_TEST_REQUIRE(host.authorized_ticket_count() == 0);
   BEACON_TEST_REQUIRE(!completion(rejected).worker_completion().succeeded());

@@ -13,12 +13,17 @@ public final class BeaconStreamSessionTest {
         BeaconStreamSession session = BeaconStreamSession.parse(
             "https://beacon.example:5001/control",
             "z-fold-7",
-            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":12,\"planExplanation\":\"selected\",\"sessionId\":\"session-1\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1920,\"height\":1080,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"}}}");
+            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":12,\"planExplanation\":\"selected\",\"sessionId\":\"session-1\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1920,\"height\":1080,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"},\"selectedAudio\":{\"codec\":\"opus\",\"sampleRateHz\":48000,\"channelCount\":2,\"frameDurationUs\":20000,\"bitrateBps\":96000}}}");
 
         assertEquals("beacon.example", session.host());
         assertEquals(47990, session.port());
         assertEquals("session-1", session.sessionId());
         assertEquals(1920, session.selectedVideo().width());
+        assertEquals("opus", session.selectedAudio().codec());
+        assertEquals(48_000, session.selectedAudio().sampleRateHz());
+        assertEquals(2, session.selectedAudio().channelCount());
+        assertEquals(20_000, session.selectedAudio().frameDurationUs());
+        assertEquals(96_000, session.selectedAudio().bitrateBps());
         byte[] ticket = session.consumeTicket();
         assertEquals(3, ticket.length);
         assertTrue(session.ticketConsumed());
@@ -34,7 +39,7 @@ public final class BeaconStreamSessionTest {
         BeaconStreamSession session = BeaconStreamSession.parse(
             "https://beacon.example",
             "client",
-            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":2,\"planExplanation\":\"authoritative\",\"sessionId\":\"s\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"av1\",\"width\":2560,\"height\":1600,\"framesPerSecondNumerator\":120,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"hdr10\"}}}");
+            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":2,\"planExplanation\":\"authoritative\",\"sessionId\":\"s\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"av1\",\"width\":2560,\"height\":1600,\"framesPerSecondNumerator\":120,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"hdr10\"},\"selectedAudio\":{\"codec\":\"opus\",\"sampleRateHz\":48000,\"channelCount\":2,\"frameDurationUs\":20000,\"bitrateBps\":96000}}}");
 
         assertEquals("av1", session.selectedVideo().codec());
         assertEquals("hdr10", session.selectedVideo().dynamicRange());

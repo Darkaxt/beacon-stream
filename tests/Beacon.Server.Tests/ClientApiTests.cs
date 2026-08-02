@@ -520,7 +520,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         SessionPlan savedPlan = Assert.IsType<SessionPlan>(
             factory.Services.GetRequiredService<InMemorySessionStore>().Get("z-fold-7"));
         Assert.Equal(
-            $"{savedPlan.Display.Reason} {savedPlan.Stream.Reason}",
+            $"{savedPlan.Display.Reason} {savedPlan.Stream.Reason} {savedPlan.Audio.Reason}",
             connection.GetProperty("planExplanation").GetString());
         JsonElement selectedVideo = connection.GetProperty("selectedVideo");
         Assert.Equal("av1", selectedVideo.GetProperty("codec").GetString());
@@ -529,6 +529,12 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         Assert.Equal(120, selectedVideo.GetProperty("framesPerSecondNumerator").GetInt32());
         Assert.Equal(1, selectedVideo.GetProperty("framesPerSecondDenominator").GetInt32());
         Assert.Equal("sdr", selectedVideo.GetProperty("dynamicRange").GetString());
+        JsonElement selectedAudio = connection.GetProperty("selectedAudio");
+        Assert.Equal("opus", selectedAudio.GetProperty("codec").GetString());
+        Assert.Equal(48_000, selectedAudio.GetProperty("sampleRateHz").GetInt32());
+        Assert.Equal(2, selectedAudio.GetProperty("channelCount").GetInt32());
+        Assert.Equal(20_000, selectedAudio.GetProperty("frameDurationUs").GetInt32());
+        Assert.Equal(96_000, selectedAudio.GetProperty("bitrateBps").GetInt32());
         ulong planRevision = root.GetProperty("connection").GetProperty("planRevision").GetUInt64();
         Assert.NotEqual(0UL, planRevision);
         byte[] publicTicket = Convert.FromBase64String(Assert.IsType<string>(
@@ -543,7 +549,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         Assert.Equal(32, privateAuthorization.TicketHash.Length);
         Assert.False(CryptographicOperations.FixedTimeEquals(publicTicket, privateAuthorization.TicketHash));
         Assert.True(connection.EnumerateObject().Select(property => property.Name).ToHashSet().SetEquals(
-            ["protocolVersion", "ticket", "expiresAt", "planRevision", "planExplanation", "sessionId", "port", "publicKeyFingerprint", "selectedVideo"]));
+            ["protocolVersion", "ticket", "expiresAt", "planRevision", "planExplanation", "sessionId", "port", "publicKeyFingerprint", "selectedVideo", "selectedAudio"]));
         string responseJson = root.GetRawText();
         Assert.DoesNotContain(identity.IdentityPath, responseJson, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("privateKey", responseJson, StringComparison.OrdinalIgnoreCase);
@@ -1241,6 +1247,9 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         Assert.Equal(
             launchConnection.GetProperty("selectedVideo").GetRawText(),
             reconnectConnection.GetProperty("selectedVideo").GetRawText());
+        Assert.Equal(
+            launchConnection.GetProperty("selectedAudio").GetRawText(),
+            reconnectConnection.GetProperty("selectedAudio").GetRawText());
         FakeStreamSessionAuthorizer authorizer = Assert.IsType<FakeStreamSessionAuthorizer>(
             factory.Services.GetRequiredService<IStreamSessionAuthorizer>());
         Assert.True(authorizer.Revocations.Count >= 2);

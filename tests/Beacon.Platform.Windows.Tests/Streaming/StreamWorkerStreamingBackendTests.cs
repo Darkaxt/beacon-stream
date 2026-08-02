@@ -340,6 +340,11 @@ public sealed class StreamWorkerStreamingBackendTests
         Assert.Equal(WorkerVideoCodec.H264, prepare.VideoCodec);
         Assert.Equal(WorkerDynamicRange.Sdr, prepare.DynamicRange);
         Assert.Equal(45000u, prepare.InitialBitrateKbps);
+        Assert.Equal(WorkerAudioCodec.Opus, prepare.AudioCodec);
+        Assert.Equal(48_000u, prepare.AudioSampleRateHz);
+        Assert.Equal(2u, prepare.AudioChannelCount);
+        Assert.Equal(20_000u, prepare.AudioFrameDurationUs);
+        Assert.Equal(96_000u, prepare.AudioBitrateBps);
         Assert.Equal(WorkerIpcEnvelope.BodyOneofCase.StartMedia, host.Commands[1].BodyCase);
         Assert.Equal("0.0.0.0", host.Commands[1].StartMedia.ListenAddress);
         Assert.Equal(0u, host.Commands[1].StartMedia.ListenPort);
@@ -816,7 +821,8 @@ public sealed class StreamWorkerStreamingBackendTests
             "adaptive",
             "test",
             Guid.Parse("33acde60-b29f-4f03-b2b2-f51337bdb9a5"),
-            "test-benchmark-revision"));
+            "test-benchmark-revision"),
+        new PlannedAudio("opus", 48_000, 2, 20_000, 96_000, "R2 test audio."));
 
     private sealed class FixedDisplayNameResolver(string? displayName)
         : IWindowsDisplayNameResolver

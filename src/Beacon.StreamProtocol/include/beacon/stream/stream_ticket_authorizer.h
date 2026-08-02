@@ -24,6 +24,7 @@ struct StreamTicketAuthorization {
   StreamTicketAuthorizationResult result{
       StreamTicketAuthorizationResult::unknown};
   std::optional<v1::SelectedVideoMode> selected_video;
+  std::optional<v1::SelectedAudioMode> selected_audio;
   std::optional<v1::StartBenchmark> benchmark_plan;
 };
 

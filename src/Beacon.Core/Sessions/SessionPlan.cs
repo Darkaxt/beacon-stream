@@ -35,12 +35,21 @@ public sealed record PlannedStream(
     public bool HdrPresentationVerified { get; init; }
 }
 
+public sealed record PlannedAudio(
+    string Codec,
+    int SampleRateHz,
+    int ChannelCount,
+    int FrameDurationUs,
+    int BitrateBps,
+    string Reason);
+
 public sealed record SessionPlan(
     string SessionId,
     ClientId ClientId,
     string AppId,
     PlannedDisplay Display,
     PlannedStream Stream,
+    PlannedAudio Audio,
     ulong Revision = 1);
 
 public sealed record SessionPlanResult(bool Success, SessionPlan? Plan, string? Error);

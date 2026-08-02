@@ -691,6 +691,14 @@ ConnectionGrant parse_grant(JNIEnv *environment, jobject native_grant) {
   }
 
   if (video != nullptr) {
+    jobject audio = java_optional_object(
+        environment, native_grant, "selectedAudio",
+        "Ldev/beacon/android/BeaconStreamSession$SelectedAudio;");
+    if (audio == nullptr) {
+      environment->DeleteLocalRef(video);
+      throw std::invalid_argument(
+          "Connection grant audio mode is required for streaming.");
+    }
     const std::string codec_text = java_string(environment, video, "codec");
     const std::string dynamic_range_text =
         java_string(environment, video, "dynamicRange");
@@ -702,6 +710,7 @@ ConnectionGrant parse_grant(JNIEnv *environment, jobject native_grant) {
         environment, video, "framesPerSecondDenominator");
     if (width <= 0 || height <= 0 || fps_numerator <= 0 ||
         fps_denominator <= 0) {
+      environment->DeleteLocalRef(audio);
       environment->DeleteLocalRef(video);
       throw std::invalid_argument(
           "Connection grant video dimensions or frame rate are invalid.");
@@ -712,10 +721,31 @@ ConnectionGrant parse_grant(JNIEnv *environment, jobject native_grant) {
             static_cast<std::uint32_t>(fps_numerator),
             static_cast<std::uint32_t>(fps_denominator), dynamic_range_text,
             grant.video)) {
+      environment->DeleteLocalRef(audio);
       environment->DeleteLocalRef(video);
       throw std::invalid_argument(
           "Connection grant selects a mode absent from the stream protocol contract.");
     }
+    const std::string audio_codec_text =
+        java_string(environment, audio, "codec");
+    const jint sample_rate_hz = java_int(environment, audio, "sampleRateHz");
+    const jint channel_count = java_int(environment, audio, "channelCount");
+    const jint frame_duration_us =
+        java_int(environment, audio, "frameDurationUs");
+    const jint bitrate_bps = java_int(environment, audio, "bitrateBps");
+    if (sample_rate_hz <= 0 || channel_count <= 0 ||
+        frame_duration_us <= 0 || bitrate_bps <= 0 ||
+        !map_selected_audio_grant(
+            audio_codec_text, static_cast<std::uint32_t>(sample_rate_hz),
+            static_cast<std::uint32_t>(channel_count),
+            static_cast<std::uint32_t>(frame_duration_us),
+            static_cast<std::uint32_t>(bitrate_bps), grant.audio)) {
+      environment->DeleteLocalRef(audio);
+      environment->DeleteLocalRef(video);
+      throw std::invalid_argument(
+          "Connection grant selects an audio mode absent from the stream protocol contract.");
+    }
+    environment->DeleteLocalRef(audio);
     environment->DeleteLocalRef(video);
   } else {
     BenchmarkGrant mapped;

@@ -110,6 +110,15 @@ public static class SessionPlanner
         GameDescriptor game,
         StreamPlanningSelection selection)
     {
+        string audioMode = profile.Audio.Mode.Trim().ToLowerInvariant();
+        if (audioMode != "stereo")
+        {
+            return new SessionPlanResult(
+                false,
+                null,
+                $"R2 audio supports only the server-owned stereo mode; requested mode was '{profile.Audio.Mode}'.");
+        }
+
         string? hdrBlocker = GetHdrBlocker(capabilities, selection);
 
         if (profile.Display.HdrPreference == HdrPreference.Require && hdrBlocker is not null)
@@ -155,13 +164,22 @@ public static class SessionPlanner
             HdrPresentationVerified = selection.HdrPresentationVerified
         };
 
+        var audio = new PlannedAudio(
+            Codec: "opus",
+            SampleRateHz: 48_000,
+            ChannelCount: 2,
+            FrameDurationUs: 20_000,
+            BitrateBps: 96_000,
+            Reason: "Server selected the fixed R2 Opus stereo production path.");
+
         var plan = new SessionPlan(
             SessionId: $"{profile.ClientId.Value}-{game.Id}",
             ClientId: profile.ClientId,
             AppId: game.Id,
             Display: display,
             Stream: stream,
-            Revision: CreateRevision(profile.ClientId, game.Id, display, stream));
+            Audio: audio,
+            Revision: CreateRevision(profile.ClientId, game.Id, display, stream, audio));
 
         return new SessionPlanResult(true, plan, null);
     }
@@ -235,7 +253,8 @@ public static class SessionPlanner
         ClientId clientId,
         string appId,
         PlannedDisplay display,
-        PlannedStream stream)
+        PlannedStream stream,
+        PlannedAudio audio)
     {
         using var material = new MemoryStream();
         using (var writer = new BinaryWriter(material, Encoding.UTF8, leaveOpen: true))
@@ -263,6 +282,11 @@ public static class SessionPlanner
             writer.Write(stream.BitDepth);
             writer.Write(stream.TenBitPresentationVerified);
             writer.Write(stream.HdrPresentationVerified);
+            writer.Write(audio.Codec);
+            writer.Write(audio.SampleRateHz);
+            writer.Write(audio.ChannelCount);
+            writer.Write(audio.FrameDurationUs);
+            writer.Write(audio.BitrateBps);
         }
 
         byte[] digest = SHA256.HashData(material.GetBuffer().AsSpan(0, checked((int)material.Length)));

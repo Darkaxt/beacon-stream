@@ -1128,6 +1128,11 @@ public sealed class StreamWorkerStreamingBackend :
                 MinimumBitrateKbps = checked((uint)Math.Max(1000, plan.Stream.InitialBitrateMbps * 500)),
                 InitialBitrateKbps = checked((uint)plan.Stream.InitialBitrateMbps * 1000),
                 MaximumBitrateKbps = checked((uint)plan.Stream.InitialBitrateMbps * 2000),
+                AudioCodec = WorkerAudioCodec.Opus,
+                AudioSampleRateHz = checked((uint)plan.Audio.SampleRateHz),
+                AudioChannelCount = checked((uint)plan.Audio.ChannelCount),
+                AudioFrameDurationUs = checked((uint)plan.Audio.FrameDurationUs),
+                AudioBitrateBps = checked((uint)plan.Audio.BitrateBps),
             },
         };
 

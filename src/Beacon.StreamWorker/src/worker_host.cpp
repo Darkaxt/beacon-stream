@@ -54,6 +54,25 @@ worker_video_plan_from(const v1::WorkerIpcEnvelope& request) {
                                               : std::nullopt;
 }
 
+std::optional<stream::v1::SelectedAudioMode>
+worker_audio_plan_from(const v1::WorkerIpcEnvelope& request) {
+  const auto& source = request.prepare_session();
+  if (source.audio_codec() != v1::WORKER_AUDIO_CODEC_OPUS ||
+      source.audio_sample_rate_hz() != 48'000 ||
+      source.audio_channel_count() != 2 ||
+      source.audio_frame_duration_us() != 20'000 ||
+      source.audio_bitrate_bps() != 96'000) {
+    return std::nullopt;
+  }
+  stream::v1::SelectedAudioMode plan;
+  plan.set_codec(stream::v1::AUDIO_CODEC_OPUS);
+  plan.set_sample_rate_hz(source.audio_sample_rate_hz());
+  plan.set_channel_count(source.audio_channel_count());
+  plan.set_frame_duration_us(source.audio_frame_duration_us());
+  plan.set_bitrate_bps(source.audio_bitrate_bps());
+  return plan;
+}
+
 }  // namespace
 
 WorkerHost::WorkerHost(std::vector<std::byte> worker_instance_id,
@@ -92,6 +111,12 @@ v1::WorkerIpcEnvelope WorkerHost::capabilities() const {
   message->set_maximum_frames_per_second(120);
   message->set_hdr10(false);
   message->set_video_available(video_capabilities_.available);
+  message->add_audio_codecs(v1::WORKER_AUDIO_CODEC_OPUS);
+  message->add_audio_capture_methods(
+      v1::WORKER_AUDIO_CAPTURE_METHOD_WASAPI_LOOPBACK);
+  message->set_audio_available(false);
+  message->set_audio_unavailable_boundary(
+      v1::DIAGNOSTIC_BOUNDARY_AUDIO_CAPTURE);
   if (!video_capabilities_.available) {
     const auto boundary = video_capabilities_.unavailable_boundary ==
                                   video::ProductionVideoCapabilityBoundary::capture
@@ -191,7 +216,8 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare(
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_STATE);
   }
   auto video_plan = worker_video_plan_from(request);
-  if (!video_plan) {
+  auto audio_plan = worker_audio_plan_from(request);
+  if (!video_plan || !audio_plan) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);
   }
   try {
@@ -207,6 +233,7 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare(
   benchmark_plan_.Clear();
   session_id_ = request.session_id();
   prepared_video_plan_ = std::move(video_plan);
+  prepared_audio_plan_ = std::move(audio_plan);
   auto state = response_envelope(request);
   state.mutable_session_state_changed()->set_state(v1::WORKER_SESSION_STATE_PREPARED);
   state.mutable_session_state_changed()->set_error_code(v1::WORKER_ERROR_CODE_NONE);
@@ -229,6 +256,7 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare_benchmark(
 
   video_pipeline_.reset();
   prepared_video_plan_.reset();
+  prepared_audio_plan_.reset();
   prepared_ = true;
   benchmark_prepared_ = true;
   benchmark_plan_ = plan;
@@ -264,13 +292,15 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::authorize_ticket(
           .plan_revision = ticket.plan_revision(),
           .expires_at_unix_ms = ticket.expires_at_unix_ms(),
           .selected_video = std::nullopt,
+          .selected_audio = std::nullopt,
           .benchmark_plan = std::nullopt,
       };
   if (benchmark_prepared_) {
     authorization.benchmark_plan = benchmark_plan_;
-  } else if (prepared_video_plan_) {
+  } else if (prepared_video_plan_ && prepared_audio_plan_) {
     authorization.selected_video =
         video::selected_video_from_plan(*prepared_video_plan_);
+    authorization.selected_audio = *prepared_audio_plan_;
   }
   if (!authorized_tickets_.authorize(std::move(authorization))) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_STATE);
@@ -333,6 +363,7 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::stop_media(
   benchmark_prepared_ = false;
   benchmark_plan_.Clear();
   prepared_video_plan_.reset();
+  prepared_audio_plan_.reset();
   auto state = response_envelope(request);
   state.mutable_session_state_changed()->set_state(v1::WORKER_SESSION_STATE_STOPPED);
   state.mutable_session_state_changed()->set_error_code(v1::WORKER_ERROR_CODE_NONE);
@@ -368,6 +399,7 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::shutdown(
   benchmark_prepared_ = false;
   benchmark_plan_.Clear();
   prepared_video_plan_.reset();
+  prepared_audio_plan_.reset();
   shutdown_requested_ = true;
   return {completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }

@@ -53,7 +53,8 @@ public sealed class WindowsSessionOwnedWorkTerminatorTests
             new ClientId("z-fold-7"),
             "steam:1",
             new PlannedDisplay("client-z-fold-7", 2560, 1600, 120, "virtual-primary", HdrPreference.Off, false, "sdr", "test"),
-            new PlannedStream("h264", 2560, 1600, 60, 20, "lan-direct", "adaptive", "test", Guid.NewGuid(), "test"));
+            new PlannedStream("h264", 2560, 1600, 60, 20, "lan-direct", "adaptive", "test", Guid.NewGuid(), "test"),
+            new PlannedAudio("opus", 48_000, 2, 20_000, 96_000, "R2 test audio."));
         return new SessionOwnershipRecord(
             plan,
             new GameLaunchState(

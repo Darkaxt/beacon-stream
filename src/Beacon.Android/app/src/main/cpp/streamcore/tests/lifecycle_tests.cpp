@@ -456,6 +456,20 @@ void grant_mapping_matches_every_current_protocol_mode() {
   BEACON_TEST_REQUIRE(selected.fps_numerator == 120);
   BEACON_TEST_REQUIRE(selected.fps_denominator == 1);
   BEACON_TEST_REQUIRE(selected.dynamic_range == beacon::stream::v1::DYNAMIC_RANGE_HDR10);
+  beacon::stream::v1::AudioCodec audio_codec{};
+  BEACON_TEST_REQUIRE(android_stream::grant_audio_codec_enum_name("opus") ==
+                      "AUDIO_CODEC_OPUS");
+  BEACON_TEST_REQUIRE(android_stream::map_grant_audio_codec("opus", audio_codec));
+  BEACON_TEST_REQUIRE(audio_codec == beacon::stream::v1::AUDIO_CODEC_OPUS);
+  BEACON_TEST_REQUIRE(!android_stream::map_grant_audio_codec("aac", audio_codec));
+  android_stream::SelectedAudio audio;
+  BEACON_TEST_REQUIRE(android_stream::map_selected_audio_grant(
+      "opus", 48'000, 2, 20'000, 96'000, audio));
+  BEACON_TEST_REQUIRE(audio.codec == beacon::stream::v1::AUDIO_CODEC_OPUS);
+  BEACON_TEST_REQUIRE(audio.sample_rate_hz == 48'000);
+  BEACON_TEST_REQUIRE(audio.channel_count == 2);
+  BEACON_TEST_REQUIRE(audio.frame_duration_us == 20'000);
+  BEACON_TEST_REQUIRE(audio.bitrate_bps == 96'000);
 }
 
 void closing_registry_retains_until_callback_completion() {

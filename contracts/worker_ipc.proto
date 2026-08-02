@@ -34,6 +34,16 @@ enum WorkerVideoEncoder {
   WORKER_VIDEO_ENCODER_NVENC = 1;
 }
 
+enum WorkerAudioCodec {
+  WORKER_AUDIO_CODEC_UNSPECIFIED = 0;
+  WORKER_AUDIO_CODEC_OPUS = 1;
+}
+
+enum WorkerAudioCaptureMethod {
+  WORKER_AUDIO_CAPTURE_METHOD_UNSPECIFIED = 0;
+  WORKER_AUDIO_CAPTURE_METHOD_WASAPI_LOOPBACK = 1;
+}
+
 enum WorkerCaptureMethod {
   WORKER_CAPTURE_METHOD_UNSPECIFIED = 0;
   WORKER_CAPTURE_METHOD_WINDOWS_GRAPHICS_CAPTURE = 1;
@@ -73,6 +83,10 @@ enum DiagnosticBoundary {
   DIAGNOSTIC_BOUNDARY_TRANSPORT = 3;
   DIAGNOSTIC_BOUNDARY_CAPTURE = 4;
   DIAGNOSTIC_BOUNDARY_ENCODER = 5;
+  DIAGNOSTIC_BOUNDARY_AUDIO_CAPTURE = 6;
+  DIAGNOSTIC_BOUNDARY_AUDIO_ENCODER = 7;
+  DIAGNOSTIC_BOUNDARY_AUDIO_DECODER = 8;
+  DIAGNOSTIC_BOUNDARY_AUDIO_PLAYBACK = 9;
 }
 
 enum DiagnosticCode {
@@ -151,6 +165,11 @@ message WorkerCapabilities {
   bool video_available = 10;
   DiagnosticBoundary video_unavailable_boundary = 11;
   uint32 video_unavailable_code = 12;
+  repeated WorkerAudioCodec audio_codecs = 13;
+  repeated WorkerAudioCaptureMethod audio_capture_methods = 14;
+  bool audio_available = 15;
+  DiagnosticBoundary audio_unavailable_boundary = 16;
+  uint32 audio_unavailable_code = 17;
 }
 
 message WorkerHealth {
@@ -182,6 +201,11 @@ message PrepareSession {
   uint32 initial_bitrate_kbps = 9;
   uint32 maximum_bitrate_kbps = 10;
   string display_device_name = 11;
+  WorkerAudioCodec audio_codec = 12;
+  uint32 audio_sample_rate_hz = 13;
+  uint32 audio_channel_count = 14;
+  uint32 audio_frame_duration_us = 15;
+  uint32 audio_bitrate_bps = 16;
 }
 
 message PrepareBenchmark {

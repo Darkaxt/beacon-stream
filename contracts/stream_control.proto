@@ -18,6 +18,11 @@ enum DynamicRange {
   DYNAMIC_RANGE_HDR10 = 2;
 }
 
+enum AudioCodec {
+  AUDIO_CODEC_UNSPECIFIED = 0;
+  AUDIO_CODEC_OPUS = 1;
+}
+
 enum SessionState {
   SESSION_STATE_UNSPECIFIED = 0;
   SESSION_STATE_AUTHENTICATING = 1;
@@ -96,6 +101,14 @@ message SelectedVideoMode {
   DynamicRange dynamic_range = 6;
 }
 
+message SelectedAudioMode {
+  AudioCodec codec = 1;
+  uint32 sample_rate_hz = 2;
+  uint32 channel_count = 3;
+  uint32 frame_duration_us = 4;
+  uint32 bitrate_bps = 5;
+}
+
 message PublicSessionEnvelope {
   uint32 protocol_version = 1;
   string server_address = 2;
@@ -105,6 +118,7 @@ message PublicSessionEnvelope {
   SelectedVideoMode selected_video = 6;
   uint64 plan_revision = 7;
   string plan_explanation = 8;
+  SelectedAudioMode selected_audio = 9;
 }
 
 message SessionStreamEnvelope {
@@ -140,6 +154,7 @@ message SessionAuthenticated {
 
 message StartSession {
   SelectedVideoMode selected_video = 1;
+  SelectedAudioMode selected_audio = 2;
 }
 
 message BenchmarkRoundPlan {

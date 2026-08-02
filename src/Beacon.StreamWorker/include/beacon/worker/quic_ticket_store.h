@@ -24,6 +24,7 @@ struct AuthorizedQuicTicket {
   std::uint64_t plan_revision{};
   std::uint64_t expires_at_unix_ms{};
   std::optional<stream::v1::SelectedVideoMode> selected_video;
+  std::optional<stream::v1::SelectedAudioMode> selected_audio;
   std::optional<stream::v1::StartBenchmark> benchmark_plan;
 };
 

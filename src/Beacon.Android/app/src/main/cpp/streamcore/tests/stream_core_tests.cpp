@@ -125,6 +125,11 @@ android_stream::ConnectionGrant grant() {
                   .fps_numerator = 60,
                   .fps_denominator = 1,
                   .dynamic_range = stream_v1::DYNAMIC_RANGE_SDR};
+  result.audio = {.codec = stream_v1::AUDIO_CODEC_OPUS,
+                  .sample_rate_hz = 48'000,
+                  .channel_count = 2,
+                  .frame_duration_us = 20'000,
+                  .bitrate_bps = 96'000};
   return result;
 }
 
@@ -331,6 +336,12 @@ void accepted_auth_starts_selected_video() {
   BEACON_TEST_REQUIRE(start.start_session().selected_video().width() == 1920);
   BEACON_TEST_REQUIRE(start.start_session().selected_video().height() == 1080);
   BEACON_TEST_REQUIRE(start.start_session().selected_video().frames_per_second_numerator() == 60);
+  BEACON_TEST_REQUIRE(start.start_session().selected_audio().codec() ==
+                      stream_v1::AUDIO_CODEC_OPUS);
+  BEACON_TEST_REQUIRE(start.start_session().selected_audio().sample_rate_hz() == 48'000);
+  BEACON_TEST_REQUIRE(start.start_session().selected_audio().channel_count() == 2);
+  BEACON_TEST_REQUIRE(start.start_session().selected_audio().frame_duration_us() == 20'000);
+  BEACON_TEST_REQUIRE(start.start_session().selected_audio().bitrate_bps() == 96'000);
 }
 
 void accepted_auth_starts_benchmark_without_starting_video() {

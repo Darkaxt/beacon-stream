@@ -68,6 +68,16 @@ stream_v1::SelectedVideoMode selected_video() {
   return video;
 }
 
+stream_v1::SelectedAudioMode selected_audio() {
+  stream_v1::SelectedAudioMode audio;
+  audio.set_codec(stream_v1::AUDIO_CODEC_OPUS);
+  audio.set_sample_rate_hz(48'000);
+  audio.set_channel_count(2);
+  audio.set_frame_duration_us(20'000);
+  audio.set_bitrate_bps(96'000);
+  return audio;
+}
+
 struct TestAuthorizedTicket {
   std::string raw_ticket;
   std::string client_id;
@@ -75,6 +85,7 @@ struct TestAuthorizedTicket {
   std::uint64_t plan_revision{};
   std::uint64_t expires_at_unix_ms{};
   std::optional<stream_v1::SelectedVideoMode> selected_video;
+  std::optional<stream_v1::SelectedAudioMode> selected_audio;
   std::optional<stream_v1::StartBenchmark> benchmark_plan;
 };
 
@@ -86,6 +97,7 @@ TestAuthorizedTicket grant(std::string_view raw_ticket) {
       .plan_revision = 8,
       .expires_at_unix_ms = 2'000,
       .selected_video = selected_video(),
+      .selected_audio = selected_audio(),
       .benchmark_plan = std::nullopt,
   };
   return ticket;
@@ -97,7 +109,9 @@ public:
   bool authorize(TestAuthorizedTicket ticket) {
     if (ticket.client_id.empty() || ticket.session_id.empty() ||
         ticket.plan_revision == 0 || ticket.expires_at_unix_ms == 0 ||
-        ticket.selected_video.has_value() == ticket.benchmark_plan.has_value()) {
+        (ticket.selected_video.has_value() && ticket.selected_audio.has_value()) ==
+            ticket.benchmark_plan.has_value() ||
+        ticket.selected_video.has_value() != ticket.selected_audio.has_value()) {
       return false;
     }
     const auto duplicate =
@@ -123,41 +137,48 @@ public:
       return {.result =
                   beacon::stream::StreamTicketAuthorizationResult::unknown,
               .selected_video = std::nullopt,
+              .selected_audio = std::nullopt,
               .benchmark_plan = std::nullopt};
     }
     if (found->consumed) {
       return {.result =
                   beacon::stream::StreamTicketAuthorizationResult::replayed,
               .selected_video = std::nullopt,
+              .selected_audio = std::nullopt,
               .benchmark_plan = std::nullopt};
     }
     if (found->ticket.client_id != client_id) {
       return {.result = beacon::stream::StreamTicketAuthorizationResult::
                             client_mismatch,
               .selected_video = std::nullopt,
+              .selected_audio = std::nullopt,
               .benchmark_plan = std::nullopt};
     }
     if (found->ticket.session_id != session_id) {
       return {.result = beacon::stream::StreamTicketAuthorizationResult::
                             session_mismatch,
               .selected_video = std::nullopt,
+              .selected_audio = std::nullopt,
               .benchmark_plan = std::nullopt};
     }
     if (found->ticket.plan_revision != plan_revision) {
       return {.result =
                   beacon::stream::StreamTicketAuthorizationResult::plan_mismatch,
               .selected_video = std::nullopt,
+              .selected_audio = std::nullopt,
               .benchmark_plan = std::nullopt};
     }
     if (now_unix_ms > found->ticket.expires_at_unix_ms) {
       return {.result =
                   beacon::stream::StreamTicketAuthorizationResult::expired,
               .selected_video = std::nullopt,
+              .selected_audio = std::nullopt,
               .benchmark_plan = std::nullopt};
     }
     found->consumed = true;
     return {.result = beacon::stream::StreamTicketAuthorizationResult::accepted,
             .selected_video = found->ticket.selected_video,
+            .selected_audio = found->ticket.selected_audio,
             .benchmark_plan = found->ticket.benchmark_plan};
   }
 
@@ -211,6 +232,7 @@ stream_v1::SessionStreamEnvelope start_session(std::uint64_t sequence) {
   video->set_frames_per_second_numerator(120);
   video->set_frames_per_second_denominator(1);
   video->set_dynamic_range(stream_v1::DYNAMIC_RANGE_SDR);
+  *message.mutable_start_session()->mutable_selected_audio() = selected_audio();
   return message;
 }
 
@@ -505,6 +527,39 @@ void start_session_must_match_every_authorized_video_field() {
   }
 }
 
+void start_session_must_match_every_authorized_audio_field() {
+  using Mutation = std::function<void(stream_v1::SelectedAudioMode&)>;
+  const std::vector<std::pair<std::string, Mutation>> mismatches{
+      {"codec", [](auto& audio) { audio.set_codec(stream_v1::AUDIO_CODEC_UNSPECIFIED); }},
+      {"sample-rate", [](auto& audio) { audio.set_sample_rate_hz(44'100); }},
+      {"channels", [](auto& audio) { audio.set_channel_count(1); }},
+      {"frame-duration", [](auto& audio) { audio.set_frame_duration_us(10'000); }},
+      {"bitrate", [](auto& audio) { audio.set_bitrate_bps(128'000); }},
+  };
+
+  for (const auto& [name, mutate] : mismatches) {
+    AuthorizedQuicTicketStore store;
+    const auto raw_ticket = "mismatched-audio-" + name;
+    BEACON_TEST_REQUIRE(store.authorize(grant(raw_ticket)));
+    QuicSessionProtocol protocol(store);
+    protocol.set_maximum_datagram_bytes(1232);
+    BEACON_TEST_REQUIRE(
+        protocol
+            .receive(QuicPeerStreamRole::session,
+                     frame(authenticate(raw_ticket)), 1'000)
+            .accepted_authentication.has_value());
+    auto start = start_session(2);
+    mutate(*start.mutable_start_session()->mutable_selected_audio());
+
+    const auto rejected = protocol.receive(
+        QuicPeerStreamRole::session, frame(start), 1'001);
+
+    BEACON_TEST_REQUIRE(protocol_failed(rejected));
+    BEACON_TEST_REQUIRE(
+        accepted_action<AcceptedStartSession>(rejected) == nullptr);
+  }
+}
+
 void stop_session_clears_active_state_before_another_idr_request() {
   AuthorizedQuicTicketStore store;
   BEACON_TEST_REQUIRE(store.authorize(grant("raw-ticket-stop")));
@@ -583,6 +638,7 @@ void benchmark_start_and_cancel_are_typed_for_the_authenticated_generation() {
   AuthorizedQuicTicketStore store;
   auto authorization = grant("benchmark-ticket");
   authorization.selected_video.reset();
+  authorization.selected_audio.reset();
   authorization.benchmark_plan = start_benchmark(2).start_benchmark();
   BEACON_TEST_REQUIRE(store.authorize(std::move(authorization)));
   QuicSessionProtocol protocol(store);
@@ -624,6 +680,7 @@ void benchmark_stop_is_a_terminal_session_action() {
   AuthorizedQuicTicketStore store;
   auto authorization = grant("benchmark-stop-ticket");
   authorization.selected_video.reset();
+  authorization.selected_audio.reset();
   authorization.benchmark_plan = start_benchmark(2).start_benchmark();
   BEACON_TEST_REQUIRE(store.authorize(std::move(authorization)));
   QuicSessionProtocol protocol(store);
@@ -651,6 +708,7 @@ void benchmark_start_must_match_the_worker_authorized_plan() {
   AuthorizedQuicTicketStore store;
   auto authorization = grant("modified-benchmark-ticket");
   authorization.selected_video.reset();
+  authorization.selected_audio.reset();
   authorization.benchmark_plan = start_benchmark(2).start_benchmark();
   BEACON_TEST_REQUIRE(store.authorize(std::move(authorization)));
   QuicSessionProtocol protocol(store);
@@ -838,6 +896,7 @@ int main() {
     idr_requests_require_an_active_media_session_and_typed_reason();
     start_session_is_typed_once_per_authenticated_generation();
     start_session_must_match_every_authorized_video_field();
+    start_session_must_match_every_authorized_audio_field();
     stop_session_clears_active_state_before_another_idr_request();
     coalesced_session_actions_preserve_protocol_order();
     benchmark_start_and_cancel_are_typed_for_the_authenticated_generation();

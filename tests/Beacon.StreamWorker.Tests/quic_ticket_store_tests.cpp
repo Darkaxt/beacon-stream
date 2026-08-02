@@ -30,6 +30,16 @@ stream_v1::SelectedVideoMode selected_video() {
   return video;
 }
 
+stream_v1::SelectedAudioMode selected_audio() {
+  stream_v1::SelectedAudioMode audio;
+  audio.set_codec(stream_v1::AUDIO_CODEC_OPUS);
+  audio.set_sample_rate_hz(48'000);
+  audio.set_channel_count(2);
+  audio.set_frame_duration_us(20'000);
+  audio.set_bitrate_bps(96'000);
+  return audio;
+}
+
 stream_v1::StartBenchmark benchmark_plan() {
   stream_v1::StartBenchmark benchmark;
   benchmark.set_run_id("11111111-1111-1111-1111-111111111111");
@@ -54,6 +64,7 @@ AuthorizedQuicTicket grant(std::string_view raw_ticket) {
       .expires_at_unix_ms = 2'000,
   };
   ticket.selected_video = selected_video();
+  ticket.selected_audio = selected_audio();
   return ticket;
 }
 
@@ -137,6 +148,7 @@ void tickets_authorize_exactly_one_prepared_operation() {
 
   auto missing_operation = grant("missing-operation");
   missing_operation.selected_video.reset();
+  missing_operation.selected_audio.reset();
   BEACON_TEST_REQUIRE(!store.authorize(std::move(missing_operation)));
 
   auto ambiguous_operation = grant("ambiguous-operation");
@@ -145,6 +157,7 @@ void tickets_authorize_exactly_one_prepared_operation() {
 
   auto benchmark_operation = grant("benchmark-operation");
   benchmark_operation.selected_video.reset();
+  benchmark_operation.selected_audio.reset();
   benchmark_operation.benchmark_plan = benchmark_plan();
   BEACON_TEST_REQUIRE(store.authorize(std::move(benchmark_operation)));
 }

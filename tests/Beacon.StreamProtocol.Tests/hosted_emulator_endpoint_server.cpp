@@ -54,10 +54,21 @@ v1::SelectedVideoMode fixed_video_mode() {
   return mode;
 }
 
+v1::SelectedAudioMode fixed_audio_mode() {
+  v1::SelectedAudioMode mode;
+  mode.set_codec(v1::AUDIO_CODEC_OPUS);
+  mode.set_sample_rate_hz(48'000);
+  mode.set_channel_count(2);
+  mode.set_frame_duration_us(20'000);
+  mode.set_bitrate_bps(96'000);
+  return mode;
+}
+
 StreamTicketAuthorization
 authorization_failure(StreamTicketAuthorizationResult result) {
   return {.result = result,
           .selected_video = std::nullopt,
+          .selected_audio = std::nullopt,
           .benchmark_plan = std::nullopt};
 }
 
@@ -103,6 +114,7 @@ StreamTicketAuthorization HostedEmulatorTicketAuthorizer::authorize(
   consumed_ = true;
   return {.result = StreamTicketAuthorizationResult::accepted,
           .selected_video = fixed_video_mode(),
+          .selected_audio = fixed_audio_mode(),
           .benchmark_plan = std::nullopt};
 }
 

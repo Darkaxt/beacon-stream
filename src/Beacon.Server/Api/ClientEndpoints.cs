@@ -1042,7 +1042,7 @@ public static class ClientEndpoints
             Ticket: ticket.Ticket,
             ExpiresAt: ticket.ExpiresAt,
             PlanRevision: plan.Revision,
-            PlanExplanation: $"{plan.Display.Reason} {plan.Stream.Reason}",
+            PlanExplanation: $"{plan.Display.Reason} {plan.Stream.Reason} {plan.Audio.Reason}",
             SessionId: plan.SessionId,
             Port: streamingSession.ActiveListenerPort!.Value,
             PublicKeyFingerprint: serverIdentity.PublicKeyFingerprint,
@@ -1052,7 +1052,13 @@ public static class ClientEndpoints
                 Height: plan.Stream.Height,
                 FramesPerSecondNumerator: plan.Stream.Fps,
                 FramesPerSecondDenominator: 1,
-                DynamicRange: plan.Display.HdrMode));
+                DynamicRange: plan.Display.HdrMode),
+            SelectedAudio: new SelectedAudioGrant(
+                Codec: plan.Audio.Codec,
+                SampleRateHz: plan.Audio.SampleRateHz,
+                ChannelCount: plan.Audio.ChannelCount,
+                FrameDurationUs: plan.Audio.FrameDurationUs,
+                BitrateBps: plan.Audio.BitrateBps));
 
     private static bool IsActiveRuntime(StreamingSessionState? session) =>
         session is not null
@@ -1069,7 +1075,8 @@ public static class ClientEndpoints
         string SessionId,
         int Port,
         string PublicKeyFingerprint,
-        SelectedVideoGrant SelectedVideo);
+        SelectedVideoGrant SelectedVideo,
+        SelectedAudioGrant SelectedAudio);
 
     private sealed record SelectedVideoGrant(
         string Codec,
@@ -1078,6 +1085,13 @@ public static class ClientEndpoints
         int FramesPerSecondNumerator,
         int FramesPerSecondDenominator,
         string DynamicRange);
+
+    private sealed record SelectedAudioGrant(
+        string Codec,
+        int SampleRateHz,
+        int ChannelCount,
+        int FrameDurationUs,
+        int BitrateBps);
 
     private static async Task<PlanResolutionResult> ResolvePlanAsync(
         string clientId,

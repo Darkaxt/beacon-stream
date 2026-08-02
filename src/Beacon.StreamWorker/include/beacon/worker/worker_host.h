@@ -72,6 +72,7 @@ class WorkerHost {
   bool shutdown_requested_{};
   std::string session_id_;
   std::optional<video::WorkerVideoPlan> prepared_video_plan_;
+  std::optional<stream::v1::SelectedAudioMode> prepared_audio_plan_;
   stream::v1::StartBenchmark benchmark_plan_;
 };
 

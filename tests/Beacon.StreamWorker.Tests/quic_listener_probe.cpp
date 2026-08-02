@@ -507,6 +507,12 @@ struct ClientState {
     video->set_frames_per_second_numerator(120);
     video->set_frames_per_second_denominator(1);
     video->set_dynamic_range(stream_v1::DYNAMIC_RANGE_SDR);
+    auto *audio = control.mutable_start_session()->mutable_selected_audio();
+    audio->set_codec(stream_v1::AUDIO_CODEC_OPUS);
+    audio->set_sample_rate_hz(48'000);
+    audio->set_channel_count(2);
+    audio->set_frame_duration_us(20'000);
+    audio->set_bitrate_bps(96'000);
 
     stream_v1::InputStreamEnvelope input;
     input.set_protocol_version(1);
@@ -1230,6 +1236,11 @@ int run_worker_process_probe(
     plan->set_frames_per_second_numerator(120);
     plan->set_frames_per_second_denominator(1);
     plan->set_dynamic_range(worker_v1::WORKER_DYNAMIC_RANGE_SDR);
+    plan->set_audio_codec(worker_v1::WORKER_AUDIO_CODEC_OPUS);
+    plan->set_audio_sample_rate_hz(48'000);
+    plan->set_audio_channel_count(2);
+    plan->set_audio_frame_duration_us(20'000);
+    plan->set_audio_bitrate_bps(96'000);
     plan->set_minimum_bitrate_kbps(8'000);
     plan->set_initial_bitrate_kbps(24'000);
     plan->set_maximum_bitrate_kbps(40'000);

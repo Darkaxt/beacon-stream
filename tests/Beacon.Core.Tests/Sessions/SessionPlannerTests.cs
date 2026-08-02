@@ -35,6 +35,31 @@ public sealed class SessionPlannerTests
         Assert.Equal("virtual-primary", plan.Display.Mode);
         Assert.Equal(120, plan.Stream.Fps);
         Assert.Equal("av1", plan.Stream.Codec);
+        Assert.Equal("opus", plan.Audio.Codec);
+        Assert.Equal(48_000, plan.Audio.SampleRateHz);
+        Assert.Equal(2, plan.Audio.ChannelCount);
+        Assert.Equal(20_000, plan.Audio.FrameDurationUs);
+        Assert.Equal(96_000, plan.Audio.BitrateBps);
+    }
+
+    [Fact]
+    public void UnsupportedAudioModeFailsBeforeLaunch()
+    {
+        ClientProfile profile = ClientProfile.CreateZFold7Default() with
+        {
+            Audio = new AudioPreferences("surround")
+        };
+
+        SessionPlanResult result = SessionPlanner.CreatePlan(
+            profile,
+            new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false),
+            CreateEvidence(),
+            Dispatch);
+
+        Assert.False(result.Success);
+        Assert.Null(result.Plan);
+        Assert.Contains("audio", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("stereo", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

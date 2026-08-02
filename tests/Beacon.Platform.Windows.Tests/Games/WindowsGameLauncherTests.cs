@@ -85,5 +85,6 @@ public sealed class WindowsGameLauncherTests
                 "adaptive",
                 "Test benchmark evidence.",
                 Guid.Parse("33acde60-b29f-4f03-b2b2-f51337bdb9a5"),
-                "test-benchmark-revision"));
+                "test-benchmark-revision"),
+            new PlannedAudio("opus", 48_000, 2, 20_000, 96_000, "R2 test audio."));
 }

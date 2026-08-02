@@ -84,6 +84,14 @@ struct SelectedVideo {
   stream::v1::DynamicRange dynamic_range{stream::v1::DYNAMIC_RANGE_UNSPECIFIED};
 };
 
+struct SelectedAudio {
+  stream::v1::AudioCodec codec{stream::v1::AUDIO_CODEC_UNSPECIFIED};
+  std::uint32_t sample_rate_hz{};
+  std::uint32_t channel_count{};
+  std::uint32_t frame_duration_us{};
+  std::uint32_t bitrate_bps{};
+};
+
 struct BenchmarkGrant {
   std::string run_id;
   std::array<std::byte, 16> run_token{};
@@ -104,6 +112,7 @@ struct ConnectionGrant {
   std::string plan_explanation;
   TicketSecret ticket;
   SelectedVideo video;
+  SelectedAudio audio;
   std::optional<BenchmarkGrant> benchmark;
 };
 

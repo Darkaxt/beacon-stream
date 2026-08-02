@@ -32,6 +32,7 @@ stream::StreamTicketAuthorization authorization_failure(
     stream::StreamTicketAuthorizationResult result) {
   return {.result = result,
           .selected_video = std::nullopt,
+          .selected_audio = std::nullopt,
           .benchmark_plan = std::nullopt};
 }
 
@@ -75,7 +76,9 @@ TicketHash hash_stream_ticket(std::span<const std::byte> ticket) {
 bool AuthorizedQuicTicketStore::authorize(AuthorizedQuicTicket ticket) {
   if (ticket.client_id.empty() || ticket.session_id.empty() ||
       ticket.plan_revision == 0 || ticket.expires_at_unix_ms == 0 ||
-      ticket.selected_video.has_value() == ticket.benchmark_plan.has_value()) {
+      (ticket.selected_video.has_value() && ticket.selected_audio.has_value()) ==
+          ticket.benchmark_plan.has_value() ||
+      ticket.selected_video.has_value() != ticket.selected_audio.has_value()) {
     return false;
   }
 
@@ -136,6 +139,7 @@ stream::StreamTicketAuthorization AuthorizedQuicTicketStore::authorize(
   found->consumed = true;
   return {.result = stream::StreamTicketAuthorizationResult::accepted,
           .selected_video = found->ticket.selected_video,
+          .selected_audio = found->ticket.selected_audio,
           .benchmark_plan = found->ticket.benchmark_plan};
 }
 

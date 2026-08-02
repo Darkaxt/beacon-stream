@@ -64,6 +64,25 @@ public sealed class ProtocolContractTests
     }
 
     [Fact]
+    public void SelectedAudioMode_RepresentsTheR2ProductionGrant()
+    {
+        var audio = new SelectedAudioMode
+        {
+            Codec = AudioCodec.Opus,
+            SampleRateHz = 48_000,
+            ChannelCount = 2,
+            FrameDurationUs = 20_000,
+            BitrateBps = 96_000,
+        };
+
+        Assert.Equal(1, (int)audio.Codec);
+        Assert.Equal(48_000u, audio.SampleRateHz);
+        Assert.Equal(2u, audio.ChannelCount);
+        Assert.Equal(20_000u, audio.FrameDurationUs);
+        Assert.Equal(96_000u, audio.BitrateBps);
+    }
+
+    [Fact]
     public void ProtocolVersion_RejectsUnsupportedVersions()
     {
         ProtocolVersion.EnsureSupported(ProtocolVersion.Current);
@@ -94,6 +113,14 @@ public sealed class ProtocolContractTests
                 FramesPerSecondDenominator = 1,
                 DynamicRange = DynamicRange.Sdr,
             },
+            SelectedAudio = new SelectedAudioMode
+            {
+                Codec = AudioCodec.Opus,
+                SampleRateHz = 48_000,
+                ChannelCount = 2,
+                FrameDurationUs = 20_000,
+                BitrateBps = 96_000,
+            },
             PlanRevision = 9,
             PlanExplanation = "Measured path supports this plan.",
         };
@@ -119,6 +146,7 @@ public sealed class ProtocolContractTests
             "stream_ticket",
             "pinned_server_fingerprint",
             "selected_video",
+            "selected_audio",
             "plan_revision",
             "plan_explanation",
         };

@@ -105,6 +105,15 @@ bool video_modes_equal(const stream_v1::SelectedVideoMode &left,
          left.dynamic_range() == right.dynamic_range();
 }
 
+bool audio_modes_equal(const stream_v1::SelectedAudioMode &left,
+                       const stream_v1::SelectedAudioMode &right) noexcept {
+  return left.codec() == right.codec() &&
+         left.sample_rate_hz() == right.sample_rate_hz() &&
+         left.channel_count() == right.channel_count() &&
+         left.frame_duration_us() == right.frame_duration_us() &&
+         left.bitrate_bps() == right.bitrate_bps();
+}
+
 } // namespace
 
 QuicPeerStreamRole classify_peer_stream(std::uint64_t stream_id) noexcept {
@@ -246,6 +255,7 @@ ServerSessionProtocol::receive(QuicPeerStreamRole role,
             authenticated_ = result->accepted();
             if (authenticated_) {
               authorized_video_plan_ = std::move(consumed.selected_video);
+              authorized_audio_plan_ = std::move(consumed.selected_audio);
               authorized_benchmark_plan_ = std::move(consumed.benchmark_plan);
               session_id_ = message.session_id();
               last_session_sequence_ = message.sequence();
@@ -273,10 +283,14 @@ ServerSessionProtocol::receive(QuicPeerStreamRole role,
                  body == stream_v1::SessionStreamEnvelope::kRequestIdr);
         if (valid && body == stream_v1::SessionStreamEnvelope::kStartSession) {
           valid = !started_ && authorized_video_plan_.has_value() &&
+                  authorized_audio_plan_.has_value() &&
                   !authorized_benchmark_plan_.has_value() &&
                   message.start_session().has_selected_video() &&
+                  message.start_session().has_selected_audio() &&
                   video_modes_equal(message.start_session().selected_video(),
-                                    *authorized_video_plan_);
+                                    *authorized_video_plan_) &&
+                  audio_modes_equal(message.start_session().selected_audio(),
+                                    *authorized_audio_plan_);
         } else if (valid &&
                    body == stream_v1::SessionStreamEnvelope::kStartBenchmark) {
           valid = !started_ && authorized_benchmark_plan_.has_value() &&
@@ -434,6 +448,7 @@ void ServerSessionProtocol::reset() noexcept {
   session_id_.clear();
   benchmark_run_id_.clear();
   authorized_video_plan_.reset();
+  authorized_audio_plan_.reset();
   authorized_benchmark_plan_.reset();
   maximum_datagram_bytes_ = 0;
   last_session_sequence_ = 0;
