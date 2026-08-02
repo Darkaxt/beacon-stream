@@ -27,6 +27,10 @@ R1 Integrated Streaming Proof, Checkpoint 3: production media start.
   intended virtual-primary/physical-extended topology before media start.
 - Locked-session display preparation now fails cleanly and releases its lease instead of falling
   back to `DisplaySwitch.exe`, which was proven to detach the physical panel.
+- Locked-session production evidence in
+  `.artifacts/gate5-production-5c4d63e57e1e4069802495aa25559207` confirms `/beacon` returns `503`
+  after the signed helper exits with code `5`; the final lease is released and Windows remains on
+  physical-only `DISPLAY5` at `2560x1600@240`, primary, without mirror mode.
 
 ## Current Validation Constraint
 
