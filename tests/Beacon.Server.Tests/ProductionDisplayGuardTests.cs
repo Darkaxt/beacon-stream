@@ -6,6 +6,23 @@ namespace Beacon.Server.Tests;
 public sealed class ProductionDisplayGuardTests
 {
     [Fact]
+    public void ProductionProcessTreeAllowsOnlyTheWindowsSystemConsoleHost()
+    {
+        const string worker = @"C:\repo\Beacon.StreamWorker.exe";
+        const string probe = @"C:\repo\Beacon.SessionProbe.exe";
+        string systemConsoleHost = Path.Combine(Environment.SystemDirectory, "conhost.exe");
+
+        Assert.True(Beacon.ProductionAcceptance.Program.IsExpectedProductionChildPath(
+            systemConsoleHost,
+            worker,
+            probe));
+        Assert.False(Beacon.ProductionAcceptance.Program.IsExpectedProductionChildPath(
+            @"C:\repo\conhost.exe",
+            worker,
+            probe));
+    }
+
+    [Fact]
     public void AcceptanceOptionsPreserveCallerOwnedRunIdentity()
     {
         AcceptanceOptions options = AcceptanceOptions.Parse(

@@ -792,14 +792,25 @@ internal static partial class Program
                 "The production Server did not own exactly one Beacon StreamWorker.");
             Require(childPaths.Count(path => SamePath(path, probePath)) == 1,
                 "The production Server did not own exactly one catalog probe.");
-            Require(childPaths.All(path => SamePath(path, workerPath) || SamePath(path, probePath)),
-                $"The production Server owned an undeclared child: {string.Join(", ", childPaths)}");
+            string[] unexpected = childPaths
+                .Where(path => !IsExpectedProductionChildPath(path, workerPath, probePath))
+                .ToArray();
+            Require(unexpected.Length == 0,
+                $"The production Server owned an undeclared child: {string.Join(", ", unexpected)}");
         }
         finally
         {
             foreach (Process child in children) child.Dispose();
         }
     }
+
+    internal static bool IsExpectedProductionChildPath(
+        string childPath,
+        string workerPath,
+        string probePath) =>
+        SamePath(childPath, workerPath) ||
+        SamePath(childPath, probePath) ||
+        SamePath(childPath, Path.Combine(Environment.SystemDirectory, "conhost.exe"));
 
     private static async Task<string> RunDisplayProbeAsync(
         string repositoryRoot,
