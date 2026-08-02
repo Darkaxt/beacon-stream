@@ -1066,12 +1066,19 @@ public sealed class WindowsDisplayApi :
                 $"Windows CCD access validation could not query the active topology: {diagnostic}");
         }
 
-        uint status = NativeMethods.SetDisplayConfig(
-            checked((uint)paths.Length),
-            paths,
-            checked((uint)modes.Length),
-            modes,
-            SuppliedDisplayConfigValidateFlags());
+        uint status = modes.Length == 0
+            ? NativeMethods.SetDisplayConfigWithoutModes(
+                checked((uint)paths.Length),
+                paths,
+                0,
+                IntPtr.Zero,
+                SuppliedDisplayConfigValidateFlags())
+            : NativeMethods.SetDisplayConfig(
+                checked((uint)paths.Length),
+                paths,
+                checked((uint)modes.Length),
+                modes,
+                SuppliedDisplayConfigValidateFlags());
         return status == ErrorSuccess
             ? DisplayApiResult.Ok()
             : DisplayApiResult.Fail(
