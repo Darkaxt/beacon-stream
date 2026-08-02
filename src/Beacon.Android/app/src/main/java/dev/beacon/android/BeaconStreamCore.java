@@ -360,6 +360,11 @@ public final class BeaconStreamCore implements AutoCloseable {
         return nativeTestParseGrant(grant);
     }
 
+    static int[] parseNativeControllerInputForTest(BeaconApiClient.InputBatch input) {
+        NativeLibrary.ensureLoaded();
+        return nativeTestParseControllerInput(input);
+    }
+
     static void emitNativeBenchmarkResultForTest(long handle, long generation) {
         NativeLibrary.ensureLoaded();
         nativeTestEmitBenchmarkResult(handle, generation);
@@ -811,5 +816,6 @@ public final class BeaconStreamCore implements AutoCloseable {
     private static native void nativeTestAwaitRegistryIdle();
     private static native int nativeTestRegistrySize();
     private static native boolean nativeTestParseGrant(BeaconStreamSession.NativeGrant grant);
+    private static native int[] nativeTestParseControllerInput(BeaconApiClient.InputBatch input);
     private static native void nativeTestEmitBenchmarkResult(long handle, long generation);
 }

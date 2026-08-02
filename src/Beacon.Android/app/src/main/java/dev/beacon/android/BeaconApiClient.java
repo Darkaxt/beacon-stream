@@ -378,6 +378,23 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             return batch;
         }
 
+        public static InputBatch controller(
+            int sequence,
+            int controllerIndex,
+            int controlId,
+            int value) {
+            if (sequence < 0 || controllerIndex != 0 || controlId < 1 || controlId > 21 ||
+                value < Short.MIN_VALUE || value > Short.MAX_VALUE) {
+                throw new IllegalArgumentException("Controller input values are invalid.");
+            }
+            InputBatch batch = new InputBatch();
+            batch.sequence = sequence;
+            batch.events = new InputEvent[] {
+                InputEvent.controller(controllerIndex, controlId, value)
+            };
+            return batch;
+        }
+
     }
 
     public static final class InputEvent {
@@ -389,6 +406,9 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         public Integer buttons;
         public String key;
         public String code;
+        public int controllerIndex;
+        public int controlId;
+        public int controllerValue;
 
         static InputEvent pointer(String action, int pointerId, double x, double y, Integer buttons) {
             InputEvent event = new InputEvent();
@@ -407,6 +427,16 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             event.action = action;
             event.key = key;
             event.code = code;
+            return event;
+        }
+
+        static InputEvent controller(int controllerIndex, int controlId, int value) {
+            InputEvent event = new InputEvent();
+            event.type = "controller";
+            event.action = "value";
+            event.controllerIndex = controllerIndex;
+            event.controlId = controlId;
+            event.controllerValue = value;
             return event;
         }
 

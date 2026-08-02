@@ -168,6 +168,20 @@ public final class BeaconApiClientTest {
     }
 
     @Test
+    public void controllerBatchCarriesStableControllerIdentityAndValue() {
+        BeaconApiClient.InputBatch batch =
+            BeaconApiClient.InputBatch.controller(7, 0, 12, 1);
+
+        assertEquals(7, batch.sequence);
+        assertEquals(1, batch.events.length);
+        assertEquals("controller", batch.events[0].type);
+        assertEquals("value", batch.events[0].action);
+        assertEquals(0, batch.events[0].controllerIndex);
+        assertEquals(12, batch.events[0].controlId);
+        assertEquals(1, batch.events[0].controllerValue);
+    }
+
+    @Test
     public void benchmarkCompletionPostsRawNetworkDecoderAndPowerFacts() throws Exception {
         FakeTransport transport = new FakeTransport();
         BeaconApiClient client = new BeaconApiClient(

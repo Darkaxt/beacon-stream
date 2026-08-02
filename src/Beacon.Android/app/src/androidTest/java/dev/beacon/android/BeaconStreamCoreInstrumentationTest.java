@@ -154,6 +154,17 @@ public final class BeaconStreamCoreInstrumentationTest {
     }
 
     @Test
+    public void testProductionJniMapsControllerInput() {
+        int[] values = BeaconStreamCore.parseNativeControllerInputForTest(
+            BeaconApiClient.InputBatch.controller(9, 0, 12, 1));
+
+        assertEquals(3, values.length);
+        assertEquals(0, values[0]);
+        assertEquals(12, values[1]);
+        assertEquals(1, values[2]);
+    }
+
+    @Test
     public void testProductionJniRejectsNullInputFieldsWithoutCheckJniAbort() {
         BeaconStreamCore core = new BeaconStreamCore(frame -> { });
         assertThrows(IllegalArgumentException.class, () -> core.sendInput(null));

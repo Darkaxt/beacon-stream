@@ -805,6 +805,22 @@ stream::v1::InputBatch parse_input(JNIEnv *environment, jobject input) {
       auto *released = result.add_events()->mutable_keyboard();
       released->set_scan_code(scan_code);
       released->set_pressed(false);
+    } else if (type == "controller" && action == "value") {
+      const jint controller_index = java_int(environment, event, "controllerIndex");
+      const jint control_id = java_int(environment, event, "controlId");
+      const jint value = java_int(environment, event, "controllerValue");
+      if (controller_index != 0 || control_id < 1 || control_id > 21 ||
+          value < std::numeric_limits<std::int16_t>::min() ||
+          value > std::numeric_limits<std::int16_t>::max()) {
+        environment->DeleteLocalRef(event);
+        environment->DeleteLocalRef(events);
+        throw std::invalid_argument("Beacon controller input values are invalid.");
+      }
+      auto *controller = result.add_events()->mutable_controller();
+      controller->set_controller_index(
+          static_cast<std::uint32_t>(controller_index));
+      controller->set_control_id(static_cast<std::uint32_t>(control_id));
+      controller->set_value(static_cast<std::int32_t>(value));
     } else if (type == "pointer" &&
                (action == "tap" || action == "down" ||
                 action == "up" || action == "move")) {
@@ -1233,6 +1249,46 @@ Java_dev_beacon_android_BeaconStreamCore_nativeTestParseGrant(
         "Unexpected Beacon native benchmark grant test failure.");
   }
   return JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_dev_beacon_android_BeaconStreamCore_nativeTestParseControllerInput(
+    JNIEnv *environment, jclass, jobject input) {
+  try {
+    auto batch = beacon::android::streamcore::parse_input(environment, input);
+    if (batch.events_size() != 1 || !batch.events(0).has_controller()) {
+      throw std::invalid_argument(
+          "Beacon native controller input test requires one controller event.");
+    }
+    const auto &controller = batch.events(0).controller();
+    const jint values[] = {
+        static_cast<jint>(controller.controller_index()),
+        static_cast<jint>(controller.control_id()),
+        static_cast<jint>(controller.value()),
+    };
+    jintArray result = environment->NewIntArray(3);
+    beacon::android::streamcore::check_jni(environment);
+    if (result == nullptr) {
+      throw std::bad_alloc{};
+    }
+    environment->SetIntArrayRegion(result, 0, 3, values);
+    beacon::android::streamcore::check_jni(environment);
+    return result;
+  } catch (const beacon::android::streamcore::PendingJniException &) {
+    return nullptr;
+  } catch (const std::bad_alloc &) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/OutOfMemoryError",
+        "Could not allocate Beacon native controller test result.");
+  } catch (const std::exception &error) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/IllegalArgumentException", error.what());
+  } catch (...) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/RuntimeException",
+        "Unexpected Beacon native controller input test failure.");
+  }
+  return nullptr;
 }
 
 extern "C" JNIEXPORT void JNICALL
