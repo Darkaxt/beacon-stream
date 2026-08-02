@@ -553,6 +553,52 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
     }
 
     [Fact]
+    public async Task LaunchGrantUsesCertifiedStreamModeWithoutChangingDisplayGeometry()
+    {
+        WebApplicationFactory<Program> streamingFactory = factory.WithWebHostBuilder(_ => { });
+        FakeStreamingBackend backend = Assert.IsType<FakeStreamingBackend>(
+            streamingFactory.Services.GetRequiredService<IStreamingBackend>());
+        backend.ActiveListenerPort = 51235;
+        HttpClient client = streamingFactory.CreateClient();
+        await client.PostAsJsonAsync("/clients/z-fold-7/capabilities", new
+        {
+            av1 = false,
+            hevc = false,
+            h264 = true,
+            hdr10 = false,
+            virtualDisplayHdrSupported = false,
+            maxFps = 60,
+            currentScreenMode = "1280x720@60"
+        });
+        await CompleteBenchmarkAsync(
+            client,
+            "z-fold-7",
+            codec: "h264",
+            fps: 60,
+            throughputMbps: 100,
+            rttMs: 8,
+            width: 1280,
+            height: 720);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
+        {
+            gameId = "steam-shortcut:3767414131"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement selectedVideo = document.RootElement.GetProperty("connection").GetProperty("selectedVideo");
+        Assert.Equal(1280, selectedVideo.GetProperty("width").GetInt32());
+        Assert.Equal(720, selectedVideo.GetProperty("height").GetInt32());
+        SessionPlan savedPlan = Assert.IsType<SessionPlan>(
+            streamingFactory.Services.GetRequiredService<InMemorySessionStore>().Get("z-fold-7"));
+        Assert.Equal(2560, savedPlan.Display.Width);
+        Assert.Equal(1600, savedPlan.Display.Height);
+        Assert.Equal(1280, savedPlan.Stream.Width);
+        Assert.Equal(720, savedPlan.Stream.Height);
+    }
+
+    [Fact]
     public async Task LaunchRecordsServerOwnedSessionState()
     {
         var launcher = new FakeGameLauncher { NextProcessId = 4321 };
@@ -2279,7 +2325,9 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         string codec,
         int fps,
         double throughputMbps,
-        double rttMs)
+        double rttMs,
+        int width = 2560,
+        int height = 1600)
     {
         object fingerprints = new
         {
@@ -2300,7 +2348,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
                 deviceCapabilityRevision = "test-capabilities",
                 androidVersion = "16",
                 apkVersion = "test",
-                displayModeInventoryRevision = "2560x1600-120",
+                displayModeInventoryRevision = $"{width}x{height}-{fps}",
                 codecInventoryRevision = codec
             }
         };
@@ -2321,7 +2369,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
                     .Select(sequence => new { sequence, payloadBytes, rttMs, jitterMs = 1.0, received = true, throughputMbps, reorderDistance = 0 }),
                 decoderSamples = new[]
                 {
-                    new { codec, profile = "main", bitDepth = 8, width = 2560, height = 1600, targetFps = fps, configured = true, sustainedFps = fps, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0 }
+                    new { codec, profile = "main", bitDepth = 8, width, height, targetFps = fps, configured = true, sustainedFps = fps, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0 }
                 },
                 powerSamples = new[]
                 {

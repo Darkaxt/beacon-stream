@@ -16,6 +16,8 @@ public sealed record PlannedDisplay(
 
 public sealed record PlannedStream(
     string Codec,
+    int Width,
+    int Height,
     int Fps,
     int InitialBitrateMbps,
     string Transport,

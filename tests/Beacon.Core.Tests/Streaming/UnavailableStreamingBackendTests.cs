@@ -54,6 +54,8 @@ public sealed class UnavailableStreamingBackendTests
             "HDR unavailable during the recovery fixture."),
         Stream: new PlannedStream(
             "h264",
+            2560,
+            1600,
             120,
             65,
             "beacon",

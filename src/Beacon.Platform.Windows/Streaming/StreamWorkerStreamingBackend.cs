@@ -1088,6 +1088,10 @@ public sealed class StreamWorkerStreamingBackend :
         {
             return "Beacon StreamWorker currently supports SDR only.";
         }
+        if (plan.Stream.Width <= 0 || plan.Stream.Height <= 0)
+        {
+            return "Beacon StreamWorker requires a positive benchmark-certified stream mode.";
+        }
         return null;
     }
 
@@ -1116,8 +1120,8 @@ public sealed class StreamWorkerStreamingBackend :
                 DisplayTarget = plan.Display.DisplayId,
                 DisplayDeviceName = displayDeviceName,
                 VideoCodec = WorkerVideoCodec.H264,
-                Width = checked((uint)plan.Display.Width),
-                Height = checked((uint)plan.Display.Height),
+                Width = checked((uint)plan.Stream.Width),
+                Height = checked((uint)plan.Stream.Height),
                 FramesPerSecondNumerator = checked((uint)plan.Stream.Fps),
                 FramesPerSecondDenominator = 1,
                 DynamicRange = WorkerDynamicRange.Sdr,

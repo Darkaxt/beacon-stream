@@ -1042,8 +1042,8 @@ public static class ClientEndpoints
             PublicKeyFingerprint: serverIdentity.PublicKeyFingerprint,
             SelectedVideo: new SelectedVideoGrant(
                 Codec: plan.Stream.Codec,
-                Width: plan.Display.Width,
-                Height: plan.Display.Height,
+                Width: plan.Stream.Width,
+                Height: plan.Stream.Height,
                 FramesPerSecondNumerator: plan.Stream.Fps,
                 FramesPerSecondDenominator: 1,
                 DynamicRange: plan.Display.HdrMode));

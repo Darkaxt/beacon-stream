@@ -334,8 +334,8 @@ public sealed class StreamWorkerStreamingBackendTests
         Assert.Equal("Z Fold 7", host.Commands[0].SessionId);
         Assert.Equal("virtual-z-fold-7", prepare.DisplayTarget);
         Assert.Equal(@"\\.\DISPLAY7", prepare.DisplayDeviceName);
-        Assert.Equal(2560u, prepare.Width);
-        Assert.Equal(1600u, prepare.Height);
+        Assert.Equal(1280u, prepare.Width);
+        Assert.Equal(720u, prepare.Height);
         Assert.Equal(120u, prepare.FramesPerSecondNumerator);
         Assert.Equal(WorkerVideoCodec.H264, prepare.VideoCodec);
         Assert.Equal(WorkerDynamicRange.Sdr, prepare.DynamicRange);
@@ -808,6 +808,8 @@ public sealed class StreamWorkerStreamingBackendTests
             "test"),
         new PlannedStream(
             "h264",
+            1280,
+            720,
             120,
             45,
             "beacon-quic",

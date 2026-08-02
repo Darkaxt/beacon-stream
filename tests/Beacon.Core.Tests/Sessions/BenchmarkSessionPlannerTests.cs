@@ -46,6 +46,8 @@ public sealed class BenchmarkSessionPlannerTests
         SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
         Assert.Equal(2560, plan.Display.Width);
         Assert.Equal(1600, plan.Display.Height);
+        Assert.Equal(2560, plan.Stream.Width);
+        Assert.Equal(1600, plan.Stream.Height);
         Assert.Equal(120, plan.Display.RefreshHz);
         Assert.Equal("h264", plan.Stream.Codec);
         Assert.Equal(60, plan.Stream.Fps);
@@ -122,7 +124,7 @@ public sealed class BenchmarkSessionPlannerTests
     }
 
     [Fact]
-    public void DisplayDimensionsNeverExceedCertifiedMode()
+    public void DisplayDimensionsRemainClientOwnedWhenCertifiedStreamModeIsSmaller()
     {
         BenchmarkPlanEvidence evidence = CreatePlanEvidence("h264", 60, 35) with
         {
@@ -140,8 +142,11 @@ public sealed class BenchmarkSessionPlannerTests
             Dispatch);
 
         SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
-        Assert.Equal(1920, plan.Display.Width);
-        Assert.Equal(1080, plan.Display.Height);
+        Assert.Equal(2560, plan.Display.Width);
+        Assert.Equal(1600, plan.Display.Height);
+        Assert.Equal(1920, plan.Stream.Width);
+        Assert.Equal(1080, plan.Stream.Height);
+        Assert.Contains("certified benchmark mode 1920x1080", plan.Stream.Reason, StringComparison.Ordinal);
     }
 
     [Fact]

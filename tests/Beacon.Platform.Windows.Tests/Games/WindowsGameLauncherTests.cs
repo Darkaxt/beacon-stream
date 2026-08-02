@@ -77,6 +77,8 @@ public sealed class WindowsGameLauncherTests
             new PlannedDisplay("client-z-fold-7", 2560, 1600, 120, "virtual-primary", HdrPreference.Prefer, false, "sdr", "HDR unavailable."),
             new PlannedStream(
                 "av1",
+                2560,
+                1600,
                 120,
                 65,
                 "lan-direct",

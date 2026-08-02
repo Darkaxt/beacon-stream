@@ -119,17 +119,15 @@ public static class SessionPlanner
 
         bool hdrEnabled = profile.Display.HdrPreference != HdrPreference.Off && hdrBlocker is null;
         string hdrReason = CreateHdrReason(profile.Display.HdrPreference, hdrEnabled, hdrBlocker);
-        int width = Math.Min(profile.Display.PreferredWidth, selection.CertifiedWidth);
-        int height = Math.Min(profile.Display.PreferredHeight, selection.CertifiedHeight);
-        string dimensionReason = width != profile.Display.PreferredWidth || height != profile.Display.PreferredHeight
-            ? $"Display dimensions were limited to the certified benchmark mode {width}x{height}."
-            : "Display dimensions are within the certified benchmark mode.";
-        string displayReason = $"{CreateDisplayModeReason(profile.Display.Mode)} {dimensionReason} {hdrReason}";
+        string displayReason =
+            $"{CreateDisplayModeReason(profile.Display.Mode)} " +
+            $"Display geometry {profile.Display.PreferredWidth}x{profile.Display.PreferredHeight} " +
+            $"comes from registered client policy. {hdrReason}";
 
         var display = new PlannedDisplay(
             DisplayId: DisplayLease.CreateDisplayId(profile.ClientId),
-            Width: width,
-            Height: height,
+            Width: profile.Display.PreferredWidth,
+            Height: profile.Display.PreferredHeight,
             RefreshHz: profile.Display.PreferredRefreshHz,
             Mode: profile.Display.Mode,
             HdrPreference: profile.Display.HdrPreference,
@@ -139,11 +137,15 @@ public static class SessionPlanner
 
         var stream = new PlannedStream(
             Codec: selection.Codec,
+            Width: selection.CertifiedWidth,
+            Height: selection.CertifiedHeight,
             Fps: selection.Fps,
             InitialBitrateMbps: selection.InitialBitrateMbps,
             Transport: selection.Transport,
             CongestionPolicy: selection.CongestionPolicy,
-            Reason: selection.Reason,
+            Reason:
+                $"{selection.Reason} Stream output uses certified benchmark mode " +
+                $"{selection.CertifiedWidth}x{selection.CertifiedHeight}.",
             BenchmarkRunId: selection.BenchmarkRunId,
             BenchmarkEvidenceRevision: selection.BenchmarkEvidenceRevision)
         {
@@ -249,6 +251,8 @@ public static class SessionPlanner
             writer.Write(display.HdrEnabled);
             writer.Write(display.HdrMode);
             writer.Write(stream.Codec);
+            writer.Write(stream.Width);
+            writer.Write(stream.Height);
             writer.Write(stream.Fps);
             writer.Write(stream.InitialBitrateMbps);
             writer.Write(stream.Transport);

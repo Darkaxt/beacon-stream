@@ -174,6 +174,8 @@ public sealed class FakeStreamingBackendTests
                 "HDR disabled because virtual display does not report HDR capability."),
             Stream: new PlannedStream(
                 "av1",
+                2560,
+                1600,
                 120,
                 65,
                 "beacon",
