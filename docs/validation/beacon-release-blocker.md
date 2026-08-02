@@ -10,21 +10,21 @@ session-owned input, reconnect, explicit quit, and verified physical-display res
 ## Last Verified Checkpoint
 
 - The current worktree passes `dotnet format --verify-no-changes`, a warning-as-error solution build,
-  and the complete affected suites: 166 Core, 259 Windows Platform, and 186 Server tests.
-- Every validation command ended by invoking `restore-physical` and proving physical `DISPLAY1` at
+  and the complete affected suites: 166 Core, 259 Windows Platform, and 187 Server tests.
+- Every validation command ended by invoking `restore-physical` and proving the physical panel at
   `2560x1600@240`, primary, with mirror mode disabled, no virtual output, zero HostAgent leases, and
   no active lease heartbeat.
-- Retained prepared evidence in
-  `.artifacts/gate5-production-a528253ef29a42e3b9f7969ae8e78613/prepared-snapshot.json` proves
-  physical `DISPLAY1` remained primary at `2560x1600@240` while the per-client virtual display was
-  extended at `2560x1600@120` before launch.
-- The interrupted production run reached authenticated H.264 SDR media at `1280x720@60`, changing
-  frames, and emulator `RenderedFrame` feedback. Those later observations were visible in the live
-  runner output but were not fully retained after the laptop was hibernated, so they are diagnostic
-  evidence and not an accepted R1 proof.
-- That run reported input forwarding, but the SessionProbe never recorded F12. Helium was the
-  unrelated foreground window, proving that foreground-global `SendInput` dispatch did not establish
-  a session-owned target.
+- The guarded production evidence in
+  `.artifacts/gate5-production-fdff6aec04c8479a9d4c3efeff3b083c/` retains the prepared snapshot,
+  failure snapshot, Android logcat, SessionProbe evidence, capture probes, Server output, and display
+  guard log.
+- The prepared snapshot proves the physical panel remained primary at `2560x1600@240` while the
+  per-client virtual display was extended at `2560x1600@120`. The active failure snapshot proves the
+  same virtual display became primary while the physical panel remained extended and mirror mode
+  remained disabled.
+- The run proves authenticated H.264 SDR media at `1280x720@60`, 12 moving-frame variants, repeated
+  emulator `RenderedFrame` feedback, `input-forwarded`, and F12 recorded by the launched SessionProbe.
+  Session-owned input targeting therefore closes the prior wrong-foreground failure.
 - Input dispatch now resolves the requested session ownership record, verifies the client and display,
   selects only a visible owned window intersecting the leased display, activates that exact window,
   and refuses injection when activation cannot be verified. Diagnostics expose a sanitized result code
@@ -36,12 +36,17 @@ session-owned input, reconnect, explicit quit, and verified physical-display res
   zero leases, and no heartbeat.
 - The PowerShell entry point independently repeats and verifies physical restoration in `finally`.
   Cleanup is idempotent when the guard already removed the exact per-run lease.
+- The run stopped on a planning-model contradiction: the prepared virtual display correctly remained
+  `2560x1600`, but the immutable display plan had been independently clamped to the benchmark-certified
+  `1280x720` stream mode. Display geometry and stream output are now separate plan fields. Worker
+  preparation and the APK connection grant consume the certified stream dimensions, while display
+  lifecycle continues to consume the registered per-client geometry.
 
 ## Current Validation Constraint
 
-R1 is still incomplete. The interrupted run did not produce retained F12, reconnect, quit, restored
-snapshot, and cleanup evidence in one transaction. No topology-changing production run may be used as
-evidence unless all of the following are true:
+R1 is still incomplete. The latest guarded run proved media and session-owned input, but validation
+stopped before reconnect, explicit quit, the owned process exit, and the restored snapshot. No
+topology-changing production run may be used as evidence unless all of the following are true:
 
 1. The owning Windows session is unlocked and its input desktop is `Default`.
 2. The runner emits `BEACON_GATE5_DISPLAY_GUARD_ARMED` before `prepared-display`.
@@ -49,17 +54,18 @@ evidence unless all of the following are true:
    `BEACON_MANDATORY_POST_TEST_RESTORE_END ... topology=True agent=True`.
 4. An independent final status proves physical primary, mirror mode disabled, and zero leases.
 
-The previous runner could wait indefinitely for F12 while the virtual display remained primary. The
-new guard deliberately does not use a cancellation timeout. Process exit, completion, resume, unlock,
+The guard deliberately does not use a cancellation timeout. Process exit, completion, resume, unlock,
 or the emergency hotkey are explicit recovery gates, and failed cleanup is retried only on a monitoring
-heartbeat until the final state is proven.
+heartbeat until the final state is proven. The latest failure exercised normal completion-triggered
+guard recovery and independently verified physical-only topology and zero leases.
 
 ## Hypothesis Under Test
 
-The media path is far enough along to expose the first input event. The next falsifiable question is
-whether activating the verified session-owned window before `SendInput` produces retained F12 evidence
-without targeting an unrelated local window. Independently, every outcome must prove that the external
-guard and outer runner restore physical-only topology.
+Media, APK rendering, and session-owned F12 input are now retained facts. The next falsifiable question
+is whether separating client display geometry from benchmark-certified stream output lets the same
+transaction pass active-state validation and continue through fresh-ticket reconnect, explicit quit,
+owned-process exit, and restored-state verification. Independently, every outcome must continue to
+prove that the external guard and outer runner restore physical-only topology.
 
 ## Next Falsifiable Proof
 
