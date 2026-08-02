@@ -26,8 +26,12 @@ internal static partial class Program
     {
         try
         {
+            if (args.Length > 0 && string.Equals(args[0], "display-guard", StringComparison.Ordinal))
+            {
+                return await ProductionDisplayGuardCli.RunAsync(args[1..]).ConfigureAwait(false);
+            }
             AcceptanceOptions options = AcceptanceOptions.Parse(args);
-            await RunAsync(options).ConfigureAwait(false);
+            await ProductionDisplayGuardHost.RunAsync(options, RunAsync).ConfigureAwait(false);
             return 0;
         }
         catch (Exception error)
@@ -75,13 +79,11 @@ internal static partial class Program
             Require(File.Exists(path), $"Required Gate 5 artifact is unavailable: {path}");
         }
 
-        string runId = Guid.NewGuid().ToString("N");
+        string runId = options.RunId;
         string clientId = $"gate5-emulator-{runId}";
         string gameId = $"gate5-session-probe-{runId}";
         string ownedRoot = Path.Combine(Path.GetTempPath(), $"beacon-gate5-{runId}");
-        string evidenceDirectory = string.IsNullOrWhiteSpace(options.EvidenceDirectory)
-            ? Path.Combine(repositoryRoot, ".artifacts", $"gate5-production-{runId}")
-            : Path.GetFullPath(options.EvidenceDirectory);
+        string evidenceDirectory = options.ResolveEvidenceDirectory();
         string probeEvidencePath = Path.Combine(ownedRoot, "session-probe.jsonl");
         string identityPath = Path.Combine(ownedRoot, "server-identity.pfx");
         string credentialPath = Path.Combine(ownedRoot, "credentials.json");
@@ -267,8 +269,6 @@ internal static partial class Program
                 Path.Combine(evidenceDirectory, "instrumentation.log"),
                 string.Join(Environment.NewLine, benchmarkOutput, preflightOutput, firstOutput, reconnectOutput));
             success = true;
-            Console.WriteLine("BEACON_GATE5_PRODUCTION_SESSION_OK");
-            Console.WriteLine($"BEACON_GATE5_EVIDENCE {evidenceDirectory}");
         }
         finally
         {
@@ -1161,13 +1161,19 @@ internal static partial class Program
 
 internal sealed record AcceptanceOptions(
     string RepositoryRoot,
+    string RunId,
     string Serial,
     string? EvidenceDirectory,
     string? BeforeConnectSignalPath)
 {
+    public string ResolveEvidenceDirectory() => string.IsNullOrWhiteSpace(EvidenceDirectory)
+        ? Path.Combine(Path.GetFullPath(RepositoryRoot), ".artifacts", $"gate5-production-{RunId}")
+        : Path.GetFullPath(EvidenceDirectory);
+
     public static AcceptanceOptions Parse(IReadOnlyList<string> args)
     {
         string? repositoryRoot = null;
+        string runId = Guid.NewGuid().ToString("N");
         string serial = "emulator-5554";
         string? evidenceDirectory = null;
         string? beforeConnectSignalPath = null;
@@ -1187,6 +1193,9 @@ internal sealed record AcceptanceOptions(
                 case "--serial":
                     serial = ReadValue();
                     break;
+                case "--run-id":
+                    runId = ReadValue();
+                    break;
                 case "--evidence-directory":
                     evidenceDirectory = ReadValue();
                     break;
@@ -1201,8 +1210,14 @@ internal sealed record AcceptanceOptions(
         {
             throw new ArgumentException("--repository-root is required.");
         }
+        if (!Guid.TryParseExact(runId, "N", out Guid parsedRunId) ||
+            !string.Equals(runId, parsedRunId.ToString("N"), StringComparison.Ordinal))
+        {
+            throw new ArgumentException("--run-id must be a lowercase 32-character GUID.");
+        }
         return new AcceptanceOptions(
             repositoryRoot,
+            runId,
             serial,
             evidenceDirectory,
             beforeConnectSignalPath);
