@@ -657,6 +657,9 @@ public sealed class AdminApiTests(BeaconServerTestFactory factory) : IClassFixtu
 
     private sealed class RecordingClientInputSessionLifecycle : IClientInputSessionLifecycle
     {
+        public Task PrepareSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
         public List<string> SessionIds { get; } = [];
 
         public Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken)

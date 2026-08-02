@@ -421,6 +421,7 @@ public final class BeaconStreamCoreInstrumentationTest {
             evidence.recordGrant(model.latestStream());
             videoRuntime.awaitChangingFrames();
             model.sendInput(BeaconApiClient.InputBatch.keyboardPress(1, "F12", "F12"));
+            model.sendInput(BeaconApiClient.InputBatch.controller(2, 0, 12, 1));
             evidence.recordInputSent();
             evidence.persistForReconnect();
             model.disconnect();
@@ -439,6 +440,7 @@ public final class BeaconStreamCoreInstrumentationTest {
         emit("BEACON_GATE5_MOVING_FRAMES " + videoRuntime.frameCount());
         emit("BEACON_GATE5_PIXEL_VARIANTS " + videoRuntime.pixelVariantCount());
         emit("BEACON_GATE5_INPUT_SENT F12");
+        emit("BEACON_GATE5_CONTROLLER_SENT A_DOWN");
         emit("BEACON_GATE5_ACTIVE_DISCONNECT");
     }
 
@@ -469,6 +471,7 @@ public final class BeaconStreamCoreInstrumentationTest {
             evidence.recordGrant(model.latestStream());
             videoRuntime.awaitChangingFrames();
             evidence.assertFreshReconnect(previous);
+            model.sendInput(BeaconApiClient.InputBatch.controller(3, 0, 12, 0));
             model.quit(new BeaconApiClient.QuitState(false));
             assertSuccessful(model);
         } finally {
@@ -488,6 +491,7 @@ public final class BeaconStreamCoreInstrumentationTest {
         assertTrue(evidence.transportClosed());
         evidence.clearPersistedReconnect();
         emit("BEACON_GATE5_RECONNECT_FRESH_TICKET");
+        emit("BEACON_GATE5_CONTROLLER_SENT A_UP");
         emit("BEACON_GATE5_QUIT_INACTIVE");
     }
 

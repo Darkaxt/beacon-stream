@@ -232,10 +232,18 @@ internal static partial class Program
                 probeEvidence.Input,
                 probeExit,
                 "F12 input evidence").ConfigureAwait(false);
+            JsonElement controller = await AwaitUnlessProcessExitedAsync(
+                probeEvidence.Controller,
+                probeExit,
+                "Xbox A input evidence").ConfigureAwait(false);
             Require(RequiredString(input.GetProperty("details"), "key") == "F12",
                 "The catalog application did not receive F12.");
+            Require(RequiredString(controller.GetProperty("details"), "button") == "A"
+                    && controller.GetProperty("details").GetProperty("pressed").GetBoolean(),
+                "The catalog application did not receive the Xbox A transition.");
             RequireMarker(firstOutput, "BEACON_GATE5_MOVING_FRAMES 12");
             RequireMarker(firstOutput, "BEACON_GATE5_INPUT_SENT F12");
+            RequireMarker(firstOutput, "BEACON_GATE5_CONTROLLER_SENT A_DOWN");
             RequireMarker(firstOutput, "BEACON_GATE5_ACTIVE_DISCONNECT");
 
             JsonElement activeSnapshot = await GetJsonAsync(http, "/admin/snapshot")
@@ -254,6 +262,7 @@ internal static partial class Program
                 fingerprint,
                 gameId).ConfigureAwait(false);
             RequireMarker(reconnectOutput, "BEACON_GATE5_RECONNECT_FRESH_TICKET");
+            RequireMarker(reconnectOutput, "BEACON_GATE5_CONTROLLER_SENT A_UP");
             RequireMarker(reconnectOutput, "BEACON_GATE5_QUIT_INACTIVE");
             await AwaitWithHeartbeatAsync(probeExit, "owned catalog process exit")
                 .ConfigureAwait(false);
@@ -710,6 +719,15 @@ internal static partial class Program
         Require(snapshot.GetProperty("diagnostics").EnumerateArray().Any(value =>
             RequiredString(value, "operation") == "input.forwarded"),
             "The authenticated input stream did not publish forwarding evidence.");
+        JsonElement inputHealth = snapshot.GetProperty("inputHealth");
+        Require(inputHealth.GetProperty("supportedEventTypes").EnumerateArray().Any(value =>
+            string.Equals(value.GetString(), "controller", StringComparison.Ordinal)),
+            "The production input backend does not report controller support.");
+        Require(
+            RequiredString(inputHealth, "diagnostic").Contains(
+                "activeControllerSessions=1",
+                StringComparison.Ordinal),
+            "The production input backend did not retain one session controller.");
     }
 
     private static void ValidatePreparedDisplaySnapshot(JsonElement snapshot, string displayId)
@@ -749,6 +767,11 @@ internal static partial class Program
         Require(snapshot.GetProperty("diagnostics").EnumerateArray().Any(value =>
             RequiredString(value, "operation") == "lease.cleanup.removed"),
             "The inactive AND no-owned-work cleanup decision was not journaled.");
+        Require(
+            RequiredString(snapshot.GetProperty("inputHealth"), "diagnostic").Contains(
+                "activeControllerSessions=0",
+                StringComparison.Ordinal),
+            "The session controller remained after inactive quit.");
     }
 
     internal static bool HasActiveStreamingRuntime(JsonElement snapshot, string clientId) =>
@@ -1248,6 +1271,7 @@ internal sealed class ProbeEvidenceWatcher : IDisposable
     private readonly Lock gate = new();
     private readonly TaskCompletionSource<JsonElement> shown = NewSource();
     private readonly TaskCompletionSource<JsonElement> input = NewSource();
+    private readonly TaskCompletionSource<JsonElement> controller = NewSource();
 
     public ProbeEvidenceWatcher(string path, string runId)
     {
@@ -1267,6 +1291,7 @@ internal sealed class ProbeEvidenceWatcher : IDisposable
 
     public Task<JsonElement> Shown => shown.Task;
     public Task<JsonElement> Input => input.Task;
+    public Task<JsonElement> Controller => controller.Task;
 
     public void Dispose()
     {
@@ -1305,6 +1330,7 @@ internal sealed class ProbeEvidenceWatcher : IDisposable
                     string? eventName = record.GetProperty("eventName").GetString();
                     if (eventName == "shown") shown.TrySetResult(record.Clone());
                     if (eventName == "input") input.TrySetResult(record.Clone());
+                    if (eventName == "controller") controller.TrySetResult(record.Clone());
                 }
                 catch (JsonException)
                 {

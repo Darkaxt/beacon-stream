@@ -440,6 +440,7 @@ public static class ClientEndpoints
             InMemorySessionStore sessions,
             GameLibraryService games,
             StreamSessionLaunchService launchService,
+            IClientInputSessionLifecycle inputLifecycle,
             BeaconServerIdentity serverIdentity,
             CancellationToken cancellationToken) =>
         {
@@ -473,6 +474,9 @@ public static class ClientEndpoints
                     launch.Error,
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
+            await inputLifecycle.PrepareSessionAsync(
+                resolved.Plan.SessionId,
+                cancellationToken);
             sessions.Save(resolved.Plan);
 
             return Results.Ok(new

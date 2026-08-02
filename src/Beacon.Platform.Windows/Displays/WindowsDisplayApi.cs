@@ -26,6 +26,7 @@ public sealed class WindowsDisplayApi :
     private const uint OpenExisting = 3;
     private const uint FileAttributeNormal = 0x00000080;
     private const uint ErrorSuccess = 0;
+    private const uint ErrorNotSupported = 50;
     private const uint QdcAllPaths = 0x00000001;
     private const uint QdcOnlyActivePaths = 0x00000002;
     private const uint QdcVirtualModeAware = 0x00000010;
@@ -1416,19 +1417,35 @@ public sealed class WindowsDisplayApi :
         paths = [];
         modes = [];
 
+        uint effectiveFlags = flags;
         uint pathCount = 0;
         uint modeCount = 0;
-        uint sizeStatus = NativeMethods.GetDisplayConfigBufferSizes(flags, ref pathCount, ref modeCount);
+        uint sizeStatus = NativeMethods.GetDisplayConfigBufferSizes(
+            effectiveFlags,
+            ref pathCount,
+            ref modeCount);
+        bool filteredAllPaths = false;
+        if (sizeStatus == ErrorNotSupported && (flags & QdcOnlyActivePaths) != 0)
+        {
+            effectiveFlags = (flags & ~QdcOnlyActivePaths) | QdcAllPaths;
+            pathCount = 0;
+            modeCount = 0;
+            sizeStatus = NativeMethods.GetDisplayConfigBufferSizes(
+                effectiveFlags,
+                ref pathCount,
+                ref modeCount);
+            filteredAllPaths = sizeStatus == ErrorSuccess;
+        }
         if (sizeStatus != ErrorSuccess)
         {
-            diagnostic = $"GetDisplayConfigBufferSizes failed. Flags=0x{flags:X} Result={sizeStatus}.";
+            diagnostic = $"GetDisplayConfigBufferSizes failed. Flags=0x{effectiveFlags:X} Result={sizeStatus}.";
             return false;
         }
 
         paths = new DisplayConfigPathInfo[pathCount];
         modes = new DisplayConfigModeInfo[modeCount];
         uint queryStatus = NativeMethods.QueryDisplayConfig(
-            flags,
+            effectiveFlags,
             ref pathCount,
             paths,
             ref modeCount,
@@ -1436,13 +1453,21 @@ public sealed class WindowsDisplayApi :
             IntPtr.Zero);
         if (queryStatus != ErrorSuccess)
         {
-            diagnostic = $"QueryDisplayConfig failed. Flags=0x{flags:X} Result={queryStatus}.";
+            diagnostic = $"QueryDisplayConfig failed. Flags=0x{effectiveFlags:X} Result={queryStatus}.";
             return false;
         }
 
         Array.Resize(ref paths, checked((int)pathCount));
         Array.Resize(ref modes, checked((int)modeCount));
-        diagnostic = "DisplayConfig queried.";
+        if (filteredAllPaths)
+        {
+            paths = paths
+                .Where(path => (path.Flags & DisplayConfigPathActive) != 0)
+                .ToArray();
+        }
+        diagnostic = filteredAllPaths
+            ? "DisplayConfig queried through the all-path fallback and filtered to active paths."
+            : "DisplayConfig queried.";
         return true;
     }
 

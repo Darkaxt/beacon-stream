@@ -123,13 +123,16 @@ public sealed class WindowsClientInputSink :
         new(
             Ready: true,
             Backend: "windows-sendinput",
-            Diagnostic: "Session-targeted Windows input sink ready; Xbox controller targets are created lazily through ViGEm.",
+            Diagnostic: $"Session-targeted Windows input sink ready; activeControllerSessions={controllerApi.ActiveSessionCount}.",
             SupportedEventTypes: EventTypes,
             SupportedPointerActions: PointerActions,
             SupportedKeyboardActions: KeyboardActions);
 
     public Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken) =>
         controllerApi.ReleaseSessionAsync(sessionId, cancellationToken);
+
+    public Task PrepareSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+        controllerApi.PrepareSessionAsync(sessionId, cancellationToken);
 
     private static bool TryAppendCommands(
         ClientInputEvent inputEvent,
@@ -405,6 +408,11 @@ public sealed class WindowsClientInputSink :
     private sealed class TestWindowsVirtualControllerApi : IWindowsVirtualControllerApi
     {
         public static TestWindowsVirtualControllerApi Instance { get; } = new();
+
+        public int ActiveSessionCount => 0;
+
+        public Task PrepareSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
 
         public Task<WindowsVirtualControllerResult> ApplyAsync(
             string sessionId,

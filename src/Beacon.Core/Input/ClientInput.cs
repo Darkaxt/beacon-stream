@@ -181,5 +181,7 @@ public interface IClientInputHealthProvider
 
 public interface IClientInputSessionLifecycle
 {
+    Task PrepareSessionAsync(string sessionId, CancellationToken cancellationToken);
+
     Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken);
 }

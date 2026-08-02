@@ -28,4 +28,7 @@ public sealed class NoOpClientInputSink :
 
     public Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken) =>
         Task.CompletedTask;
+
+    public Task PrepareSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
 }

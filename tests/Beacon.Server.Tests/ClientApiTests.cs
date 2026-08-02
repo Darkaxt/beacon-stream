@@ -1187,6 +1187,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             new { });
 
         Assert.Equal(HttpStatusCode.OK, launch.StatusCode);
+        Assert.Equal([sessionId], lifecycle.PreparedSessionIds);
         Assert.Equal(HttpStatusCode.OK, disconnect.StatusCode);
         Assert.Empty(lifecycle.SessionIds);
 
@@ -2884,7 +2885,15 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
 
     private sealed class RecordingClientInputSessionLifecycle : IClientInputSessionLifecycle
     {
+        public List<string> PreparedSessionIds { get; } = [];
+
         public List<string> SessionIds { get; } = [];
+
+        public Task PrepareSessionAsync(string sessionId, CancellationToken cancellationToken)
+        {
+            PreparedSessionIds.Add(sessionId);
+            return Task.CompletedTask;
+        }
 
         public Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken)
         {

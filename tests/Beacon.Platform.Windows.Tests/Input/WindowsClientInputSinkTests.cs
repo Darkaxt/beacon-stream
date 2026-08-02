@@ -579,6 +579,11 @@ public sealed class WindowsClientInputSinkTests
     private sealed class FakeWindowsVirtualControllerApi(List<string> operations)
         : IWindowsVirtualControllerApi
     {
+        public int ActiveSessionCount => Batches.Count == 0 ? 0 : 1;
+
+        public Task PrepareSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
         public WindowsVirtualControllerResult Result { get; init; } =
             WindowsVirtualControllerResult.Ok();
 

@@ -35,6 +35,7 @@ public sealed class WindowsVirtualControllerTests
             ],
             target.Changes);
         Assert.Equal(1, target.SubmitCount);
+        Assert.Equal(1, api.ActiveSessionCount);
     }
 
     [Fact]
@@ -101,6 +102,33 @@ public sealed class WindowsVirtualControllerTests
 
         Assert.Equal(1, target.DisconnectCount);
         Assert.Equal(1, target.DisposeCount);
+        Assert.Equal(0, api.ActiveSessionCount);
+    }
+
+    [Fact]
+    public async Task ReleasedSessionRejectsLateInputUntilNewLaunchPreparesIt()
+    {
+        var factory = new FakeXboxControllerFactory();
+        await using var api = new WindowsVirtualControllerApi(factory);
+        ClientControllerInput input = new(0, 12, 1);
+        await api.ApplyAsync("session-1", [input], CancellationToken.None);
+        await api.ReleaseSessionAsync("session-1", CancellationToken.None);
+
+        WindowsVirtualControllerResult late = await api.ApplyAsync(
+            "session-1", [input], CancellationToken.None);
+
+        Assert.False(late.Success);
+        Assert.Equal("controller-session-ended", late.ResultCode);
+        Assert.Single(factory.Targets);
+        Assert.Equal(0, api.ActiveSessionCount);
+
+        await api.PrepareSessionAsync("session-1", CancellationToken.None);
+        WindowsVirtualControllerResult relaunched = await api.ApplyAsync(
+            "session-1", [input], CancellationToken.None);
+
+        Assert.True(relaunched.Success, relaunched.Error);
+        Assert.Equal(2, factory.Targets.Count);
+        Assert.Equal(1, api.ActiveSessionCount);
     }
 
     [Fact]

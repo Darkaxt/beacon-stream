@@ -19,6 +19,10 @@ public sealed record WindowsVirtualControllerResult(
 
 public interface IWindowsVirtualControllerApi : IAsyncDisposable
 {
+    int ActiveSessionCount { get; }
+
+    Task PrepareSessionAsync(string sessionId, CancellationToken cancellationToken);
+
     Task<WindowsVirtualControllerResult> ApplyAsync(
         string sessionId,
         IReadOnlyList<ClientControllerInput> events,
@@ -33,6 +37,8 @@ public sealed class WindowsVirtualControllerApi : IWindowsVirtualControllerApi
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<string, IWindowsXboxController> targets =
         new(StringComparer.Ordinal);
+    private readonly HashSet<string> endedSessions = new(StringComparer.Ordinal);
+    private int activeTargetCount;
     private bool disposed;
 
     public WindowsVirtualControllerApi()
@@ -43,6 +49,25 @@ public sealed class WindowsVirtualControllerApi : IWindowsVirtualControllerApi
     internal WindowsVirtualControllerApi(IWindowsXboxControllerFactory factory)
     {
         this.factory = factory;
+    }
+
+    public int ActiveSessionCount => Volatile.Read(ref activeTargetCount);
+
+    public async Task PrepareSessionAsync(
+        string sessionId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId)) return;
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            endedSessions.Remove(sessionId);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     public async Task<WindowsVirtualControllerResult> ApplyAsync(
@@ -63,11 +88,18 @@ public sealed class WindowsVirtualControllerApi : IWindowsVirtualControllerApi
         try
         {
             ObjectDisposedException.ThrowIf(disposed, this);
+            if (endedSessions.Contains(sessionId))
+            {
+                return WindowsVirtualControllerResult.Fail(
+                    "Controller input arrived after the Beacon session ended.",
+                    "controller-session-ended");
+            }
             if (!targets.TryGetValue(sessionId, out target))
             {
                 target = factory.Create();
                 target.Connect();
                 targets.Add(sessionId, target);
+                Interlocked.Increment(ref activeTargetCount);
             }
 
             foreach (ClientControllerInput input in events)
@@ -85,7 +117,10 @@ public sealed class WindowsVirtualControllerApi : IWindowsVirtualControllerApi
         {
             if (target is not null)
             {
-                targets.Remove(sessionId);
+                if (targets.Remove(sessionId))
+                {
+                    Interlocked.Decrement(ref activeTargetCount);
+                }
                 TryDispose(target);
             }
             return WindowsVirtualControllerResult.Fail(
@@ -106,8 +141,10 @@ public sealed class WindowsVirtualControllerApi : IWindowsVirtualControllerApi
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            endedSessions.Add(sessionId);
             if (targets.Remove(sessionId, out IWindowsXboxController? target))
             {
+                Interlocked.Decrement(ref activeTargetCount);
                 TryDispose(target);
             }
         }
@@ -129,6 +166,8 @@ public sealed class WindowsVirtualControllerApi : IWindowsVirtualControllerApi
                 TryDispose(target);
             }
             targets.Clear();
+            endedSessions.Clear();
+            Interlocked.Exchange(ref activeTargetCount, 0);
             factory.Dispose();
         }
         finally

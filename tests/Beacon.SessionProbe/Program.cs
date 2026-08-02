@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 
 namespace Beacon.SessionProbe;
@@ -27,7 +28,10 @@ internal sealed class ProbeForm : Form
 {
     private readonly ProbeEvidence evidence;
     private readonly System.Windows.Forms.Timer animation;
+    private readonly bool[] controllerAPressed = new bool[4];
     private int frame;
+    private bool controllerStateInitialized;
+    private bool controllerEvidenceWritten;
 
     public ProbeForm(ProbeEvidence evidence)
     {
@@ -43,6 +47,7 @@ internal sealed class ProbeForm : Form
         animation.Tick += (_, _) =>
         {
             frame++;
+            PollControllers();
             Invalidate();
         };
         Shown += OnShown;
@@ -108,6 +113,53 @@ internal sealed class ProbeForm : Form
     {
         animation.Stop();
         evidence.Write("closed", new { reason = eventArgs.CloseReason.ToString(), frame });
+    }
+
+    private void PollControllers()
+    {
+        for (uint userIndex = 0; userIndex < controllerAPressed.Length; userIndex++)
+        {
+            bool pressed = XInputGetState(userIndex, out XInputState state) == 0
+                && (state.Gamepad.Buttons & XInputGamepadA) != 0;
+            if (controllerStateInitialized && pressed && !controllerAPressed[userIndex]
+                && !controllerEvidenceWritten)
+            {
+                controllerEvidenceWritten = true;
+                evidence.Write("controller", new
+                {
+                    userIndex,
+                    button = "A",
+                    pressed = true,
+                    frame,
+                });
+            }
+            controllerAPressed[userIndex] = pressed;
+        }
+        controllerStateInitialized = true;
+    }
+
+    private const ushort XInputGamepadA = 0x1000;
+
+    [DllImport("xinput1_4.dll")]
+    private static extern uint XInputGetState(uint userIndex, out XInputState state);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XInputState
+    {
+        public uint PacketNumber;
+        public XInputGamepad Gamepad;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct XInputGamepad
+    {
+        public ushort Buttons;
+        public byte LeftTrigger;
+        public byte RightTrigger;
+        public short LeftThumbX;
+        public short LeftThumbY;
+        public short RightThumbX;
+        public short RightThumbY;
     }
 }
 
