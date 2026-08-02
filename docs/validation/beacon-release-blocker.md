@@ -4,90 +4,88 @@ Updated: 2026-08-02
 
 ## Active Outcome
 
-R1 Integrated Streaming Proof, Checkpoint 3: production media start.
+R1 Integrated Streaming Proof: complete one guarded emulator-backed production transaction through
+session-owned input, reconnect, explicit quit, and verified physical-display restoration.
 
 ## Last Verified Checkpoint
 
-- Deployed code checkpoint `d8c3bf7a3e31afb91b340d4551c29ba332616f53` is recorded on the synchronized
-  `codex/beacon-production-benchmarks` branch.
-- Installed HostAgent source is `d8c3bf7a3e31afb91b340d4551c29ba332616f53`, supervised by the elevated
-  `Beacon Stream Host Agent` scheduled task.
-- HostAgent reports SudoVDA protocol `0.2.1`, zero retained leases, and healthy final-session
-  closure before the run.
-- Windows begins and ends with only physical `DISPLAY5` at `2560x1600@240`, primary, with no mirror
-  mode.
-- `emulator-5554` is online and Android reports boot complete.
-- The retained prepared snapshot proves the fixture virtual display is extended at
-  `2560x1600@120`, the physical panel remains primary, and the logical lease maps to
-  `DISPLAY34` before launch.
-- The production transaction passes prepared-display validation, emulator validation, TCP
-  preflight, certified benchmark, session preflight, application launch, virtual-primary
-  activation, transport authentication, and Android MediaCodec startup.
-- The post-primary heartbeat gate is deployed. It requires consecutive observations of the
-  intended virtual-primary/physical-extended topology before media start.
-- Locked-session display preparation now fails cleanly and releases its lease instead of falling
-  back to `DisplaySwitch.exe`, which was proven to detach the physical panel.
-- Locked-session production evidence in
-  `.artifacts/gate5-production-5c4d63e57e1e4069802495aa25559207` confirms `/beacon` returns `503`
-  after the signed helper exits with code `5`; the final lease is released and Windows remains on
-  physical-only `DISPLAY5` at `2560x1600@240`, primary, without mirror mode.
+- The current worktree passes `dotnet format --verify-no-changes`, a warning-as-error solution build,
+  and the complete affected suites: 166 Core, 259 Windows Platform, and 186 Server tests.
+- Every validation command ended by invoking `restore-physical` and proving physical `DISPLAY1` at
+  `2560x1600@240`, primary, with mirror mode disabled, no virtual output, zero HostAgent leases, and
+  no active lease heartbeat.
+- Retained prepared evidence in
+  `.artifacts/gate5-production-a528253ef29a42e3b9f7969ae8e78613/prepared-snapshot.json` proves
+  physical `DISPLAY1` remained primary at `2560x1600@240` while the per-client virtual display was
+  extended at `2560x1600@120` before launch.
+- The interrupted production run reached authenticated H.264 SDR media at `1280x720@60`, changing
+  frames, and emulator `RenderedFrame` feedback. Those later observations were visible in the live
+  runner output but were not fully retained after the laptop was hibernated, so they are diagnostic
+  evidence and not an accepted R1 proof.
+- That run reported input forwarding, but the SessionProbe never recorded F12. Helium was the
+  unrelated foreground window, proving that foreground-global `SendInput` dispatch did not establish
+  a session-owned target.
+- Input dispatch now resolves the requested session ownership record, verifies the client and display,
+  selects only a visible owned window intersecting the leased display, activates that exact window,
+  and refuses injection when activation cannot be verified. Diagnostics expose a sanitized result code
+  without leaking raw worker errors.
+- Gate 5 now arms a separate display-guard process before display preparation. The guard monitors
+  acceptance exit, successful completion, power resume, Windows-session unlock, and the global
+  `Ctrl+Alt+Shift+F12` emergency action. Recovery forces the internal output, performs exact lease
+  cleanup, and does not exit until it proves physical-only primary topology, mirror mode disabled,
+  zero leases, and no heartbeat.
+- The PowerShell entry point independently repeats and verifies physical restoration in `finally`.
+  Cleanup is idempotent when the guard already removed the exact per-run lease.
 
 ## Current Validation Constraint
 
-The post-primary heartbeat gate still needs one unlocked production rerun. The active Windows input
-desktop is currently `Screen-saver`; Windows rejects the signed helper's direct `SetDisplayConfig`
-request in that state, and Beacon intentionally refuses the unsafe `DisplaySwitch.exe` fallback.
-Production validation therefore requires the owning Windows session on the `Default` desktop.
+R1 is still incomplete. The interrupted run did not produce retained F12, reconnect, quit, restored
+snapshot, and cleanup evidence in one transaction. No topology-changing production run may be used as
+evidence unless all of the following are true:
 
-The last unlocked production acceptance run failed when the authenticated APK asked StreamWorker to
-start the first production video generation. `GraphicsCaptureItem::TryCreateFromDisplayId` rejected
-the newly primary virtual output with Win32 `0x80070490` (`ERROR_NOT_FOUND`) at failure stage
-`capture-item-display-id-create`, so StreamWorker closed the authenticated transport before media
-evidence was produced.
+1. The owning Windows session is unlocked and its input desktop is `Default`.
+2. The runner emits `BEACON_GATE5_DISPLAY_GUARD_ARMED` before `prepared-display`.
+3. The run ends with both guard recovery evidence and
+   `BEACON_MANDATORY_POST_TEST_RESTORE_END ... topology=True agent=True`.
+4. An independent final status proves physical primary, mirror mode disabled, and zero leases.
 
-Evidence:
-
-- `.artifacts/gate5-production-87104c13eaae4417953cd141bf2e3aef/prepared-snapshot.json`
-- `.artifacts/gate5-production-87104c13eaae4417953cd141bf2e3aef/failure-snapshot.json`
-- `.artifacts/gate5-production-87104c13eaae4417953cd141bf2e3aef/server-output.log`
-- `.artifacts/gate5-production-87104c13eaae4417953cd141bf2e3aef/session-probe.jsonl`
-- `.artifacts/gate5-production-87104c13eaae4417953cd141bf2e3aef/display-id-capture-probe.log`
-- `.artifacts/gate5-production-87104c13eaae4417953cd141bf2e3aef/wgc-capture-probe.log`
-
-The retained snapshot and session probe show `DISPLAY34` active at `2560x1600@120`, primary,
-extended with physical `DISPLAY5`, and hosting the launched probe window. A standalone DisplayId
-probe and the full WGC capture probe both succeed against the same `DISPLAY34` after failure; the
-WGC probe receives changing `2560x1600` frames through the NVIDIA capture device. Cleanup restores
-physical-only topology and releases the lease successfully.
-
-The first unattended post-update validation attempts failed earlier during display preparation
-because the active Windows desktop was `Screen-saver`. `GetShellWindow()` is desktop-local, so the
-elevated HostAgent could not resolve Explorer even though the owning user's Explorer process was
-healthy in the same interactive session. The topology helper now falls back to the oldest Explorer
-process in the current session, never selects an Explorer process from another session, and binds
-the de-elevated helper explicitly to `winsta0\default` instead of inheriting the locked
-`Screen-saver` desktop. Windows still rejects the helper's direct `SetDisplayConfig` request while
-the session is locked. R1 therefore fails display preparation and cleans up in that state; it does
-not fall back to `DisplaySwitch.exe`, which was proven to detach the physical panel while reporting
-success. Emulator-backed production validation requires the owning Windows session on `Default`.
+The previous runner could wait indefinitely for F12 while the virtual display remained primary. The
+new guard deliberately does not use a cancellation timeout. Process exit, completion, resume, unlock,
+or the emergency hotkey are explicit recovery gates, and failed cleanup is retried only on a monitoring
+heartbeat until the final state is proven.
 
 ## Hypothesis Under Test
 
-Before `d8c3bf7`, `WindowsDisplayApi.SetVirtualPrimaryAsync` returned immediately after requesting
-the primary transition, while virtual-display creation already waited for consecutive
-post-heartbeat topology evidence. The deployed gate tests whether that timing gap let the APK
-authenticate and request media while Windows Graphics Capture still rejected the newly-primary
-DisplayId, even though CCD and EnumDisplayDevices already reported the intended topology.
+The media path is far enough along to expose the first input event. The next falsifiable question is
+whether activating the verified session-owned window before `SendInput` produces retained F12 evidence
+without targeting an unrelated local window. Independently, every outcome must prove that the external
+guard and outer runner restore physical-only topology.
 
 ## Next Falsifiable Proof
 
-Unlock the owning Windows session, confirm its input desktop is `Default`, rerun the same production
-command, and inspect whether WGC opens without the transient DisplayId failure:
+With the owning Windows session on the `Default` desktop, run only the guarded production entry point:
 
 ```powershell
 .\scripts\test-gate5-production-session.ps1 -Serial emulator-5554 -ArtifactsReady
 ```
 
-- Success advances R1 to encoded-frame and APK-render evidence.
-- The same `0x80070490` failure after the gate proves topology convergence is insufficient and
-  authorizes a target-specific StreamWorker capture-readiness handshake before ticket issuance.
+Success requires one retained evidence set proving:
+
+- prepared per-client extended display;
+- authenticated media with moving frames and APK render feedback;
+- F12 received by the launched SessionProbe;
+- active disconnect without premature session destruction;
+- fresh-ticket reconnect and explicit quit;
+- owned application exit;
+- restored server snapshot and released virtual display;
+- guard recovery plus outer physical-only, mirror-off, zero-lease verification.
+
+Any earlier failure becomes the next R1 blocker. It does not authorize product-feature work.
+
+## Prior Evidence
+
+- `.artifacts/gate5-production-87104c13eaae4417953cd141bf2e3aef/` records the earlier transient
+  `GraphicsCaptureItem::TryCreateFromDisplayId` failure (`0x80070490`) after primary activation. A
+  standalone DisplayId probe and WGC probe subsequently succeeded against the same virtual output.
+- `.artifacts/gate5-production-5c4d63e57e1e4069802495aa25559207/` records locked-session display
+  preparation failing closed with HTTP 503 while cleanup retained physical-only topology.
