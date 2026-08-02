@@ -3,13 +3,31 @@ using Beacon.Platform.Windows.Displays;
 
 namespace Beacon.Platform.Windows.Input;
 
-public sealed class WindowsClientInputSink(
-    IWindowsDisplayApi displayApi,
-    IWindowsInputApi inputApi) : IClientInputSink, IClientInputHealthProvider
+public sealed class WindowsClientInputSink : IClientInputSink, IClientInputHealthProvider
 {
     private static readonly string[] EventTypes = ["pointer", "keyboard"];
     private static readonly string[] PointerActions = ["move", "down", "up", "tap"];
     private static readonly string[] KeyboardActions = ["down", "up", "press"];
+    private readonly IWindowsDisplayApi displayApi;
+    private readonly IWindowsInputApi inputApi;
+    private readonly IWindowsSessionInputTargetActivator targetActivator;
+
+    public WindowsClientInputSink(
+        IWindowsDisplayApi displayApi,
+        IWindowsInputApi inputApi,
+        IWindowsSessionInputTargetActivator targetActivator)
+    {
+        this.displayApi = displayApi;
+        this.inputApi = inputApi;
+        this.targetActivator = targetActivator;
+    }
+
+    internal WindowsClientInputSink(
+        IWindowsDisplayApi displayApi,
+        IWindowsInputApi inputApi)
+        : this(displayApi, inputApi, TestSessionInputTargetActivator.Instance)
+    {
+    }
 
     public async Task<ClientInputResult> ForwardAsync(ClientInputBatch batch, CancellationToken cancellationToken)
     {
@@ -21,13 +39,15 @@ public sealed class WindowsClientInputSink(
         if (display is null)
         {
             return ClientInputResult.Fail(
-                $"Display '{batch.DisplayId}' is not active; refusing to send input for session '{batch.SessionId}'.");
+                $"Display '{batch.DisplayId}' is not active; refusing to send input for session '{batch.SessionId}'.",
+                "display-inactive");
         }
 
         if (display.Width <= 0 || display.Height <= 0)
         {
             return ClientInputResult.Fail(
-                $"Display '{batch.DisplayId}' has invalid geometry {display.Width}x{display.Height}; refusing to send input.");
+                $"Display '{batch.DisplayId}' has invalid geometry {display.Width}x{display.Height}; refusing to send input.",
+                "display-inactive");
         }
 
         List<WindowsInputCommand> commands = [];
@@ -35,21 +55,33 @@ public sealed class WindowsClientInputSink(
         {
             if (!TryAppendCommands(inputEvent, display, commands, out string? error))
             {
-                return ClientInputResult.Fail(error);
+                return ClientInputResult.Fail(error, "input-invalid");
             }
+        }
+
+        WindowsSessionInputTargetResult target = await targetActivator.ActivateAsync(
+            batch,
+            cancellationToken).ConfigureAwait(false);
+        if (!target.Success)
+        {
+            return ClientInputResult.Fail(
+                target.Error ?? "The session-owned Windows input target could not be activated.",
+                "session-target-activation-failed");
         }
 
         WindowsInputResult send = await inputApi.SendAsync(commands, cancellationToken);
         return send.Success
             ? ClientInputResult.Ok(batch.Events.Count)
-            : ClientInputResult.Fail(send.Error ?? "Windows input dispatch failed.");
+            : ClientInputResult.Fail(
+                send.Error ?? "Windows input dispatch failed.",
+                "sendinput-failed");
     }
 
     public ClientInputHealth GetHealth() =>
         new(
             Ready: true,
             Backend: "windows-sendinput",
-            Diagnostic: "Windows SendInput pointer and keyboard sink ready.",
+            Diagnostic: "Session-targeted Windows SendInput pointer and keyboard sink ready.",
             SupportedEventTypes: EventTypes,
             SupportedPointerActions: PointerActions,
             SupportedKeyboardActions: KeyboardActions);
@@ -311,5 +343,15 @@ public sealed class WindowsClientInputSink(
 
         error = $"Unsupported pointer button mask '{buttons}'.";
         return false;
+    }
+
+    private sealed class TestSessionInputTargetActivator : IWindowsSessionInputTargetActivator
+    {
+        public static TestSessionInputTargetActivator Instance { get; } = new();
+
+        public Task<WindowsSessionInputTargetResult> ActivateAsync(
+            ClientInputBatch batch,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(WindowsSessionInputTargetResult.Activated(0, 0));
     }
 }

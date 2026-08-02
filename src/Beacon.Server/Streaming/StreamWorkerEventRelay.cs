@@ -196,7 +196,8 @@ public sealed class StreamWorkerEventRelay(
                     input,
                     result.Success ? DiagnosticSeverity.Information : DiagnosticSeverity.Warning,
                     ("sequence", input.Sequence),
-                    ("eventCount", input.Events.Count));
+                    ("eventCount", input.Events.Count),
+                    ("resultCode", result.ResultCode));
                 break;
             case StreamWorkerFeedbackReceived feedback:
                 bool feedbackAccepted = runtimeEvents.IsCurrent(feedback);

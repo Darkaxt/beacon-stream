@@ -173,6 +173,7 @@ public sealed class StreamWorkerEventRelayTests
         Assert.Contains("platformStatusCode=2151743494", rendered, StringComparison.Ordinal);
         Assert.Contains("input.dispatch_failed", rendered, StringComparison.Ordinal);
         Assert.Contains("input.rejected", rendered, StringComparison.Ordinal);
+        Assert.Contains("resultCode=input-rejected", rendered, StringComparison.Ordinal);
         Assert.Equal(1, runtime.ExitCalls);
         Assert.Equal(3, sink.Batches.Count);
     }

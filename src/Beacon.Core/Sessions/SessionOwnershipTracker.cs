@@ -148,7 +148,11 @@ public sealed class SessionOwnershipTracker : ISessionOwnershipTracker
             activity.LaunchedProcessRunning,
             activity.ChildProcessRunning,
             activity.OwnedWindowRemaining,
-            reasons);
+            reasons)
+        {
+            DisplayId = record.Plan.Display.DisplayId,
+            OwnedProcessIds = activity.OwnedProcessIds,
+        };
     }
 
     private static IReadOnlyList<string> CreateReasons(SessionActivitySnapshot activity)

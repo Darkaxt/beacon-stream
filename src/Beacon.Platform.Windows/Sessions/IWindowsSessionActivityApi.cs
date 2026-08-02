@@ -12,6 +12,8 @@ public interface IWindowsSessionActivityApi
 
     IReadOnlyList<WindowsTopLevelWindow> EnumerateTopLevelWindows();
 
+    WindowsTopLevelWindowActivationResult ActivateTopLevelWindow(nint windowHandle);
+
     Task<bool> TerminateProcessAsync(int processId, CancellationToken cancellationToken);
 }
 
@@ -19,7 +21,17 @@ public sealed record WindowsTopLevelWindow(
     int ProcessId,
     string Title,
     WindowsRectangle Bounds,
-    bool IsVisible);
+    bool IsVisible)
+{
+    public nint Handle { get; init; }
+}
+
+public sealed record WindowsTopLevelWindowActivationResult(bool Success, string? Error)
+{
+    public static WindowsTopLevelWindowActivationResult Activated() => new(true, null);
+
+    public static WindowsTopLevelWindowActivationResult Fail(string error) => new(false, error);
+}
 
 public sealed record WindowsRectangle(int X, int Y, int Width, int Height)
 {

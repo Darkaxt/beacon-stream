@@ -16,6 +16,11 @@ internal sealed class FakeWindowsSessionActivityApi : IWindowsSessionActivityApi
 
     public List<int> TerminatedProcessIds { get; } = [];
 
+    public List<nint> ActivatedWindowHandles { get; } = [];
+
+    public WindowsTopLevelWindowActivationResult ActivationResult { get; set; } =
+        WindowsTopLevelWindowActivationResult.Activated();
+
     public HashSet<int> FailedTerminationProcessIds { get; } = [];
 
     public bool IsProcessRunning(int processId) =>
@@ -32,6 +37,12 @@ internal sealed class FakeWindowsSessionActivityApi : IWindowsSessionActivityApi
 
     public IReadOnlyList<WindowsTopLevelWindow> EnumerateTopLevelWindows() =>
         Windows;
+
+    public WindowsTopLevelWindowActivationResult ActivateTopLevelWindow(nint windowHandle)
+    {
+        ActivatedWindowHandles.Add(windowHandle);
+        return ActivationResult;
+    }
 
     public Task<bool> TerminateProcessAsync(int processId, CancellationToken cancellationToken)
     {

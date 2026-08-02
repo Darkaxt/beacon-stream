@@ -7,6 +7,7 @@ namespace Beacon.Platform.Windows.Sessions;
 public sealed class WindowsSessionActivityApi : IWindowsSessionActivityApi
 {
     private const int ProcessBasicInformation = 0;
+    private const int ShowWindowRestore = 9;
 
     public int CurrentProcessId => Environment.ProcessId;
 
@@ -74,12 +75,83 @@ public sealed class WindowsSessionActivityApi : IWindowsSessionActivityApi
                 checked((int)processId),
                 title,
                 new WindowsRectangle(rect.Left, rect.Top, rect.Right - rect.Left, rect.Bottom - rect.Top),
-                visible));
+                visible)
+            {
+                Handle = handle,
+            });
 
             return true;
         }, IntPtr.Zero);
 
         return windows;
+    }
+
+    public WindowsTopLevelWindowActivationResult ActivateTopLevelWindow(nint windowHandle)
+    {
+        IntPtr handle = windowHandle;
+        if (handle == IntPtr.Zero ||
+            !NativeMethods.IsWindow(handle) ||
+            !NativeMethods.IsWindowVisible(handle))
+        {
+            return WindowsTopLevelWindowActivationResult.Fail(
+                "The verified session-owned window is no longer active.");
+        }
+
+        IntPtr foreground = NativeMethods.GetForegroundWindow();
+        if (foreground == handle)
+        {
+            return WindowsTopLevelWindowActivationResult.Activated();
+        }
+
+        uint currentThread = NativeMethods.GetCurrentThreadId();
+        uint targetThread = NativeMethods.GetWindowThreadProcessId(handle, out _);
+        uint foregroundThread = foreground == IntPtr.Zero
+            ? 0
+            : NativeMethods.GetWindowThreadProcessId(foreground, out _);
+        _ = NativeMethods.PeekMessage(out _, IntPtr.Zero, 0, 0, 0);
+
+        bool foregroundAttached = false;
+        bool targetAttached = false;
+        try
+        {
+            if (foregroundThread != 0 && foregroundThread != currentThread)
+            {
+                foregroundAttached = NativeMethods.AttachThreadInput(
+                    currentThread,
+                    foregroundThread,
+                    attach: true);
+            }
+            if (targetThread != 0 && targetThread != currentThread && targetThread != foregroundThread)
+            {
+                targetAttached = NativeMethods.AttachThreadInput(
+                    currentThread,
+                    targetThread,
+                    attach: true);
+            }
+
+            if (NativeMethods.IsIconic(handle))
+            {
+                _ = NativeMethods.ShowWindow(handle, ShowWindowRestore);
+            }
+            _ = NativeMethods.BringWindowToTop(handle);
+            _ = NativeMethods.SetForegroundWindow(handle);
+            _ = NativeMethods.SetFocus(handle);
+            return NativeMethods.GetForegroundWindow() == handle
+                ? WindowsTopLevelWindowActivationResult.Activated()
+                : WindowsTopLevelWindowActivationResult.Fail(
+                    "Windows did not activate the verified session-owned window for input.");
+        }
+        finally
+        {
+            if (targetAttached)
+            {
+                _ = NativeMethods.AttachThreadInput(currentThread, targetThread, attach: false);
+            }
+            if (foregroundAttached)
+            {
+                _ = NativeMethods.AttachThreadInput(currentThread, foregroundThread, attach: false);
+            }
+        }
     }
 
     public async Task<bool> TerminateProcessAsync(
@@ -188,6 +260,25 @@ public sealed class WindowsSessionActivityApi : IWindowsSessionActivityApi
         public int Bottom;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeMessage
+    {
+        public IntPtr Window;
+        public uint Message;
+        public UIntPtr WParam;
+        public IntPtr LParam;
+        public uint Time;
+        public NativePoint Point;
+        public uint Private;
+    }
+
     private static partial class NativeMethods
     {
         public delegate bool EnumWindowsCallback(IntPtr handle, IntPtr parameter);
@@ -201,7 +292,49 @@ public sealed class WindowsSessionActivityApi : IWindowsSessionActivityApi
         public static extern bool IsWindowVisible(IntPtr handle);
 
         [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool IsWindow(IntPtr handle);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool IsIconic(IntPtr handle);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetForegroundWindow();
+
+        [DllImport("kernel32.dll")]
+        public static extern uint GetCurrentThreadId();
+
+        [DllImport("user32.dll")]
         public static extern uint GetWindowThreadProcessId(IntPtr handle, out uint processId);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool AttachThreadInput(uint attachThread, uint attachToThread, bool attach);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool BringWindowToTop(IntPtr handle);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetForegroundWindow(IntPtr handle);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr SetFocus(IntPtr handle);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ShowWindow(IntPtr handle, int command);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool PeekMessage(
+            out NativeMessage message,
+            IntPtr handle,
+            uint minimum,
+            uint maximum,
+            uint removeMessage);
 
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]

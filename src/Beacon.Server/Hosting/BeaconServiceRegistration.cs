@@ -156,6 +156,7 @@ public static class BeaconServiceRegistration
         services.AddSingleton<ISessionActivityInspector, WindowsSessionActivityInspector>();
         services.AddSingleton<ISessionOwnedWorkTerminator, WindowsSessionOwnedWorkTerminator>();
         services.AddSingleton<IWindowsInputApi, WindowsInputApi>();
+        services.AddSingleton<IWindowsSessionInputTargetActivator, WindowsSessionInputTargetActivator>();
         services.AddSingleton<WindowsClientInputSink>();
         services.AddSingleton<IClientInputSink>(sp =>
             sp.GetRequiredService<WindowsClientInputSink>());

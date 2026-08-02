@@ -12,6 +12,10 @@ public sealed record SessionOwnershipSnapshot(
     bool OwnedWindowRemaining,
     IReadOnlyList<string> Reasons)
 {
+    public string DisplayId { get; init; } = string.Empty;
+
+    public IReadOnlyList<int> OwnedProcessIds { get; init; } = [];
+
     public bool HasOwnedWork =>
         LaunchedProcessRunning ||
         ChildProcessRunning ||

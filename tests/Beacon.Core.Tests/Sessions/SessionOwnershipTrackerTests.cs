@@ -12,7 +12,10 @@ public sealed class SessionOwnershipTrackerTests
     {
         var inspector = new FakeSessionActivityInspector();
         SessionOwnershipTracker tracker = CreateTracker(inspector, out SessionPlan plan);
-        inspector.SetActivity(plan.SessionId, new SessionActivitySnapshot(true, false, false, []));
+        inspector.SetActivity(plan.SessionId, new SessionActivitySnapshot(true, false, false, [])
+        {
+            OwnedProcessIds = [1234]
+        });
 
         SessionOwnershipSnapshot? snapshot = await tracker.GetSnapshotAsync(plan.SessionId, CancellationToken.None);
 
@@ -20,6 +23,8 @@ public sealed class SessionOwnershipTrackerTests
         Assert.True(snapshot.HasOwnedWork);
         Assert.True(snapshot.LaunchedProcessRunning);
         Assert.Contains("Launched process", snapshot.Reasons[0]);
+        Assert.Equal(plan.Display.DisplayId, snapshot.DisplayId);
+        Assert.Equal([1234], snapshot.OwnedProcessIds);
     }
 
     [Fact]

@@ -148,9 +148,13 @@ public sealed record ClientInputBatch(
 
 public sealed record ClientInputResult(bool Success, int EventCount, string? Error)
 {
-    public static ClientInputResult Ok(int eventCount) => new(true, eventCount, null);
+    public string ResultCode { get; init; } = Success ? "input-forwarded" : "input-rejected";
 
-    public static ClientInputResult Fail(string error) => new(false, 0, error);
+    public static ClientInputResult Ok(int eventCount) =>
+        new(true, eventCount, null) { ResultCode = "input-forwarded" };
+
+    public static ClientInputResult Fail(string error, string resultCode = "input-rejected") =>
+        new(false, 0, error) { ResultCode = resultCode };
 }
 
 public sealed record ClientInputHealth(
