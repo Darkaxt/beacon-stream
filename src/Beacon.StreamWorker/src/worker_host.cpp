@@ -9,7 +9,7 @@
 namespace beacon::worker {
 namespace {
 
-std::string bytes_to_string(const std::vector<std::byte>& bytes) {
+std::string bytes_to_string(const std::vector<std::byte> &bytes) {
   std::string result;
   result.reserve(bytes.size());
   for (const auto value : bytes) {
@@ -29,8 +29,8 @@ std::optional<std::uint32_t> bitrate_bps(std::uint32_t bitrate_kbps) {
 }
 
 std::optional<video::WorkerVideoPlan>
-worker_video_plan_from(const v1::WorkerIpcEnvelope& request) {
-  const auto& source = request.prepare_session();
+worker_video_plan_from(const v1::WorkerIpcEnvelope &request) {
+  const auto &source = request.prepare_session();
   const auto minimum = bitrate_bps(source.minimum_bitrate_kbps());
   const auto initial = bitrate_bps(source.initial_bitrate_kbps());
   const auto maximum = bitrate_bps(source.maximum_bitrate_kbps());
@@ -54,44 +54,43 @@ worker_video_plan_from(const v1::WorkerIpcEnvelope& request) {
                                               : std::nullopt;
 }
 
-std::optional<stream::v1::SelectedAudioMode>
-worker_audio_plan_from(const v1::WorkerIpcEnvelope& request) {
-  const auto& source = request.prepare_session();
-  if (source.audio_codec() != v1::WORKER_AUDIO_CODEC_OPUS ||
-      source.audio_sample_rate_hz() != 48'000 ||
-      source.audio_channel_count() != 2 ||
-      source.audio_frame_duration_us() != 20'000 ||
-      source.audio_bitrate_bps() != 96'000) {
+std::optional<audio::WorkerAudioPlan>
+worker_audio_plan_from(const v1::WorkerIpcEnvelope &request) {
+  const auto &source = request.prepare_session();
+  if (source.audio_codec() != v1::WORKER_AUDIO_CODEC_OPUS) {
     return std::nullopt;
   }
-  stream::v1::SelectedAudioMode plan;
-  plan.set_codec(stream::v1::AUDIO_CODEC_OPUS);
-  plan.set_sample_rate_hz(source.audio_sample_rate_hz());
-  plan.set_channel_count(source.audio_channel_count());
-  plan.set_frame_duration_us(source.audio_frame_duration_us());
-  plan.set_bitrate_bps(source.audio_bitrate_bps());
-  return plan;
+  audio::WorkerAudioPlan plan{
+      .session_id = request.session_id(),
+      .sample_rate_hz = source.audio_sample_rate_hz(),
+      .channel_count = source.audio_channel_count(),
+      .frame_duration_us = source.audio_frame_duration_us(),
+      .bitrate_bps = source.audio_bitrate_bps(),
+  };
+  return audio::valid_worker_audio_plan(plan) ? std::optional{std::move(plan)}
+                                              : std::nullopt;
 }
 
-}  // namespace
+} // namespace
 
 WorkerHost::WorkerHost(std::vector<std::byte> worker_instance_id,
                        std::uint32_t process_id,
-                       IWorkerMediaTransport& transport,
-                       AuthorizedQuicTicketStore& authorized_tickets,
-                       video::IWorkerVideoPipeline& video_pipeline,
-                       video::ProductionVideoCapabilities video_capabilities)
+                       IWorkerMediaTransport &transport,
+                       AuthorizedQuicTicketStore &authorized_tickets,
+                       video::IWorkerVideoPipeline &video_pipeline,
+                       audio::IWorkerAudioPipeline &audio_pipeline,
+                       video::ProductionVideoCapabilities video_capabilities,
+                       audio::ProductionAudioCapabilities audio_capabilities)
     : worker_instance_id_(std::move(worker_instance_id)),
-      process_id_(process_id),
-      transport_(transport),
-      authorized_tickets_(authorized_tickets),
-      video_pipeline_(video_pipeline),
-      video_capabilities_(video_capabilities) {}
+      process_id_(process_id), transport_(transport),
+      authorized_tickets_(authorized_tickets), video_pipeline_(video_pipeline),
+      audio_pipeline_(audio_pipeline), video_capabilities_(video_capabilities),
+      audio_capabilities_(audio_capabilities) {}
 
 v1::WorkerIpcEnvelope WorkerHost::hello() const {
   v1::WorkerIpcEnvelope envelope;
   envelope.set_protocol_version(worker_protocol_version);
-  auto* message = envelope.mutable_worker_hello();
+  auto *message = envelope.mutable_worker_hello();
   message->set_worker_instance_id(bytes_to_string(worker_instance_id_));
   message->set_process_id(process_id_);
   return envelope;
@@ -100,7 +99,7 @@ v1::WorkerIpcEnvelope WorkerHost::hello() const {
 v1::WorkerIpcEnvelope WorkerHost::capabilities() const {
   v1::WorkerIpcEnvelope envelope;
   envelope.set_protocol_version(worker_protocol_version);
-  auto* message = envelope.mutable_worker_capabilities();
+  auto *message = envelope.mutable_worker_capabilities();
   message->set_worker_instance_id(bytes_to_string(worker_instance_id_));
   message->add_video_codecs(v1::WORKER_VIDEO_CODEC_H264);
   message->add_video_encoders(v1::WORKER_VIDEO_ENCODER_NVENC);
@@ -114,14 +113,21 @@ v1::WorkerIpcEnvelope WorkerHost::capabilities() const {
   message->add_audio_codecs(v1::WORKER_AUDIO_CODEC_OPUS);
   message->add_audio_capture_methods(
       v1::WORKER_AUDIO_CAPTURE_METHOD_WASAPI_LOOPBACK);
-  message->set_audio_available(false);
-  message->set_audio_unavailable_boundary(
-      v1::DIAGNOSTIC_BOUNDARY_AUDIO_CAPTURE);
+  message->set_audio_available(audio_capabilities_.available);
+  if (!audio_capabilities_.available) {
+    message->set_audio_unavailable_boundary(
+        audio_capabilities_.unavailable_boundary ==
+                audio::ProductionAudioCapabilityBoundary::encoder
+            ? v1::DIAGNOSTIC_BOUNDARY_AUDIO_ENCODER
+            : v1::DIAGNOSTIC_BOUNDARY_AUDIO_CAPTURE);
+    message->set_audio_unavailable_code(audio_capabilities_.unavailable_code);
+  }
   if (!video_capabilities_.available) {
-    const auto boundary = video_capabilities_.unavailable_boundary ==
-                                  video::ProductionVideoCapabilityBoundary::capture
-                              ? v1::DIAGNOSTIC_BOUNDARY_CAPTURE
-                              : v1::DIAGNOSTIC_BOUNDARY_ENCODER;
+    const auto boundary =
+        video_capabilities_.unavailable_boundary ==
+                video::ProductionVideoCapabilityBoundary::capture
+            ? v1::DIAGNOSTIC_BOUNDARY_CAPTURE
+            : v1::DIAGNOSTIC_BOUNDARY_ENCODER;
     message->set_video_unavailable_boundary(boundary);
     message->set_video_unavailable_code(video_capabilities_.unavailable_code);
   }
@@ -136,8 +142,8 @@ v1::WorkerIpcEnvelope WorkerHost::ready() const {
   return envelope;
 }
 
-std::vector<v1::WorkerIpcEnvelope> WorkerHost::dispatch(
-    const v1::WorkerIpcEnvelope& request) {
+std::vector<v1::WorkerIpcEnvelope>
+WorkerHost::dispatch(const v1::WorkerIpcEnvelope &request) {
   if (request.protocol_version() != worker_protocol_version) {
     return reject(request, v1::WORKER_ERROR_CODE_UNSUPPORTED_VERSION);
   }
@@ -149,35 +155,37 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::dispatch(
   }
 
   switch (request.body_case()) {
-    case v1::WorkerIpcEnvelope::kPrepareSession:
-      return prepare(request);
-    case v1::WorkerIpcEnvelope::kPrepareBenchmark:
-      return prepare_benchmark(request);
-    case v1::WorkerIpcEnvelope::kAuthorizeTicket:
-      return authorize_ticket(request);
-    case v1::WorkerIpcEnvelope::kRevokeTicket:
-      return revoke_ticket(request);
-    case v1::WorkerIpcEnvelope::kStartMedia:
-      return start_media(request);
-    case v1::WorkerIpcEnvelope::kStopMedia:
-      return stop_media(request);
-    case v1::WorkerIpcEnvelope::kRequestIdr:
-      return request_idr(request);
-    case v1::WorkerIpcEnvelope::kShutdownWorker:
-      return shutdown(request);
-    default:
-      return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);
+  case v1::WorkerIpcEnvelope::kPrepareSession:
+    return prepare(request);
+  case v1::WorkerIpcEnvelope::kPrepareBenchmark:
+    return prepare_benchmark(request);
+  case v1::WorkerIpcEnvelope::kAuthorizeTicket:
+    return authorize_ticket(request);
+  case v1::WorkerIpcEnvelope::kRevokeTicket:
+    return revoke_ticket(request);
+  case v1::WorkerIpcEnvelope::kStartMedia:
+    return start_media(request);
+  case v1::WorkerIpcEnvelope::kStopMedia:
+    return stop_media(request);
+  case v1::WorkerIpcEnvelope::kRequestIdr:
+    return request_idr(request);
+  case v1::WorkerIpcEnvelope::kShutdownWorker:
+    return shutdown(request);
+  default:
+    return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);
   }
 }
 
-bool WorkerHost::shutdown_requested() const noexcept { return shutdown_requested_; }
+bool WorkerHost::shutdown_requested() const noexcept {
+  return shutdown_requested_;
+}
 
 std::size_t WorkerHost::authorized_ticket_count() const {
   return authorized_tickets_.size();
 }
 
-v1::WorkerIpcEnvelope WorkerHost::response_envelope(
-    const v1::WorkerIpcEnvelope& request) const {
+v1::WorkerIpcEnvelope
+WorkerHost::response_envelope(const v1::WorkerIpcEnvelope &request) const {
   v1::WorkerIpcEnvelope response;
   response.set_protocol_version(worker_protocol_version);
   response.set_request_id(request.request_id());
@@ -185,25 +193,25 @@ v1::WorkerIpcEnvelope WorkerHost::response_envelope(
   return response;
 }
 
-v1::WorkerIpcEnvelope WorkerHost::completion(const v1::WorkerIpcEnvelope& request,
-                                             bool succeeded,
-                                             v1::WorkerErrorCode error_code) const {
+v1::WorkerIpcEnvelope
+WorkerHost::completion(const v1::WorkerIpcEnvelope &request, bool succeeded,
+                       v1::WorkerErrorCode error_code) const {
   auto response = response_envelope(request);
-  auto* result = response.mutable_worker_completion();
+  auto *result = response.mutable_worker_completion();
   result->set_succeeded(succeeded);
   result->set_error_code(error_code);
   return response;
 }
 
-std::vector<v1::WorkerIpcEnvelope> WorkerHost::reject(
-    const v1::WorkerIpcEnvelope& request,
-    v1::WorkerErrorCode error_code) const {
+std::vector<v1::WorkerIpcEnvelope>
+WorkerHost::reject(const v1::WorkerIpcEnvelope &request,
+                   v1::WorkerErrorCode error_code) const {
   return {completion(request, false, error_code)};
 }
 
-std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare(
-    const v1::WorkerIpcEnvelope& request) {
-  const auto& plan = request.prepare_session();
+std::vector<v1::WorkerIpcEnvelope>
+WorkerHost::prepare(const v1::WorkerIpcEnvelope &request) {
+  const auto &plan = request.prepare_session();
   if (request.session_id().empty() || plan.display_target().empty() ||
       plan.display_device_name().empty() || plan.width() == 0 ||
       plan.height() == 0 || plan.frames_per_second_numerator() == 0 ||
@@ -212,7 +220,8 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare(
       plan.dynamic_range() != v1::WORKER_DYNAMIC_RANGE_SDR) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);
   }
-  if (streaming_) {
+  if (streaming_ || !video_capabilities_.available ||
+      !audio_capabilities_.available) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_STATE);
   }
   auto video_plan = worker_video_plan_from(request);
@@ -224,7 +233,13 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare(
     if (!video_pipeline_.prepare(*video_plan)) {
       return reject(request, v1::WORKER_ERROR_CODE_OPERATION_FAILED);
     }
+    if (!audio_pipeline_.prepare(*audio_plan)) {
+      video_pipeline_.reset();
+      return reject(request, v1::WORKER_ERROR_CODE_OPERATION_FAILED);
+    }
   } catch (...) {
+    video_pipeline_.reset();
+    audio_pipeline_.reset();
     return reject(request, v1::WORKER_ERROR_CODE_OPERATION_FAILED);
   }
 
@@ -235,15 +250,18 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare(
   prepared_video_plan_ = std::move(video_plan);
   prepared_audio_plan_ = std::move(audio_plan);
   auto state = response_envelope(request);
-  state.mutable_session_state_changed()->set_state(v1::WORKER_SESSION_STATE_PREPARED);
-  state.mutable_session_state_changed()->set_error_code(v1::WORKER_ERROR_CODE_NONE);
-  return {std::move(state), completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
+  state.mutable_session_state_changed()->set_state(
+      v1::WORKER_SESSION_STATE_PREPARED);
+  state.mutable_session_state_changed()->set_error_code(
+      v1::WORKER_ERROR_CODE_NONE);
+  return {std::move(state),
+          completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }
 
-std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare_benchmark(
-    const v1::WorkerIpcEnvelope& request) {
-  const auto& plan = request.prepare_benchmark().plan();
-  const auto valid_round = [](const stream::v1::BenchmarkRoundPlan& round) {
+std::vector<v1::WorkerIpcEnvelope>
+WorkerHost::prepare_benchmark(const v1::WorkerIpcEnvelope &request) {
+  const auto &plan = request.prepare_benchmark().plan();
+  const auto valid_round = [](const stream::v1::BenchmarkRoundPlan &round) {
     return round.packet_count() != 0 && round.payload_bytes() != 0 &&
            round.measurement_interval_us() != 0;
   };
@@ -255,6 +273,7 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare_benchmark(
   }
 
   video_pipeline_.reset();
+  audio_pipeline_.reset();
   prepared_video_plan_.reset();
   prepared_audio_plan_.reset();
   prepared_ = true;
@@ -270,9 +289,9 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::prepare_benchmark(
           completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }
 
-std::vector<v1::WorkerIpcEnvelope> WorkerHost::authorize_ticket(
-    const v1::WorkerIpcEnvelope& request) {
-  const auto& ticket = request.authorize_ticket();
+std::vector<v1::WorkerIpcEnvelope>
+WorkerHost::authorize_ticket(const v1::WorkerIpcEnvelope &request) {
+  const auto &ticket = request.authorize_ticket();
   if (!prepared_ || request.session_id() != session_id_ ||
       request.session_id().empty() || ticket.ticket_hash().size() != 32 ||
       ticket.client_id().empty() || ticket.plan_revision() == 0 ||
@@ -286,21 +305,22 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::authorize_ticket(
     hash[index] = static_cast<std::byte>(ticket.ticket_hash()[index]);
   }
   AuthorizedQuicTicket authorization{
-          .hash = hash,
-          .client_id = ticket.client_id(),
-          .session_id = request.session_id(),
-          .plan_revision = ticket.plan_revision(),
-          .expires_at_unix_ms = ticket.expires_at_unix_ms(),
-          .selected_video = std::nullopt,
-          .selected_audio = std::nullopt,
-          .benchmark_plan = std::nullopt,
-      };
+      .hash = hash,
+      .client_id = ticket.client_id(),
+      .session_id = request.session_id(),
+      .plan_revision = ticket.plan_revision(),
+      .expires_at_unix_ms = ticket.expires_at_unix_ms(),
+      .selected_video = std::nullopt,
+      .selected_audio = std::nullopt,
+      .benchmark_plan = std::nullopt,
+  };
   if (benchmark_prepared_) {
     authorization.benchmark_plan = benchmark_plan_;
   } else if (prepared_video_plan_ && prepared_audio_plan_) {
     authorization.selected_video =
         video::selected_video_from_plan(*prepared_video_plan_);
-    authorization.selected_audio = *prepared_audio_plan_;
+    authorization.selected_audio =
+        audio::selected_audio_from_plan(*prepared_audio_plan_);
   }
   if (!authorized_tickets_.authorize(std::move(authorization))) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_STATE);
@@ -308,26 +328,28 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::authorize_ticket(
   return {completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }
 
-std::vector<v1::WorkerIpcEnvelope> WorkerHost::revoke_ticket(
-    const v1::WorkerIpcEnvelope& request) {
-  const auto& hash = request.revoke_ticket().ticket_hash();
+std::vector<v1::WorkerIpcEnvelope>
+WorkerHost::revoke_ticket(const v1::WorkerIpcEnvelope &request) {
+  const auto &hash = request.revoke_ticket().ticket_hash();
   if (hash.size() != 32) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);
   }
 
-  authorized_tickets_.revoke({reinterpret_cast<const std::byte*>(hash.data()), hash.size()});
+  authorized_tickets_.revoke(
+      {reinterpret_cast<const std::byte *>(hash.data()), hash.size()});
   return {completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }
 
-std::vector<v1::WorkerIpcEnvelope> WorkerHost::start_media(
-    const v1::WorkerIpcEnvelope& request) {
+std::vector<v1::WorkerIpcEnvelope>
+WorkerHost::start_media(const v1::WorkerIpcEnvelope &request) {
   if (!prepared_ || streaming_ || request.session_id() != session_id_) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_STATE);
   }
-  const auto& media = request.start_media();
+  const auto &media = request.start_media();
   if (media.listen_port() > 65'535 ||
       !transport_.configure_listener(
-          media.listen_address(), static_cast<std::uint16_t>(media.listen_port())) ||
+          media.listen_address(),
+          static_cast<std::uint16_t>(media.listen_port())) ||
       !transport_.open_connection()) {
     return reject(request, v1::WORKER_ERROR_CODE_OPERATION_FAILED);
   }
@@ -339,10 +361,13 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::start_media(
 
   streaming_ = true;
   auto transport_ready = response_envelope(request);
-  transport_ready.mutable_worker_transport_ready()->set_listener_port(listener_port);
+  transport_ready.mutable_worker_transport_ready()->set_listener_port(
+      listener_port);
   auto state = response_envelope(request);
-  state.mutable_session_state_changed()->set_state(v1::WORKER_SESSION_STATE_STREAMING);
-  state.mutable_session_state_changed()->set_error_code(v1::WORKER_ERROR_CODE_NONE);
+  state.mutable_session_state_changed()->set_state(
+      v1::WORKER_SESSION_STATE_STREAMING);
+  state.mutable_session_state_changed()->set_error_code(
+      v1::WORKER_ERROR_CODE_NONE);
   auto metrics = response_envelope(request);
   metrics.mutable_media_metrics()->set_encoded_frames(0);
   metrics.mutable_media_metrics()->set_sent_datagrams(0);
@@ -351,12 +376,13 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::start_media(
           completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }
 
-std::vector<v1::WorkerIpcEnvelope> WorkerHost::stop_media(
-    const v1::WorkerIpcEnvelope& request) {
+std::vector<v1::WorkerIpcEnvelope>
+WorkerHost::stop_media(const v1::WorkerIpcEnvelope &request) {
   if (!streaming_ || request.session_id() != session_id_) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_STATE);
   }
   video_pipeline_.reset();
+  audio_pipeline_.reset();
   transport_.close_connection();
   streaming_ = false;
   prepared_ = false;
@@ -365,13 +391,16 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::stop_media(
   prepared_video_plan_.reset();
   prepared_audio_plan_.reset();
   auto state = response_envelope(request);
-  state.mutable_session_state_changed()->set_state(v1::WORKER_SESSION_STATE_STOPPED);
-  state.mutable_session_state_changed()->set_error_code(v1::WORKER_ERROR_CODE_NONE);
-  return {std::move(state), completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
+  state.mutable_session_state_changed()->set_state(
+      v1::WORKER_SESSION_STATE_STOPPED);
+  state.mutable_session_state_changed()->set_error_code(
+      v1::WORKER_ERROR_CODE_NONE);
+  return {std::move(state),
+          completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }
 
-std::vector<v1::WorkerIpcEnvelope> WorkerHost::request_idr(
-    const v1::WorkerIpcEnvelope& request) {
+std::vector<v1::WorkerIpcEnvelope>
+WorkerHost::request_idr(const v1::WorkerIpcEnvelope &request) {
   if (!streaming_ || benchmark_prepared_ || !prepared_video_plan_ ||
       request.session_id() != session_id_ ||
       request.request_idr().reason() == v1::IDR_REASON_UNSPECIFIED) {
@@ -387,9 +416,10 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::request_idr(
   return {completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }
 
-std::vector<v1::WorkerIpcEnvelope> WorkerHost::shutdown(
-    const v1::WorkerIpcEnvelope& request) {
+std::vector<v1::WorkerIpcEnvelope>
+WorkerHost::shutdown(const v1::WorkerIpcEnvelope &request) {
   video_pipeline_.reset();
+  audio_pipeline_.reset();
   if (streaming_) {
     transport_.close_connection();
   }
@@ -404,4 +434,4 @@ std::vector<v1::WorkerIpcEnvelope> WorkerHost::shutdown(
   return {completion(request, true, v1::WORKER_ERROR_CODE_NONE)};
 }
 
-}  // namespace beacon::worker
+} // namespace beacon::worker

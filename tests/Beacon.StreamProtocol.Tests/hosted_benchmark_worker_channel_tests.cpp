@@ -6,8 +6,8 @@
 #include "beacon/worker/worker_host.h"
 #include "test_failure.h"
 
-#include <unistd.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
 #include <array>
 #include <cerrno>
@@ -72,8 +72,8 @@ Pipe make_pipe() {
 bool write_exact(int descriptor, std::span<const std::byte> bytes) {
   std::size_t offset = 0;
   while (offset < bytes.size()) {
-    const auto written = ::write(descriptor, bytes.data() + offset,
-                                 bytes.size() - offset);
+    const auto written =
+        ::write(descriptor, bytes.data() + offset, bytes.size() - offset);
     if (written <= 0) {
       return false;
     }
@@ -103,8 +103,8 @@ std::vector<std::byte> frame(const worker_v1::WorkerIpcEnvelope &envelope) {
   result[1] = static_cast<std::byte>((size >> 16U) & 0xffU);
   result[2] = static_cast<std::byte>((size >> 8U) & 0xffU);
   result[3] = static_cast<std::byte>(size & 0xffU);
-  BEACON_TEST_REQUIRE(envelope.SerializeToArray(
-      result.data() + 4, static_cast<int>(body_size)));
+  BEACON_TEST_REQUIRE(envelope.SerializeToArray(result.data() + 4,
+                                                static_cast<int>(body_size)));
   return result;
 }
 
@@ -118,7 +118,8 @@ worker_v1::WorkerIpcEnvelope read_frame(int descriptor) {
   std::vector<std::byte> body(size);
   BEACON_TEST_REQUIRE(read_exact(descriptor, body));
   worker_v1::WorkerIpcEnvelope result;
-  BEACON_TEST_REQUIRE(result.ParseFromArray(body.data(), static_cast<int>(size)));
+  BEACON_TEST_REQUIRE(
+      result.ParseFromArray(body.data(), static_cast<int>(size)));
   return result;
 }
 
@@ -147,8 +148,7 @@ public:
   void close_connection() noexcept override { ++close_calls; }
   void request_active_disconnect() noexcept override {}
   beacon::stream::TransportSendResult
-  send_for_generation(beacon::stream::TransportPacket,
-                      std::uint64_t) override {
+  send_for_generation(beacon::stream::TransportPacket, std::uint64_t) override {
     return beacon::stream::TransportSendResult::accepted;
   }
   void shutdown() noexcept override { ++shutdown_calls; }
@@ -165,6 +165,18 @@ public:
   }
   void handle_media_event(const beacon::worker::QuicMediaEvent &) override {}
   bool request_idr() override { return false; }
+  void reset() noexcept override { ++reset_calls; }
+
+  int reset_calls{};
+};
+
+class NoAudioPipeline final
+    : public beacon::worker::audio::IWorkerAudioPipeline {
+public:
+  bool prepare(const beacon::worker::audio::WorkerAudioPlan &) override {
+    return false;
+  }
+  void handle_media_event(const beacon::worker::QuicMediaEvent &) override {}
   void reset() noexcept override { ++reset_calls; }
 
   int reset_calls{};
@@ -197,8 +209,8 @@ void exact_big_endian_frames_round_trip_over_file_descriptors() {
   std::vector<std::byte> body(inbound.size() - 4U);
   BEACON_TEST_REQUIRE(read_exact(output.read.get(), body));
   worker_v1::WorkerIpcEnvelope round_trip;
-  BEACON_TEST_REQUIRE(round_trip.ParseFromArray(
-      body.data(), static_cast<int>(body.size())));
+  BEACON_TEST_REQUIRE(
+      round_trip.ParseFromArray(body.data(), static_cast<int>(body.size())));
   BEACON_TEST_REQUIRE(round_trip.request_id() == 17);
 }
 
@@ -218,8 +230,8 @@ void malformed_oversized_and_invalid_frames_are_rejected() {
     auto input = make_pipe();
     auto output = make_pipe();
     HostedBenchmarkWorkerChannel channel(input.read.get(), output.write.get());
-    constexpr std::array oversized{std::byte{0}, std::byte{0x10},
-                                   std::byte{0}, std::byte{1}};
+    constexpr std::array oversized{std::byte{0}, std::byte{0x10}, std::byte{0},
+                                   std::byte{1}};
     BEACON_TEST_REQUIRE(write_exact(input.write.get(), oversized));
     worker_v1::WorkerIpcEnvelope envelope;
     BEACON_TEST_REQUIRE(channel.read(envelope) ==
@@ -280,22 +292,29 @@ void typed_shutdown_writes_terminal_completion_and_stops_the_worker() {
 
   RecordingTransport transport;
   NoVideoPipeline video_pipeline;
+  NoAudioPipeline audio_pipeline;
   beacon::worker::AuthorizedQuicTicketStore tickets;
   beacon::worker::WorkerHost host(
       {std::byte{1}, std::byte{2}}, 42, transport, tickets, video_pipeline,
+      audio_pipeline,
       {.available = false,
        .unavailable_boundary =
            beacon::worker::video::ProductionVideoCapabilityBoundary::encoder,
+       .unavailable_code = 1},
+      {.available = false,
+       .unavailable_boundary =
+           beacon::worker::audio::ProductionAudioCapabilityBoundary::capture,
        .unavailable_code = 1});
   beacon::worker::WorkerOutboundQueue outbound;
 
-  const auto result = beacon::testing::run_hosted_worker_control(
-      channel, host, outbound);
+  const auto result =
+      beacon::testing::run_hosted_worker_control(channel, host, outbound);
 
   BEACON_TEST_REQUIRE(result == HostedWorkerControlResult::clean_shutdown);
   BEACON_TEST_REQUIRE(host.shutdown_requested());
   BEACON_TEST_REQUIRE(transport.shutdown_calls == 1);
   BEACON_TEST_REQUIRE(video_pipeline.reset_calls == 1);
+  BEACON_TEST_REQUIRE(audio_pipeline.reset_calls == 1);
   const auto hello = read_frame(output.read.get());
   const auto capabilities = read_frame(output.read.get());
   const auto ready = read_frame(output.read.get());
@@ -326,8 +345,8 @@ void hosted_worker_process_publishes_fixed_markers_and_exits_cleanly() {
     ::close(output.write.get());
     ::close(diagnostics.read.get());
     ::close(diagnostics.write.get());
-    ::execl(BEACON_HOSTED_WORKER_PATH, BEACON_HOSTED_WORKER_PATH,
-            "--identity", "/tmp/beacon-hosted-worker-unused.pfx",
+    ::execl(BEACON_HOSTED_WORKER_PATH, BEACON_HOSTED_WORKER_PATH, "--identity",
+            "/tmp/beacon-hosted-worker-unused.pfx",
             static_cast<char *>(nullptr));
     ::_exit(127);
   }
@@ -363,13 +382,14 @@ void hosted_worker_process_publishes_fixed_markers_and_exits_cleanly() {
   prepare_benchmark.set_protocol_version(1);
   prepare_benchmark.set_request_id(303);
   prepare_benchmark.set_session_id("session-benchmark");
-  auto *benchmark = prepare_benchmark.mutable_prepare_benchmark()->mutable_plan();
+  auto *benchmark =
+      prepare_benchmark.mutable_prepare_benchmark()->mutable_plan();
   benchmark->set_run_id("11111111-1111-1111-1111-111111111111");
   benchmark->set_schema_version(3);
   const std::array<std::byte, 16> run_token{
-      std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4},
-      std::byte{5}, std::byte{6}, std::byte{7}, std::byte{8},
-      std::byte{9}, std::byte{10}, std::byte{11}, std::byte{12},
+      std::byte{1},  std::byte{2},  std::byte{3},  std::byte{4},
+      std::byte{5},  std::byte{6},  std::byte{7},  std::byte{8},
+      std::byte{9},  std::byte{10}, std::byte{11}, std::byte{12},
       std::byte{13}, std::byte{14}, std::byte{15}, std::byte{16}};
   benchmark->set_run_token(run_token.data(), run_token.size());
   benchmark->mutable_reliable_round()->set_packet_count(8);
@@ -379,8 +399,7 @@ void hosted_worker_process_publishes_fixed_markers_and_exits_cleanly() {
   benchmark->mutable_datagram_round()->set_payload_bytes(1000);
   benchmark->mutable_datagram_round()->set_measurement_interval_us(500'000);
   const auto prepare_benchmark_frame = frame(prepare_benchmark);
-  BEACON_TEST_REQUIRE(
-      write_exact(input.write.get(), prepare_benchmark_frame));
+  BEACON_TEST_REQUIRE(write_exact(input.write.get(), prepare_benchmark_frame));
   const auto benchmark_state = read_frame(output.read.get());
   const auto benchmark_completion = read_frame(output.read.get());
 
@@ -405,9 +424,8 @@ void hosted_worker_process_publishes_fixed_markers_and_exits_cleanly() {
   BEACON_TEST_REQUIRE(ready.has_worker_ready());
   BEACON_TEST_REQUIRE(video_rejection.request_id() == 302);
   BEACON_TEST_REQUIRE(!video_rejection.worker_completion().succeeded());
-  BEACON_TEST_REQUIRE(
-      video_rejection.worker_completion().error_code() ==
-      worker_v1::WORKER_ERROR_CODE_OPERATION_FAILED);
+  BEACON_TEST_REQUIRE(video_rejection.worker_completion().error_code() ==
+                      worker_v1::WORKER_ERROR_CODE_OPERATION_FAILED);
   BEACON_TEST_REQUIRE(benchmark_state.request_id() == 303);
   BEACON_TEST_REQUIRE(benchmark_state.session_state_changed().state() ==
                       worker_v1::WORKER_SESSION_STATE_PREPARED);
@@ -415,9 +433,8 @@ void hosted_worker_process_publishes_fixed_markers_and_exits_cleanly() {
   BEACON_TEST_REQUIRE(benchmark_completion.worker_completion().succeeded());
   BEACON_TEST_REQUIRE(completion.request_id() == 301);
   BEACON_TEST_REQUIRE(completion.worker_completion().succeeded());
-  BEACON_TEST_REQUIRE(markers ==
-                      "BEACON_HOSTED_WORKER_READY\n"
-                      "BEACON_HOSTED_WORKER_STOPPED\n");
+  BEACON_TEST_REQUIRE(markers == "BEACON_HOSTED_WORKER_READY\n"
+                                 "BEACON_HOSTED_WORKER_STOPPED\n");
   BEACON_TEST_REQUIRE(markers.find("unused.pfx") == std::string::npos);
 }
 

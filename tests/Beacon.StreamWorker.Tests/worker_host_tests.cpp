@@ -1,6 +1,6 @@
-#include "beacon/worker/worker_host.h"
-#include "beacon/worker/worker_events.h"
 #include "beacon/worker/video/worker_video_pipeline.h"
+#include "beacon/worker/worker_events.h"
+#include "beacon/worker/worker_host.h"
 
 #include "../Beacon.StreamProtocol.Tests/test_failure.h"
 #include "worker_ipc.pb.h"
@@ -16,18 +16,20 @@ namespace {
 
 using beacon::stream::TransportPacket;
 using beacon::stream::TransportSendResult;
+using beacon::worker::AuthorizedQuicTicketStore;
 using beacon::worker::IWorkerMediaTransport;
 using beacon::worker::WorkerHost;
-using beacon::worker::AuthorizedQuicTicketStore;
 using beacon::worker::v1::WorkerIpcEnvelope;
+namespace audio = beacon::worker::audio;
 namespace video = beacon::worker::video;
 
 static_assert(!std::is_base_of_v<beacon::stream::IStreamTransport,
                                  IWorkerMediaTransport>);
 
 class RecordingTransport final : public IWorkerMediaTransport {
- public:
-  bool configure_listener(std::string_view address, std::uint16_t port) override {
+public:
+  bool configure_listener(std::string_view address,
+                          std::uint16_t port) override {
     listen_address = address;
     listen_port = port;
     return true;
@@ -56,9 +58,7 @@ class RecordingTransport final : public IWorkerMediaTransport {
     }
   }
 
-  void request_active_disconnect() noexcept override {
-    ++disconnect_count;
-  }
+  void request_active_disconnect() noexcept override { ++disconnect_count; }
 
   TransportSendResult
   send_for_generation(TransportPacket packet,
@@ -87,6 +87,31 @@ class RecordingTransport final : public IWorkerMediaTransport {
   std::size_t shutdown_count{};
   std::vector<TransportPacket> packets;
   std::vector<std::uint64_t> generations;
+  std::vector<std::string> *lifecycle{};
+};
+
+class RecordingAudioPipeline final : public audio::IWorkerAudioPipeline {
+public:
+  bool prepare(const audio::WorkerAudioPlan &plan) override {
+    plans.push_back(plan);
+    return prepare_result;
+  }
+
+  void handle_media_event(const beacon::worker::QuicMediaEvent &) override {
+    ++media_event_count;
+  }
+
+  void reset() noexcept override {
+    ++reset_count;
+    if (lifecycle) {
+      lifecycle->emplace_back("audio-pipeline-reset");
+    }
+  }
+
+  bool prepare_result{true};
+  std::size_t media_event_count{};
+  std::size_t reset_count{};
+  std::vector<audio::WorkerAudioPlan> plans;
   std::vector<std::string> *lifecycle{};
 };
 
@@ -120,17 +145,20 @@ public:
   std::size_t reset_count{};
   std::vector<video::WorkerVideoPlan> plans;
   std::vector<std::string> *lifecycle{};
+  RecordingAudioPipeline audio;
 };
 
-const WorkerIpcEnvelope& completion(const std::vector<WorkerIpcEnvelope>& responses) {
-  const auto response = std::ranges::find_if(responses, [](const WorkerIpcEnvelope& value) {
-    return value.body_case() == WorkerIpcEnvelope::kWorkerCompletion;
-  });
+const WorkerIpcEnvelope &
+completion(const std::vector<WorkerIpcEnvelope> &responses) {
+  const auto response =
+      std::ranges::find_if(responses, [](const WorkerIpcEnvelope &value) {
+        return value.body_case() == WorkerIpcEnvelope::kWorkerCompletion;
+      });
   BEACON_TEST_REQUIRE(response != responses.end());
   return *response;
 }
 
-WorkerIpcEnvelope command(std::uint64_t request_id, const char* session_id) {
+WorkerIpcEnvelope command(std::uint64_t request_id, const char *session_id) {
   WorkerIpcEnvelope envelope;
   envelope.set_protocol_version(1);
   envelope.set_request_id(request_id);
@@ -164,12 +192,17 @@ video::ProductionVideoCapabilities available_video() {
   return {.available = true};
 }
 
+audio::ProductionAudioCapabilities available_audio() {
+  return {.available = true};
+}
+
 void hello_capabilities_and_ready_are_typed_and_instance_bound() {
   RecordingTransport transport;
   RecordingPipeline pipeline;
   AuthorizedQuicTicketStore tickets;
   WorkerHost host({std::byte{1}, std::byte{2}, std::byte{3}}, 42, transport,
-                  tickets, pipeline, available_video());
+                  tickets, pipeline, pipeline.audio, available_video(),
+                  available_audio());
 
   const auto hello = host.hello();
   const auto capabilities = host.capabilities();
@@ -177,44 +210,53 @@ void hello_capabilities_and_ready_are_typed_and_instance_bound() {
 
   BEACON_TEST_REQUIRE(hello.protocol_version() == 1);
   BEACON_TEST_REQUIRE(hello.worker_hello().process_id() == 42);
-  BEACON_TEST_REQUIRE(hello.worker_hello().worker_instance_id() == "\x01\x02\x03");
+  BEACON_TEST_REQUIRE(hello.worker_hello().worker_instance_id() ==
+                      "\x01\x02\x03");
   BEACON_TEST_REQUIRE(capabilities.protocol_version() == 1);
   BEACON_TEST_REQUIRE(capabilities.worker_capabilities().quic_datagrams());
-  BEACON_TEST_REQUIRE(capabilities.worker_capabilities().maximum_sessions() == 1);
+  BEACON_TEST_REQUIRE(capabilities.worker_capabilities().maximum_sessions() ==
+                      1);
+  BEACON_TEST_REQUIRE(capabilities.worker_capabilities().worker_instance_id() ==
+                      "\x01\x02\x03");
+  BEACON_TEST_REQUIRE(capabilities.worker_capabilities().video_codecs_size() ==
+                      1);
+  BEACON_TEST_REQUIRE(capabilities.worker_capabilities().video_codecs(0) ==
+                      beacon::worker::v1::WORKER_VIDEO_CODEC_H264);
   BEACON_TEST_REQUIRE(
-      capabilities.worker_capabilities().worker_instance_id() == "\x01\x02\x03");
-  BEACON_TEST_REQUIRE(capabilities.worker_capabilities().video_codecs_size() == 1);
+      capabilities.worker_capabilities().video_encoders_size() == 1);
+  BEACON_TEST_REQUIRE(capabilities.worker_capabilities().video_encoders(0) ==
+                      beacon::worker::v1::WORKER_VIDEO_ENCODER_NVENC);
   BEACON_TEST_REQUIRE(
-      capabilities.worker_capabilities().video_codecs(0) ==
-      beacon::worker::v1::WORKER_VIDEO_CODEC_H264);
-  BEACON_TEST_REQUIRE(capabilities.worker_capabilities().video_encoders_size() == 1);
-  BEACON_TEST_REQUIRE(
-      capabilities.worker_capabilities().video_encoders(0) ==
-      beacon::worker::v1::WORKER_VIDEO_ENCODER_NVENC);
-  BEACON_TEST_REQUIRE(capabilities.worker_capabilities().capture_methods_size() == 1);
+      capabilities.worker_capabilities().capture_methods_size() == 1);
   BEACON_TEST_REQUIRE(
       capabilities.worker_capabilities().capture_methods(0) ==
       beacon::worker::v1::WORKER_CAPTURE_METHOD_WINDOWS_GRAPHICS_CAPTURE);
   BEACON_TEST_REQUIRE(
       capabilities.worker_capabilities().maximum_frames_per_second() == 120);
   BEACON_TEST_REQUIRE(capabilities.worker_capabilities().video_available());
-  BEACON_TEST_REQUIRE(capabilities.worker_capabilities().audio_codecs_size() == 1);
-  BEACON_TEST_REQUIRE(
-      capabilities.worker_capabilities().audio_codecs(0) ==
-      beacon::worker::v1::WORKER_AUDIO_CODEC_OPUS);
+  BEACON_TEST_REQUIRE(capabilities.worker_capabilities().audio_codecs_size() ==
+                      1);
+  BEACON_TEST_REQUIRE(capabilities.worker_capabilities().audio_codecs(0) ==
+                      beacon::worker::v1::WORKER_AUDIO_CODEC_OPUS);
   BEACON_TEST_REQUIRE(
       capabilities.worker_capabilities().audio_capture_methods_size() == 1);
   BEACON_TEST_REQUIRE(
       capabilities.worker_capabilities().audio_capture_methods(0) ==
       beacon::worker::v1::WORKER_AUDIO_CAPTURE_METHOD_WASAPI_LOOPBACK);
-  BEACON_TEST_REQUIRE(!capabilities.worker_capabilities().audio_available());
+  BEACON_TEST_REQUIRE(capabilities.worker_capabilities().audio_available());
   BEACON_TEST_REQUIRE(
       capabilities.worker_capabilities().video_unavailable_boundary() ==
       beacon::worker::v1::DIAGNOSTIC_BOUNDARY_UNSPECIFIED);
   BEACON_TEST_REQUIRE(
       capabilities.worker_capabilities().video_unavailable_code() == 0);
+  BEACON_TEST_REQUIRE(
+      capabilities.worker_capabilities().audio_unavailable_boundary() ==
+      beacon::worker::v1::DIAGNOSTIC_BOUNDARY_UNSPECIFIED);
+  BEACON_TEST_REQUIRE(
+      capabilities.worker_capabilities().audio_unavailable_code() == 0);
   BEACON_TEST_REQUIRE(ready.protocol_version() == 1);
-  BEACON_TEST_REQUIRE(ready.worker_ready().worker_instance_id() == "\x01\x02\x03");
+  BEACON_TEST_REQUIRE(ready.worker_ready().worker_instance_id() ==
+                      "\x01\x02\x03");
 }
 
 void unavailable_video_is_reported_without_poisoning_worker() {
@@ -222,22 +264,48 @@ void unavailable_video_is_reported_without_poisoning_worker() {
   RecordingTransport transport;
   RecordingPipeline pipeline;
   AuthorizedQuicTicketStore tickets;
-  WorkerHost host(
-      {std::byte{1}}, 42, transport, tickets, pipeline,
-      {.available = false,
-       .unavailable_boundary = video::ProductionVideoCapabilityBoundary::encoder,
-       .unavailable_code = encoder_unavailable_code});
+  WorkerHost host({std::byte{1}}, 42, transport, tickets, pipeline,
+                  pipeline.audio,
+                  {.available = false,
+                   .unavailable_boundary =
+                       video::ProductionVideoCapabilityBoundary::encoder,
+                   .unavailable_code = encoder_unavailable_code},
+                  available_audio());
 
   const auto capabilities = host.capabilities().worker_capabilities();
 
   BEACON_TEST_REQUIRE(!capabilities.video_available());
-  BEACON_TEST_REQUIRE(
-      capabilities.video_unavailable_boundary() ==
-      beacon::worker::v1::DIAGNOSTIC_BOUNDARY_ENCODER);
-  BEACON_TEST_REQUIRE(
-      capabilities.video_unavailable_code() == encoder_unavailable_code);
+  BEACON_TEST_REQUIRE(capabilities.video_unavailable_boundary() ==
+                      beacon::worker::v1::DIAGNOSTIC_BOUNDARY_ENCODER);
+  BEACON_TEST_REQUIRE(capabilities.video_unavailable_code() ==
+                      encoder_unavailable_code);
   BEACON_TEST_REQUIRE(pipeline.plans.empty());
   BEACON_TEST_REQUIRE(!host.shutdown_requested());
+}
+
+void unavailable_audio_is_reported_without_preparing_a_session() {
+  constexpr std::uint32_t capture_unavailable_code{0x88890004U};
+  RecordingTransport transport;
+  RecordingPipeline pipeline;
+  AuthorizedQuicTicketStore tickets;
+  WorkerHost host({std::byte{1}}, 42, transport, tickets, pipeline,
+                  pipeline.audio, available_video(),
+                  {.available = false,
+                   .unavailable_boundary =
+                       audio::ProductionAudioCapabilityBoundary::capture,
+                   .unavailable_code = capture_unavailable_code});
+
+  const auto capabilities = host.capabilities().worker_capabilities();
+  BEACON_TEST_REQUIRE(!capabilities.audio_available());
+  BEACON_TEST_REQUIRE(capabilities.audio_unavailable_boundary() ==
+                      beacon::worker::v1::DIAGNOSTIC_BOUNDARY_AUDIO_CAPTURE);
+  BEACON_TEST_REQUIRE(capabilities.audio_unavailable_code() ==
+                      capture_unavailable_code);
+  BEACON_TEST_REQUIRE(!completion(host.dispatch(prepare_video()))
+                           .worker_completion()
+                           .succeeded());
+  BEACON_TEST_REQUIRE(pipeline.plans.empty());
+  BEACON_TEST_REQUIRE(pipeline.audio.plans.empty());
 }
 
 void unsupported_versions_receive_one_correlated_failure() {
@@ -245,13 +313,13 @@ void unsupported_versions_receive_one_correlated_failure() {
   RecordingPipeline pipeline;
   AuthorizedQuicTicketStore tickets;
   WorkerHost host({std::byte{1}}, 42, transport, tickets, pipeline,
-                  available_video());
+                  pipeline.audio, available_video(), available_audio());
   auto request = command(17, "session-a");
   request.set_protocol_version(2);
   request.mutable_prepare_session();
 
   const auto responses = host.dispatch(request);
-  const auto& result = completion(responses);
+  const auto &result = completion(responses);
 
   BEACON_TEST_REQUIRE(result.request_id() == 17);
   BEACON_TEST_REQUIRE(result.session_id() == "session-a");
@@ -259,9 +327,10 @@ void unsupported_versions_receive_one_correlated_failure() {
   BEACON_TEST_REQUIRE(
       result.worker_completion().error_code() ==
       beacon::worker::v1::WORKER_ERROR_CODE_UNSUPPORTED_VERSION);
-  BEACON_TEST_REQUIRE(std::ranges::count_if(responses, [](const WorkerIpcEnvelope& value) {
-                        return value.body_case() == WorkerIpcEnvelope::kWorkerCompletion;
-                      }) == 1);
+  BEACON_TEST_REQUIRE(
+      std::ranges::count_if(responses, [](const WorkerIpcEnvelope &value) {
+        return value.body_case() == WorkerIpcEnvelope::kWorkerCompletion;
+      }) == 1);
 }
 
 void marker_ready_state_does_not_claim_encoded_or_sent_media() {
@@ -270,10 +339,11 @@ void marker_ready_state_does_not_claim_encoded_or_sent_media() {
   RecordingPipeline pipeline;
   AuthorizedQuicTicketStore tickets;
   WorkerHost host({std::byte{1}}, 42, transport, tickets, pipeline,
-                  available_video());
+                  pipeline.audio, available_video(), available_audio());
 
   auto prepare = prepare_video();
-  BEACON_TEST_REQUIRE(completion(host.dispatch(prepare)).worker_completion().succeeded());
+  BEACON_TEST_REQUIRE(
+      completion(host.dispatch(prepare)).worker_completion().succeeded());
   const std::vector expected_plans{video::WorkerVideoPlan{
       .session_id = "session-a",
       .display_device_name = L"\\\\.\\DISPLAY7",
@@ -286,6 +356,14 @@ void marker_ready_state_does_not_claim_encoded_or_sent_media() {
       .maximum_bitrate_bps = 40'000'000,
   }};
   BEACON_TEST_REQUIRE(pipeline.plans == expected_plans);
+  const std::vector expected_audio_plans{audio::WorkerAudioPlan{
+      .session_id = "session-a",
+      .sample_rate_hz = 48'000,
+      .channel_count = 2,
+      .frame_duration_us = 20'000,
+      .bitrate_bps = 96'000,
+  }};
+  BEACON_TEST_REQUIRE(pipeline.audio.plans == expected_audio_plans);
 
   auto start = command(21, "session-a");
   start.mutable_start_media()->set_listen_port(0);
@@ -297,16 +375,17 @@ void marker_ready_state_does_not_claim_encoded_or_sent_media() {
   BEACON_TEST_REQUIRE(transport.listen_address.empty());
   BEACON_TEST_REQUIRE(transport.listen_port == 0);
   BEACON_TEST_REQUIRE(transport.packets.empty());
-  BEACON_TEST_REQUIRE(std::ranges::count_if(responses, [](const WorkerIpcEnvelope& value) {
-                        return value.body_case() ==
-                               WorkerIpcEnvelope::kWorkerTransportReady;
-                      }) == 1);
-  BEACON_TEST_REQUIRE(std::ranges::any_of(responses, [](const WorkerIpcEnvelope& value) {
-    return value.body_case() == WorkerIpcEnvelope::kWorkerTransportReady &&
-           value.worker_transport_ready().listener_port() == 45999;
-  }));
   BEACON_TEST_REQUIRE(
-      std::ranges::any_of(responses, [](const WorkerIpcEnvelope& value) {
+      std::ranges::count_if(responses, [](const WorkerIpcEnvelope &value) {
+        return value.body_case() == WorkerIpcEnvelope::kWorkerTransportReady;
+      }) == 1);
+  BEACON_TEST_REQUIRE(
+      std::ranges::any_of(responses, [](const WorkerIpcEnvelope &value) {
+        return value.body_case() == WorkerIpcEnvelope::kWorkerTransportReady &&
+               value.worker_transport_ready().listener_port() == 45999;
+      }));
+  BEACON_TEST_REQUIRE(
+      std::ranges::any_of(responses, [](const WorkerIpcEnvelope &value) {
         return value.body_case() == WorkerIpcEnvelope::kMediaMetrics &&
                value.media_metrics().encoded_frames() == 0 &&
                value.media_metrics().sent_datagrams() == 0 &&
@@ -322,19 +401,21 @@ void failed_listener_open_emits_no_transport_ready_event() {
   RecordingPipeline pipeline;
   AuthorizedQuicTicketStore tickets;
   WorkerHost host({std::byte{1}}, 42, transport, tickets, pipeline,
-                  available_video());
+                  pipeline.audio, available_video(), available_audio());
 
   auto prepare = prepare_video(22);
-  BEACON_TEST_REQUIRE(completion(host.dispatch(prepare)).worker_completion().succeeded());
+  BEACON_TEST_REQUIRE(
+      completion(host.dispatch(prepare)).worker_completion().succeeded());
 
   auto start = command(23, "session-a");
   start.mutable_start_media()->set_listen_port(0);
   const auto responses = host.dispatch(start);
 
   BEACON_TEST_REQUIRE(!completion(responses).worker_completion().succeeded());
-  BEACON_TEST_REQUIRE(std::ranges::none_of(responses, [](const WorkerIpcEnvelope& value) {
-    return value.body_case() == WorkerIpcEnvelope::kWorkerTransportReady;
-  }));
+  BEACON_TEST_REQUIRE(
+      std::ranges::none_of(responses, [](const WorkerIpcEnvelope &value) {
+        return value.body_case() == WorkerIpcEnvelope::kWorkerTransportReady;
+      }));
 }
 
 void prepare_rejects_missing_windows_display_device_name() {
@@ -342,9 +423,9 @@ void prepare_rejects_missing_windows_display_device_name() {
   RecordingPipeline pipeline;
   AuthorizedQuicTicketStore tickets;
   WorkerHost host({std::byte{1}}, 42, transport, tickets, pipeline,
-                  available_video());
+                  pipeline.audio, available_video(), available_audio());
   auto prepare = command(24, "session-a");
-  auto* plan = prepare.mutable_prepare_session();
+  auto *plan = prepare.mutable_prepare_session();
   plan->set_display_target("display-a");
   plan->set_video_codec(beacon::worker::v1::WORKER_VIDEO_CODEC_H264);
   plan->set_width(2560);
@@ -354,12 +435,11 @@ void prepare_rejects_missing_windows_display_device_name() {
   plan->set_dynamic_range(beacon::worker::v1::WORKER_DYNAMIC_RANGE_SDR);
 
   const auto responses = host.dispatch(prepare);
-  const auto& result = completion(responses);
+  const auto &result = completion(responses);
 
   BEACON_TEST_REQUIRE(!result.worker_completion().succeeded());
-  BEACON_TEST_REQUIRE(
-      result.worker_completion().error_code() ==
-      beacon::worker::v1::WORKER_ERROR_CODE_INVALID_REQUEST);
+  BEACON_TEST_REQUIRE(result.worker_completion().error_code() ==
+                      beacon::worker::v1::WORKER_ERROR_CODE_INVALID_REQUEST);
 }
 
 void benchmark_plan_is_prepared_without_a_display_or_video_mode() {
@@ -368,7 +448,7 @@ void benchmark_plan_is_prepared_without_a_display_or_video_mode() {
   RecordingPipeline pipeline;
   AuthorizedQuicTicketStore tickets;
   WorkerHost host({std::byte{1}}, 42, transport, tickets, pipeline,
-                  available_video());
+                  pipeline.audio, available_video(), available_audio());
 
   auto prepare = command(24, "benchmark-session");
   auto *plan = prepare.mutable_prepare_benchmark()->mutable_plan();
@@ -399,11 +479,13 @@ void ticket_authorization_is_hash_only_and_worker_bound() {
   RecordingPipeline pipeline;
   AuthorizedQuicTicketStore tickets;
   WorkerHost host({std::byte{1}, std::byte{2}}, 42, transport, tickets,
-                  pipeline, available_video());
-  BEACON_TEST_REQUIRE(
-      completion(host.dispatch(prepare_video())).worker_completion().succeeded());
+                  pipeline, pipeline.audio, available_video(),
+                  available_audio());
+  BEACON_TEST_REQUIRE(completion(host.dispatch(prepare_video()))
+                          .worker_completion()
+                          .succeeded());
   auto authorize = command(25, "session-a");
-  auto* ticket = authorize.mutable_authorize_ticket();
+  auto *ticket = authorize.mutable_authorize_ticket();
   const std::string raw_ticket = "worker-bound-ticket";
   const auto ticket_hash = beacon::worker::hash_stream_ticket(
       {reinterpret_cast<const std::byte *>(raw_ticket.data()),
@@ -415,20 +497,21 @@ void ticket_authorization_is_hash_only_and_worker_bound() {
   ticket->set_worker_instance_id("\x01\x02");
 
   const auto accepted = host.dispatch(authorize);
-  const auto consumed = tickets.authorize(
-      {reinterpret_cast<const std::byte *>(raw_ticket.data()), raw_ticket.size()},
-      "z-fold-7", "session-a", 8, 1'000);
+  const auto consumed =
+      tickets.authorize({reinterpret_cast<const std::byte *>(raw_ticket.data()),
+                         raw_ticket.size()},
+                        "z-fold-7", "session-a", 8, 1'000);
   auto revoke = command(26, "session-a");
   revoke.mutable_revoke_ticket()->set_ticket_hash(ticket_hash.data(),
-                                                   ticket_hash.size());
+                                                  ticket_hash.size());
   const auto revoked = host.dispatch(revoke);
   ticket->set_worker_instance_id("\x09");
   const auto rejected = host.dispatch(authorize);
 
   BEACON_TEST_REQUIRE(completion(accepted).worker_completion().succeeded());
-  BEACON_TEST_REQUIRE(consumed.result ==
-                      beacon::stream::StreamTicketAuthorizationResult::
-                          accepted);
+  BEACON_TEST_REQUIRE(
+      consumed.result ==
+      beacon::stream::StreamTicketAuthorizationResult::accepted);
   BEACON_TEST_REQUIRE(consumed.selected_video.has_value());
   BEACON_TEST_REQUIRE(consumed.selected_video->width() == 2560);
   BEACON_TEST_REQUIRE(consumed.selected_video->height() == 1600);
@@ -447,7 +530,7 @@ void bitrate_order_and_pipeline_prepare_failures_are_rejected() {
   RecordingPipeline pipeline;
   AuthorizedQuicTicketStore tickets;
   WorkerHost host({std::byte{1}}, 42, transport, tickets, pipeline,
-                  available_video());
+                  pipeline.audio, available_video(), available_audio());
 
   auto unordered = prepare_video();
   unordered.mutable_prepare_session()->set_minimum_bitrate_kbps(30'000);
@@ -456,11 +539,19 @@ void bitrate_order_and_pipeline_prepare_failures_are_rejected() {
   BEACON_TEST_REQUIRE(pipeline.plans.empty());
 
   pipeline.prepare_result = false;
-  BEACON_TEST_REQUIRE(
-      !completion(host.dispatch(prepare_video(21)))
-           .worker_completion()
-           .succeeded());
+  BEACON_TEST_REQUIRE(!completion(host.dispatch(prepare_video(21)))
+                           .worker_completion()
+                           .succeeded());
   BEACON_TEST_REQUIRE(pipeline.plans.size() == 1);
+
+  pipeline.prepare_result = true;
+  pipeline.audio.prepare_result = false;
+  BEACON_TEST_REQUIRE(!completion(host.dispatch(prepare_video(22)))
+                           .worker_completion()
+                           .succeeded());
+  BEACON_TEST_REQUIRE(pipeline.plans.size() == 2);
+  BEACON_TEST_REQUIRE(pipeline.audio.plans.size() == 1);
+  BEACON_TEST_REQUIRE(pipeline.reset_count == 1);
 }
 
 void idr_stop_and_shutdown_follow_pipeline_lifecycle_order() {
@@ -470,10 +561,12 @@ void idr_stop_and_shutdown_follow_pipeline_lifecycle_order() {
   std::vector<std::string> lifecycle;
   transport.lifecycle = &lifecycle;
   pipeline.lifecycle = &lifecycle;
+  pipeline.audio.lifecycle = &lifecycle;
   WorkerHost host({std::byte{1}}, 42, transport, tickets, pipeline,
-                  available_video());
-  BEACON_TEST_REQUIRE(
-      completion(host.dispatch(prepare_video())).worker_completion().succeeded());
+                  pipeline.audio, available_video(), available_audio());
+  BEACON_TEST_REQUIRE(completion(host.dispatch(prepare_video()))
+                          .worker_completion()
+                          .succeeded());
   auto start = command(21, "session-a");
   start.mutable_start_media()->set_listen_port(50000);
   BEACON_TEST_REQUIRE(
@@ -492,6 +585,7 @@ void idr_stop_and_shutdown_follow_pipeline_lifecycle_order() {
   BEACON_TEST_REQUIRE(
       completion(host.dispatch(stop)).worker_completion().succeeded());
   const std::vector expected_stop{std::string{"pipeline-reset"},
+                                  std::string{"audio-pipeline-reset"},
                                   std::string{"transport-close"}};
   BEACON_TEST_REQUIRE(lifecycle == expected_stop);
 
@@ -501,6 +595,7 @@ void idr_stop_and_shutdown_follow_pipeline_lifecycle_order() {
   BEACON_TEST_REQUIRE(
       completion(host.dispatch(shutdown)).worker_completion().succeeded());
   const std::vector expected_shutdown{std::string{"pipeline-reset"},
+                                      std::string{"audio-pipeline-reset"},
                                       std::string{"transport-shutdown"}};
   BEACON_TEST_REQUIRE(lifecycle == expected_shutdown);
 }
@@ -510,7 +605,7 @@ void explicit_shutdown_is_acknowledged_and_releases_once() {
   RecordingPipeline pipeline;
   AuthorizedQuicTicketStore tickets;
   WorkerHost host({std::byte{1}}, 42, transport, tickets, pipeline,
-                  available_video());
+                  pipeline.audio, available_video(), available_audio());
   auto shutdown = command(30, "");
   shutdown.mutable_shutdown_worker();
 
@@ -522,6 +617,7 @@ void explicit_shutdown_is_acknowledged_and_releases_once() {
   BEACON_TEST_REQUIRE(host.shutdown_requested());
   BEACON_TEST_REQUIRE(transport.shutdown_count == 1);
   BEACON_TEST_REQUIRE(pipeline.reset_count == 1);
+  BEACON_TEST_REQUIRE(pipeline.audio.reset_count == 1);
 }
 
 void video_failure_events_preserve_stage_and_platform_status() {
@@ -534,17 +630,35 @@ void video_failure_events_preserve_stage_and_platform_status() {
   });
 
   BEACON_TEST_REQUIRE(events.size() == 2);
-  const auto& diagnostic = events[1].worker_diagnostic();
+  const auto &diagnostic = events[1].worker_diagnostic();
   BEACON_TEST_REQUIRE(diagnostic.failure_stage() == "capture-session-create");
   BEACON_TEST_REQUIRE(diagnostic.platform_error_code() == 0x80070005U);
 }
 
-}  // namespace
+void audio_failure_events_preserve_boundary_stage_and_platform_status() {
+  const auto events = beacon::worker::make_audio_pipeline_failure_events({
+      .session_id = "session-a",
+      .session_generation = 32,
+      .boundary = audio::AudioPipelineFailureBoundary::capture,
+      .failure_stage = "packet-acquire",
+      .native_code = 0x88890004U,
+  });
+
+  BEACON_TEST_REQUIRE(events.size() == 2);
+  const auto &diagnostic = events[1].worker_diagnostic();
+  BEACON_TEST_REQUIRE(diagnostic.boundary() ==
+                      beacon::worker::v1::DIAGNOSTIC_BOUNDARY_AUDIO_CAPTURE);
+  BEACON_TEST_REQUIRE(diagnostic.failure_stage() == "packet-acquire");
+  BEACON_TEST_REQUIRE(diagnostic.platform_error_code() == 0x88890004U);
+}
+
+} // namespace
 
 int main() {
   return beacon::stream::testing::run_tests([] {
     hello_capabilities_and_ready_are_typed_and_instance_bound();
     unavailable_video_is_reported_without_poisoning_worker();
+    unavailable_audio_is_reported_without_preparing_a_session();
     unsupported_versions_receive_one_correlated_failure();
     marker_ready_state_does_not_claim_encoded_or_sent_media();
     failed_listener_open_emits_no_transport_ready_event();
@@ -555,5 +669,6 @@ int main() {
     idr_stop_and_shutdown_follow_pipeline_lifecycle_order();
     explicit_shutdown_is_acknowledged_and_releases_once();
     video_failure_events_preserve_stage_and_platform_status();
+    audio_failure_events_preserve_boundary_stage_and_platform_status();
   });
 }

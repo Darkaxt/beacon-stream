@@ -1,8 +1,11 @@
+#include "beacon/worker/audio/production_audio_capabilities.h"
+#include "beacon/worker/audio/production_audio_generation.h"
+#include "beacon/worker/audio/worker_audio_pipeline.h"
 #include "beacon/worker/named_pipe_channel.h"
 #include "beacon/worker/outbound_queue.h"
 #include "beacon/worker/quic_listener.h"
-#include "beacon/worker/video/production_video_generation.h"
 #include "beacon/worker/video/production_video_capabilities.h"
+#include "beacon/worker/video/production_video_generation.h"
 #include "beacon/worker/video/worker_video_pipeline.h"
 #include "beacon/worker/worker_events.h"
 #include "beacon/worker/worker_host.h"
@@ -27,7 +30,7 @@
 namespace {
 
 class ProcessWinrtApartment final {
- public:
+public:
   ProcessWinrtApartment() {
     const auto result = RoInitialize(RO_INIT_MULTITHREADED);
     if (FAILED(result) && result != RPC_E_CHANGED_MODE) {
@@ -43,25 +46,26 @@ class ProcessWinrtApartment final {
     }
   }
 
- private:
+private:
   bool uninitialize_{};
 };
 
 std::vector<std::byte> create_instance_id() {
   std::vector<std::byte> id(16);
-  const auto status = BCryptGenRandom(nullptr, reinterpret_cast<PUCHAR>(id.data()),
-                                      static_cast<ULONG>(id.size()),
-                                      BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+  const auto status = BCryptGenRandom(
+      nullptr, reinterpret_cast<PUCHAR>(id.data()),
+      static_cast<ULONG>(id.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
   if (status < 0) {
     return {};
   }
   return id;
 }
 
-}  // namespace
+} // namespace
 
-int wmain(int argument_count, wchar_t** arguments) {
-  SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+int wmain(int argument_count, wchar_t **arguments) {
+  SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX |
+               SEM_NOOPENFILEERRORBOX);
   if (argument_count != 5 || std::wstring_view(arguments[1]) != L"--pipe" ||
       std::wstring_view(arguments[3]) != L"--identity") {
     return 1;
@@ -82,8 +86,7 @@ int wmain(int argument_count, wchar_t** arguments) {
       static_cast<void>(process_result.compare_exchange_strong(
           expected, code, std::memory_order_acq_rel));
     };
-    using EventBatch =
-        std::vector<beacon::worker::v1::WorkerIpcEnvelope>;
+    using EventBatch = std::vector<beacon::worker::v1::WorkerIpcEnvelope>;
     using EventDispatcher = std::function<bool(EventBatch)>;
     auto enqueue_async = std::make_shared<EventDispatcher>(
         [&channel, &outbound, &record_failure](EventBatch events) {
@@ -109,25 +112,43 @@ int wmain(int argument_count, wchar_t** arguments) {
         });
     beacon::worker::video::ProductionVideoGenerationFactory generation_factory(
         transport,
-        [enqueue_async](beacon::worker::video::VideoPipelineFailureEvent failure) {
+        [enqueue_async](
+            beacon::worker::video::VideoPipelineFailureEvent failure) {
           static_cast<void>((*enqueue_async)(
               beacon::worker::make_video_pipeline_failure_events(failure)));
         });
     auto video_pipeline =
         std::make_shared<beacon::worker::video::WorkerVideoPipeline>(
             generation_factory);
+    beacon::worker::audio::ProductionAudioGenerationFactory
+        audio_generation_factory(
+            transport,
+            [enqueue_async](
+                beacon::worker::audio::AudioPipelineFailureEvent failure) {
+              static_cast<void>((*enqueue_async)(
+                  beacon::worker::make_audio_pipeline_failure_events(failure)));
+            });
+    auto audio_pipeline =
+        std::make_shared<beacon::worker::audio::WorkerAudioPipeline>(
+            audio_generation_factory);
     std::weak_ptr<beacon::worker::video::IWorkerVideoPipeline>
         weak_video_pipeline = video_pipeline;
-    transport.set_media_event_sink(
-        [weak_video_pipeline](beacon::worker::QuicMediaEvent event) {
-          if (const auto pipeline = weak_video_pipeline.lock()) {
-            pipeline->handle_media_event(event);
-          }
-        });
+    std::weak_ptr<beacon::worker::audio::IWorkerAudioPipeline>
+        weak_audio_pipeline = audio_pipeline;
+    transport.set_media_event_sink([weak_video_pipeline, weak_audio_pipeline](
+                                       beacon::worker::QuicMediaEvent event) {
+      if (const auto pipeline = weak_video_pipeline.lock()) {
+        pipeline->handle_media_event(event);
+      }
+      if (const auto pipeline = weak_audio_pipeline.lock()) {
+        pipeline->handle_media_event(event);
+      }
+    });
     beacon::worker::WorkerHost host(
         std::move(instance_id), GetCurrentProcessId(), transport, tickets,
-        *video_pipeline,
-        beacon::worker::video::probe_windows_production_video_capabilities());
+        *video_pipeline, *audio_pipeline,
+        beacon::worker::video::probe_windows_production_video_capabilities(),
+        beacon::worker::audio::probe_windows_production_audio_capabilities());
     if (outbound.enqueue({host.hello(), host.capabilities(), host.ready()}) !=
         beacon::worker::WorkerOutboundEnqueueResult::accepted) {
       return 3;
@@ -141,6 +162,7 @@ int wmain(int argument_count, wchar_t** arguments) {
               beacon::worker::FrameDecodeStatus::success) {
             record_failure(4);
             video_pipeline->reset();
+            audio_pipeline->reset();
             transport.shutdown();
             outbound.close();
             channel.cancel_pending_io();
@@ -156,6 +178,7 @@ int wmain(int argument_count, wchar_t** arguments) {
               beacon::worker::WorkerOutboundEnqueueResult::accepted) {
             record_failure(5);
             video_pipeline->reset();
+            audio_pipeline->reset();
             transport.shutdown();
             outbound.close();
             channel.cancel_pending_io();
@@ -168,6 +191,7 @@ int wmain(int argument_count, wchar_t** arguments) {
       } catch (...) {
         record_failure(6);
         video_pipeline->reset();
+        audio_pipeline->reset();
         transport.shutdown();
         outbound.close();
         channel.cancel_pending_io();
@@ -185,19 +209,20 @@ int wmain(int argument_count, wchar_t** arguments) {
       if (write_failed) {
         record_failure(5);
         video_pipeline->reset();
+        audio_pipeline->reset();
         transport.shutdown();
         outbound.close();
         channel.cancel_pending_io();
         break;
       }
-      if (item->kind ==
-          beacon::worker::WorkerOutboundBatchKind::terminal) {
+      if (item->kind == beacon::worker::WorkerOutboundBatchKind::terminal) {
         outbound.close();
       }
     }
     channel.cancel_pending_io();
     command_reader.join();
     video_pipeline->reset();
+    audio_pipeline->reset();
     return process_result.load(std::memory_order_acquire);
   } catch (...) {
     return 6;

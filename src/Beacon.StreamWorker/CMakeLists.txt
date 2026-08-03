@@ -5,6 +5,7 @@ add_library(
     src/outbound_queue.cpp
     src/quic_listener.cpp
     src/quic_ticket_store.cpp
+    src/audio/worker_audio_pipeline.cpp
     src/video/worker_video_pipeline.cpp
     src/worker_events.cpp
     src/worker_host.cpp
@@ -51,6 +52,11 @@ if(WIN32)
   add_library(
     BeaconStreamWorkerCore
     STATIC
+      src/audio/audio_media_session.cpp
+      src/audio/opus_audio_encoder.cpp
+      src/audio/production_audio_capabilities.cpp
+      src/audio/production_audio_generation.cpp
+      src/audio/wasapi_loopback_capture.cpp
       src/capture/wgc_display_capture.cpp
       src/capture/windows_wgc_capture_platform.cpp
       src/named_pipe_channel.cpp
@@ -74,8 +80,10 @@ if(WIN32)
       d3d11
       dwmapi
       dxgi
+      ole32
       runtimeobject
       windowsapp
+      opus
   )
   target_compile_options(BeaconStreamWorkerCore PRIVATE /W4 /WX /permissive-)
   beacon_use_windows_app_sdk(BeaconStreamWorkerCore)

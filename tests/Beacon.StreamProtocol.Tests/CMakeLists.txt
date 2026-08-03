@@ -46,6 +46,13 @@ target_link_libraries(BeaconVideoMediaPacketizerTests PRIVATE Beacon::StreamProt
 add_test(NAME BeaconStreamProtocol.VideoMediaPacketizer COMMAND BeaconVideoMediaPacketizerTests)
 
 add_executable(
+  BeaconAudioMediaPacketizerTests
+  audio_media_packetizer_tests.cpp
+)
+target_link_libraries(BeaconAudioMediaPacketizerTests PRIVATE Beacon::StreamProtocol)
+add_test(NAME BeaconStreamProtocol.AudioMediaPacketizer COMMAND BeaconAudioMediaPacketizerTests)
+
+add_executable(
   BeaconAccessUnitVectorTests
   access_unit_vector.cpp
   access_unit_vector_tests.cpp

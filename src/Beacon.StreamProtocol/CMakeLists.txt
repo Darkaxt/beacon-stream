@@ -1,6 +1,7 @@
 add_library(
   BeaconStreamProtocol
   STATIC
+    src/audio_media_packetizer.cpp
     src/benchmark_datagram.cpp
     src/frame_assembler.cpp
     src/media_datagram.cpp

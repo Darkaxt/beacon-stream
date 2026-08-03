@@ -23,6 +23,7 @@
 namespace {
 
 constexpr std::uint32_t kHostedVideoUnavailableCode{1};
+constexpr std::uint32_t kHostedAudioUnavailableCode{1};
 
 class NoVideoPipeline final
     : public beacon::worker::video::IWorkerVideoPipeline {
@@ -32,6 +33,16 @@ public:
   }
   void handle_media_event(const beacon::worker::QuicMediaEvent &) override {}
   bool request_idr() override { return false; }
+  void reset() noexcept override {}
+};
+
+class NoAudioPipeline final
+    : public beacon::worker::audio::IWorkerAudioPipeline {
+public:
+  bool prepare(const beacon::worker::audio::WorkerAudioPlan &) override {
+    return false;
+  }
+  void handle_media_event(const beacon::worker::QuicMediaEvent &) override {}
   void reset() noexcept override {}
 };
 
@@ -91,8 +102,9 @@ int main(int argument_count, char **arguments) {
     beacon::worker::WorkerOutboundQueue outbound;
     beacon::worker::AuthorizedQuicTicketStore tickets;
     NoVideoPipeline video_pipeline;
-    beacon::worker::QuicListener transport(
-        std::filesystem::path{arguments[2]}, tickets);
+    NoAudioPipeline audio_pipeline;
+    beacon::worker::QuicListener transport(std::filesystem::path{arguments[2]},
+                                           tickets);
     transport.set_event_sink(
         [&outbound, &channel](beacon::worker::v1::WorkerIpcEnvelope event) {
           std::vector<beacon::worker::v1::WorkerIpcEnvelope> batch;
@@ -103,23 +115,29 @@ int main(int argument_count, char **arguments) {
             channel.cancel_read();
           }
         });
-    transport.set_media_event_sink(
-        [&video_pipeline](beacon::worker::QuicMediaEvent event) {
-          video_pipeline.handle_media_event(event);
-        });
+    transport.set_media_event_sink([&video_pipeline, &audio_pipeline](
+                                       beacon::worker::QuicMediaEvent event) {
+      video_pipeline.handle_media_event(event);
+      audio_pipeline.handle_media_event(event);
+    });
     beacon::worker::WorkerHost host(
         std::move(instance_id), static_cast<std::uint32_t>(::getpid()),
-        transport, tickets, video_pipeline,
+        transport, tickets, video_pipeline, audio_pipeline,
         {.available = false,
-         .unavailable_boundary = beacon::worker::video::
-             ProductionVideoCapabilityBoundary::encoder,
-         .unavailable_code = kHostedVideoUnavailableCode});
+         .unavailable_boundary =
+             beacon::worker::video::ProductionVideoCapabilityBoundary::encoder,
+         .unavailable_code = kHostedVideoUnavailableCode},
+        {.available = false,
+         .unavailable_boundary =
+             beacon::worker::audio::ProductionAudioCapabilityBoundary::capture,
+         .unavailable_code = kHostedAudioUnavailableCode});
 
     write_marker("BEACON_HOSTED_WORKER_READY");
     const auto result =
         beacon::testing::run_hosted_worker_control(channel, host, outbound);
     if (!host.shutdown_requested()) {
       video_pipeline.reset();
+      audio_pipeline.reset();
       transport.shutdown();
     }
     const auto code = failure_code(result);
