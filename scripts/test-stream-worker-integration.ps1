@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Remove-Item Env:BEACON_TEST_ALLOW_UNSUPPORTED_VIDEO_HARDWARE -ErrorAction SilentlyContinue
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($WorkerPath)) {
     $WorkerPath = Join-Path $repositoryRoot `
@@ -32,6 +33,9 @@ if ($null -eq $primaryScreen) {
 $displayDevice = $primaryScreen.DeviceName
 $displayWidth = $primaryScreen.Bounds.Width
 $displayHeight = $primaryScreen.Bounds.Height
+if ($AllowUnsupportedVideoHardware) {
+    $env:BEACON_TEST_ALLOW_UNSUPPORTED_VIDEO_HARDWARE = '1'
+}
 try {
     $key = [Security.Cryptography.RSA]::Create(3072)
     try {
@@ -133,6 +137,7 @@ try {
     Write-Host $startupExitOutput
 }
 finally {
+    Remove-Item Env:BEACON_TEST_ALLOW_UNSUPPORTED_VIDEO_HARDWARE -ErrorAction SilentlyContinue
     Remove-Item Env:BEACON_SERVER_IDENTITY_PATH -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $identityPath -Force -ErrorAction SilentlyContinue
 }

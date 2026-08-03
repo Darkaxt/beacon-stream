@@ -524,6 +524,31 @@ public sealed class StreamWorkerProcessHostTests
     }
 
     [Fact]
+    public void UnsupportedVideoHardwareOptInAcceptsOnlyExactCapabilityFailure()
+    {
+        Assert.True(IsAllowedUnsupportedVideoHardwareResult(
+            "1",
+            succeeded: false,
+            WorkerErrorCode.CapabilityUnavailable));
+        Assert.False(IsAllowedUnsupportedVideoHardwareResult(
+            null,
+            succeeded: false,
+            WorkerErrorCode.CapabilityUnavailable));
+        Assert.False(IsAllowedUnsupportedVideoHardwareResult(
+            "0",
+            succeeded: false,
+            WorkerErrorCode.CapabilityUnavailable));
+        Assert.False(IsAllowedUnsupportedVideoHardwareResult(
+            "1",
+            succeeded: false,
+            WorkerErrorCode.OperationFailed));
+        Assert.False(IsAllowedUnsupportedVideoHardwareResult(
+            "1",
+            succeeded: true,
+            WorkerErrorCode.CapabilityUnavailable));
+    }
+
+    [Fact]
     public async Task RealWorkerCompletesExplicitLifecycleWhenBinaryIsAvailable()
     {
         string? executable = Environment.GetEnvironmentVariable("BEACON_STREAM_WORKER_PATH");
@@ -546,6 +571,18 @@ public sealed class StreamWorkerProcessHostTests
             authorizationContext.RuntimeGeneration,
             Prepare("integration-session"),
             CancellationToken.None);
+        if (IsAllowedUnsupportedVideoHardwareResult(
+            Environment.GetEnvironmentVariable("BEACON_TEST_ALLOW_UNSUPPORTED_VIDEO_HARDWARE"),
+            prepare.Completion.WorkerCompletion.Succeeded,
+            prepare.Completion.WorkerCompletion.ErrorCode))
+        {
+            Assert.False(prepare.Completion.WorkerCompletion.Succeeded);
+            Assert.Equal(
+                WorkerErrorCode.CapabilityUnavailable,
+                prepare.Completion.WorkerCompletion.ErrorCode);
+            return;
+        }
+
         Assert.True(
             prepare.Completion.WorkerCompletion.Succeeded,
             $"StreamWorker prepare failed ({prepare.Completion.WorkerCompletion.ErrorCode}).");
@@ -635,6 +672,14 @@ public sealed class StreamWorkerProcessHostTests
             AudioBitrateBps = 96_000,
         },
     };
+
+    private static bool IsAllowedUnsupportedVideoHardwareResult(
+        string? optIn,
+        bool succeeded,
+        WorkerErrorCode errorCode) =>
+        string.Equals(optIn, "1", StringComparison.Ordinal)
+        && !succeeded
+        && errorCode == WorkerErrorCode.CapabilityUnavailable;
 
     private static WorkerIpcEnvelope Hello(uint processId, uint version) => new()
     {

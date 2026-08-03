@@ -158,8 +158,19 @@ public sealed class ArchitectureRecoveryBoundaryTests
         string workflow = File.ReadAllText(ToPlatformPath(
             root,
             ".github/workflows/ci.yml"));
+        string processHostTests = File.ReadAllText(ToPlatformPath(
+            root,
+            "tests/Beacon.Platform.Windows.Tests/Streaming/StreamWorkerProcessHostTests.cs"));
 
         Assert.Contains("[switch]$AllowUnsupportedVideoHardware", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "$env:BEACON_TEST_ALLOW_UNSUPPORTED_VIDEO_HARDWARE = '1'",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Remove-Item Env:BEACON_TEST_ALLOW_UNSUPPORTED_VIDEO_HARDWARE",
+            script,
+            StringComparison.Ordinal);
         Assert.Contains("$nativeExitCode -eq 99", script, StringComparison.Ordinal);
         Assert.Contains(
             "BEACON_WORKER_VIDEO_FAILURE CAPTURE 5",
@@ -169,6 +180,7 @@ public sealed class ArchitectureRecoveryBoundaryTests
             "./scripts/test-stream-worker-integration.ps1 -AllowUnsupportedVideoHardware",
             workflow,
             StringComparison.Ordinal);
+        Assert.Contains("Prepare(\"integration-session\")", processHostTests, StringComparison.Ordinal);
         Assert.DoesNotContain("continue-on-error", workflow, StringComparison.OrdinalIgnoreCase);
     }
 
