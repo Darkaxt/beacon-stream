@@ -77,6 +77,7 @@ try {
         --filter 'FullyQualifiedName~RealWorkerCompletesExplicitLifecycleWhenBinaryIsAvailable'
     if ($LASTEXITCODE -ne 0) { throw 'StreamWorker process integration failed.' }
 
+    $primaryHardwareUnavailable = $false
     $nativeOutput = & $nativeProbe `
         --worker $WorkerPath `
         --identity $identityPath `
@@ -95,35 +96,43 @@ try {
             'BEACON_WORKER_VIDEO_FAILURE PREPARE CAPABILITY_UNAVAILABLE',
             'BEACON_WORKER_VIDEO_FAILURE CAPTURE 5')) {
         Write-Host $nativeOutput
+        $primaryHardwareUnavailable = $true
     }
     elseif ($AllowUnsupportedAudioHardware -and
         $nativeExitCode -eq 78 -and
         $nativeOutput -eq 'BEACON_WORKER_AUDIO_FAILURE PREPARE CAPABILITY_UNAVAILABLE') {
         Write-Host $nativeOutput
+        $primaryHardwareUnavailable = $true
     }
     elseif ($AllowUnsupportedVideoHardware -and
         $AllowUnsupportedAudioHardware -and
         $nativeExitCode -eq 79 -and
         $nativeOutput -eq 'BEACON_WORKER_MEDIA_FAILURE PREPARE CAPABILITY_UNAVAILABLE') {
         Write-Host $nativeOutput
+        $primaryHardwareUnavailable = $true
     }
     else {
         throw "Native Worker IPC/QUIC integration failed with exit code ${nativeExitCode}: $nativeOutput"
     }
 
-    $failureOutput = & $nativeProbe `
-        --worker $WorkerPath `
-        --identity $identityPath `
-        --fingerprint $fingerprint `
-        --display '\\.\BEACON-NOT-A-DISPLAY' `
-        --width 2560 `
-        --height 1600
-    $failureExitCode = $LASTEXITCODE
-    if ($failureExitCode -ne 99 -or
-        $failureOutput -ne 'BEACON_WORKER_VIDEO_FAILURE CAPTURE 2') {
-        throw "Native Worker failure diagnostic integration failed with exit code ${failureExitCode}: $failureOutput"
+    if ($primaryHardwareUnavailable) {
+        Write-Host 'BEACON_WORKER_CAPTURE_DIAGNOSTIC_UNAVAILABLE CAPABILITY_UNAVAILABLE'
     }
-    Write-Host $failureOutput
+    else {
+        $failureOutput = & $nativeProbe `
+            --worker $WorkerPath `
+            --identity $identityPath `
+            --fingerprint $fingerprint `
+            --display '\\.\BEACON-NOT-A-DISPLAY' `
+            --width 2560 `
+            --height 1600
+        $failureExitCode = $LASTEXITCODE
+        if ($failureExitCode -ne 99 -or
+            $failureOutput -ne 'BEACON_WORKER_VIDEO_FAILURE CAPTURE 2') {
+            throw "Native Worker failure diagnostic integration failed with exit code ${failureExitCode}: $failureOutput"
+        }
+        Write-Host $failureOutput
+    }
 
     $benchmarkOutput = & $nativeProbe `
         --benchmark-worker $WorkerPath `
