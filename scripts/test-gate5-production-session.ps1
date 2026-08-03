@@ -1,6 +1,9 @@
 [CmdletBinding()]
 param(
     [string]$Serial = 'emulator-5554',
+    [ValidateSet('Emulator', 'Physical')]
+    [string]$AndroidClientKind = 'Emulator',
+    [string]$ServerHost,
     [string]$EvidenceDirectory,
     [string]$BeforeConnectSignalPath,
     [switch]$ArtifactsReady
@@ -8,6 +11,11 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+$clientKind = $AndroidClientKind.ToLowerInvariant()
+if ($clientKind -eq 'physical' -and [string]::IsNullOrWhiteSpace($ServerHost)) {
+    throw 'ServerHost is required for a physical Android client.'
+}
 
 function Invoke-Gate5CleanupCommand {
     param(
@@ -60,7 +68,7 @@ if (-not $ArtifactsReady) {
 }
 
 $runId = [Guid]::NewGuid().ToString('N')
-$clientId = "gate5-emulator-$runId"
+$clientId = "gate5-$clientKind-$runId"
 $effectiveEvidenceDirectory = if ([string]::IsNullOrWhiteSpace($EvidenceDirectory)) {
     Join-Path $repositoryRoot ".artifacts\gate5-production-$runId"
 } else {
@@ -80,9 +88,14 @@ $arguments = @(
     $runId,
     '--serial',
     $Serial,
+    '--android-client-kind',
+    $clientKind,
     '--evidence-directory',
     $effectiveEvidenceDirectory
 )
+if (-not [string]::IsNullOrWhiteSpace($ServerHost)) {
+    $arguments += @('--server-host', $ServerHost)
+}
 if (-not [string]::IsNullOrWhiteSpace($BeforeConnectSignalPath)) {
     $arguments += @('--before-connect-signal', $BeforeConnectSignalPath)
 }
@@ -204,9 +217,8 @@ try {
     $removeVerified =
         $byName['remove'].ExitCode -eq 0 -or
         ($byName['remove'].ExitCode -eq 2 -and
-            $removeOutput.StartsWith(
-                'remove: failed: No active SudoVDA driver lease owns client-',
-                [StringComparison]::Ordinal))
+            $removeOutput -ceq
+                "remove: failed: No active SudoVDA driver lease owns client-$clientId.")
     $commandsVerified =
         $byName['force-physical'].ExitCode -eq 0 -and
         $byName['restore-before-guard'].ExitCode -eq 0 -and

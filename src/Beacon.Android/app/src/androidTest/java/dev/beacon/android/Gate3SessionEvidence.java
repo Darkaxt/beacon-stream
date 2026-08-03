@@ -16,6 +16,7 @@ import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
@@ -27,6 +28,8 @@ final class Gate3SessionEvidence implements BeaconVideoFeedbackBridge.Observer {
     private static final String SessionIdKey = "sessionId";
     private static final String FrameSequenceKey = "frameSequence";
     private static final String TicketEvidenceFile = "beacon-gate3-ticket-evidence";
+    private static final Pattern RunScopedClientId = Pattern.compile(
+        "gate5-(emulator|physical)-[0-9a-f]{32}");
 
     private final SharedPreferences preferences;
     private final File ticketEvidence;
@@ -44,9 +47,8 @@ final class Gate3SessionEvidence implements BeaconVideoFeedbackBridge.Observer {
     private String sessionId;
 
     private Gate3SessionEvidence(Context context, String clientId) {
-        preferences = context.getSharedPreferences(
-            PreferencesName + "." + clientId, Context.MODE_PRIVATE);
-        ticketEvidence = new File(context.getFilesDir(), TicketEvidenceFile);
+        preferences = reconnectPreferences(context, clientId);
+        ticketEvidence = ticketEvidenceFile(context, clientId);
     }
 
     static Gate3SessionEvidence startFirstInvocation(Context context, String clientId) {
@@ -63,8 +65,7 @@ final class Gate3SessionEvidence implements BeaconVideoFeedbackBridge.Observer {
     }
 
     static PreviousInvocation loadPrevious(Context context, String clientId) {
-        SharedPreferences preferences = context.getSharedPreferences(
-            PreferencesName + "." + clientId, Context.MODE_PRIVATE);
+        SharedPreferences preferences = reconnectPreferences(context, clientId);
         String ticketFingerprint = preferences.getString(TicketFingerprintKey, null);
         String sessionId = preferences.getString(SessionIdKey, null);
         long frameSequence = preferences.getLong(FrameSequenceKey, 0);
@@ -176,11 +177,25 @@ final class Gate3SessionEvidence implements BeaconVideoFeedbackBridge.Observer {
     }
 
     void clearPersistedReconnect() {
-        assertTrue("Could not clear Gate 3 reconnect evidence.", preferences.edit()
-            .remove(TicketFingerprintKey)
-            .remove(SessionIdKey)
-            .remove(FrameSequenceKey)
-            .commit());
+        assertTrue("Could not clear Gate 3 reconnect evidence.",
+            preferences.edit().clear().commit());
+    }
+
+    static SharedPreferences reconnectPreferences(Context context, String clientId) {
+        return context.getSharedPreferences(
+            PreferencesName + "." + clientId, Context.MODE_PRIVATE);
+    }
+
+    static File ticketEvidenceFile(Context context, String clientId) {
+        return new File(context.getFilesDir(), evidenceFileName(TicketEvidenceFile, clientId));
+    }
+
+    static boolean isRunScopedClientId(String clientId) {
+        return clientId != null && RunScopedClientId.matcher(clientId).matches();
+    }
+
+    static String evidenceFileName(String baseName, String clientId) {
+        return isRunScopedClientId(clientId) ? baseName + "." + clientId : baseName;
     }
 
     boolean transportConnected() {

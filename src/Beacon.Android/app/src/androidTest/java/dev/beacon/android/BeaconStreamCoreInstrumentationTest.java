@@ -27,6 +27,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -81,6 +82,76 @@ public final class BeaconStreamCoreInstrumentationTest {
         core.close();
         assertEquals(0, bindings.stopCount);
         assertEquals(1, bindings.releaseCount);
+    }
+
+    @Test
+    public void gate5RunScopedCleanupPreservesUnrelatedAndroidState() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        String requestedClientId = "gate5-physical-" + runId();
+        String unrelatedClientId = "gate5-emulator-" + runId();
+        AndroidKeyStoreCredentialStore requestedStore =
+            new AndroidKeyStoreCredentialStore(context, requestedClientId);
+        AndroidKeyStoreCredentialStore unrelatedStore =
+            new AndroidKeyStoreCredentialStore(context, unrelatedClientId);
+        File requestedCredential = credentialEvidenceFile(context, requestedClientId);
+        File unrelatedCredential = credentialEvidenceFile(context, unrelatedClientId);
+        File requestedTicket = Gate3SessionEvidence.ticketEvidenceFile(context, requestedClientId);
+        File unrelatedTicket = Gate3SessionEvidence.ticketEvidenceFile(context, unrelatedClientId);
+
+        try {
+            requestedStore.saveCredential("requested-secret");
+            unrelatedStore.saveCredential("unrelated-secret");
+            assertTrue(Gate3SessionEvidence.reconnectPreferences(context, requestedClientId)
+                .edit().putString("cleanup-marker", "requested").commit());
+            assertTrue(Gate3SessionEvidence.reconnectPreferences(context, unrelatedClientId)
+                .edit().putString("cleanup-marker", "unrelated").commit());
+            assertTrue(requestedCredential.createNewFile());
+            assertTrue(unrelatedCredential.createNewFile());
+            assertTrue(requestedTicket.createNewFile());
+            assertTrue(unrelatedTicket.createNewFile());
+
+            cleanupRunScopedClientState(context, requestedClientId);
+
+            assertNull(requestedStore.loadCredential());
+            assertTrue(Gate3SessionEvidence.reconnectPreferences(context, requestedClientId)
+                .getAll().isEmpty());
+            assertTrue(!requestedCredential.exists());
+            assertTrue(!requestedTicket.exists());
+            assertEquals("unrelated-secret", unrelatedStore.loadCredential());
+            assertEquals("unrelated", Gate3SessionEvidence.reconnectPreferences(
+                context, unrelatedClientId).getString("cleanup-marker", null));
+            assertTrue(unrelatedCredential.exists());
+            assertTrue(unrelatedTicket.exists());
+        } finally {
+            cleanupRunScopedClientState(context, requestedClientId);
+            cleanupRunScopedClientState(context, unrelatedClientId);
+        }
+    }
+
+    @Test
+    public void gate5RunScopedCleanupRejectsNonRunScopedClientId() {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+
+        assertThrows(IllegalArgumentException.class,
+            () -> cleanupRunScopedClientState(context, "z-fold-7"));
+    }
+
+    @Test
+    public void gate5CleanupClientIdSkipsOnlyAbsentOrBlankArguments() {
+        Bundle absent = new Bundle();
+        Bundle blank = new Bundle();
+        blank.putString("clientId", "   ");
+        Bundle valid = new Bundle();
+        valid.putString("clientId", " gate5-physical-0123456789abcdef0123456789abcdef ");
+        Bundle invalid = new Bundle();
+        invalid.putString("clientId", " z-fold-7 ");
+
+        assertNull(optionalCleanupClientId(absent));
+        assertNull(optionalCleanupClientId(blank));
+        assertEquals(
+            "gate5-physical-0123456789abcdef0123456789abcdef",
+            optionalCleanupClientId(valid));
+        assertEquals("z-fold-7", optionalCleanupClientId(invalid));
     }
 
     @Test
@@ -586,6 +657,17 @@ public final class BeaconStreamCoreInstrumentationTest {
     }
 
     @Test
+    public void gate5CleanupRunScopedClientState() {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        String clientId = optionalCleanupClientId(InstrumentationRegistry.getArguments());
+        assumeTrue(
+            "Gate 5 run-scoped cleanup requires an explicit clientId.",
+            clientId != null);
+        cleanupRunScopedClientState(instrumentation.getTargetContext(), clientId);
+        emit("BEACON_GATE5_ANDROID_STATE_CLEANED " + clientId);
+    }
+
+    @Test
     public void gate4NetworkAndHardwareBenchmark() throws Exception {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
         Gate4BenchmarkOutcome outcome = runGate4Benchmark(
@@ -962,8 +1044,8 @@ public final class BeaconStreamCoreInstrumentationTest {
         String clientId) {
         AndroidKeyStoreCredentialStore store = new AndroidKeyStoreCredentialStore(
             instrumentation.getTargetContext(), clientId);
-        File evidence = new File(
-            instrumentation.getTargetContext().getFilesDir(), CredentialEvidenceFile);
+        File evidence = credentialEvidenceFile(
+            instrumentation.getTargetContext(), clientId);
         if (!evidence.exists()) {
             assertTrue("Gate 3 credential is unavailable.", store.loadCredential() != null);
             return;
@@ -992,6 +1074,45 @@ public final class BeaconStreamCoreInstrumentationTest {
                 throw new IllegalStateException("Could not delete Gate 3 credential evidence.");
             }
         }
+    }
+
+    private static void cleanupRunScopedClientState(Context context, String clientId) {
+        if (!Gate3SessionEvidence.isRunScopedClientId(clientId)) {
+            throw new IllegalArgumentException(
+                "Gate 5 cleanup requires a run-scoped client ID.");
+        }
+
+        new AndroidKeyStoreCredentialStore(context, clientId).clearCredential();
+        assertTrue("Could not clear run-scoped reconnect preferences.",
+            Gate3SessionEvidence.reconnectPreferences(context, clientId)
+                .edit().clear().commit());
+        deleteRunScopedEvidence(credentialEvidenceFile(context, clientId));
+        deleteRunScopedEvidence(Gate3SessionEvidence.ticketEvidenceFile(context, clientId));
+    }
+
+    private static String optionalCleanupClientId(Bundle arguments) {
+        String clientId = arguments.getString("clientId");
+        if (clientId == null || clientId.trim().isEmpty()) {
+            return null;
+        }
+        return clientId.trim();
+    }
+
+    private static File credentialEvidenceFile(Context context, String clientId) {
+        return new File(
+            context.getFilesDir(),
+            Gate3SessionEvidence.evidenceFileName(CredentialEvidenceFile, clientId));
+    }
+
+    private static void deleteRunScopedEvidence(File evidence) {
+        if (evidence.exists() && !evidence.delete()) {
+            throw new IllegalStateException(
+                "Could not delete run-scoped Android test evidence: " + evidence.getName());
+        }
+    }
+
+    private static String runId() {
+        return UUID.randomUUID().toString().replace("-", "");
     }
 
     private static void registerAndLaunch(BeaconViewModel model) throws Exception {
@@ -1280,6 +1401,9 @@ public final class BeaconStreamCoreInstrumentationTest {
     private static void emit(String marker) {
         Log.i("BeaconGate3", marker);
         System.out.println(marker);
+        Bundle status = new Bundle();
+        status.putString(Instrumentation.REPORT_KEY_STREAMRESULT, marker + "\n");
+        InstrumentationRegistry.getInstrumentation().sendStatus(2, status);
     }
 
     private static void assertSuccessful(BeaconViewModel model) {

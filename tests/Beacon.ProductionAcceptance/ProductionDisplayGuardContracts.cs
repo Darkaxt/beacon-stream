@@ -12,7 +12,7 @@ internal sealed record ProductionDisplayGuardOptions(
     string LogPath)
 {
     private static readonly Regex ClientIdPattern = new(
-        "^[a-z0-9][a-z0-9-]{0,127}$",
+        "^gate5-(emulator|physical)-[0-9a-f]{32}\\z",
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
     public static ProductionDisplayGuardOptions Parse(IReadOnlyList<string> args)
@@ -93,7 +93,8 @@ internal static class ProductionDisplayRecoveryVerifier
     ];
 
     public static ProductionDisplayRecoveryResult Verify(
-        IReadOnlyList<ProductionDisplayGuardCommandResult> commands)
+        IReadOnlyList<ProductionDisplayGuardCommandResult> commands,
+        string expectedClientId)
     {
         Dictionary<string, ProductionDisplayGuardCommandResult> byName;
         try
@@ -112,7 +113,8 @@ internal static class ProductionDisplayRecoveryVerifier
                 return ProductionDisplayRecoveryResult.Failed(
                     $"Display recovery did not execute required command '{name}'.");
             }
-            if (command.ExitCode != 0 && !IsAlreadyAbsentRemove(name, command))
+            if (command.ExitCode != 0 &&
+                !IsAlreadyAbsentRemove(name, command, expectedClientId))
             {
                 return ProductionDisplayRecoveryResult.Failed(
                     $"Display recovery command '{name}' failed with exit code {command.ExitCode}: " +
@@ -161,11 +163,13 @@ internal static class ProductionDisplayRecoveryVerifier
 
     private static bool IsAlreadyAbsentRemove(
         string name,
-        ProductionDisplayGuardCommandResult command) =>
+        ProductionDisplayGuardCommandResult command,
+        string expectedClientId) =>
         string.Equals(name, "remove", StringComparison.Ordinal) &&
         command.ExitCode == 2 &&
         string.IsNullOrWhiteSpace(command.Error) &&
-        command.Output.Trim().StartsWith(
-            "remove: failed: No active SudoVDA driver lease owns client-",
+        string.Equals(
+            command.Output.Trim(),
+            $"remove: failed: No active SudoVDA driver lease owns client-{expectedClientId}.",
             StringComparison.Ordinal);
 }

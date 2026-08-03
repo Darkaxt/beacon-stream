@@ -52,6 +52,105 @@ public sealed class ProductionDisplayGuardTests
         Assert.Equal("0123456789abcdef0123456789abcdef", options.RunId);
     }
 
+    [Fact]
+    public void AcceptanceOptionsPreserveEmulatorDefaults()
+    {
+        AcceptanceOptions options = AcceptanceOptions.Parse(
+            [
+                "--repository-root", @"C:\repo",
+                "--run-id", "0123456789abcdef0123456789abcdef"
+            ]);
+
+        Assert.Equal(AndroidClientKind.Emulator, options.ClientKind);
+        Assert.Equal("emulator-5554", options.Serial);
+        Assert.Equal("10.0.2.2", options.ServerHost);
+        Assert.Equal("gate5-emulator-0123456789abcdef0123456789abcdef", options.ClientId);
+        Assert.True(options.ClearAndroidPackageData);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("localhost")]
+    [InlineData("127.0.0.1")]
+    [InlineData("0.0.0.0")]
+    [InlineData("::1")]
+    [InlineData("::")]
+    [InlineData("*")]
+    public void PhysicalAcceptanceRequiresExplicitReachableServerHost(string? serverHost)
+    {
+        var arguments = new List<string>
+        {
+            "--repository-root", @"C:\repo",
+            "--run-id", "0123456789abcdef0123456789abcdef",
+            "--android-client-kind", "physical",
+        };
+        if (serverHost is not null)
+        {
+            arguments.Add("--server-host");
+            arguments.Add(serverHost);
+        }
+
+        Assert.Throws<ArgumentException>(() => AcceptanceOptions.Parse(arguments));
+    }
+
+    [Fact]
+    public void PhysicalAcceptanceUsesPhysicalRunIdentityWithoutPackageClear()
+    {
+        AcceptanceOptions options = AcceptanceOptions.Parse(
+            [
+                "--repository-root", @"C:\repo",
+                "--run-id", "0123456789abcdef0123456789abcdef",
+                "--android-client-kind", "physical",
+                "--server-host", "192.168.8.3",
+                "--serial", "R5CX123456A"
+            ]);
+
+        Assert.Equal(AndroidClientKind.Physical, options.ClientKind);
+        Assert.Equal("192.168.8.3", options.ServerHost);
+        Assert.Equal("https://192.168.8.3:47990", options.CreateAndroidServerUrl(47990));
+        Assert.Equal("gate5-physical-0123456789abcdef0123456789abcdef", options.ClientId);
+        Assert.False(options.ClearAndroidPackageData);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("1")]
+    [InlineData("-1")]
+    [InlineData("2")]
+    [InlineData(" emulator ")]
+    [InlineData("tablet")]
+    public void AcceptanceOptionsRejectNonTextualClientKind(string clientKind)
+    {
+        Assert.Throws<ArgumentException>(() => AcceptanceOptions.Parse(
+            [
+                "--repository-root", @"C:\repo",
+                "--android-client-kind", clientKind,
+                "--server-host", "192.168.8.3"
+            ]));
+    }
+
+    [Theory]
+    [InlineData("EMULATOR", "Emulator")]
+    [InlineData("PhYsIcAl", "Physical")]
+    public void AcceptanceOptionsMatchSupportedClientKindTextIgnoringCase(
+        string clientKind,
+        string expected)
+    {
+        var arguments = new List<string>
+        {
+            "--repository-root", @"C:\repo",
+            "--android-client-kind", clientKind,
+        };
+        if (expected == "Physical")
+        {
+            arguments.Add("--server-host");
+            arguments.Add("192.168.8.3");
+        }
+
+        Assert.Equal(expected, AcceptanceOptions.Parse(arguments).ClientKind.ToString());
+    }
+
     [Theory]
     [InlineData("not-a-guid")]
     [InlineData("0123456789ABCDEF0123456789ABCDEF")]
@@ -61,13 +160,15 @@ public sealed class ProductionDisplayGuardTests
             ["--repository-root", @"C:\repo", "--run-id", runId]));
     }
 
-    [Fact]
-    public void GuardOptionsRequireExactAcceptanceAndRecoveryIdentity()
+    [Theory]
+    [InlineData("gate5-emulator-0123456789abcdef0123456789abcdef")]
+    [InlineData("gate5-physical-fedcba9876543210fedcba9876543210")]
+    public void GuardOptionsRequireExactAcceptanceAndRecoveryIdentity(string clientId)
     {
         ProductionDisplayGuardOptions options = ProductionDisplayGuardOptions.Parse(
             [
                 "--acceptance-process-id", "4321",
-                "--client-id", "gate5-emulator-0123456789abcdef0123456789abcdef",
+                "--client-id", clientId,
                 "--repository-root", @"C:\repo",
                 "--ready-event", @"Local\Beacon.Gate5.Ready.test",
                 "--completion-event", @"Local\Beacon.Gate5.Complete.test",
@@ -75,11 +176,86 @@ public sealed class ProductionDisplayGuardTests
             ]);
 
         Assert.Equal(4321, options.AcceptanceProcessId);
-        Assert.Equal("gate5-emulator-0123456789abcdef0123456789abcdef", options.ClientId);
+        Assert.Equal(clientId, options.ClientId);
         Assert.Equal(@"C:\repo", options.RepositoryRoot);
         Assert.Equal(@"Local\Beacon.Gate5.Ready.test", options.ReadyEventName);
         Assert.Equal(@"Local\Beacon.Gate5.Complete.test", options.CompletionEventName);
         Assert.Equal(@"C:\evidence\display-guard.log", options.LogPath);
+    }
+
+    [Theory]
+    [InlineData("z-fold-7")]
+    [InlineData("gate5-emulator-not-a-run-id")]
+    [InlineData("gate5-emulator-0123456789ABCDEF0123456789ABCDEF")]
+    [InlineData("gate5-tablet-0123456789abcdef0123456789abcdef")]
+    [InlineData("gate5-physical-0123456789abcdef0123456789abcde")]
+    [InlineData("gate5-physical-0123456789abcdef0123456789abcdef-extra")]
+    public void GuardOptionsRejectNonRunScopedClientIdentity(string clientId)
+    {
+        Assert.Throws<ArgumentException>(() => ProductionDisplayGuardOptions.Parse(
+            [
+                "--acceptance-process-id", "4321",
+                "--client-id", clientId,
+                "--repository-root", @"C:\repo",
+                "--ready-event", @"Local\Beacon.Gate5.Ready.test",
+                "--completion-event", @"Local\Beacon.Gate5.Complete.test",
+                "--log-path", @"C:\evidence\display-guard.log"
+            ]));
+    }
+
+    [Fact]
+    public void GuardHostPassesTheOptionsClientIdentityToRecovery()
+    {
+        AcceptanceOptions options = AcceptanceOptions.Parse(
+            [
+                "--repository-root", @"C:\repo",
+                "--run-id", "0123456789abcdef0123456789abcdef",
+                "--android-client-kind", "physical",
+                "--server-host", "beacon-host.lan"
+            ]);
+
+        ProcessStartInfo startInfo = ProductionDisplayGuardHost.CreateStartInfo(
+            options,
+            @"C:\repo\Beacon.ProductionAcceptance.exe",
+            @"Local\Beacon.Gate5.Ready.test",
+            @"Local\Beacon.Gate5.Complete.test",
+            @"C:\evidence\display-guard.log");
+
+        string[] arguments = startInfo.ArgumentList.ToArray();
+        int clientIdOption = Array.IndexOf(arguments, "--client-id");
+        Assert.True(clientIdOption >= 0);
+        Assert.Equal(options.ClientId, arguments[clientIdOption + 1]);
+    }
+
+    [Fact]
+    public void PhysicalAcceptanceHostsServerThroughTheExecutableApphost()
+    {
+        AcceptanceOptions physical = AcceptanceOptions.Parse(
+            [
+                "--repository-root", @"C:\repo",
+                "--run-id", "0123456789abcdef0123456789abcdef",
+                "--android-client-kind", "physical",
+                "--server-host", "192.168.8.3"
+            ]);
+        AcceptanceOptions emulator = AcceptanceOptions.Parse(
+            [
+                "--repository-root", @"C:\repo",
+                "--run-id", "0123456789abcdef0123456789abcdef"
+            ]);
+        const string serverExecutable = @"C:\repo\Beacon.Server.exe";
+        const string serverAssembly = @"C:\repo\Beacon.Server.dll";
+
+        ProcessStartInfo physicalStart = Beacon.ProductionAcceptance.Program
+            .CreateServerHostStartInfo(physical, serverExecutable, serverAssembly);
+        ProcessStartInfo emulatorStart = Beacon.ProductionAcceptance.Program
+            .CreateServerHostStartInfo(emulator, serverExecutable, serverAssembly);
+
+        Assert.Equal(serverExecutable, physicalStart.FileName);
+        Assert.DoesNotContain(serverAssembly, physicalStart.ArgumentList);
+        Assert.DoesNotContain("dotnet", physicalStart.ArgumentList);
+        Assert.False(physicalStart.UseShellExecute);
+        Assert.Equal("dotnet", emulatorStart.FileName);
+        Assert.Equal(serverAssembly, emulatorStart.ArgumentList[0]);
     }
 
     [Fact]
@@ -97,7 +273,8 @@ public sealed class ProductionDisplayGuardTests
                 Command(
                     "host-agent-status",
                     "{\"success\":true,\"payload\":{\"lease\":{\"leaseCount\":0,\"heartbeatActive\":false}}}")
-            ]);
+            ],
+            "gate5-emulator-0123456789abcdef0123456789abcdef");
 
         Assert.True(result.Success, result.Diagnostic);
     }
@@ -105,12 +282,13 @@ public sealed class ProductionDisplayGuardTests
     [Fact]
     public void RecoveryVerificationAcceptsAnAlreadyAbsentExactLease()
     {
+        const string clientId = "gate5-emulator-0123456789abcdef0123456789abcdef";
         ProductionDisplayRecoveryResult result = ProductionDisplayRecoveryVerifier.Verify(
             [
                 Command("restore-before-remove", "restore-physical: success verified=True"),
                 Command(
                     "remove",
-                    "remove: failed: No active SudoVDA driver lease owns client-gate5-emulator-test.",
+                    $"remove: failed: No active SudoVDA driver lease owns client-{clientId}.",
                     exitCode: 2),
                 Command("restore-after-remove", "restore-physical: success verified=True"),
                 Command(
@@ -120,9 +298,35 @@ public sealed class ProductionDisplayGuardTests
                 Command(
                     "host-agent-status",
                     "{\"success\":true,\"payload\":{\"lease\":{\"leaseCount\":0,\"heartbeatActive\":false}}}")
-            ]);
+            ],
+            clientId);
 
         Assert.True(result.Success, result.Diagnostic);
+    }
+
+    [Fact]
+    public void RecoveryVerificationRejectsAlreadyAbsentDiagnosticForAnotherClient()
+    {
+        ProductionDisplayRecoveryResult result = ProductionDisplayRecoveryVerifier.Verify(
+            [
+                Command("restore-before-remove", "restore-physical: success verified=True"),
+                Command(
+                    "remove",
+                    "remove: failed: No active SudoVDA driver lease owns client-" +
+                    "gate5-physical-fedcba9876543210fedcba9876543210.",
+                    exitCode: 2),
+                Command("restore-after-remove", "restore-physical: success verified=True"),
+                Command(
+                    "display-status",
+                    "mirrorMode=False physicalPrimaryVerified=True\n" +
+                    "display=\\\\.\\DISPLAY5 kind=Physical 2560x1600@240 primary=True x=0 y=0"),
+                Command(
+                    "host-agent-status",
+                    "{\"success\":true,\"payload\":{\"lease\":{\"leaseCount\":0,\"heartbeatActive\":false}}}")
+            ],
+            "gate5-emulator-0123456789abcdef0123456789abcdef");
+
+        Assert.False(result.Success);
     }
 
     [Theory]
@@ -145,7 +349,8 @@ public sealed class ProductionDisplayGuardTests
                 Command(
                     "host-agent-status",
                     $"{{\"success\":true,\"payload\":{{\"lease\":{{\"leaseCount\":{leaseCount},\"heartbeatActive\":false}}}}}}")
-            ]);
+            ],
+            "gate5-emulator-0123456789abcdef0123456789abcdef");
 
         Assert.False(result.Success);
     }

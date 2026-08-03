@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Net;
 using System.Net.Http.Json;
 using System.Net.Http.Headers;
 using System.Runtime.InteropServices;
@@ -16,7 +17,7 @@ namespace Beacon.ProductionAcceptance;
 
 internal static partial class Program
 {
-    private const string AndroidPackage = "dev.beacon.android";
+    internal const string AndroidPackage = "dev.beacon.android";
     private const string InstrumentationRunner =
         "dev.beacon.android.test/androidx.test.runner.AndroidJUnitRunner";
     private const string InstrumentationClass =
@@ -48,10 +49,11 @@ internal static partial class Program
             repositoryRoot,
             "native", "out", "build", "windows-x64",
             "Beacon.StreamWorker", "Debug", "Beacon.StreamWorker.exe");
-        string serverPath = Path.Combine(
+        string serverDirectory = Path.Combine(
             repositoryRoot,
-            "src", "Beacon.Server", "bin", "Debug", "net10.0-windows",
-            "Beacon.Server.dll");
+            "src", "Beacon.Server", "bin", "Debug", "net10.0-windows");
+        string serverExecutablePath = Path.Combine(serverDirectory, "Beacon.Server.exe");
+        string serverAssemblyPath = Path.Combine(serverDirectory, "Beacon.Server.dll");
         string probePath = Path.Combine(
             repositoryRoot,
             "tests", "Beacon.SessionProbe", "bin", "Debug", "net10.0-windows",
@@ -72,7 +74,7 @@ internal static partial class Program
             "Beacon.StreamWorker.Tests", "Debug", "BeaconStreamWorkerDisplayIdCaptureProbe.exe");
         foreach (string path in new[]
                  {
-                     workerPath, serverPath, probePath, appApk, testApk,
+                     workerPath, serverExecutablePath, serverAssemblyPath, probePath, appApk, testApk,
                      displayIdCaptureProbePath
                  })
         {
@@ -80,7 +82,7 @@ internal static partial class Program
         }
 
         string runId = options.RunId;
-        string clientId = $"gate5-emulator-{runId}";
+        string clientId = options.ClientId;
         string gameId = $"gate5-session-probe-{runId}";
         string ownedRoot = Path.Combine(Path.GetTempPath(), $"beacon-gate5-{runId}");
         string evidenceDirectory = options.ResolveEvidenceDirectory();
@@ -104,6 +106,7 @@ internal static partial class Program
         ProbeEvidenceWatcher? probeEvidence = null;
         int? probeProcessId = null;
         string? clientDisplayId = null;
+        bool androidStateCleaned = false;
         bool success = false;
         try
         {
@@ -112,7 +115,9 @@ internal static partial class Program
             IReadOnlySet<string> activeVirtualDisplaysBefore = CaptureActiveVirtualDisplayNames();
 
             ProcessStartInfo startInfo = CreateServerStartInfo(
-                serverPath,
+                options,
+                serverExecutablePath,
+                serverAssemblyPath,
                 workerPath,
                 identityPath,
                 credentialPath,
@@ -134,7 +139,7 @@ internal static partial class Program
                 "production Server readiness").ConfigureAwait(false);
             var listening = new Uri(address);
             string hostUrl = $"https://127.0.0.1:{listening.Port}";
-            string emulatorUrl = $"https://10.0.2.2:{listening.Port}";
+            string androidUrl = options.CreateAndroidServerUrl(listening.Port);
             http = CreateHttpClient(hostUrl);
             JsonElement identity = await GetJsonAsync(http, "/identity").ConfigureAwait(false);
             string fingerprint = RequiredString(identity, "publicKeyFingerprint");
@@ -156,28 +161,41 @@ internal static partial class Program
             string preparedDisplayName = ResolvePreparedDisplayName(activeVirtualDisplaysBefore);
             Console.WriteLine($"BEACON_GATE5_PREPARED_DISPLAY_OK {preparedDisplayName}");
 
-            Console.WriteLine("BEACON_GATE5_STAGE emulator-environment");
-            await RunAdbAsync(options.Serial, "get-state").ConfigureAwait(false);
-            await RunAdbAsync(options.Serial, "install", "-r", appApk).ConfigureAwait(false);
-            await RunAdbAsync(options.Serial, "install", "-r", testApk).ConfigureAwait(false);
-            await RunAdbAsync(options.Serial, "shell", "pm", "clear", AndroidPackage)
+            Console.WriteLine(
+                $"BEACON_GATE5_ANDROID_CLIENT kind={options.ClientKindValue} " +
+                $"clientId={clientId} serverHost={options.ServerHost}");
+            Console.WriteLine("BEACON_GATE5_STAGE client-environment");
+            await AcceptanceAndroidClientOperations.PrepareAsync(
+                options,
+                appApk,
+                testApk,
+                args => RunAdbAsync(options.Serial, [.. args]),
+                () => TransferCredentialAsync(options.Serial, clientId, credential))
                 .ConfigureAwait(false);
-            await TransferCredentialAsync(options.Serial, credential).ConfigureAwait(false);
-            await RunAdbAsync(options.Serial, "logcat", "-c").ConfigureAwait(false);
 
-            Console.WriteLine("BEACON_GATE5_STAGE emulator-tcp-preflight");
+            Console.WriteLine("BEACON_GATE5_STAGE client-tcp-preflight");
             await AwaitWithHeartbeatAsync(
                 RunAdbAsync(
                     options.Serial,
-                    "shell", "toybox", "nc", "-z", "10.0.2.2", listening.Port.ToString()),
-                "emulator TCP preflight").ConfigureAwait(false);
-            Console.WriteLine("BEACON_GATE5_EMULATOR_TCP_REACHABLE");
+                    "shell", "toybox", "nc", "-z", options.ServerHost, listening.Port.ToString()),
+                $"{options.ClientKindValue} Android client TCP preflight").ConfigureAwait(false);
+            Console.WriteLine(
+                $"BEACON_GATE5_CLIENT_TCP_REACHABLE kind={options.ClientKindValue} " +
+                $"host={options.ServerHost}");
+            if (options.ClientKind == AndroidClientKind.Emulator)
+            {
+                Console.WriteLine("BEACON_GATE5_EMULATOR_TCP_REACHABLE");
+            }
+            else
+            {
+                Console.WriteLine("BEACON_GATE5_PHYSICAL_TCP_REACHABLE");
+            }
 
             Console.WriteLine("BEACON_GATE5_STAGE certified-benchmark");
             string benchmarkOutput = await RunInstrumentationAsync(
-                options.Serial,
+                options,
                 "gate4CertifiedBenchmarkEvidence",
-                emulatorUrl,
+                androidUrl,
                 clientId,
                 fingerprint,
                 gameId).ConfigureAwait(false);
@@ -185,9 +203,9 @@ internal static partial class Program
 
             Console.WriteLine("BEACON_GATE5_STAGE session-preflight");
             string preflightOutput = await RunInstrumentationAsync(
-                options.Serial,
+                options,
                 "gate4CertifiedSessionPreflight",
-                emulatorUrl,
+                androidUrl,
                 clientId,
                 fingerprint,
                 gameId).ConfigureAwait(false);
@@ -205,9 +223,9 @@ internal static partial class Program
             probeEvidence = new ProbeEvidenceWatcher(probeEvidencePath, runId);
             Console.WriteLine("BEACON_GATE5_STAGE production-connect");
             Task<string> firstInvocation = RunInstrumentationAsync(
-                options.Serial,
+                options,
                 "gate5ProductionConnectSendAndDisconnect",
-                emulatorUrl,
+                androidUrl,
                 clientId,
                 fingerprint,
                 gameId);
@@ -218,7 +236,7 @@ internal static partial class Program
             {
                 string earlyOutput = await firstInvocation.ConfigureAwait(false);
                 throw new InvalidOperationException(
-                    $"First emulator stream ended before the catalog application window appeared.{Environment.NewLine}{earlyOutput}");
+                    $"First Android client stream ended before the catalog application window appeared.{Environment.NewLine}{earlyOutput}");
             }
             JsonElement shown = await probeEvidence.Shown.ConfigureAwait(false);
             probeProcessId = RequiredInt(shown.GetProperty("details"), "processId");
@@ -227,7 +245,7 @@ internal static partial class Program
             string firstOutput = await AwaitUnlessProcessExitedAsync(
                 firstInvocation,
                 probeExit,
-                "first emulator stream").ConfigureAwait(false);
+                "first Android client stream").ConfigureAwait(false);
             JsonElement input = await AwaitUnlessProcessExitedAsync(
                 probeEvidence.Input,
                 probeExit,
@@ -256,9 +274,9 @@ internal static partial class Program
 
             Console.WriteLine("BEACON_GATE5_STAGE production-reconnect-quit");
             string reconnectOutput = await RunInstrumentationAsync(
-                options.Serial,
+                options,
                 "gate5ProductionReconnectAndQuit",
-                emulatorUrl,
+                androidUrl,
                 clientId,
                 fingerprint,
                 gameId).ConfigureAwait(false);
@@ -279,55 +297,102 @@ internal static partial class Program
             File.WriteAllText(
                 Path.Combine(evidenceDirectory, "instrumentation.log"),
                 string.Join(Environment.NewLine, benchmarkOutput, preflightOutput, firstOutput, reconnectOutput));
+            string cleanupOutput = await RunAndroidCleanupInstrumentationAsync(
+                options,
+                clientId).ConfigureAwait(false);
+            RequireMarker(cleanupOutput, $"BEACON_GATE5_ANDROID_STATE_CLEANED {clientId}");
+            File.AppendAllText(
+                Path.Combine(evidenceDirectory, "instrumentation.log"),
+                Environment.NewLine + cleanupOutput);
+            androidStateCleaned = true;
             success = true;
         }
         finally
         {
-            if (!success)
-            {
-                await CaptureFailureEvidenceAsync(
-                    http,
-                    options.Serial,
-                    evidenceDirectory,
-                    probeEvidencePath,
-                    repositoryRoot).ConfigureAwait(false);
-            }
-            if (http is not null)
-            {
-                await TryPostAsync(http, $"/clients/{clientId}/quit", new { clientActive = false })
-                    .ConfigureAwait(false);
-                await TryPostAsync(http, $"/clients/{clientId}/emergency-restore", new { })
-                    .ConfigureAwait(false);
-            }
-            if (probeProcessId is int processId)
-            {
-                TryTerminateExactProcess(processId, probePath);
-            }
-            probeEvidence?.Dispose();
-            http?.Dispose();
-            if (server is not null && !server.HasExited)
-            {
-                server.Kill(entireProcessTree: true);
-                await server.WaitForExitAsync().ConfigureAwait(false);
-            }
-            serverJob?.Dispose();
-            if (serverOutput is not null)
-            {
-                if (server is not null && server.HasExited)
-                {
-                    serverOutput.WaitForDrain();
-                }
-                File.WriteAllText(
-                    Path.Combine(evidenceDirectory, "server-output.log"),
-                    serverOutput.CombinedOutput);
-                serverOutput.Dispose();
-            }
-            server?.Dispose();
-            await RunDisplayProbeBestEffortAsync(
-                repositoryRoot, displayProbeProject, "restore-physical").ConfigureAwait(false);
-            await RunDisplayProbeBestEffortAsync(
-                repositoryRoot, displayProbeProject, "remove", clientId).ConfigureAwait(false);
-            await RemoveAndroidEvidenceBestEffortAsync(options.Serial).ConfigureAwait(false);
+            await AcceptanceFailureCleanupSequencer.RunBestEffortAsync(
+                new AcceptanceFailureCleanupOperations(
+                    () =>
+                    {
+                        if (probeProcessId is int processId)
+                        {
+                            TryInitiateExactProcessTermination(processId, probePath);
+                        }
+                    },
+                    () =>
+                    {
+                        try
+                        {
+                            if (server is not null && !server.HasExited)
+                            {
+                                server.Kill(entireProcessTree: true);
+                            }
+                        }
+                        finally
+                        {
+                            serverJob?.Dispose();
+                        }
+                    },
+                    () => RunDisplayProbeBestEffortAsync(
+                        repositoryRoot, displayProbeProject, "restore-physical"),
+                    () => RunDisplayProbeBestEffortAsync(
+                        repositoryRoot, displayProbeProject, "remove", clientId),
+                    async () =>
+                    {
+                        var exitTasks = new List<Task>();
+                        if (probeProcessId is int processId)
+                        {
+                            exitTasks.Add(WaitForExactProcessExitAsync(processId, probePath));
+                        }
+                        if (server is not null && !server.HasExited)
+                        {
+                            exitTasks.Add(server.WaitForExitAsync());
+                        }
+                        await Task.WhenAll(exitTasks).ConfigureAwait(false);
+                    },
+                    () =>
+                    {
+                        if (serverOutput is not null && server is not null && server.HasExited)
+                        {
+                            serverOutput.WaitForDrain();
+                            File.WriteAllText(
+                                Path.Combine(evidenceDirectory, "server-output.log"),
+                                serverOutput.CombinedOutput);
+                        }
+                    },
+                    [
+                        () => probeEvidence?.Dispose(),
+                        () => http?.Dispose(),
+                        () => serverJob?.Dispose(),
+                        () => serverOutput?.Dispose(),
+                        () => server?.Dispose(),
+                    ],
+                    async () =>
+                    {
+                        if (!success)
+                        {
+                            try
+                            {
+                                await CaptureFailureEvidenceAsync(
+                                    options,
+                                    evidenceDirectory,
+                                    probeEvidencePath,
+                                    repositoryRoot).ConfigureAwait(false);
+                            }
+                            catch (Exception error)
+                            {
+                                Console.Error.WriteLine(
+                                    $"BEACON_GATE5_FAILURE_CAPTURE_FAILED {error.Message}");
+                            }
+                        }
+                    },
+                    async () =>
+                    {
+                        if (!androidStateCleaned)
+                        {
+                            await CleanupAndroidRunStateBestEffortAsync(options, clientId)
+                                .ConfigureAwait(false);
+                        }
+                    })).ConfigureAwait(false);
             if (!success)
             {
                 Console.Error.WriteLine($"BEACON_GATE5_FAILURE_EVIDENCE {evidenceDirectory}");
@@ -340,7 +405,9 @@ internal static partial class Program
     }
 
     private static ProcessStartInfo CreateServerStartInfo(
-        string serverPath,
+        AcceptanceOptions options,
+        string serverExecutablePath,
+        string serverAssemblyPath,
         string workerPath,
         string identityPath,
         string credentialPath,
@@ -352,18 +419,10 @@ internal static partial class Program
         string runId,
         string ownedRoot)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "dotnet",
-            WorkingDirectory = Path.GetDirectoryName(serverPath)!,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-        startInfo.ArgumentList.Add(serverPath);
-        startInfo.ArgumentList.Add("--urls");
-        startInfo.ArgumentList.Add("https://0.0.0.0:0");
+        ProcessStartInfo startInfo = CreateServerHostStartInfo(
+            options,
+            serverExecutablePath,
+            serverAssemblyPath);
         startInfo.Environment["Beacon__Streaming__WorkerPath"] = workerPath;
         startInfo.Environment["Beacon__Security__IdentityPath"] = identityPath;
         startInfo.Environment["Beacon__Security__CredentialsPath"] = credentialPath;
@@ -382,49 +441,70 @@ internal static partial class Program
         return startInfo;
     }
 
+    internal static ProcessStartInfo CreateServerHostStartInfo(
+        AcceptanceOptions options,
+        string serverExecutablePath,
+        string serverAssemblyPath)
+    {
+        bool useAppHost = options.ClientKind == AndroidClientKind.Physical;
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = useAppHost ? serverExecutablePath : "dotnet",
+            WorkingDirectory = Path.GetDirectoryName(serverExecutablePath)!,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        if (!useAppHost)
+        {
+            startInfo.ArgumentList.Add(serverAssemblyPath);
+        }
+        startInfo.ArgumentList.Add("--urls");
+        startInfo.ArgumentList.Add("https://0.0.0.0:0");
+        return startInfo;
+    }
+
     private static async Task<string> RunInstrumentationAsync(
-        string serial,
+        AcceptanceOptions options,
         string method,
         string serverUrl,
         string clientId,
         string fingerprint,
         string gameId)
     {
-        await RunAdbAsync(serial, "logcat", "-c").ConfigureAwait(false);
-        string instrumentationOutput = await AwaitWithHeartbeatAsync(
-            RunProcessAsync(
-                "adb",
-                [
-                    "-s", serial,
-                    "shell", "am", "instrument", "-w", "-r",
-                    "-e", "class", $"{InstrumentationClass}#{method}",
-                    "-e", "serverUrl", serverUrl,
-                    "-e", "clientId", clientId,
-                    "-e", "inputMarker", "BEACON-GATE5-INPUT",
-                    "-e", "serverPublicKeyFingerprint", fingerprint,
-                    "-e", "gameId", gameId,
-                    InstrumentationRunner,
-                ]),
-            $"Android instrumentation {method}").ConfigureAwait(false);
-        string markerOutput = await RunAdbAsync(
-            serial,
-            "logcat", "-d", "-v", "raw", "-s", "BeaconGate3:I", "*:S")
-            .ConfigureAwait(false);
-        string output = string.Join(
-            Environment.NewLine,
-            new[] { instrumentationOutput, markerOutput }
-                .Where(value => !string.IsNullOrWhiteSpace(value)));
+        AndroidInstrumentationCapture capture =
+            await AcceptanceAndroidClientOperations.CaptureInstrumentationAsync(
+                options,
+                () => AwaitWithHeartbeatAsync(
+                    RunProcessAsync(
+                        "adb",
+                        [
+                            "-s", options.Serial,
+                            "shell", "am", "instrument", "-w", "-r",
+                            "-e", "class", $"{InstrumentationClass}#{method}",
+                            "-e", "serverUrl", serverUrl,
+                            "-e", "clientId", clientId,
+                            "-e", "inputMarker", "BEACON-GATE5-INPUT",
+                            "-e", "serverPublicKeyFingerprint", fingerprint,
+                            "-e", "gameId", gameId,
+                            InstrumentationRunner,
+                        ]),
+                    $"Android instrumentation {method}"),
+                args => RunAdbAsync(options.Serial, [.. args])).ConfigureAwait(false);
         Require(
-            InstrumentationSuccessPattern().IsMatch(instrumentationOutput)
-            && !InstrumentationFailurePattern().IsMatch(instrumentationOutput),
-            $"Android instrumentation '{method}' failed.{Environment.NewLine}{output}");
-        return output;
+            IsSuccessfulInstrumentationOutput(capture.InvocationOutput),
+            $"Android instrumentation '{method}' failed.{Environment.NewLine}{capture.Output}");
+        return capture.Output;
     }
 
     private static async Task<string> RunAdbAsync(string serial, params string[] args) =>
         await RunProcessAsync("adb", ["-s", serial, .. args]).ConfigureAwait(false);
 
-    private static async Task TransferCredentialAsync(string serial, string credential)
+    private static async Task TransferCredentialAsync(
+        string serial,
+        string clientId,
+        string credential)
     {
         await RunAdbAsync(serial, "shell", "run-as", AndroidPackage, "mkdir", "-p", "files")
             .ConfigureAwait(false);
@@ -433,7 +513,7 @@ internal static partial class Program
             [
                 "-s", serial,
                 "exec-in", "run-as", AndroidPackage,
-                "tee", "files/beacon-gate3-client-credential",
+                "tee", AndroidEvidencePath("beacon-gate3-client-credential", clientId),
             ],
             redirectInput: true);
         using var process = new Process { StartInfo = startInfo };
@@ -448,20 +528,58 @@ internal static partial class Program
         Require(process.ExitCode == 0, $"Private Android credential transfer failed: {errorText}");
     }
 
-    private static async Task RemoveAndroidEvidenceBestEffortAsync(string serial)
+    private static async Task<string> RunAndroidCleanupInstrumentationAsync(
+        AcceptanceOptions options,
+        string clientId)
+    {
+        AndroidInstrumentationCapture capture =
+            await AcceptanceAndroidClientOperations.CaptureInstrumentationAsync(
+                options,
+                () => AwaitWithHeartbeatAsync(
+                    RunProcessAsync(
+                        "adb",
+                        [
+                            "-s", options.Serial,
+                            "shell", "am", "instrument", "-w", "-r",
+                            "-e", "class", $"{InstrumentationClass}#gate5CleanupRunScopedClientState",
+                            "-e", "clientId", clientId,
+                            InstrumentationRunner,
+                        ]),
+                    "Android run-scoped state cleanup"),
+                args => RunAdbAsync(options.Serial, [.. args])).ConfigureAwait(false);
+        Require(
+            IsSuccessfulInstrumentationOutput(capture.InvocationOutput),
+            $"Android run-scoped state cleanup failed.{Environment.NewLine}{capture.Output}");
+        return capture.Output;
+    }
+
+    private static async Task CleanupAndroidRunStateBestEffortAsync(
+        AcceptanceOptions options,
+        string clientId)
     {
         try
         {
+            await RunAndroidCleanupInstrumentationAsync(options, clientId).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+
+        try
+        {
             await RunAdbAsync(
-                serial,
+                options.Serial,
                 "shell", "run-as", AndroidPackage, "rm", "-f",
-                "files/beacon-gate3-client-credential",
-                "files/beacon-gate3-ticket-evidence").ConfigureAwait(false);
+                AndroidEvidencePath("beacon-gate3-client-credential", clientId),
+                AndroidEvidencePath("beacon-gate3-ticket-evidence", clientId)).ConfigureAwait(false);
         }
         catch
         {
         }
     }
+
+    private static string AndroidEvidencePath(string baseName, string clientId) =>
+        $"files/{baseName}.{clientId}";
 
     private static async Task<string> RunProcessAsync(string fileName, IReadOnlyList<string> args)
     {
@@ -521,18 +639,6 @@ internal static partial class Program
         return document.RootElement.Clone();
     }
 
-    private static async Task TryPostAsync(HttpClient client, string path, object body)
-    {
-        try
-        {
-            using HttpResponseMessage response = await client.PostAsJsonAsync(path, body)
-                .ConfigureAwait(false);
-        }
-        catch
-        {
-        }
-    }
-
     private static async Task<JsonElement> PostJsonAsync(HttpClient client, string path, object body)
     {
         using HttpResponseMessage response = await client.PostAsJsonAsync(path, body)
@@ -546,32 +652,20 @@ internal static partial class Program
     }
 
     private static async Task CaptureFailureEvidenceAsync(
-        HttpClient? client,
-        string serial,
+        AcceptanceOptions options,
         string evidenceDirectory,
         string probeEvidencePath,
         string repositoryRoot)
     {
         var errors = new List<string>();
-        if (client is not null)
-        {
-            try
-            {
-                JsonElement snapshot = await GetJsonAsync(client, "/admin/snapshot")
-                    .ConfigureAwait(false);
-                WriteJson(Path.Combine(evidenceDirectory, "failure-snapshot.json"), snapshot);
-            }
-            catch (Exception error)
-            {
-                errors.Add($"snapshot: {error.Message}");
-            }
-        }
-
         try
         {
-            string logcat = await RunAdbAsync(serial, "logcat", "-d", "-v", "time")
-                .ConfigureAwait(false);
-            File.WriteAllText(Path.Combine(evidenceDirectory, "android-logcat.log"), logcat);
+            await AcceptanceFailureEvidenceOperations.CaptureAndroidLogcatAsync(
+                options,
+                args => RunAdbAsync(options.Serial, [.. args]),
+                logcat => File.WriteAllText(
+                    Path.Combine(evidenceDirectory, "android-logcat.log"),
+                    logcat)).ConfigureAwait(false);
         }
         catch (Exception error)
         {
@@ -1096,14 +1190,29 @@ internal static partial class Program
         }
     }
 
-    private static void TryTerminateExactProcess(int processId, string expectedPath)
+    private static void TryInitiateExactProcessTermination(int processId, string expectedPath)
     {
         try
         {
             using Process process = Process.GetProcessById(processId);
             if (!SamePath(RequiredProcessPath(process), expectedPath)) return;
             process.Kill(entireProcessTree: true);
-            process.WaitForExit();
+        }
+        catch (ArgumentException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private static async Task WaitForExactProcessExitAsync(int processId, string expectedPath)
+    {
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            if (!SamePath(RequiredProcessPath(process), expectedPath)) return;
+            await process.WaitForExitAsync().ConfigureAwait(false);
         }
         catch (ArgumentException)
         {
@@ -1143,6 +1252,10 @@ internal static partial class Program
 
     [GeneratedRegex("FAILURES!!!|INSTRUMENTATION_FAILED|INSTRUMENTATION_ABORTED|Process crashed", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex InstrumentationFailurePattern();
+
+    internal static bool IsSuccessfulInstrumentationOutput(string output) =>
+        InstrumentationSuccessPattern().IsMatch(output) &&
+        !InstrumentationFailurePattern().IsMatch(output);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct ProcessBasicInformation
@@ -1203,22 +1316,175 @@ internal static partial class Program
     }
 }
 
+internal sealed record AndroidInstrumentationCapture(
+    string InvocationOutput,
+    string Output);
+
+internal static class AcceptanceFailureEvidenceOperations
+{
+    internal static async Task CaptureAndroidLogcatAsync(
+        AcceptanceOptions options,
+        Func<IReadOnlyList<string>, Task<string>> runAdbAsync,
+        Action<string> writeLogcat)
+    {
+        if (options.ClientKind == AndroidClientKind.Physical) return;
+
+        string logcat = await runAdbAsync(["logcat", "-d", "-v", "time"])
+            .ConfigureAwait(false);
+        writeLogcat(logcat);
+    }
+}
+
+internal static class AcceptanceAndroidClientOperations
+{
+    internal static async Task PrepareAsync(
+        AcceptanceOptions options,
+        string appApk,
+        string testApk,
+        Func<IReadOnlyList<string>, Task<string>> runAdbAsync,
+        Func<Task> transferCredentialAsync)
+    {
+        await runAdbAsync(["get-state"]).ConfigureAwait(false);
+        if (options.ClientKind == AndroidClientKind.Emulator)
+        {
+            string emulatorIdentity = await runAdbAsync(
+                ["shell", "getprop", "ro.kernel.qemu"]).ConfigureAwait(false);
+            if (!string.Equals(emulatorIdentity.Trim(), "1", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Android package clear requires exact emulator identity evidence " +
+                    "ro.kernel.qemu=1.");
+            }
+        }
+
+        await runAdbAsync(["install", "-r", appApk]).ConfigureAwait(false);
+        await runAdbAsync(["install", "-r", testApk]).ConfigureAwait(false);
+        if (options.ClearAndroidPackageData)
+        {
+            await runAdbAsync(["shell", "pm", "clear", Program.AndroidPackage])
+                .ConfigureAwait(false);
+        }
+        await transferCredentialAsync().ConfigureAwait(false);
+        if (options.ClientKind == AndroidClientKind.Emulator)
+        {
+            await runAdbAsync(["logcat", "-c"]).ConfigureAwait(false);
+        }
+    }
+
+    internal static async Task<AndroidInstrumentationCapture> CaptureInstrumentationAsync(
+        AcceptanceOptions options,
+        Func<Task<string>> runInstrumentationAsync,
+        Func<IReadOnlyList<string>, Task<string>> runAdbAsync)
+    {
+        if (options.ClientKind == AndroidClientKind.Emulator)
+        {
+            await runAdbAsync(["logcat", "-c"]).ConfigureAwait(false);
+        }
+
+        string invocationOutput = await runInstrumentationAsync().ConfigureAwait(false);
+        if (options.ClientKind == AndroidClientKind.Physical)
+        {
+            return new AndroidInstrumentationCapture(invocationOutput, invocationOutput);
+        }
+
+        string markerOutput = await runAdbAsync(
+            ["logcat", "-d", "-v", "raw", "-s", "BeaconGate3:I", "*:S"])
+            .ConfigureAwait(false);
+        string output = string.Join(
+            Environment.NewLine,
+            new[] { invocationOutput, markerOutput }
+                .Where(value => !string.IsNullOrWhiteSpace(value)));
+        return new AndroidInstrumentationCapture(invocationOutput, output);
+    }
+}
+
+internal sealed record AcceptanceFailureCleanupOperations(
+    Action InitiateOwnedProcessTermination,
+    Action InitiateServerTermination,
+    Func<Task> RestorePhysicalDisplayAsync,
+    Func<Task> RemoveExactLeaseAsync,
+    Func<Task> AwaitOwnedProcessAndServerExitAsync,
+    Action DrainServerOutput,
+    IReadOnlyList<Action> DisposeResources,
+    Func<Task> CaptureEvidenceAsync,
+    Func<Task> CleanupAndroidAsync);
+
+internal static class AcceptanceFailureCleanupSequencer
+{
+    internal static async Task RunBestEffortAsync(AcceptanceFailureCleanupOperations operations)
+    {
+        TryRun(operations.InitiateOwnedProcessTermination);
+        TryRun(operations.InitiateServerTermination);
+        await TryRunAsync(operations.RestorePhysicalDisplayAsync).ConfigureAwait(false);
+        await TryRunAsync(operations.RemoveExactLeaseAsync).ConfigureAwait(false);
+        await TryRunAsync(operations.AwaitOwnedProcessAndServerExitAsync).ConfigureAwait(false);
+        TryRun(operations.DrainServerOutput);
+        foreach (Action disposeResource in operations.DisposeResources)
+        {
+            TryRun(disposeResource);
+        }
+        await TryRunAsync(operations.CaptureEvidenceAsync).ConfigureAwait(false);
+        await TryRunAsync(operations.CleanupAndroidAsync).ConfigureAwait(false);
+    }
+
+    private static void TryRun(Action operation)
+    {
+        try
+        {
+            operation();
+        }
+        catch
+        {
+        }
+    }
+
+    private static async Task TryRunAsync(Func<Task> operation)
+    {
+        try
+        {
+            await operation().ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+    }
+}
+
+internal enum AndroidClientKind
+{
+    Emulator,
+    Physical,
+}
+
 internal sealed record AcceptanceOptions(
     string RepositoryRoot,
     string RunId,
     string Serial,
+    AndroidClientKind ClientKind,
+    string ServerHost,
     string? EvidenceDirectory,
     string? BeforeConnectSignalPath)
 {
+    public string ClientKindValue => ClientKind.ToString().ToLowerInvariant();
+
+    public string ClientId => $"gate5-{ClientKindValue}-{RunId}";
+
+    public bool ClearAndroidPackageData => ClientKind == AndroidClientKind.Emulator;
+
     public string ResolveEvidenceDirectory() => string.IsNullOrWhiteSpace(EvidenceDirectory)
         ? Path.Combine(Path.GetFullPath(RepositoryRoot), ".artifacts", $"gate5-production-{RunId}")
         : Path.GetFullPath(EvidenceDirectory);
+
+    public string CreateAndroidServerUrl(int port) =>
+        new UriBuilder(Uri.UriSchemeHttps, ServerHost, port).Uri.GetLeftPart(UriPartial.Authority);
 
     public static AcceptanceOptions Parse(IReadOnlyList<string> args)
     {
         string? repositoryRoot = null;
         string runId = Guid.NewGuid().ToString("N");
         string serial = "emulator-5554";
+        AndroidClientKind clientKind = AndroidClientKind.Emulator;
+        string? serverHost = null;
         string? evidenceDirectory = null;
         string? beforeConnectSignalPath = null;
         for (int index = 0; index < args.Count; index++)
@@ -1236,6 +1502,12 @@ internal sealed record AcceptanceOptions(
                     break;
                 case "--serial":
                     serial = ReadValue();
+                    break;
+                case "--android-client-kind":
+                    clientKind = ParseClientKind(ReadValue());
+                    break;
+                case "--server-host":
+                    serverHost = NormalizeServerHost(ReadValue());
                     break;
                 case "--run-id":
                     runId = ReadValue();
@@ -1259,12 +1531,82 @@ internal sealed record AcceptanceOptions(
         {
             throw new ArgumentException("--run-id must be a lowercase 32-character GUID.");
         }
+        if (clientKind == AndroidClientKind.Physical && string.IsNullOrWhiteSpace(serverHost))
+        {
+            throw new ArgumentException(
+                "--server-host is required for a physical Android client.");
+        }
+        serverHost ??= "10.0.2.2";
+        if (clientKind == AndroidClientKind.Physical)
+        {
+            RequirePhysicalServerHost(serverHost);
+        }
         return new AcceptanceOptions(
             repositoryRoot,
             runId,
             serial,
+            clientKind,
+            serverHost,
             evidenceDirectory,
             beforeConnectSignalPath);
+    }
+
+    private static AndroidClientKind ParseClientKind(string value)
+    {
+        if (string.Equals(value, "emulator", StringComparison.OrdinalIgnoreCase))
+        {
+            return AndroidClientKind.Emulator;
+        }
+        if (string.Equals(value, "physical", StringComparison.OrdinalIgnoreCase))
+        {
+            return AndroidClientKind.Physical;
+        }
+        throw new ArgumentException(
+            "--android-client-kind must be either 'emulator' or 'physical'.");
+    }
+
+    private static string NormalizeServerHost(string value)
+    {
+        string host = value.Trim();
+        if (host.Length > 2 && host[0] == '[' && host[^1] == ']')
+        {
+            host = host[1..^1];
+        }
+        if (IPAddress.TryParse(host, out IPAddress? address))
+        {
+            return address.ToString();
+        }
+        if (Uri.CheckHostName(host) == UriHostNameType.Dns)
+        {
+            return host;
+        }
+        throw new ArgumentException("--server-host must be a host name or IP address.");
+    }
+
+    private static void RequirePhysicalServerHost(string host)
+    {
+        if (IPAddress.TryParse(host, out IPAddress? address))
+        {
+            IPAddress comparable = address.IsIPv4MappedToIPv6
+                ? address.MapToIPv4()
+                : address;
+            if (IPAddress.IsLoopback(comparable) ||
+                comparable.Equals(IPAddress.Any) ||
+                comparable.Equals(IPAddress.IPv6Any))
+            {
+                throw new ArgumentException(
+                    "--server-host must be client-reachable for a physical Android client.");
+            }
+            return;
+        }
+
+        string dnsHost = host.TrimEnd('.');
+        if (dnsHost.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+            dnsHost.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                "--server-host must not be loopback for a physical Android client.");
+        }
     }
 }
 

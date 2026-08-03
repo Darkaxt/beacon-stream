@@ -114,6 +114,22 @@ internal static class ProductionDisplayGuardHost
                 executablePath);
         }
 
+        return Process.Start(CreateStartInfo(
+            options,
+            executablePath,
+            readyEventName,
+            completionEventName,
+            logPath))
+            ?? throw new InvalidOperationException("Could not start the Gate 5 display guard process.");
+    }
+
+    internal static ProcessStartInfo CreateStartInfo(
+        AcceptanceOptions options,
+        string executablePath,
+        string readyEventName,
+        string completionEventName,
+        string logPath)
+    {
         var startInfo = new ProcessStartInfo(executablePath)
         {
             UseShellExecute = false,
@@ -123,7 +139,7 @@ internal static class ProductionDisplayGuardHost
                  {
                      "display-guard",
                      "--acceptance-process-id", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                     "--client-id", $"gate5-emulator-{options.RunId}",
+                     "--client-id", options.ClientId,
                      "--repository-root", Path.GetFullPath(options.RepositoryRoot),
                      "--ready-event", readyEventName,
                      "--completion-event", completionEventName,
@@ -133,7 +149,6 @@ internal static class ProductionDisplayGuardHost
             startInfo.ArgumentList.Add(argument);
         }
 
-        return Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Could not start the Gate 5 display guard process.");
+        return startInfo;
     }
 }

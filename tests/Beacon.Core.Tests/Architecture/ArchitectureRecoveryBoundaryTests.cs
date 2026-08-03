@@ -362,7 +362,7 @@ public sealed class ArchitectureRecoveryBoundaryTests
     }
 
     [Fact]
-    public void ProductionAcceptanceSeedsRegistrationAndPreparesDisplayBeforeEmulatorWork()
+    public void ProductionAcceptanceSeedsRegistrationAndPreparesDisplayBeforeAndroidClientWork()
     {
         string root = FindRepositoryRoot();
         string acceptance = File.ReadAllText(ToPlatformPath(
@@ -376,8 +376,8 @@ public sealed class ArchitectureRecoveryBoundaryTests
         int preparedDisplay = acceptance.IndexOf(
             "BEACON_GATE5_STAGE prepared-display",
             StringComparison.Ordinal);
-        int emulatorEnvironment = acceptance.IndexOf(
-            "BEACON_GATE5_STAGE emulator-environment",
+        int clientEnvironment = acceptance.IndexOf(
+            "BEACON_GATE5_STAGE client-environment",
             StringComparison.Ordinal);
         int certifiedBenchmark = acceptance.IndexOf(
             "BEACON_GATE5_STAGE certified-benchmark",
@@ -385,11 +385,11 @@ public sealed class ArchitectureRecoveryBoundaryTests
 
         Assert.True(preparedDisplay >= 0, "The production gate has no prepared-display stage.");
         Assert.True(
-            emulatorEnvironment > preparedDisplay,
-            "The production gate must validate its display before mutating the emulator.");
+            clientEnvironment > preparedDisplay,
+            "The production gate must validate its display before mutating the Android client.");
         Assert.True(
-            certifiedBenchmark > emulatorEnvironment,
-            "The production gate must validate the emulator environment before benchmarking.");
+            certifiedBenchmark > clientEnvironment,
+            "The production gate must validate the Android client environment before benchmarking.");
         Assert.Contains(
             "IReadOnlySet<string> activeVirtualDisplaysBefore = CaptureActiveVirtualDisplayNames();",
             acceptance,

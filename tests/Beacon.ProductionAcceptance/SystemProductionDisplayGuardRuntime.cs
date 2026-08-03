@@ -83,7 +83,7 @@ internal sealed class SystemProductionDisplayGuardRuntime(
                 cancellationToken).ConfigureAwait(false),
         ];
 
-        return ProductionDisplayRecoveryVerifier.Verify(results);
+        return ProductionDisplayRecoveryVerifier.Verify(results, options.ClientId);
     }
 
     public Task WaitForRecoveryHeartbeatAsync(CancellationToken cancellationToken) =>
