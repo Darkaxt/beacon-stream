@@ -151,6 +151,29 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
     }
 
     @Test
+    public void codecCallbackDuringStopAfterEndOfStreamDoesNotBecomeOutputError() {
+        RecordingCodec codec = new RecordingCodec();
+        codec.errorOnStop = new IllegalStateException(
+            "Rendered MediaCodec frame has no queued Beacon frame identity.");
+        RecordingSurfaceFactory surfaces = new RecordingSurfaceFactory();
+        MediaCodecDeviceBenchmarkRoundExecutor executor =
+            new MediaCodecDeviceBenchmarkRoundExecutor(
+                ignored -> codec,
+                ignored -> twoFrameVector(),
+                surfaces,
+                Runnable::run);
+        RecordingRoundObserver observer = new RecordingRoundObserver();
+
+        executor.start(round(), observer);
+        codec.observer.onEndOfStream();
+
+        assertTrue(observer.sample.toJson().toString().contains("\"outputErrors\":0"));
+        assertTrue(codec.stopped);
+        assertTrue(codec.released);
+        assertTrue(surfaces.closed);
+    }
+
+    @Test
     public void codecCallbackFailureRemainsAReportedDecoderOutputError() {
         RecordingCodec codec = new RecordingCodec();
         RecordingSurfaceFactory surfaces = new RecordingSurfaceFactory();
@@ -202,6 +225,7 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
         private RuntimeException configurationFailure;
         private RuntimeException stopFailure;
         private RuntimeException releaseFailure;
+        private RuntimeException errorOnStop;
         private boolean stopped;
         private boolean released;
 
@@ -227,6 +251,7 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
         @Override public void start() { }
         @Override public void stop() {
             stopped = true;
+            if (errorOnStop != null) observer.onError(errorOnStop);
             if (stopFailure != null) throw stopFailure;
         }
         @Override public void release() {

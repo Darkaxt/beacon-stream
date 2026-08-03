@@ -198,7 +198,7 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
         @Override
         public void onError(Throwable failure) {
             synchronized (this) {
-                if (finished) return;
+                if (finished || finalizing) return;
                 measurements.recordError();
             }
             beginFinish(true);
