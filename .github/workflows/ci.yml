@@ -70,6 +70,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
       - run: gradle -p src/Beacon.Android clean test assembleDebug assembleRelease assembleDebugAndroidTest
       - run: python3 -m unittest tests.scripts.test_hosted_emulator_benchmarks
+      - run: python3 -m unittest tests.scripts.test_hosted_thin_apk_flow
       - uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -79,6 +80,7 @@ jobs:
             gradle -p src/Beacon.Android connectedDebugAndroidTest
             bash scripts/test-hosted-emulator-stream.sh
             bash scripts/test-hosted-emulator-benchmarks.sh
+            bash scripts/test-hosted-thin-apk-flow.sh
 
   native-windows:
     runs-on: windows-latest

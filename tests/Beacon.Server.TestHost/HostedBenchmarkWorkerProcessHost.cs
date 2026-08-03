@@ -233,6 +233,13 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
         };
         startInfo.ArgumentList.Add("--identity");
         startInfo.ArgumentList.Add(options.IdentityPath);
+        if (options.VideoEnabled)
+        {
+            startInfo.ArgumentList.Add("--video-720p");
+            startInfo.ArgumentList.Add(options.Video720pPath!);
+            startInfo.ArgumentList.Add("--video-360p");
+            startInfo.ArgumentList.Add(options.Video360pPath!);
+        }
         return startInfo;
     }
 

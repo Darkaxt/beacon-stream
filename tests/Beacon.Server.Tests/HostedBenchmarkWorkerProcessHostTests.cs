@@ -10,6 +10,41 @@ namespace Beacon.Server.Tests;
 public sealed class HostedBenchmarkWorkerProcessHostTests
 {
     [Fact]
+    public void StartInfoIncludesValidatedHostedVideoVectors()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            $"beacon-hosted-worker-start-info-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        string executable = Path.Combine(directory, "worker");
+        string identity = Path.Combine(directory, "identity.pfx");
+        string video720p = Path.Combine(directory, "video-720p.bau");
+        string video360p = Path.Combine(directory, "video-360p.bau");
+        File.WriteAllBytes(executable, []);
+        File.WriteAllBytes(identity, []);
+        File.WriteAllBytes(video720p, []);
+        File.WriteAllBytes(video360p, []);
+
+        try
+        {
+            ProcessStartInfo startInfo = HostedBenchmarkWorkerProcessHost.CreateStartInfo(
+                HostedBenchmarkWorkerOptions.Create(
+                    executable,
+                    identity,
+                    video720p,
+                    video360p));
+
+            Assert.Equal(
+                ["--identity", identity, "--video-720p", video720p, "--video-360p", video360p],
+                startInfo.ArgumentList);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task DuplexStreamReadsFromOutputAndWritesToInput()
     {
         await using var read = new MemoryStream([1, 2, 3]);

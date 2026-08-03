@@ -140,6 +140,42 @@ public final class BeaconViewModelSessionTest {
         assertEquals(2, factory.created.size());
     }
 
+    @Test
+    public void explicitSuccessfulQuitFollowedByCloseSendsOneServiceQuit() throws Exception {
+        RecordingModelFactory factory = new RecordingModelFactory();
+        BeaconViewModelSession session = new BeaconViewModelSession(factory);
+        BeaconViewModel model = session.get("z-fold-7", "http://server");
+
+        model.quit(new BeaconApiClient.QuitState(false));
+        session.close();
+
+        assertEquals("quit", factory.services.get(0).actions());
+    }
+
+    @Test
+    public void failedExplicitQuitFollowedByCloseRetriesServiceQuit() throws Exception {
+        RecordingModelFactory factory = new RecordingModelFactory();
+        BeaconViewModelSession session = new BeaconViewModelSession(factory);
+        BeaconViewModel model = session.get("z-fold-7", "http://server");
+        factory.services.get(0).failNextQuit = true;
+
+        model.quit(new BeaconApiClient.QuitState(false));
+        session.close();
+
+        assertEquals("quit,quit", factory.services.get(0).actions());
+    }
+
+    @Test
+    public void closeWithoutExplicitQuitSendsOneServiceQuit() {
+        RecordingModelFactory factory = new RecordingModelFactory();
+        BeaconViewModelSession session = new BeaconViewModelSession(factory);
+        session.get("z-fold-7", "http://server");
+
+        session.close();
+
+        assertEquals("quit", factory.services.get(0).actions());
+    }
+
     private static final class RecordingModelFactory implements BeaconViewModelSession.Factory {
         private final List<BeaconViewModel> created = new ArrayList<>();
         private final List<RecordingService> services = new ArrayList<>();
@@ -167,6 +203,7 @@ public final class BeaconViewModelSessionTest {
         private final StringBuilder actions = new StringBuilder();
         private final List<String> threadEvents;
         private boolean failInactive;
+        private boolean failNextQuit;
 
         private RecordingService(List<String> threadEvents) {
             this.threadEvents = threadEvents;
@@ -213,7 +250,14 @@ public final class BeaconViewModelSessionTest {
         public BeaconApiClient.BeaconResult disconnect() { return result; }
 
         @Override
-        public BeaconApiClient.BeaconResult quit(BeaconApiClient.QuitState state) { return record("quit"); }
+        public BeaconApiClient.BeaconResult quit(BeaconApiClient.QuitState state) {
+            record("quit");
+            if (failNextQuit) {
+                failNextQuit = false;
+                return new BeaconApiClient.BeaconResult(503, "quit failed");
+            }
+            return result;
+        }
 
         @Override
         public BeaconApiClient.BeaconResult emergencyRestore() { return result; }

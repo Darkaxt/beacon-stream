@@ -148,6 +148,9 @@ public sealed class StreamWorkerStreamingBackendTests
         Assert.Equal(81, batch.Sequence);
         Assert.Equal(0x1Eu, Assert.Single(batch.Events).Keyboard?.ScanCode);
         Assert.Equal(started.RuntimeGeneration, runtimeEvents.GetBoundRuntimeGeneration(plan.SessionId));
+        Assert.Equal(
+            new StreamWorkerRuntimeSnapshot(1, 1, 0, 0, 1),
+            backend.GetRuntimeSnapshot());
     }
 
     [Fact]
@@ -351,6 +354,9 @@ public sealed class StreamWorkerStreamingBackendTests
         Assert.Equal(WorkerIpcEnvelope.BodyOneofCase.StopMedia, host.Commands[2].BodyCase);
         Assert.True(host.IsReady);
         Assert.Equal(0, host.ShutdownCalls);
+        Assert.Equal(
+            new StreamWorkerRuntimeSnapshot(1, 0, 0, 0, 0),
+            backend.GetRuntimeSnapshot());
     }
 
     [Fact]
@@ -417,6 +423,9 @@ public sealed class StreamWorkerStreamingBackendTests
         Assert.Equal(started.RunToken, prepare.Plan.RunToken.ToByteArray());
         Assert.True(host.IsReady);
         Assert.Equal(0, host.ShutdownCalls);
+        Assert.Equal(
+            new StreamWorkerRuntimeSnapshot(0, 0, 1, 0, 0),
+            backend.GetRuntimeSnapshot());
     }
 
     [Fact]

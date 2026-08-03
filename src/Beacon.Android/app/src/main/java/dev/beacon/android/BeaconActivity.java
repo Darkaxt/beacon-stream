@@ -43,6 +43,7 @@ public final class BeaconActivity extends Activity {
     private final AndroidGamepadMapper gamepadInputMapper = new AndroidGamepadMapper();
     private final AndroidDeviceCapabilityProbe capabilityProbe = AndroidDeviceCapabilityProbe.system();
     private final AutomaticBenchmarkGate automaticBenchmarkGate = new AutomaticBenchmarkGate();
+    private final BeaconActivityEventSource activityEvents = new BeaconActivityEventSource();
 
     private BeaconViewModelSession modelSession;
     private AndroidBenchmarkChangeMonitor benchmarkChangeMonitor;
@@ -77,6 +78,8 @@ public final class BeaconActivity extends Activity {
     private SurfaceView videoSurfaceView;
     private AndroidSurfaceViewProvider videoSurfaceProvider;
     private TextView status;
+    private BeaconVideoPipelineObserverSwitch videoObserverSwitch;
+    private BeaconVideoPipelineObserverSwitch.Decorator videoObserverDecorator;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -271,35 +274,20 @@ public final class BeaconActivity extends Activity {
         updateControllerOverlay();
 
         root.addView(localButton("Connect", this::connect));
-        root.addView(button("Load Games", model -> {
-            model.loadGames();
-            setGameEntries(model.latestGameEntries());
-        }));
+        root.addView(button("Load Games", this::loadGames));
         root.addView(localButton("Run Benchmark", () -> scheduleBenchmark("manual", benchmarkNetwork)));
         root.addView(button("Plan", model -> model.preflightAndPlan(
             readCapabilities(),
             readTelemetry(),
             readGame())));
-        root.addView(button("Launch", model -> {
-            BeaconApiClient.ClientCapabilities capabilities = readCapabilities();
-            model.preflightBenchmarkAndLaunch(
-                capabilities,
-                readTelemetry(),
-                benchmarkFingerprintProbe.create(
-                    "sessionPreflight",
-                    serverUrl.getText().toString(),
-                    capabilities,
-                    benchmarkNetwork),
-                AndroidDeviceBenchmarkRunner.system(this),
-                readGame());
-        }));
+        root.addView(button("Launch", this::launch));
         root.addView(button("Send Pointer", model -> model.sendInput(BeaconApiClient.InputBatch.pointerTap(1, 0.5, 0.5))));
         root.addView(button("Send Escape", model -> model.sendInput(BeaconApiClient.InputBatch.keyboardPress(2, "Escape", "Escape"))));
         root.addView(button("Stop Stream", model -> model.stopStream()));
-        root.addView(button("Disconnect", model -> model.disconnect()));
-        root.addView(button("Reconnect", model -> model.reconnect()));
+        root.addView(button("Disconnect", this::disconnect));
+        root.addView(button("Reconnect", this::reconnect));
         root.addView(button("Quit", model -> leaveAndQuit(model)));
-        root.addView(button("Emergency Restore", model -> model.emergencyRestore()));
+        root.addView(button("Emergency Restore", this::emergencyRestore));
 
         status = text("Idle", uiState.bodyTextSizeSp(), false);
         status.setGravity(Gravity.START);
@@ -491,6 +479,10 @@ public final class BeaconActivity extends Activity {
             config = readClientConfig();
         } catch (RuntimeException failure) {
             setStatus(label + " failed: " + failure.getMessage());
+            activityEvents.publish(
+                BeaconActivityEventSource.Kind.ACTION_FAILED,
+                label,
+                failure.getMessage());
             return;
         }
         executeWithModel(config, model -> {
@@ -500,10 +492,74 @@ public final class BeaconActivity extends Activity {
                 setStatus(model.status() + "\nGames: " + model.latestGames() +
                     "\nPlan: " + model.latestPlan() + "\nStream: " + model.latestStream() +
                     error);
+                activityEvents.publish(
+                    model.latestError().isEmpty()
+                        ? BeaconActivityEventSource.Kind.ACTION_COMPLETE
+                        : BeaconActivityEventSource.Kind.ACTION_FAILED,
+                    label,
+                    model.latestError().isEmpty() ? model.status() : model.latestError());
             } catch (IOException | RuntimeException ex) {
                 setStatus(label + " failed: " + ex.getMessage());
+                activityEvents.publish(
+                    BeaconActivityEventSource.Kind.ACTION_FAILED,
+                    label,
+                    ex.getMessage());
             }
         });
+    }
+
+    private void loadGames(BeaconViewModel model) throws IOException {
+        model.loadGames();
+        if (!model.latestError().isEmpty()) return;
+        setGameEntries(model.latestGameEntries());
+        String selected = model.latestGameEntries().isEmpty()
+            ? ""
+            : model.latestGameEntries().get(0).id();
+        activityEvents.publish(
+            BeaconActivityEventSource.Kind.CATALOG_LOADED,
+            "Load Games",
+            selected);
+    }
+
+    private void launch(BeaconViewModel model) throws IOException {
+        BeaconApiClient.ClientCapabilities capabilities = readCapabilities();
+        model.preflightBenchmarkAndLaunch(
+            capabilities,
+            readTelemetry(),
+            benchmarkFingerprintProbe.create(
+                "sessionPreflight",
+                serverUrl.getText().toString(),
+                capabilities,
+                benchmarkNetwork),
+            AndroidDeviceBenchmarkRunner.system(this),
+            readGame());
+        if (!model.latestError().isEmpty()) return;
+        activityEvents.publish(
+            BeaconActivityEventSource.Kind.BENCHMARK_COMPLETE,
+            "sessionPreflight",
+            "accepted");
+        publishConnectionGrant("Launch", model);
+    }
+
+    private void disconnect(BeaconViewModel model) throws IOException {
+        model.disconnect();
+    }
+
+    private void reconnect(BeaconViewModel model) throws IOException {
+        model.reconnect();
+        publishConnectionGrant("Reconnect", model);
+    }
+
+    private void emergencyRestore(BeaconViewModel model) throws IOException {
+        model.emergencyRestore();
+    }
+
+    private void publishConnectionGrant(String operation, BeaconViewModel model) {
+        if (!model.latestError().isEmpty()) return;
+        activityEvents.publish(
+            BeaconActivityEventSource.Kind.CONNECTION_GRANTED,
+            operation,
+            BeaconConnectionGrantEvidence.fromJson(model.latestStream()).toString());
     }
 
     private void connect() {
@@ -530,12 +586,20 @@ public final class BeaconActivity extends Activity {
                 current.setForegroundDesired(true);
                 if (current.onForeground(readCapabilities())) {
                     if (!presenceCoordinator.activationSucceeded(attempt)) return;
+                    activityEvents.publish(
+                        BeaconActivityEventSource.Kind.PRESENCE_ACTIVE,
+                        label,
+                        current.status());
                     runOnUiThread(() -> {
                         if (presenceCoordinator.isCurrent(attempt)) enableAutomaticBenchmark();
                     });
                 } else {
                     current.setForegroundDesired(false);
                     if (!presenceCoordinator.activationFailed(attempt)) return;
+                    activityEvents.publish(
+                        BeaconActivityEventSource.Kind.ACTION_FAILED,
+                        label,
+                        current.latestError());
                 }
                 String error = current.latestError().isEmpty()
                     ? ""
@@ -546,6 +610,10 @@ public final class BeaconActivity extends Activity {
             } catch (IOException | RuntimeException failure) {
                 if (!presenceCoordinator.activationFailed(attempt)) return;
                 setActivationStatus(attempt, label + " failed: " + failure.getMessage());
+                activityEvents.publish(
+                    BeaconActivityEventSource.Kind.ACTION_FAILED,
+                    label,
+                    failure.getMessage());
             }
         });
     }
@@ -602,10 +670,18 @@ public final class BeaconActivity extends Activity {
                     request,
                     AndroidDeviceBenchmarkRunner.system(this));
                 started = result.isSuccess();
+                activityEvents.publish(
+                    BeaconActivityEventSource.Kind.BENCHMARK_COMPLETE,
+                    trigger,
+                    "status=" + result.statusCode());
                 String error = started ? "" : "\nError: " + model.latestError();
                 setStatus(model.status() + error);
             } catch (IOException | RuntimeException failure) {
                 setStatus("Benchmark failed: " + failure.getMessage());
+                activityEvents.publish(
+                    BeaconActivityEventSource.Kind.ACTION_FAILED,
+                    trigger + " benchmark",
+                    failure.getMessage());
             } finally {
                 if (automatic) automaticBenchmarkGate.finish(fingerprint, started);
             }
@@ -810,8 +886,60 @@ public final class BeaconActivity extends Activity {
             service,
             failureObserver -> new BeaconVideoSession(
                 videoSurfaceProvider,
-                failureObserver),
+                failureObserver,
+                activityEvents,
+                this::registerVideoObserverSwitch),
             BeaconAudioSession::new);
+    }
+
+    private synchronized void registerVideoObserverSwitch(
+        BeaconVideoPipelineObserverSwitch observerSwitch) {
+        videoObserverSwitch = observerSwitch;
+        if (videoObserverDecorator != null) {
+            videoObserverSwitch.install(videoObserverDecorator);
+        }
+    }
+
+    BeaconActivityEventSource activityEventsForInstrumentation() {
+        return activityEvents;
+    }
+
+    synchronized void installVideoObserverForInstrumentation(
+        BeaconVideoPipelineObserverSwitch.Decorator decorator) {
+        if (decorator == null) {
+            throw new IllegalArgumentException("Video observer decorator is required.");
+        }
+        videoObserverDecorator = decorator;
+        if (videoObserverSwitch != null) videoObserverSwitch.install(decorator);
+    }
+
+    void loadGamesForInstrumentation() {
+        runAction("Load Games", this::loadGames);
+    }
+
+    void launchForInstrumentation() {
+        runAction("Launch", this::launch);
+    }
+
+    void disconnectForInstrumentation() {
+        runAction("Disconnect", this::disconnect);
+    }
+
+    void reconnectForInstrumentation() {
+        runAction("Reconnect", this::reconnect);
+    }
+
+    void quitForInstrumentation() {
+        runAction("Quit", this::leaveAndQuit);
+    }
+
+    void emergencyRestoreForInstrumentation() {
+        runAction("Emergency Restore", this::emergencyRestore);
+    }
+
+    boolean hasActiveStreamForInstrumentation() {
+        BeaconViewModel model = currentModelIfPresent();
+        return model != null && model.hasActiveStream();
     }
 
     BeaconViewModel createOwnedModelForInstrumentation(
@@ -886,8 +1014,18 @@ public final class BeaconActivity extends Activity {
         model.setForegroundDesired(false);
         try {
             model.reconcileBackground();
-        } catch (IOException ignored) {
+            if (model.latestError().isEmpty()) {
+                activityEvents.publish(
+                    BeaconActivityEventSource.Kind.PRESENCE_DEPARTED,
+                    "Quit",
+                    model.status());
+            }
+        } catch (IOException failure) {
             // Presence departure is best-effort; explicit quit still has to run.
+            activityEvents.publish(
+                BeaconActivityEventSource.Kind.ACTION_FAILED,
+                "Quit presence departure",
+                failure.getMessage());
         }
         model.quit(new BeaconApiClient.QuitState(false));
     }

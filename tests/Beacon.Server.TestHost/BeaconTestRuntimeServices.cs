@@ -29,6 +29,15 @@ public static class BeaconTestRuntimeServices
         this IServiceCollection services,
         IConfiguration? configuration = null)
     {
+        string? hostedWorkerPath =
+            configuration?[HostedBenchmarkWorkerOptions.ExecutablePathConfigurationKey];
+        string? hostedVideo720pPath =
+            configuration?[HostedBenchmarkWorkerOptions.Video720pPathConfigurationKey];
+        string? hostedVideo360pPath =
+            configuration?[HostedBenchmarkWorkerOptions.Video360pPathConfigurationKey];
+        bool useHostedWorkerVideo = !string.IsNullOrWhiteSpace(hostedWorkerPath)
+            && !string.IsNullOrWhiteSpace(hostedVideo720pPath)
+            && !string.IsNullOrWhiteSpace(hostedVideo360pPath);
         bool useProductionStreamWorker = bool.TryParse(
             configuration?[ProductionStreamWorkerConfigurationKey],
             out bool configuredProductionStreamWorker)
@@ -79,11 +88,13 @@ public static class BeaconTestRuntimeServices
         services.RemoveAll<IGameLibraryProvider>();
 
         services.AddSingleton(new BeaconHostOptions(
-            useProductionStreamWorker ? "fake-worker" : "fake",
+            useProductionStreamWorker
+                ? "fake-worker"
+                : useHostedWorkerVideo ? "fake-hosted-worker" : "fake",
             nameof(FakeDisplayBackend),
             nameof(FakeGameLauncher),
             nameof(FakeSessionActivityInspector),
-            useProductionStreamWorker
+            useProductionStreamWorker || useHostedWorkerVideo
                 ? nameof(StreamWorkerStreamingBackend)
                 : nameof(FakeStreamingBackend)));
         services.AddSingleton<IDisplayBackend, FakeDisplayBackend>();
@@ -146,10 +157,14 @@ public static class BeaconTestRuntimeServices
                     new GameProcessHints(null, null))
             ]));
 
-        string? hostedWorkerPath = configuration?[HostedBenchmarkWorkerOptions.ExecutablePathConfigurationKey];
         if (!useProductionStreamWorker && !string.IsNullOrWhiteSpace(hostedWorkerPath))
         {
-            UseHostedBenchmarkWorker(services, hostedWorkerPath);
+            UseHostedBenchmarkWorker(
+                services,
+                hostedWorkerPath,
+                hostedVideo720pPath,
+                hostedVideo360pPath,
+                useHostedWorkerVideo);
         }
         return services;
     }
@@ -213,17 +228,26 @@ public static class BeaconTestRuntimeServices
 
     private static void UseHostedBenchmarkWorker(
         IServiceCollection services,
-        string executablePath)
+        string executablePath,
+        string? video720pPath,
+        string? video360pPath,
+        bool videoEnabled)
     {
         services.RemoveAll<IStreamWorkerHost>();
         services.RemoveAll<IStreamWorkerRuntimeEvents>();
         services.RemoveAll<IStreamSessionAuthorizer>();
         services.RemoveAll<IBenchmarkRuntime>();
         services.RemoveAll<FakeBenchmarkRuntime>();
+        if (videoEnabled)
+        {
+            services.RemoveAll<IStreamingBackend>();
+        }
 
         services.AddSingleton(sp => HostedBenchmarkWorkerOptions.Create(
             executablePath,
-            sp.GetRequiredService<BeaconServerIdentity>().IdentityPath));
+            sp.GetRequiredService<BeaconServerIdentity>().IdentityPath,
+            video720pPath,
+            video360pPath));
         services.AddSingleton<HostedBenchmarkWorkerProcessHost>();
         services.AddSingleton<IStreamWorkerHost>(sp =>
             sp.GetRequiredService<HostedBenchmarkWorkerProcessHost>());
@@ -231,6 +255,11 @@ public static class BeaconTestRuntimeServices
             new StreamWorkerStreamingBackend(sp.GetRequiredService<IStreamWorkerHost>()));
         services.AddSingleton<IBenchmarkRuntime>(sp =>
             sp.GetRequiredService<StreamWorkerStreamingBackend>());
+        if (videoEnabled)
+        {
+            services.AddSingleton<IStreamingBackend>(sp =>
+                sp.GetRequiredService<StreamWorkerStreamingBackend>());
+        }
         services.AddSingleton<IStreamWorkerRuntimeEvents>(sp =>
             sp.GetRequiredService<StreamWorkerStreamingBackend>());
         services.AddSingleton<IStreamSessionAuthorizer, StreamWorkerSessionAuthorizer>();

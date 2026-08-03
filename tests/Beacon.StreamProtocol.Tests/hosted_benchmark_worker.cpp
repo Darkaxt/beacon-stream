@@ -1,4 +1,6 @@
 #include "hosted_benchmark_worker_channel.h"
+#include "hosted_video_generation.h"
+#include "access_unit_vector.h"
 
 #include "beacon/worker/outbound_queue.h"
 #include "beacon/worker/quic_listener.h"
@@ -17,6 +19,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -45,6 +51,62 @@ public:
   void handle_media_event(const beacon::worker::QuicMediaEvent &) override {}
   void reset() noexcept override {}
 };
+
+class AcceptingAudioPipeline final
+    : public beacon::worker::audio::IWorkerAudioPipeline {
+public:
+  bool prepare(const beacon::worker::audio::WorkerAudioPlan &plan) override {
+    std::lock_guard lock{mutex_};
+    prepared_ = beacon::worker::audio::valid_worker_audio_plan(plan);
+    return prepared_;
+  }
+  void handle_media_event(const beacon::worker::QuicMediaEvent &) override {}
+  void reset() noexcept override {
+    std::lock_guard lock{mutex_};
+    prepared_ = false;
+  }
+
+private:
+  std::mutex mutex_;
+  bool prepared_{};
+};
+
+struct HostedWorkerArguments {
+  std::filesystem::path identity;
+  std::optional<std::filesystem::path> video_720p;
+  std::optional<std::filesystem::path> video_360p;
+
+  [[nodiscard]] bool video_enabled() const noexcept {
+    return video_720p.has_value() && video_360p.has_value();
+  }
+};
+
+std::optional<HostedWorkerArguments>
+parse_arguments(int argument_count, char **arguments) {
+  if (argument_count == 3 &&
+      std::string_view(arguments[1]) == "--identity" &&
+      !std::string_view(arguments[2]).empty()) {
+    return HostedWorkerArguments{
+        .identity = arguments[2],
+        .video_720p = std::nullopt,
+        .video_360p = std::nullopt,
+    };
+  }
+  if (argument_count == 7 &&
+      std::string_view(arguments[1]) == "--identity" &&
+      !std::string_view(arguments[2]).empty() &&
+      std::string_view(arguments[3]) == "--video-720p" &&
+      !std::string_view(arguments[4]).empty() &&
+      std::string_view(arguments[5]) == "--video-360p" &&
+      !std::string_view(arguments[6]).empty()) {
+    return HostedWorkerArguments{
+        .identity = arguments[2],
+        .video_720p = std::filesystem::path{arguments[4]},
+        .video_360p = std::filesystem::path{arguments[6]},
+    };
+  }
+  return std::nullopt;
+}
 
 std::vector<std::byte> create_instance_id() {
   std::vector<std::byte> result(16);
@@ -83,8 +145,8 @@ int failure_code(beacon::testing::HostedWorkerControlResult result) noexcept {
 } // namespace
 
 int main(int argument_count, char **arguments) {
-  if (argument_count != 3 || std::string_view(arguments[1]) != "--identity" ||
-      std::string_view(arguments[2]).empty()) {
+  const auto options = parse_arguments(argument_count, arguments);
+  if (!options.has_value()) {
     write_failure_marker(1);
     return 1;
   }
@@ -101,10 +163,41 @@ int main(int argument_count, char **arguments) {
                                                           STDOUT_FILENO);
     beacon::worker::WorkerOutboundQueue outbound;
     beacon::worker::AuthorizedQuicTicketStore tickets;
-    NoVideoPipeline video_pipeline;
-    NoAudioPipeline audio_pipeline;
-    beacon::worker::QuicListener transport(std::filesystem::path{arguments[2]},
-                                           tickets);
+    beacon::worker::QuicListener transport(options->identity, tickets);
+    std::unique_ptr<beacon::testing::HostedVideoGenerationFactory>
+        generation_factory;
+    std::unique_ptr<beacon::worker::video::IWorkerVideoPipeline>
+        video_pipeline;
+    std::unique_ptr<beacon::worker::audio::IWorkerAudioPipeline>
+        audio_pipeline;
+    if (options->video_enabled()) {
+      auto video_720p = beacon::stream::testing::load_access_unit_vector(
+          *options->video_720p);
+      auto video_360p = beacon::stream::testing::load_access_unit_vector(
+          *options->video_360p);
+      if (video_720p.error !=
+              beacon::stream::testing::AccessUnitVectorError::none ||
+          video_360p.error !=
+              beacon::stream::testing::AccessUnitVectorError::none) {
+        write_failure_marker(7);
+        return 7;
+      }
+      generation_factory =
+          std::make_unique<beacon::testing::HostedVideoGenerationFactory>(
+              transport, std::move(video_720p.access_units),
+              std::move(video_360p.access_units));
+      if (!generation_factory->valid()) {
+        write_failure_marker(7);
+        return 7;
+      }
+      video_pipeline =
+          std::make_unique<beacon::worker::video::WorkerVideoPipeline>(
+              *generation_factory);
+      audio_pipeline = std::make_unique<AcceptingAudioPipeline>();
+    } else {
+      video_pipeline = std::make_unique<NoVideoPipeline>();
+      audio_pipeline = std::make_unique<NoAudioPipeline>();
+    }
     transport.set_event_sink(
         [&outbound, &channel](beacon::worker::v1::WorkerIpcEnvelope event) {
           std::vector<beacon::worker::v1::WorkerIpcEnvelope> batch;
@@ -117,17 +210,17 @@ int main(int argument_count, char **arguments) {
         });
     transport.set_media_event_sink([&video_pipeline, &audio_pipeline](
                                        beacon::worker::QuicMediaEvent event) {
-      video_pipeline.handle_media_event(event);
-      audio_pipeline.handle_media_event(event);
+      video_pipeline->handle_media_event(event);
+      audio_pipeline->handle_media_event(event);
     });
     beacon::worker::WorkerHost host(
         std::move(instance_id), static_cast<std::uint32_t>(::getpid()),
-        transport, tickets, video_pipeline, audio_pipeline,
-        {.available = false,
+        transport, tickets, *video_pipeline, *audio_pipeline,
+        {.available = options->video_enabled(),
          .unavailable_boundary =
              beacon::worker::video::ProductionVideoCapabilityBoundary::encoder,
          .unavailable_code = kHostedVideoUnavailableCode},
-        {.available = false,
+        {.available = options->video_enabled(),
          .unavailable_boundary =
              beacon::worker::audio::ProductionAudioCapabilityBoundary::capture,
          .unavailable_code = kHostedAudioUnavailableCode});
@@ -136,8 +229,8 @@ int main(int argument_count, char **arguments) {
     const auto result =
         beacon::testing::run_hosted_worker_control(channel, host, outbound);
     if (!host.shutdown_requested()) {
-      video_pipeline.reset();
-      audio_pipeline.reset();
+      video_pipeline->reset();
+      audio_pipeline->reset();
       transport.shutdown();
     }
     const auto code = failure_code(result);

@@ -222,6 +222,67 @@ public sealed class BeaconServiceRegistrationTests
     }
 
     [Fact]
+    public async Task HostedVideoConfigurationUsesWorkerStreamingWithFakeMachineBoundaries()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            $"beacon-hosted-video-registration-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        string identityPath = Path.Combine(directory, "identity.pfx");
+        string video720pPath = Path.Combine(directory, "video-720p.bau");
+        string video360pPath = Path.Combine(directory, "video-360p.bau");
+        File.WriteAllBytes(video720pPath, [1]);
+        File.WriteAllBytes(video360pPath, [2]);
+        IConfiguration configuration = CreateConfiguration(
+            new KeyValuePair<string, string?>(
+                HostedBenchmarkWorkerOptions.ExecutablePathConfigurationKey,
+                typeof(TestHostProgram).Assembly.Location),
+            new KeyValuePair<string, string?>(
+                HostedBenchmarkWorkerOptions.Video720pPathConfigurationKey,
+                video720pPath),
+            new KeyValuePair<string, string?>(
+                HostedBenchmarkWorkerOptions.Video360pPathConfigurationKey,
+                video360pPath),
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.SecurityIdentityPathConfigurationKey,
+                identityPath),
+            new KeyValuePair<string, string?>(
+                BeaconServiceRegistration.SecurityTestHostConfigurationKey,
+                bool.TrueString));
+
+        try
+        {
+            var services = new ServiceCollection();
+            services.AddBeaconServices(
+                configuration,
+                environmentClientProfilesPath: null,
+                environmentStreamWorkerPath: null,
+                environmentBenchmarkEvidencePath: null);
+            services.UseBeaconFakeRuntime(configuration);
+            await using ServiceProvider provider = BuildServiceProvider(services);
+
+            BeaconHostOptions host = provider.GetRequiredService<BeaconHostOptions>();
+            Assert.Equal("fake-hosted-worker", host.ModeName);
+            Assert.Equal(nameof(FakeDisplayBackend), host.DisplayBackendName);
+            Assert.Equal(nameof(FakeGameLauncher), host.GameLauncherName);
+            Assert.Equal(nameof(StreamWorkerStreamingBackend), host.StreamingBackendName);
+            Assert.IsType<FakeRecoveryBackend>(provider.GetRequiredService<IRecoveryBackend>());
+            Assert.Same(
+                provider.GetRequiredService<IStreamingBackend>(),
+                provider.GetRequiredService<IBenchmarkRuntime>());
+            Assert.Same(
+                provider.GetRequiredService<IStreamingBackend>(),
+                provider.GetRequiredService<IStreamWorkerRuntimeEvents>());
+            Assert.True(provider.GetRequiredService<HostedBenchmarkWorkerOptions>().VideoEnabled);
+            Assert.Single(provider.GetServices<IStreamingBackend>());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task LegacyModeConfigurationCannotReplaceProductionBoundaries()
     {
         await using ServiceProvider provider = BuildProvider(

@@ -30,6 +30,13 @@ public interface IStreamWorkerRuntimeEvents
     Guid? GetBoundRuntimeGeneration(string sessionId);
 }
 
+public sealed record StreamWorkerRuntimeSnapshot(
+    int RetainedStreams,
+    int ActiveStreams,
+    int RetainedBenchmarks,
+    int ActiveBenchmarks,
+    int BoundRuntimes);
+
 public sealed class StreamWorkerStreamingBackend :
     IStreamingBackend,
     IBenchmarkRuntime,
@@ -597,6 +604,20 @@ public sealed class StreamWorkerStreamingBackend :
             .OrderBy(session => session.ClientId, StringComparer.OrdinalIgnoreCase)
             .ThenBy(session => session.SessionId, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+    }
+
+    public StreamWorkerRuntimeSnapshot GetRuntimeSnapshot()
+    {
+        lock (runtimeGate)
+        {
+            return new StreamWorkerRuntimeSnapshot(
+                sessions.Count,
+                sessions.Values.Count(runtime => runtime.State.State == "running"),
+                benchmarks.Count,
+                benchmarks.Values.Count(runtime => runtime.State.State == "running"),
+                sessions.Values.Count(runtime => runtime.Binding is not null)
+                    + benchmarks.Values.Count(runtime => runtime.Binding is not null));
+        }
     }
 
     public bool TryBind(StreamWorkerTransportAuthenticated authenticated)

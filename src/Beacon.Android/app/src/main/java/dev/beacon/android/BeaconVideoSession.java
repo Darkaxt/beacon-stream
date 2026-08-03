@@ -2,6 +2,7 @@ package dev.beacon.android;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 
 final class BeaconVideoSession implements BeaconViewModel.VideoSession {
     private final ExecutorService decoderExecutor;
@@ -22,18 +23,32 @@ final class BeaconVideoSession implements BeaconViewModel.VideoSession {
         EncodedVideoSurfaceProvider surfaceProvider,
         BeaconVideoFeedbackBridge.FailureObserver failureObserver,
         BeaconVideoFeedbackBridge.Observer observer) {
+        this(surfaceProvider, failureObserver, observer, ignored -> { });
+    }
+
+    BeaconVideoSession(
+        EncodedVideoSurfaceProvider surfaceProvider,
+        BeaconVideoFeedbackBridge.FailureObserver failureObserver,
+        BeaconVideoFeedbackBridge.Observer observer,
+        Consumer<BeaconVideoPipelineObserverSwitch> observerRegistration) {
         if (surfaceProvider == null || failureObserver == null || observer == null) {
             throw new IllegalArgumentException("Beacon video session dependencies are required.");
+        }
+        if (observerRegistration == null) {
+            throw new IllegalArgumentException("Beacon video observer registration is required.");
         }
         decoderExecutor = Executors.newSingleThreadExecutor(
             action -> new Thread(action, "beacon-video-decoder"));
         feedback = new BeaconVideoFeedbackBridge(failureObserver, observer);
+        BeaconVideoPipelineObserverSwitch pipelineObserver =
+            new BeaconVideoPipelineObserverSwitch(feedback);
+        observerRegistration.accept(pipelineObserver);
         pipeline = new BeaconVideoPipeline(
             new AndroidMediaCodecFactory(),
             surfaceProvider,
             3,
             decoderExecutor,
-            feedback);
+            pipelineObserver);
     }
 
     @Override

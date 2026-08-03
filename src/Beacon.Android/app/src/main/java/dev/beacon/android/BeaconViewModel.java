@@ -17,6 +17,7 @@ public final class BeaconViewModel implements AutoCloseable {
     private final BeaconBenchmarkCoordinator benchmarkCoordinator;
     private final Object presenceState = new Object();
     private final ReentrantLock presenceReconciliation = new ReentrantLock();
+    private final ReentrantLock serverSessionOwnership = new ReentrantLock();
     private BeaconStreamCore streamCore;
     private VideoSession videoSession;
     private AudioSession audioSession;
@@ -25,6 +26,7 @@ public final class BeaconViewModel implements AutoCloseable {
     private boolean foregroundDesired;
     private boolean presenceActive;
     private boolean activationAttempted;
+    private boolean serverQuitComplete;
 
     private String status = "Idle";
     private String latestGames = "";
@@ -313,6 +315,7 @@ public final class BeaconViewModel implements AutoCloseable {
         record("launch", result);
         latestStream = result.body();
         if (result.isSuccess()) {
+            markServerSessionOwned();
             startGrant(result.body());
         }
     }
@@ -383,8 +386,16 @@ public final class BeaconViewModel implements AutoCloseable {
     }
 
     public void quit(BeaconApiClient.QuitState state) throws IOException {
-        stopOwnedStreamCore();
-        record("quit", service.quit(state));
+        serverSessionOwnership.lock();
+        try {
+            if (serverQuitComplete) return;
+            stopOwnedStreamCore();
+            BeaconApiClient.BeaconResult result = service.quit(state);
+            record("quit", result);
+            serverQuitComplete = result.isSuccess();
+        } finally {
+            serverSessionOwnership.unlock();
+        }
     }
 
     public void emergencyRestore() throws IOException {
@@ -397,6 +408,7 @@ public final class BeaconViewModel implements AutoCloseable {
         record("reconnect", result);
         latestStream = result.body();
         if (result.isSuccess()) {
+            markServerSessionOwned();
             startGrant(result.body());
         }
     }
@@ -625,6 +637,15 @@ public final class BeaconViewModel implements AutoCloseable {
         BeaconStreamCore owned = streamCore;
         if (owned != null) {
             owned.stop();
+        }
+    }
+
+    private void markServerSessionOwned() {
+        serverSessionOwnership.lock();
+        try {
+            serverQuitComplete = false;
+        } finally {
+            serverSessionOwnership.unlock();
         }
     }
 

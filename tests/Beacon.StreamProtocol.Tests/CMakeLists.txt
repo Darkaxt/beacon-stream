@@ -185,8 +185,10 @@ if(BEACON_WITH_MSQUIC)
   if(UNIX AND NOT ANDROID)
     add_executable(
       BeaconHostedBenchmarkWorker
+      access_unit_vector.cpp
       hosted_benchmark_worker.cpp
       hosted_benchmark_worker_channel.cpp
+      hosted_video_generation.cpp
     )
     target_link_libraries(
       BeaconHostedBenchmarkWorker
@@ -222,6 +224,24 @@ if(BEACON_WITH_MSQUIC)
     add_test(
       NAME BeaconStreamWorker.HostedBenchmarkChannel
       COMMAND BeaconHostedBenchmarkWorkerChannelTests
+    )
+
+    add_executable(
+      BeaconHostedVideoGenerationTests
+      hosted_video_generation.cpp
+      hosted_video_generation_tests.cpp
+    )
+    target_link_libraries(
+      BeaconHostedVideoGenerationTests
+      PRIVATE Beacon::StreamWorkerPortableCore
+    )
+    target_compile_options(
+      BeaconHostedVideoGenerationTests
+      PRIVATE -Wall -Wextra -Wpedantic -Werror
+    )
+    add_test(
+      NAME BeaconStreamWorker.HostedVideoGeneration
+      COMMAND BeaconHostedVideoGenerationTests
     )
   endif()
 
