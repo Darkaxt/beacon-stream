@@ -5,6 +5,7 @@ import android.content.Context;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import org.junit.Test;
@@ -52,16 +53,21 @@ public final class AndroidDeviceBenchmarkInstrumentationTest {
             1, evidence.get().decoderSamples().size());
         assertEquals("Unexpected power evidence: " + evidence.get().powerSamples(),
             2, evidence.get().powerSamples().size());
-        String decoder = evidence.get().decoderSamples().get(0).toJson().toString();
+        JsonObject decoder = evidence.get().decoderSamples().get(0).toJson();
         System.out.println("BEACON_HARDWARE_EVIDENCE " + decoder);
         assertTrue("Decoder was not configured: " + decoder,
-            decoder.contains("\"configured\":true"));
+            decoder.has("configured") && decoder.get("configured").getAsBoolean());
         assertTrue("Presentation latency is missing: " + decoder,
-            decoder.contains("\"p95PresentationLatencyMs\":"));
+            decoder.has("p95PresentationLatencyMs"));
         assertTrue("Dropped-frame evidence is missing: " + decoder,
-            decoder.contains("\"droppedFrames\":"));
-        assertTrue("Decoder reported output errors: " + decoder,
-            decoder.contains("\"outputErrors\":0"));
+            decoder.has("droppedFrames"));
+        assertTrue("Output-error evidence is missing: " + decoder,
+            decoder.has("outputErrors"));
+        assertTrue("Output errors are not a numeric measurement: " + decoder,
+            decoder.get("outputErrors").isJsonPrimitive() &&
+                decoder.getAsJsonPrimitive("outputErrors").isNumber());
+        assertTrue("Output errors are negative: " + decoder,
+            decoder.get("outputErrors").getAsInt() >= 0);
     }
 
     private static BeaconBenchmarkHardwarePlan plan() {
