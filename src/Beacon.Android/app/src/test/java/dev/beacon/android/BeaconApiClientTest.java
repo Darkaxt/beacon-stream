@@ -1,5 +1,8 @@
 package dev.beacon.android;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonParser;
+
 import org.junit.Test;
 
 import java.io.IOException;
@@ -209,6 +212,13 @@ public final class BeaconApiClientTest {
         assertEquals(
             "/clients/z-fold-7/benchmarks/3c13df40-26c4-40c6-8414-268734f1024d/complete",
             transport.path);
+        JsonArray networkSamples = JsonParser.parseString(transport.body)
+            .getAsJsonObject()
+            .getAsJsonArray("networkSamples");
+        assertEquals(96.5, networkSamples.get(0).getAsJsonObject()
+            .get("throughputMbps").getAsDouble(), 0.001);
+        assertEquals(0.0, networkSamples.get(1).getAsJsonObject()
+            .get("throughputMbps").getAsDouble(), 0.001);
         assertTrue(transport.body.contains("\"rttMs\":2.5"));
         assertTrue(transport.body.contains("\"jitterMs\":0.3"));
         assertTrue(transport.body.contains("\"throughputMbps\":96.5"));

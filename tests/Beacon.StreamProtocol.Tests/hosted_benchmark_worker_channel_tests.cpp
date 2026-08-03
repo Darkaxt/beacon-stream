@@ -371,6 +371,11 @@ void hosted_worker_process_publishes_fixed_markers_and_exits_cleanly() {
   video->set_frames_per_second_denominator(1);
   video->set_video_codec(worker_v1::WORKER_VIDEO_CODEC_H264);
   video->set_dynamic_range(worker_v1::WORKER_DYNAMIC_RANGE_SDR);
+  video->set_audio_codec(worker_v1::WORKER_AUDIO_CODEC_OPUS);
+  video->set_audio_sample_rate_hz(48'000);
+  video->set_audio_channel_count(2);
+  video->set_audio_frame_duration_us(20'000);
+  video->set_audio_bitrate_bps(96'000);
   video->set_minimum_bitrate_kbps(10'000);
   video->set_initial_bitrate_kbps(20'000);
   video->set_maximum_bitrate_kbps(40'000);
@@ -425,7 +430,7 @@ void hosted_worker_process_publishes_fixed_markers_and_exits_cleanly() {
   BEACON_TEST_REQUIRE(video_rejection.request_id() == 302);
   BEACON_TEST_REQUIRE(!video_rejection.worker_completion().succeeded());
   BEACON_TEST_REQUIRE(video_rejection.worker_completion().error_code() ==
-                      worker_v1::WORKER_ERROR_CODE_OPERATION_FAILED);
+                      worker_v1::WORKER_ERROR_CODE_CAPABILITY_UNAVAILABLE);
   BEACON_TEST_REQUIRE(benchmark_state.request_id() == 303);
   BEACON_TEST_REQUIRE(benchmark_state.session_state_changed().state() ==
                       worker_v1::WORKER_SESSION_STATE_PREPARED);

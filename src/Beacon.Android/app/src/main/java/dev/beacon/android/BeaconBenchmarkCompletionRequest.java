@@ -43,7 +43,7 @@ public final class BeaconBenchmarkCompletionRequest {
                 sample.rttUs / 1000.0,
                 sample.jitterUs / 1000.0,
                 sample.received,
-                network.sustainableThroughputMbps,
+                sample.received ? network.sustainableThroughputMbps : 0.0,
                 sample.reorderDistance));
         }
         return new BeaconBenchmarkCompletionRequest(

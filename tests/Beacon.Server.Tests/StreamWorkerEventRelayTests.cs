@@ -113,6 +113,42 @@ public sealed class StreamWorkerEventRelayTests
     }
 
     [Fact]
+    public async Task HighRateMediaAndFeedbackDoNotEvictLifecycleDiagnostics()
+    {
+        var worker = new EventHost(capacity: 128);
+        var runtime = new RuntimeEvents();
+        var sink = new RecordingSink(expectedCalls: 1);
+        var journal = new InMemoryDiagnosticEventJournal(capacity: 12);
+        var relay = new StreamWorkerEventRelay(worker, runtime, sink, journal);
+        await relay.StartAsync(CancellationToken.None);
+        await worker.WriteAsync(new StreamWorkerConnectionObserved(1, 22));
+        await worker.WriteAsync(new StreamWorkerConnectionConfigured(1, 22));
+        await worker.WriteAsync(new StreamWorkerTransportConnected(1, 22));
+        await worker.WriteAsync(new StreamWorkerTransportAuthenticated(1, "session", 7, 1200));
+        for (ulong sequence = 1; sequence <= 50; sequence++)
+        {
+            await worker.WriteAsync(new StreamWorkerMediaEvidence(
+                1, "session", 7, sequence, checked(sequence * 1_000), 1200));
+            await worker.WriteAsync(new StreamWorkerFeedbackReceived(
+                1, "session", 7, sequence, StreamWorkerFeedbackKind.Decoder, 0, 0, 0));
+        }
+        await worker.WriteAsync(new StreamWorkerTransportDisconnected(1, "session", 7));
+        await worker.WriteAsync(Input(1, ClientInputEvent.StreamKeyboard(1, true)));
+
+        await sink.Completed;
+        await relay.StopAsync(CancellationToken.None);
+
+        IReadOnlyList<DiagnosticEvent> diagnostics = journal.GetRecent(100);
+        Assert.Contains(diagnostics, value => value.Operation == "worker.connection_observed");
+        Assert.Contains(diagnostics, value => value.Operation == "worker.connection_configured");
+        Assert.Contains(diagnostics, value => value.Operation == "worker.transport_connected");
+        Assert.Contains(diagnostics, value => value.Operation == "worker.transport_authenticated");
+        Assert.Contains(diagnostics, value => value.Operation == "worker.transport_disconnected");
+        Assert.Single(diagnostics, value => value.Operation == "worker.media");
+        Assert.Single(diagnostics, value => value.Operation == "worker.feedback");
+    }
+
+    [Fact]
     public async Task SanitizesDiagnosticsAndContinuesAfterFailuresAndWorkerExit()
     {
         const string canary = "RELAY-CANARY-4d9c";

@@ -220,9 +220,11 @@ WorkerHost::prepare(const v1::WorkerIpcEnvelope &request) {
       plan.dynamic_range() != v1::WORKER_DYNAMIC_RANGE_SDR) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);
   }
-  if (streaming_ || !video_capabilities_.available ||
-      !audio_capabilities_.available) {
+  if (streaming_) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_STATE);
+  }
+  if (!video_capabilities_.available || !audio_capabilities_.available) {
+    return reject(request, v1::WORKER_ERROR_CODE_CAPABILITY_UNAVAILABLE);
   }
   auto video_plan = worker_video_plan_from(request);
   auto audio_plan = worker_audio_plan_from(request);

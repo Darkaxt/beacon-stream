@@ -15,6 +15,8 @@ public sealed class StreamWorkerEventRelay(
     private readonly TaskCompletionSource gracefulStopRequested =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Lock stopGate = new();
+    private (long ProcessGeneration, ulong WorkerSessionGeneration)? feedbackDiagnosticGeneration;
+    private (long ProcessGeneration, ulong WorkerSessionGeneration)? mediaDiagnosticGeneration;
     private Task? stopTask;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -201,6 +203,10 @@ public sealed class StreamWorkerEventRelay(
                 break;
             case StreamWorkerFeedbackReceived feedback:
                 bool feedbackAccepted = runtimeEvents.IsCurrent(feedback);
+                if (feedbackAccepted && !ShouldPublishFeedbackDiagnostic(feedback))
+                {
+                    break;
+                }
                 Publish(
                     feedbackAccepted ? "worker.feedback" : "worker.feedback_rejected",
                     feedbackAccepted
@@ -217,6 +223,10 @@ public sealed class StreamWorkerEventRelay(
                 break;
             case StreamWorkerMediaEvidence media:
                 bool mediaAccepted = runtimeEvents.IsCurrent(media);
+                if (mediaAccepted && !ShouldPublishMediaDiagnostic(media))
+                {
+                    break;
+                }
                 Publish(
                     mediaAccepted ? "worker.media" : "worker.media_rejected",
                     mediaAccepted
@@ -273,6 +283,30 @@ public sealed class StreamWorkerEventRelay(
                     ("exitCode", exited.ExitCode));
                 break;
         }
+    }
+
+    private bool ShouldPublishFeedbackDiagnostic(StreamWorkerFeedbackReceived feedback)
+    {
+        var generation = (feedback.ProcessGeneration, feedback.WorkerSessionGeneration);
+        if (feedbackDiagnosticGeneration == generation)
+        {
+            return false;
+        }
+
+        feedbackDiagnosticGeneration = generation;
+        return true;
+    }
+
+    private bool ShouldPublishMediaDiagnostic(StreamWorkerMediaEvidence media)
+    {
+        var generation = (media.ProcessGeneration, media.WorkerSessionGeneration);
+        if (mediaDiagnosticGeneration == generation)
+        {
+            return false;
+        }
+
+        mediaDiagnosticGeneration = generation;
+        return true;
     }
 
     private void Publish(

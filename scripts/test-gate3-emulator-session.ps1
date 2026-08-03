@@ -1134,12 +1134,16 @@ try {
                 Where-Object {
                     $null -eq $_.completedAt -or $null -eq $_.selectedResult
                 })
-        Require-Condition ($completedBenchmarks.Count -eq 2) `
-            'The expected benchmark evidence was not retained.'
+        Require-Condition ($completedBenchmarks.Count -ge 2) `
+            'The certified benchmark and session preflight evidence were not retained.'
         Require-Condition (@(
             $completedBenchmarks |
                 Where-Object { $_.trigger -eq 'SessionPreflight' }).Count -eq 1) `
             'Gate 4 did not retain exactly one completed session preflight.'
+        Require-Condition (@(
+            $completedBenchmarks |
+                Where-Object { $_.trigger -ne 'SessionPreflight' }).Count -ge 1) `
+            'Gate 4 did not retain completed hardware benchmark evidence.'
         Require-Condition ($pendingBenchmarks.Count -eq 0) `
             'The real Gate 4 observation left an orphaned benchmark run.'
         $operations = @($firstSnapshot.diagnostics | ForEach-Object { $_.operation })
@@ -1154,16 +1158,21 @@ try {
             'worker.transport_disconnected')) {
             Require-Condition ($operations -contains $operation) 'The Gate 3 session did not publish required Worker evidence.'
         }
-        $mediaMarkers = @(
+        $mediaEvidence = @(
             $firstSnapshot.diagnostics |
                 Where-Object { $_.operation -eq 'worker.media' } |
                 ForEach-Object {
-                    '{0}:{1}' -f `
-                        [long]$_.metadata.workerSessionGeneration, `
-                        [long]$_.metadata.sequence
+                    [PSCustomObject]@{
+                        Generation = [long]$_.metadata.workerSessionGeneration
+                        Sequence = [long]$_.metadata.sequence
+                    }
                 } |
-                Sort-Object -Unique)
-        Require-Condition (($mediaMarkers -join ',') -eq '1:1,2:1') `
+                Sort-Object -Property Generation, Sequence -Unique)
+        $mediaGenerations = @($mediaEvidence.Generation | Sort-Object -Unique)
+        Require-Condition (
+            $mediaEvidence.Count -eq 2 -and
+            $mediaGenerations.Count -eq 2 -and
+            @($mediaEvidence | Where-Object { $_.Sequence -ne 1 }).Count -eq 0) `
             'The reconnect did not emit a fresh generation-local Worker media sequence.'
 
         $logcat = (& adb -s $Serial logcat -d -v raw -s BeaconGate3:I) -join [Environment]::NewLine
@@ -1209,16 +1218,23 @@ try {
                     Where-Object { $_.clientId -eq $clientId -and $_.state -eq 'running' })
             Require-Condition ($activeRuntime.Count -eq 1) `
                 'Worker crash instrumentation did not retain exactly one active runtime.'
-            $activeMediaMarkers = @(
+            $activeMediaEvidence = @(
                 $beforeCrash.diagnostics |
                     Where-Object { $_.operation -eq 'worker.media' } |
                     ForEach-Object {
-                        '{0}:{1}' -f `
-                            [long]$_.metadata.workerSessionGeneration, `
-                            [long]$_.metadata.sequence
+                        [PSCustomObject]@{
+                            Generation = [long]$_.metadata.workerSessionGeneration
+                            Sequence = [long]$_.metadata.sequence
+                        }
                     } |
-                    Sort-Object -Unique)
-            Require-Condition ($activeMediaMarkers -contains '3:1') `
+                    Sort-Object -Property Generation, Sequence -Unique)
+            $newActiveMedia = @(
+                $activeMediaEvidence |
+                    Where-Object {
+                        $_.Sequence -eq 1 -and
+                        $_.Generation -notin $mediaGenerations
+                    })
+            Require-Condition ($newActiveMedia.Count -eq 1) `
                 'Worker crash instrumentation did not receive its active media marker.'
 
             $workers = @(

@@ -66,18 +66,29 @@ matching heartbeat observations and resets it on any path, fingerprint, or desir
 Signed Host Agent workflow `30776554104` deployed that exact revision through the supervised
 bootstrap.
 
+The Beacon-native fake-display emulator transaction is now green. Retained evidence in
+`.artifacts/gate3-r2-benchmark-8e0edc965d6243e79c37b64a65985572/` covers the certified benchmark
+and session preflight, native hardware observation, initial stream, fresh-ticket reconnect, active
+Worker crash isolation, and emergency recovery. Network evidence now records zero throughput for
+missing packets instead of assigning them the aggregate measured throughput. The hardware benchmark
+is terminal and retained whether the emulator run accepts it or capability-rejects it; no benchmark
+remains pending. An independent post-run check found the physical `DISPLAY5` primary at
+`2560x1600@240`, mirror mode disabled, no active virtual display, zero HostAgent leases, and no active
+heartbeat. This proves the fake-display emulator transaction, not R2 completion; final physical Z Fold
+7 confirmation remains required.
+
 ## Current Blocker
 
-No R2 implementation blocker has been established. The installed topology quorum and complete audio
-path need one final guarded emulator transaction from the interactive `Default` desktop. Windows is
-currently on the secure `Screen-saver` input desktop, so no display lease is being created.
+No R2 implementation blocker has been established. The fake-display emulator transaction is complete,
+but it does not substitute for final physical Z Fold 7 confirmation through the guarded production
+display path.
 
 ## Next Falsifiable Proof
 
-The next proof must rerun the guarded production transaction with the installed four-heartbeat
-quorum, retain ordered PCM writes on initial connect and reconnect, exit the outer runner with zero,
-and independently verify one physical primary display, zero leases, and no heartbeat. Physical
-Z Fold 7 audible confirmation remains the final human audio check.
+The next proof must run the guarded production transaction from the physical Z Fold 7 with the
+installed four-heartbeat quorum, retain ordered PCM writes on initial connect and reconnect, exit the
+outer runner with zero, and independently verify one physical primary display, zero leases, and no
+heartbeat. Physical Z Fold 7 audible confirmation remains the final human audio check.
 
 ## Prior Evidence
 

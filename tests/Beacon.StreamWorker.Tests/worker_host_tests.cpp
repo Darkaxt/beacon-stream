@@ -279,6 +279,10 @@ void unavailable_video_is_reported_without_poisoning_worker() {
                       beacon::worker::v1::DIAGNOSTIC_BOUNDARY_ENCODER);
   BEACON_TEST_REQUIRE(capabilities.video_unavailable_code() ==
                       encoder_unavailable_code);
+  const auto rejected = completion(host.dispatch(prepare_video()));
+  BEACON_TEST_REQUIRE(!rejected.worker_completion().succeeded());
+  BEACON_TEST_REQUIRE(rejected.worker_completion().error_code() ==
+                      beacon::worker::v1::WORKER_ERROR_CODE_CAPABILITY_UNAVAILABLE);
   BEACON_TEST_REQUIRE(pipeline.plans.empty());
   BEACON_TEST_REQUIRE(!host.shutdown_requested());
 }
@@ -301,9 +305,10 @@ void unavailable_audio_is_reported_without_preparing_a_session() {
                       beacon::worker::v1::DIAGNOSTIC_BOUNDARY_AUDIO_CAPTURE);
   BEACON_TEST_REQUIRE(capabilities.audio_unavailable_code() ==
                       capture_unavailable_code);
-  BEACON_TEST_REQUIRE(!completion(host.dispatch(prepare_video()))
-                           .worker_completion()
-                           .succeeded());
+  const auto rejected = completion(host.dispatch(prepare_video()));
+  BEACON_TEST_REQUIRE(!rejected.worker_completion().succeeded());
+  BEACON_TEST_REQUIRE(rejected.worker_completion().error_code() ==
+                      beacon::worker::v1::WORKER_ERROR_CODE_CAPABILITY_UNAVAILABLE);
   BEACON_TEST_REQUIRE(pipeline.plans.empty());
   BEACON_TEST_REQUIRE(pipeline.audio.plans.empty());
 }
