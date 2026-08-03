@@ -132,7 +132,8 @@ public sealed class WindowsDisplayApi :
         virtualDisplayArrivalGate = new WindowsVirtualDisplayArrivalGate(
             () => driverLeaseSession.HeartbeatRevision,
             driverLeaseSession.WaitForHeartbeatAsync,
-            diagnostic);
+            diagnostic,
+            requiredStableObservations: 4);
     }
 
     internal WindowsDisplayApi(
@@ -154,7 +155,8 @@ public sealed class WindowsDisplayApi :
         extendedTopologyActivator = new WindowsShellExtendedTopologyActivator();
         virtualDisplayArrivalGate = new WindowsVirtualDisplayArrivalGate(
             () => this.driverLeaseSession.HeartbeatRevision,
-            this.driverLeaseSession.WaitForHeartbeatAsync);
+            this.driverLeaseSession.WaitForHeartbeatAsync,
+            requiredStableObservations: 4);
         topologyReconciler = new WindowsDisplayLeaseTopologyReconciler(
             () => this.inputDesktop.Invoke(QueryActiveTopology),
             SnapshotLeasedDisplayRequirements,

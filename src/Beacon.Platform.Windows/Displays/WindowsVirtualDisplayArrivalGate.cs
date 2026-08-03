@@ -10,8 +10,15 @@ internal sealed record VirtualDisplayTargetArrivalSnapshot(
 internal sealed class WindowsVirtualDisplayArrivalGate(
     Func<long> heartbeatRevision,
     Func<long, CancellationToken, Task<long>> waitForHeartbeat,
-    Action<string>? diagnostic = null)
+    Action<string>? diagnostic = null,
+    int requiredStableObservations = 2)
 {
+    private readonly int stableObservationRequirement = requiredStableObservations >= 2
+        ? requiredStableObservations
+        : throw new ArgumentOutOfRangeException(
+            nameof(requiredStableObservations),
+            "Topology stability requires at least two observations.");
+
     public async Task<DisplayApiResult> ApplyAfterNextHeartbeatAsync(
         Func<DisplayApiResult> applyStateTransition,
         CancellationToken cancellationToken)
@@ -112,6 +119,7 @@ internal sealed class WindowsVirtualDisplayArrivalGate(
         CancellationToken cancellationToken)
     {
         VirtualDisplayTargetArrivalSnapshot? previousDesired = null;
+        int stableObservationCount = 0;
         long observedRevision = heartbeatRevision();
 
         while (true)
@@ -124,6 +132,7 @@ internal sealed class WindowsVirtualDisplayArrivalGate(
             if (!current.Available)
             {
                 previousDesired = null;
+                stableObservationCount = 0;
                 continue;
             }
 
@@ -131,14 +140,24 @@ internal sealed class WindowsVirtualDisplayArrivalGate(
             {
                 if (current == previousDesired)
                 {
+                    stableObservationCount++;
+                }
+                else
+                {
+                    previousDesired = current;
+                    stableObservationCount = 1;
+                }
+
+                if (stableObservationCount >= stableObservationRequirement)
+                {
                     return DisplayApiResult.Ok();
                 }
 
-                previousDesired = current;
                 continue;
             }
 
             previousDesired = null;
+            stableObservationCount = 0;
             if (applyStateTransition is null)
             {
                 WriteDiagnostic(

@@ -5,6 +5,41 @@ namespace Beacon.Platform.Windows.Tests.Displays;
 public sealed class WindowsVirtualDisplayArrivalGateTests
 {
     [Fact]
+    public async Task ProductionQuorumRejectsADelayedTopologyCollapse()
+    {
+        var signal = new ManualHeartbeatRevisionSignal();
+        var snapshots = new ObservedSnapshotSequence(
+        [
+            new(true, @"\\.\DISPLAY34", "extended-a", ExtendedTopology: true, DesiredTopology: true),
+            new(true, @"\\.\DISPLAY34", "extended-a", ExtendedTopology: true, DesiredTopology: true),
+            new(true, @"\\.\DISPLAY34", "virtual-only", ExtendedTopology: false, DesiredTopology: false),
+            new(true, @"\\.\DISPLAY34", "extended-b", ExtendedTopology: true, DesiredTopology: true),
+            new(true, @"\\.\DISPLAY34", "extended-b", ExtendedTopology: true, DesiredTopology: true),
+            new(true, @"\\.\DISPLAY34", "extended-b", ExtendedTopology: true, DesiredTopology: true),
+            new(true, @"\\.\DISPLAY34", "extended-b", ExtendedTopology: true, DesiredTopology: true)
+        ]);
+        var gate = new WindowsVirtualDisplayArrivalGate(
+            () => signal.Revision,
+            signal.WaitAsync,
+            requiredStableObservations: 4);
+
+        Task<DisplayApiResult> wait = gate.WaitForStableDesiredTopologyAsync(
+            snapshots.Query,
+            CancellationToken.None);
+
+        for (int observation = 0; observation < 6; observation++)
+        {
+            signal.Pulse();
+            await snapshots.WaitForObservationAsync(observation);
+            Assert.False(wait.IsCompleted);
+        }
+
+        signal.Pulse();
+
+        Assert.True((await wait).Success);
+    }
+
+    [Fact]
     public async Task TransitionAfterDriverAddWaitsForTheNextHeartbeat()
     {
         var signal = new ManualHeartbeatRevisionSignal();

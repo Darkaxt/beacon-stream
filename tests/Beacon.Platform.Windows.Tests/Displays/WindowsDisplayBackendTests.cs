@@ -533,9 +533,31 @@ public sealed class WindowsDisplayBackendTests
     }
 
     [Fact]
+    public async Task RestorePhysicalPrimaryAsync_WhenAlreadyVerified_DoesNotReapplyTopology()
+    {
+        var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
+        var backend = new WindowsDisplayBackend(api);
+
+        DisplayRestoreResult result = await backend.RestorePhysicalPrimaryAsync(CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Empty(api.RestoreRequests);
+        DisplayOperationLogEntry entry = Assert.Single(backend.OperationLog);
+        Assert.True(entry.Primary);
+        Assert.Contains("already verified", entry.Reason);
+    }
+
+    [Fact]
     public async Task RestorePhysicalPrimaryAsync_WhenFirstTopologyIsStale_ReappliesUntilVerified()
     {
         var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
+        api.CurrentTopology = DisplayTopologySnapshot.Extended(
+            physicalDisplayId: "physical-laptop-panel",
+            virtualDisplayId: "client-z-fold-7",
+            width: 2560,
+            height: 1600,
+            refreshHz: 120,
+            virtualPrimary: true);
         api.RestoreTopologies.Enqueue(DisplayTopologySnapshot.Extended(
             physicalDisplayId: "physical-laptop-panel",
             virtualDisplayId: "client-z-fold-7",
@@ -560,6 +582,13 @@ public sealed class WindowsDisplayBackendTests
     public async Task RestorePhysicalPrimaryAsync_WhenTopologyRepeatsWithoutPhysicalPrimary_FailsWithDiagnostic()
     {
         var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
+        api.CurrentTopology = DisplayTopologySnapshot.Extended(
+            physicalDisplayId: "physical-laptop-panel",
+            virtualDisplayId: "client-z-fold-7",
+            width: 2560,
+            height: 1600,
+            refreshHz: 120,
+            virtualPrimary: true);
         api.RestoreTopologies.Enqueue(DisplayTopologySnapshot.Extended(
             physicalDisplayId: "physical-laptop-panel",
             virtualDisplayId: "client-z-fold-7",
@@ -591,6 +620,13 @@ public sealed class WindowsDisplayBackendTests
     public async Task RestorePhysicalPrimaryAsync_WritesTopologyDecisionLog()
     {
         var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
+        api.CurrentTopology = DisplayTopologySnapshot.Extended(
+            physicalDisplayId: "physical-laptop-panel",
+            virtualDisplayId: "client-z-fold-7",
+            width: 2560,
+            height: 1600,
+            refreshHz: 120,
+            virtualPrimary: true);
         api.RestoreTopologies.Enqueue(DisplayTopologySnapshot.PhysicalOnly(
             physicalDisplayId: "physical-laptop-panel",
             width: 2560,

@@ -329,6 +329,12 @@ public sealed class WindowsDisplayBackend : IDisplayBackend
     {
         var seenUnverifiedTopologies = new HashSet<string>(StringComparer.Ordinal);
         DisplayTopologySnapshot before = await api.QueryTopologyAsync(cancellationToken);
+        if (before.PhysicalPrimaryVerified)
+        {
+            DisplayRestoreResult alreadyRestored = DisplayRestoreResult.Ok();
+            LogRestore(before, before, alreadyRestored, "physical primary already verified");
+            return alreadyRestored;
+        }
 
         while (true)
         {
