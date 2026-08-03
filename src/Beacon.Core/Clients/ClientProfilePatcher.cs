@@ -4,40 +4,6 @@ public sealed class InvalidClientProfilePatchException(string message) : Invalid
 
 public static class ClientProfilePatcher
 {
-    public static ClientProfile ApplyApkPatch(ClientProfile profile, ClientProfilePatch patch)
-    {
-        ClientDisplayMode? preferredMode = ApplyPreferredMode(
-            profile,
-            patch.PreferredWidth,
-            patch.PreferredHeight,
-            patch.PreferredRefreshHz);
-
-        var display = profile.Display with
-        {
-            PreferredMode = preferredMode,
-            HdrPreference = patch.HdrPreference ?? profile.Display.HdrPreference
-        };
-
-        var stream = profile.Stream with
-        {
-            CodecPreference = patch.CodecPreference ?? profile.Stream.CodecPreference,
-            QualityMode = patch.QualityMode ?? profile.Stream.QualityMode,
-            BitrateCapMbps = patch.BitrateCapMbps ?? profile.Stream.BitrateCapMbps
-        };
-
-        var audio = profile.Audio with
-        {
-            Mode = patch.AudioMode ?? profile.Audio.Mode
-        };
-
-        var session = profile.Session with
-        {
-            KeepAppRunningOnDisconnect = patch.KeepAppRunningOnDisconnect ?? profile.Session.KeepAppRunningOnDisconnect
-        };
-
-        return profile with { Display = display, Stream = stream, Audio = audio, Session = session };
-    }
-
     public static ClientProfile ApplyAdminPatch(ClientProfile profile, ClientProfileAdminPatch patch)
     {
         ClientDisplayMode? preferredMode = ApplyPreferredMode(

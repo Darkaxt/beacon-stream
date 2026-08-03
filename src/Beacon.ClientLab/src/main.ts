@@ -3,84 +3,74 @@ import {
   createBenchmarkCompletionPayload,
   createBenchmarkPreparePayload,
   createCapabilitiesPayload,
-  createDefaultProfile,
   createGamePlanRequest,
   createKeyboardInputPayload,
   createPointerGesturePayload,
   createTelemetryPayload,
+  ClientPresence,
+  leaveAndQuit,
   formatBeaconState,
   formatLaunchEvents,
   formatInputAccepted,
   formatPlanDetails,
   formatStreamStop,
   getJson,
-  patchJson,
   postJson,
-  validateProfileDraft,
   type GameDescriptor,
   type GameLibrarySnapshot,
   type BeaconResponse,
   type BenchmarkNetworkProfileName,
   type BenchmarkPrepareResponse,
   type BenchmarkTrigger,
-  type HdrPreference,
   type InputAcceptedResponse,
   type LaunchResponse,
   type PlanResponse,
   type PlanRequest,
-  type ProfileDraft,
-  type StreamStopResponse,
-  type TelemetryProfileName
+  type StreamStopResponse
 } from './clientLab';
 
 const clientId = 'z-fold-7';
-const widthInput = input('widthInput');
-const heightInput = input('heightInput');
-const refreshInput = input('refreshInput');
-const hdrInput = select('hdrInput');
-const codecInput = select('codecInput');
-const bitrateInput = input('bitrateInput');
-const telemetryProfileInput = select('telemetryProfileInput');
 const benchmarkNetworkInput = select('benchmarkNetworkInput');
 const gameSelect = select('gameSelect');
 const gameCover = element('gameCover');
 const gameTitle = element('gameTitle');
 const gameMeta = element('gameMeta');
 const gameDiagnostics = element('gameDiagnostics');
-const profileError = element('profileError');
 const eventLog = element('eventLog');
 let games: GameDescriptor[] = [];
 
-setDraft(createDefaultProfile());
+const presence = new ClientPresence(async active => {
+  const result = await postJson<BeaconResponse>(
+    `/clients/${clientId}/beacon`,
+    { active },
+    !active);
+  appendLog(formatBeaconState(result));
+});
+
+window.addEventListener('pagehide', () => {
+  void presence.leave();
+});
 
 element('helloButton').addEventListener('click', async () => {
-  const result = await postJson<{ clientId: string }>('/clients/hello', { clientId, name: 'Z Fold 7' });
+  let result: { clientId: string } | undefined;
+  const active = await presence.enter(async () => {
+    result = await postJson<{ clientId: string }>('/clients/hello', { clientId, name: 'Z Fold 7' });
+    await postJson(`/clients/${clientId}/capabilities`, createCapabilitiesPayload());
+  });
+  if (!active || result === undefined) return;
   await loadGames();
+  await runBenchmark('automatic', false);
   appendLog(`hello ${result.clientId}`);
+});
+
+benchmarkNetworkInput.addEventListener('change', async () => {
+  if (presence.isActive()) {
+    await runBenchmark('automatic');
+  }
 });
 
 gameSelect.addEventListener('change', () => {
   updateGameSummary();
-});
-
-element('profileForm').addEventListener('submit', async event => {
-  event.preventDefault();
-  const draft = readDraft();
-  const validation = validateProfileDraft(draft);
-  profileError.textContent = validation.message;
-  if (!validation.ok) {
-    return;
-  }
-
-  await patchJson(`/clients/${clientId}/profile`, {
-    preferredWidth: draft.preferredWidth,
-    preferredHeight: draft.preferredHeight,
-    preferredRefreshHz: draft.preferredRefreshHz,
-    hdrPreference: draft.hdrPreference,
-    codecPreference: draft.codecPreference,
-    bitrateCapMbps: draft.bitrateCapMbps
-  });
-  appendLog('profile saved');
 });
 
 element('automaticBenchmarkButton').addEventListener('click', async () => {
@@ -116,16 +106,6 @@ element('keyboardButton').addEventListener('click', async () => {
   appendLog(formatInputAccepted(result));
 });
 
-element('activeBeaconButton').addEventListener('click', async () => {
-  const result = await postJson<BeaconResponse>(`/clients/${clientId}/beacon`, { active: true });
-  appendLog(formatBeaconState(result));
-});
-
-element('inactiveBeaconButton').addEventListener('click', async () => {
-  const result = await postJson<BeaconResponse>(`/clients/${clientId}/beacon`, { active: false });
-  appendLog(formatBeaconState(result));
-});
-
 element('disconnectButton').addEventListener('click', async () => {
   const result = await postJson<{ leaseRetained: boolean }>(`/clients/${clientId}/disconnect`, {});
   appendLog(result.leaseRetained ? 'lease retained' : 'lease released');
@@ -142,10 +122,16 @@ element('stopStreamButton').addEventListener('click', async () => {
 });
 
 element('quitButton').addEventListener('click', async () => {
-  const result = await postJson<{ cleanupEvaluated: boolean; displayRemoved: boolean }>(`/clients/${clientId}/quit`, {
-    clientActive: false
-  });
-  appendLog(`${result.cleanupEvaluated ? 'cleanup evaluated' : 'cleanup skipped'} ${result.displayRemoved ? 'display removed' : 'display retained'}`);
+  const outcome = await leaveAndQuit(presence, () =>
+    postJson<{ cleanupEvaluated: boolean; displayRemoved: boolean }>(`/clients/${clientId}/quit`, {
+      clientActive: false
+    }));
+  if (outcome.result !== undefined) {
+    appendLog(`${outcome.result.cleanupEvaluated ? 'cleanup evaluated' : 'cleanup skipped'} ${outcome.result.displayRemoved ? 'display removed' : 'display retained'}`);
+  }
+  for (const failure of outcome.failures) {
+    appendLog(`${failure.step} failed: ${failure.message}`);
+  }
 });
 
 element('restoreButton').addEventListener('click', async () => {
@@ -153,35 +139,14 @@ element('restoreButton').addEventListener('click', async () => {
   appendLog(result.recovered ? `recovered ${result.displayId}` : 'recovery skipped');
 });
 
-function readDraft(): ProfileDraft {
-  return {
-    clientId,
-    preferredWidth: widthInput.valueAsNumber,
-    preferredHeight: heightInput.valueAsNumber,
-    preferredRefreshHz: refreshInput.valueAsNumber,
-    hdrPreference: hdrInput.value as HdrPreference,
-    codecPreference: codecInput.value,
-    bitrateCapMbps: bitrateInput.value === '' ? null : bitrateInput.valueAsNumber
-  };
-}
-
-function setDraft(profile: ProfileDraft): void {
-  widthInput.value = String(profile.preferredWidth);
-  heightInput.value = String(profile.preferredHeight);
-  refreshInput.value = String(profile.preferredRefreshHz);
-  hdrInput.value = profile.hdrPreference;
-  codecInput.value = profile.codecPreference;
-  bitrateInput.value = profile.bitrateCapMbps === null ? '' : String(profile.bitrateCapMbps);
-}
-
 function createPlanRequest(): PlanRequest {
   return createGamePlanRequest(gameSelect.value);
 }
 
 async function submitClientFacts(): Promise<void> {
   await postJson(`/clients/${clientId}/capabilities`, createCapabilitiesPayload());
-  await postJson(`/clients/${clientId}/telemetry`, createTelemetryPayload(readTelemetryProfile()));
-  appendLog(`facts ${telemetryProfileInput.value}`);
+  await postJson(`/clients/${clientId}/telemetry`, createTelemetryPayload());
+  appendLog('facts reported');
 }
 
 async function runBenchmark(
@@ -203,10 +168,6 @@ async function runBenchmark(
     `/clients/${clientId}/benchmarks/${prepared.runId}/complete`,
     createBenchmarkCompletionPayload(prepared));
   appendLog(`${trigger} benchmark complete ${prepared.runId}`);
-}
-
-function readTelemetryProfile(): TelemetryProfileName {
-  return telemetryProfileInput.value as TelemetryProfileName;
 }
 
 async function loadGames(): Promise<void> {
@@ -272,10 +233,6 @@ function element(id: string): HTMLElement {
   }
 
   return found;
-}
-
-function input(id: string): HTMLInputElement {
-  return element(id) as HTMLInputElement;
 }
 
 function select(id: string): HTMLSelectElement {

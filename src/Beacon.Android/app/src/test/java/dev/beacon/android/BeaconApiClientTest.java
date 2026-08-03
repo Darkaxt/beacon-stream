@@ -53,37 +53,11 @@ public final class BeaconApiClientTest {
     }
 
     @Test
-    public void profilePatchSerializesOnlyApkAllowedFields() throws Exception {
-        FakeTransport transport = new FakeTransport();
-        BeaconApiClient client = new BeaconApiClient(new BeaconClientConfig("http://server", "z-fold-7"), transport);
-        BeaconApiClient.ProfilePatch patch = new BeaconApiClient.ProfilePatch();
-        patch.preferredWidth = 2560;
-        patch.preferredHeight = 1600;
-        patch.preferredRefreshHz = 120;
-        patch.hdrPreference = "prefer";
-        patch.codecPreference = "av1";
-        patch.qualityMode = "quality";
-        patch.bitrateCapMbps = 65;
-        patch.audioMode = "stereo";
-        patch.keepAppRunningOnDisconnect = false;
-
-        client.patchProfile(patch);
-
-        assertEquals("PATCH", transport.method);
-        assertEquals("/clients/z-fold-7/profile", transport.path);
-        assertTrue(transport.body.contains("\"preferredWidth\":2560"));
-        assertTrue(transport.body.contains("\"preferredHeight\":1600"));
-        assertTrue(transport.body.contains("\"preferredRefreshHz\":120"));
-        assertTrue(transport.body.contains("\"hdrPreference\":\"prefer\""));
-        assertTrue(transport.body.contains("\"codecPreference\":\"av1\""));
-        assertTrue(transport.body.contains("\"qualityMode\":\"quality\""));
-        assertTrue(transport.body.contains("\"bitrateCapMbps\":65"));
-        assertTrue(transport.body.contains("\"audioMode\":\"stereo\""));
-        assertTrue(transport.body.contains("\"keepAppRunningOnDisconnect\":false"));
-        assertFalse(transport.body.contains("mode"));
-        assertFalse(transport.body.contains("blackout"));
-        assertFalse(transport.body.contains("mirror"));
-        assertFalse(transport.body.contains("restorePhysicalDisplayOnEnd"));
+    public void doesNotExposeProfileMutationContract() {
+        assertFalse(Arrays.stream(BeaconApiClient.class.getDeclaredClasses())
+            .anyMatch(type -> type.getSimpleName().equals("ProfilePatch")));
+        assertFalse(Arrays.stream(BeaconApiClient.class.getDeclaredMethods())
+            .anyMatch(method -> method.getName().equals("patchProfile")));
     }
 
     @Test

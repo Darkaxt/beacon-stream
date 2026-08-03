@@ -140,7 +140,7 @@ public sealed class InMemoryClientStore
 
     public TelemetrySnapshot GetTelemetry(string clientId) =>
         WithLock(() => telemetry.GetValueOrDefault(clientId)
-        ?? new TelemetrySnapshot(RttMs: 8, PacketLossPercent: 0, DecoderLoadPercent: null));
+        ?? new TelemetrySnapshot(RttMs: null, PacketLossPercent: null, DecoderLoadPercent: null));
 
     public void SaveTelemetry(string clientId, TelemetrySnapshot value)
     {

@@ -19,7 +19,6 @@ public static class FakeEndpointCommandLine
             Width = ReadInt(values, "width", profiled.Width),
             Height = ReadInt(values, "height", profiled.Height),
             RefreshHz = ReadInt(values, "refresh", profiled.RefreshHz),
-            BitrateCapMbps = ReadOptionalInt(values, "bitrate-cap", profiled.BitrateCapMbps),
             MaxFps = ReadInt(values, "max-fps", profiled.MaxFps),
             RttMs = ReadInt(values, "rtt-ms", profiled.RttMs),
             PacketLossPercent = ReadDouble(values, "packet-loss", profiled.PacketLossPercent),
@@ -30,7 +29,8 @@ public static class FakeEndpointCommandLine
             ThermalState = ReadOptionalString(values, "thermal-state", profiled.ThermalState),
             AppId = ReadString(values, "app-id", profiled.AppId),
             Title = ReadString(values, "title", profiled.Title),
-            Source = ReadString(values, "source", profiled.Source)
+            Source = ReadString(values, "source", profiled.Source),
+            BenchmarkTrigger = ReadBenchmarkTrigger(values, profiled.BenchmarkTrigger)
         };
 
         return new FakeEndpointCommandLineOptions(
@@ -82,4 +82,9 @@ public static class FakeEndpointCommandLine
 
     private static string? ReadOptionalString(IReadOnlyDictionary<string, string> values, string key, string? fallback) =>
         values.GetValueOrDefault(key) ?? fallback;
+
+    private static string ReadBenchmarkTrigger(IReadOnlyDictionary<string, string> values, string fallback) =>
+        ReadString(values, "benchmark-trigger", fallback).Equals("manual", StringComparison.OrdinalIgnoreCase)
+            ? "manual"
+            : "automatic";
 }

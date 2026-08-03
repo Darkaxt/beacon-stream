@@ -47,6 +47,8 @@ public final class BeaconActivity extends Activity {
     private AndroidBenchmarkNetworkState benchmarkNetwork =
         AndroidBenchmarkNetworkState.disconnected();
     private boolean automaticBenchmarkEnabled;
+    private boolean lifecycleForeground;
+    private volatile boolean automaticPresenceEnabled;
     private AndroidDeviceTelemetryProbe telemetryProbe;
     private BeaconLocalSettingsStore localSettingsStore;
     private BeaconLocalSettings localSettings;
@@ -63,24 +65,9 @@ public final class BeaconActivity extends Activity {
     private CheckBox hapticsEnabled;
     private CheckBox wakeLockEnabled;
     private CheckBox decoderDebugOverlayEnabled;
-    private EditText width;
-    private EditText height;
-    private EditText refreshHz;
-    private EditText hdrPreference;
-    private EditText codecPreference;
-    private EditText qualityMode;
-    private EditText bitrateCap;
-    private EditText audioMode;
     private EditText gameId;
     private Spinner gameSelector;
     private ArrayAdapter<String> gameAdapter;
-    private EditText rttMs;
-    private EditText packetLossPercent;
-    private EditText decoderLoadPercent;
-    private EditText estimatedBandwidthMbps;
-    private EditText wifiBand;
-    private EditText batteryPercent;
-    private EditText thermalState;
     private TextView decoderDebugOverlay;
     private TextView controllerOverlayMarker;
     private View touchSurfaceView;
@@ -107,12 +94,44 @@ public final class BeaconActivity extends Activity {
     }
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        lifecycleForeground = true;
+        if (automaticPresenceEnabled) {
+            runAction("Reconnect", model -> {
+                model.setForegroundDesired(true);
+                if (model.onForeground(readCapabilities())) {
+                    runOnUiThread(this::enableAutomaticBenchmark);
+                }
+            });
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        lifecycleForeground = false;
+        disableAutomaticBenchmark();
+        if (automaticPresenceEnabled && modelSession != null) {
+            BeaconClientConfig config = readClientConfig();
+            executeWithModel(config, model -> {
+                model.setForegroundDesired(false);
+                try {
+                    model.reconcileBackground();
+                } catch (IOException ignored) {
+                    // Lifecycle departure is best-effort on the current request transport.
+                }
+            });
+        }
+        super.onStop();
+    }
+
+    @Override
     protected void onDestroy() {
         if (benchmarkChangeMonitor != null) {
             benchmarkChangeMonitor.close();
         }
         if (modelSession != null) {
-            modelSession.close();
+            executor.execute(modelSession::close);
         }
         if (videoSurfaceProvider != null) {
             videoSurfaceProvider.close();
@@ -140,7 +159,8 @@ public final class BeaconActivity extends Activity {
         BeaconApiClient.InputBatch batch = gamepadInputMapper.mapButton(
             event.getKeyCode(),
             pressed);
-        if (batch == null || !currentModel().hasActiveStream()) {
+        BeaconViewModel model = currentModelIfPresent();
+        if (batch == null || model == null || !model.hasActiveStream()) {
             return super.dispatchKeyEvent(event);
         }
         if (event.getRepeatCount() == 0) {
@@ -156,8 +176,8 @@ public final class BeaconActivity extends Activity {
             return super.dispatchGenericMotionEvent(event);
         }
 
-        BeaconViewModel model = currentModel();
-        if (!model.hasActiveStream()) {
+        BeaconViewModel model = currentModelIfPresent();
+        if (model == null || !model.hasActiveStream()) {
             return super.dispatchGenericMotionEvent(event);
         }
 
@@ -216,47 +236,16 @@ public final class BeaconActivity extends Activity {
         serverUrl = input("Server URL", "https://10.0.2.2:5001");
         clientId = input("Client ID", "z-fold-7");
         publicKeyFingerprint = input("Server public-key fingerprint", "");
-        width = input("Preferred width", "2560");
-        height = input("Preferred height", "1600");
-        refreshHz = input("Preferred refresh Hz", "120");
-        hdrPreference = input("HDR preference", "prefer");
-        codecPreference = input("Codec preference", "auto");
-        qualityMode = input("Quality mode", "auto");
-        bitrateCap = input("Bitrate cap Mbps", "");
-        audioMode = input("Audio mode", "stereo");
         gameId = input("Game ID", "steam-shortcut:3767414131");
         gameSelector = new Spinner(this);
         gameAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, new ArrayList<>());
         gameAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         gameSelector.setAdapter(gameAdapter);
-        rttMs = input("RTT ms", "8");
-        packetLossPercent = input("Packet loss percent", "0");
-        decoderLoadPercent = input("Decoder load percent", "20");
-        estimatedBandwidthMbps = input("Estimated bandwidth Mbps", "120");
-        wifiBand = input("Wi-Fi band", "wifi-7");
-        batteryPercent = input("Battery percent", "80");
-        thermalState = input("Thermal state", "nominal");
-
         root.addView(serverUrl);
         root.addView(clientId);
         root.addView(publicKeyFingerprint);
-        root.addView(width);
-        root.addView(height);
-        root.addView(refreshHz);
-        root.addView(hdrPreference);
-        root.addView(codecPreference);
-        root.addView(qualityMode);
-        root.addView(bitrateCap);
-        root.addView(audioMode);
         root.addView(gameId);
         root.addView(gameSelector);
-        root.addView(rttMs);
-        root.addView(packetLossPercent);
-        root.addView(decoderLoadPercent);
-        root.addView(estimatedBandwidthMbps);
-        root.addView(wifiBand);
-        root.addView(batteryPercent);
-        root.addView(thermalState);
         decoderDebugOverlay = text("", 12, false);
         root.addView(decoderDebugOverlay);
         updateDecoderDebugOverlay();
@@ -264,29 +253,19 @@ public final class BeaconActivity extends Activity {
         root.addView(controllerOverlayMarker);
         updateControllerOverlay();
 
-        root.addView(button("Hello / Refresh", model -> {
-            model.refresh();
-            runOnUiThread(this::enableAutomaticBenchmark);
-        }));
+        root.addView(localButton("Connect", this::connect));
         root.addView(button("Load Games", model -> {
             model.loadGames();
             setGameEntries(model.latestGameEntries());
         }));
-        root.addView(button("Patch Profile", model -> model.patchProfile(readPatch())));
-        root.addView(button("Report Capabilities", model -> model.reportCapabilities(readCapabilities())));
-        root.addView(button("Report Telemetry", model -> model.reportTelemetry(readTelemetry())));
         root.addView(localButton("Run Benchmark", () -> scheduleBenchmark("manual", benchmarkNetwork)));
-        root.addView(button("Beacon Active", model -> model.beacon(true)));
-        root.addView(button("Beacon Inactive", model -> model.beacon(false)));
         root.addView(button("Plan", model -> model.preflightAndPlan(
-            readPatch(),
             readCapabilities(),
             readTelemetry(),
             readGame())));
         root.addView(button("Launch", model -> {
             BeaconApiClient.ClientCapabilities capabilities = readCapabilities();
             model.preflightBenchmarkAndLaunch(
-                readPatch(),
                 capabilities,
                 readTelemetry(),
                 benchmarkFingerprintProbe.create(
@@ -301,7 +280,8 @@ public final class BeaconActivity extends Activity {
         root.addView(button("Send Escape", model -> model.sendInput(BeaconApiClient.InputBatch.keyboardPress(2, "Escape", "Escape"))));
         root.addView(button("Stop Stream", model -> model.stopStream()));
         root.addView(button("Disconnect", model -> model.disconnect()));
-        root.addView(button("Quit", model -> model.quit(new BeaconApiClient.QuitState(false))));
+        root.addView(button("Reconnect", model -> model.reconnect()));
+        root.addView(button("Quit", model -> leaveAndQuit(model)));
         root.addView(button("Emergency Restore", model -> model.emergencyRestore()));
 
         status = text("Idle", uiState.bodyTextSizeSp(), false);
@@ -489,8 +469,14 @@ public final class BeaconActivity extends Activity {
 
     private void runAction(String label, BeaconAction action) {
         status.setText(label + "...");
-        BeaconViewModel model = currentModel();
-        executor.execute(() -> {
+        BeaconClientConfig config;
+        try {
+            config = readClientConfig();
+        } catch (RuntimeException failure) {
+            setStatus(label + " failed: " + failure.getMessage());
+            return;
+        }
+        executeWithModel(config, model -> {
             try {
                 action.run(model);
                 String error = model.latestError().isEmpty() ? "" : "\nError: " + model.latestError();
@@ -503,6 +489,20 @@ public final class BeaconActivity extends Activity {
         });
     }
 
+    private void connect() {
+        disableAutomaticBenchmark();
+        automaticPresenceEnabled = true;
+        runAction("Connect", current -> {
+            current.setForegroundDesired(true);
+            automaticPresenceEnabled = current.onForeground(readCapabilities());
+            if (automaticPresenceEnabled) {
+                runOnUiThread(this::enableAutomaticBenchmark);
+            } else {
+                current.setForegroundDesired(false);
+            }
+        });
+    }
+
     private void onBenchmarkEnvironmentChanged(AndroidBenchmarkNetworkState network) {
         runOnUiThread(() -> {
             benchmarkNetwork = network;
@@ -511,8 +511,15 @@ public final class BeaconActivity extends Activity {
     }
 
     private void enableAutomaticBenchmark() {
+        if (!lifecycleForeground) return;
         automaticBenchmarkEnabled = true;
+        automaticBenchmarkGate.enable();
         scheduleBenchmark("automatic", benchmarkNetwork);
+    }
+
+    private void disableAutomaticBenchmark() {
+        automaticBenchmarkEnabled = false;
+        automaticBenchmarkGate.disable();
     }
 
     private void scheduleBenchmark(
@@ -520,11 +527,13 @@ public final class BeaconActivity extends Activity {
         AndroidBenchmarkNetworkState network) {
         BeaconApiClient.ClientCapabilities capabilities;
         BeaconBenchmarkPrepareRequest request;
+        BeaconClientConfig config;
         try {
+            config = readClientConfig();
             capabilities = readCapabilities();
             request = benchmarkFingerprintProbe.create(
                 trigger,
-                serverUrl.getText().toString(),
+                config.serverUrl(),
                 capabilities,
                 network);
         } catch (RuntimeException failure) {
@@ -536,8 +545,7 @@ public final class BeaconActivity extends Activity {
         boolean automatic = "automatic".equals(trigger);
         if (automatic && !automaticBenchmarkGate.begin(fingerprint)) return;
         status.setText((automatic ? "Automatic benchmark" : "Manual benchmark") + "...");
-        BeaconViewModel model = currentModel();
-        executor.execute(() -> {
+        executeWithModel(config, model -> {
             boolean started = false;
             try {
                 model.refresh();
@@ -557,17 +565,39 @@ public final class BeaconActivity extends Activity {
         });
     }
 
-    private BeaconViewModel currentModel() {
-        BeaconClientConfig config = new BeaconClientConfig(
+    private BeaconClientConfig readClientConfig() {
+        return new BeaconClientConfig(
             serverUrl.getText().toString(),
             clientId.getText().toString(),
             publicKeyFingerprint.getText().toString());
-        return modelSession.get(config.clientId(), config.serverUrl());
+    }
+
+    private BeaconViewModel currentModelIfPresent() {
+        try {
+            return modelSession.current(readClientConfig());
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private void executeWithModel(
+        BeaconClientConfig config,
+        BeaconViewModelSession.ModelAction action) {
+        if (!modelSession.isCurrent(config.clientId(), config.serverUrl())) {
+            disableAutomaticBenchmark();
+        }
+        modelSession.execute(executor, config, action);
     }
 
     private void sendGamepadInput(BeaconApiClient.InputBatch batch) {
-        BeaconViewModel model = currentModel();
-        executor.execute(() -> {
+        BeaconClientConfig config;
+        try {
+            config = readClientConfig();
+        } catch (RuntimeException failure) {
+            setStatus("Controller input failed: " + failure.getMessage());
+            return;
+        }
+        executeWithModel(config, model -> {
             try {
                 if (model.hasActiveStream()) {
                     model.sendInput(batch);
@@ -674,10 +704,11 @@ public final class BeaconActivity extends Activity {
         }
 
         decoderDebugOverlay.setVisibility(uiState.debugOverlayVisible() ? View.VISIBLE : View.GONE);
+        BeaconApiClient.ClientTelemetry telemetry = readTelemetry();
         decoderDebugOverlay.setText(
-            "Decoder load " + textValue(decoderLoadPercent) +
-                "% | bandwidth " + textValue(estimatedBandwidthMbps) +
-                " Mbps | thermal " + textValue(thermalState));
+            "Battery " + (telemetry.batteryPercent == null ? "unknown" : telemetry.batteryPercent + "%") +
+                " | network " + (telemetry.wifiBand.isEmpty() ? "unknown" : telemetry.wifiBand) +
+                " | thermal " + (telemetry.thermalState.isEmpty() ? "unknown" : telemetry.thermalState));
     }
 
     private void updateControllerOverlay() {
@@ -704,11 +735,7 @@ public final class BeaconActivity extends Activity {
         });
     }
 
-    private BeaconViewModel createModel(String clientId, String serverUrl) {
-        BeaconClientConfig config = new BeaconClientConfig(
-            serverUrl,
-            clientId,
-            publicKeyFingerprint.getText().toString());
+    private BeaconViewModel createModel(BeaconClientConfig config) {
         return new BeaconViewModel(
             config.clientId(),
             config.serverUrl(),
@@ -722,7 +749,10 @@ public final class BeaconActivity extends Activity {
     BeaconViewModel createOwnedModelForInstrumentation() {
         publicKeyFingerprint.setText(
             "0000000000000000000000000000000000000000000000000000000000000000");
-        return modelSession.get("instrumentation-client", "https://127.0.0.1");
+        return modelSession.get(new BeaconClientConfig(
+            "https://127.0.0.1",
+            "instrumentation-client",
+            publicKeyFingerprint.getText().toString()));
     }
 
     boolean workerExecutorShutdown() {
@@ -735,20 +765,6 @@ public final class BeaconActivity extends Activity {
 
     SurfaceView videoSurfaceViewForInstrumentation() {
         return videoSurfaceView;
-    }
-
-    private BeaconApiClient.ProfilePatch readPatch() {
-        BeaconApiClient.ProfilePatch patch = new BeaconApiClient.ProfilePatch();
-        patch.preferredWidth = readInteger(width);
-        patch.preferredHeight = readInteger(height);
-        patch.preferredRefreshHz = readInteger(refreshHz);
-        patch.hdrPreference = textValue(hdrPreference);
-        patch.codecPreference = textValue(codecPreference);
-        patch.qualityMode = textValue(qualityMode);
-        patch.bitrateCapMbps = readInteger(bitrateCap);
-        patch.audioMode = textValue(audioMode);
-        patch.keepAppRunningOnDisconnect = false;
-        return patch;
     }
 
     private BeaconApiClient.GameSelection readGame() {
@@ -788,18 +804,19 @@ public final class BeaconActivity extends Activity {
             telemetryProbe = AndroidDeviceTelemetryProbe.system(this);
         }
 
-        return telemetryProbe.read(
-            readRequiredInteger(rttMs),
-            readRequiredDouble(packetLossPercent),
-            readRequiredInteger(decoderLoadPercent),
-            readRequiredInteger(estimatedBandwidthMbps),
-            textValue(wifiBand),
-            readRequiredInteger(batteryPercent),
-            textValue(thermalState));
+        return telemetryProbe.read();
     }
 
-    private String readScreenMode() {
-        return readRequiredInteger(width) + "x" + readRequiredInteger(height) + "@" + readRequiredInteger(refreshHz);
+    private void leaveAndQuit(BeaconViewModel model) throws IOException {
+        automaticPresenceEnabled = false;
+        disableAutomaticBenchmark();
+        model.setForegroundDesired(false);
+        try {
+            model.reconcileBackground();
+        } catch (IOException ignored) {
+            // Presence departure is best-effort; explicit quit still has to run.
+        }
+        model.quit(new BeaconApiClient.QuitState(false));
     }
 
     @SuppressWarnings("deprecation")
@@ -845,19 +862,6 @@ public final class BeaconActivity extends Activity {
     private boolean systemDarkTheme() {
         int nightMode = getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
         return nightMode == Configuration.UI_MODE_NIGHT_YES;
-    }
-
-    private Integer readInteger(EditText editText) {
-        String value = textValue(editText);
-        return value.isEmpty() ? null : Integer.parseInt(value);
-    }
-
-    private int readRequiredInteger(EditText editText) {
-        return Integer.parseInt(textValue(editText));
-    }
-
-    private double readRequiredDouble(EditText editText) {
-        return Double.parseDouble(textValue(editText));
     }
 
     private String textValue(EditText editText) {

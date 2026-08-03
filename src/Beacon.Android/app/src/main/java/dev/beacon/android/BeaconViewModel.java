@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.locks.ReentrantLock;
 
 public final class BeaconViewModel implements AutoCloseable {
     private final BeaconService service;
@@ -14,11 +15,16 @@ public final class BeaconViewModel implements AutoCloseable {
     private final VideoSessionFactory videoSessionFactory;
     private final AudioSessionFactory audioSessionFactory;
     private final BeaconBenchmarkCoordinator benchmarkCoordinator;
+    private final Object presenceState = new Object();
+    private final ReentrantLock presenceReconciliation = new ReentrantLock();
     private BeaconStreamCore streamCore;
     private VideoSession videoSession;
     private AudioSession audioSession;
     private boolean creatingStreamCore;
     private boolean closed;
+    private boolean foregroundDesired;
+    private boolean presenceActive;
+    private boolean activationAttempted;
 
     private String status = "Idle";
     private String latestGames = "";
@@ -196,10 +202,6 @@ public final class BeaconViewModel implements AutoCloseable {
         record("hello", service.hello());
     }
 
-    public void patchProfile(BeaconApiClient.ProfilePatch patch) throws IOException {
-        record("profile patch", service.patchProfile(patch));
-    }
-
     public void reportCapabilities(BeaconApiClient.ClientCapabilities capabilities) throws IOException {
         record("capabilities", service.reportCapabilities(capabilities));
     }
@@ -208,8 +210,68 @@ public final class BeaconViewModel implements AutoCloseable {
         record("telemetry", service.reportTelemetry(telemetry));
     }
 
-    public void beacon(boolean active) throws IOException {
-        record("beacon", service.beacon(active));
+    public void setForegroundDesired(boolean desired) {
+        synchronized (presenceState) {
+            foregroundDesired = desired;
+        }
+    }
+
+    public boolean onForeground(
+        BeaconApiClient.ClientCapabilities capabilities) throws IOException {
+        presenceReconciliation.lock();
+        try {
+            synchronized (presenceState) {
+                if (!foregroundDesired) return false;
+                if (presenceActive) return true;
+            }
+
+            BeaconApiClient.BeaconResult hello = service.hello();
+            record("hello", hello);
+            if (!hello.isSuccess()) return false;
+
+            BeaconApiClient.BeaconResult facts = service.reportCapabilities(capabilities);
+            record("capabilities", facts);
+            if (!facts.isSuccess()) return false;
+
+            synchronized (presenceState) {
+                if (!foregroundDesired) return false;
+                activationAttempted = true;
+            }
+            BeaconApiClient.BeaconResult active = service.beacon(true);
+            record("beacon active", active);
+            synchronized (presenceState) {
+                presenceActive = active.isSuccess();
+                if (!presenceActive) activationAttempted = false;
+                return presenceActive && foregroundDesired;
+            }
+        } finally {
+            presenceReconciliation.unlock();
+        }
+    }
+
+    public void onBackground() throws IOException {
+        setForegroundDesired(false);
+        reconcileBackground();
+    }
+
+    public void reconcileBackground() throws IOException {
+        presenceReconciliation.lock();
+        try {
+            synchronized (presenceState) {
+                if (foregroundDesired || (!presenceActive && !activationAttempted)) return;
+            }
+
+            BeaconApiClient.BeaconResult inactive = service.beacon(false);
+            record("beacon inactive", inactive);
+            if (inactive.isSuccess()) {
+                synchronized (presenceState) {
+                    presenceActive = false;
+                    activationAttempted = false;
+                }
+            }
+        } finally {
+            presenceReconciliation.unlock();
+        }
     }
 
     public void loadGames() throws IOException {
@@ -225,10 +287,8 @@ public final class BeaconViewModel implements AutoCloseable {
     }
 
     public void preflight(
-        BeaconApiClient.ProfilePatch patch,
         BeaconApiClient.ClientCapabilities capabilities,
         BeaconApiClient.ClientTelemetry telemetry) throws IOException {
-        patchProfile(patch);
         reportCapabilities(capabilities);
         reportTelemetry(telemetry);
     }
@@ -240,11 +300,10 @@ public final class BeaconViewModel implements AutoCloseable {
     }
 
     public void preflightAndPlan(
-        BeaconApiClient.ProfilePatch patch,
         BeaconApiClient.ClientCapabilities capabilities,
         BeaconApiClient.ClientTelemetry telemetry,
         BeaconApiClient.GameSelection game) throws IOException {
-        preflight(patch, capabilities, telemetry);
+        preflight(capabilities, telemetry);
         requestPlan(game);
     }
 
@@ -296,13 +355,12 @@ public final class BeaconViewModel implements AutoCloseable {
     }
 
     public void preflightBenchmarkAndLaunch(
-        BeaconApiClient.ProfilePatch patch,
         BeaconApiClient.ClientCapabilities capabilities,
         BeaconApiClient.ClientTelemetry telemetry,
         BeaconBenchmarkPrepareRequest benchmarkRequest,
         BeaconDeviceBenchmarkRunner deviceRunner,
         BeaconApiClient.GameSelection game) throws IOException {
-        preflight(patch, capabilities, telemetry);
+        preflight(capabilities, telemetry);
         BeaconApiClient.BeaconResult benchmark =
             runBenchmarkAndWait(benchmarkRequest, deviceRunner);
         if (!benchmark.isSuccess()) {
@@ -579,8 +637,6 @@ public final class BeaconViewModel implements AutoCloseable {
 
     public interface BeaconService extends BeaconBenchmarkCoordinator.Service {
         BeaconApiClient.BeaconResult hello() throws IOException;
-
-        BeaconApiClient.BeaconResult patchProfile(BeaconApiClient.ProfilePatch patch) throws IOException;
 
         BeaconApiClient.BeaconResult reportCapabilities(BeaconApiClient.ClientCapabilities capabilities) throws IOException;
 

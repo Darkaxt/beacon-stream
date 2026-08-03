@@ -39,24 +39,57 @@ public sealed class FakeEndpointLiveTests
             CancellationToken.None);
 
         Assert.True(result.Success, result.Error);
-        Assert.Equal(
-            [
-                "POST /clients/hello",
-                "GET /clients/z-fold-7/profile",
-                "PATCH /clients/z-fold-7/profile",
-                "POST /clients/z-fold-7/capabilities",
-                "POST /clients/z-fold-7/telemetry",
-                "POST /clients/z-fold-7/beacon",
-                "POST /clients/z-fold-7/plan",
-                "POST /clients/z-fold-7/launch",
-                "POST /clients/z-fold-7/input",
-                "POST /clients/z-fold-7/disconnect",
-                "POST /clients/z-fold-7/reconnect",
-                "POST /clients/z-fold-7/stream/stop",
-                "POST /clients/z-fold-7/quit",
-                "POST /clients/z-fold-7/emergency-restore"
-            ],
-            result.Operations);
+        Assert.Equal(17, result.Operations.Count);
+        Assert.Equal("POST /clients/hello", result.Operations[0]);
+        Assert.Equal("POST /clients/z-fold-7/capabilities", result.Operations[1]);
+        Assert.Equal("POST /clients/z-fold-7/beacon", result.Operations[2]);
+        Assert.Equal("POST /clients/z-fold-7/telemetry", result.Operations[3]);
+        Assert.Equal("POST /clients/z-fold-7/benchmarks/prepare", result.Operations[4]);
+        AssertBenchmarkCompletion(result.Operations[5]);
+        Assert.Equal("POST /clients/z-fold-7/benchmarks/prepare", result.Operations[6]);
+        AssertBenchmarkCompletion(result.Operations[7]);
+        Assert.Equal("POST /clients/z-fold-7/plan", result.Operations[8]);
+        Assert.Equal("POST /clients/z-fold-7/launch", result.Operations[9]);
+        Assert.Equal("POST /clients/z-fold-7/input", result.Operations[10]);
+        Assert.Equal("POST /clients/z-fold-7/disconnect", result.Operations[11]);
+        Assert.Equal("POST /clients/z-fold-7/reconnect", result.Operations[12]);
+        Assert.Equal("POST /clients/z-fold-7/stream/stop", result.Operations[13]);
+        Assert.Equal("POST /clients/z-fold-7/beacon", result.Operations[14]);
+        Assert.Equal("POST /clients/z-fold-7/quit", result.Operations[15]);
+        Assert.Equal("POST /clients/z-fold-7/emergency-restore", result.Operations[16]);
+    }
+
+    [Theory]
+    [InlineData("packet-loss", "loss-protect")]
+    [InlineData("thermal-battery", "power-save")]
+    public async Task TelemetryProfilesDriveMeasuredServerPlanDecision(
+        string profile,
+        string expectedCongestionPolicy)
+    {
+        string stateDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"beacon-fake-endpoint-profile-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(stateDirectory);
+
+        await using var server = await BeaconServerProcess.StartAsync(stateDirectory);
+        using var client = new HttpClient { BaseAddress = server.Address };
+        var runner = new FakeEndpointRunner(client);
+
+        FakeEndpointResult result = await runner.RunAsync(
+            FakeEndpointScript.CreateZFold7Default().ApplyTelemetryProfile(profile),
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(expectedCongestionPolicy, result.PlanCongestionPolicy);
+    }
+
+    private static void AssertBenchmarkCompletion(string operation)
+    {
+        const string prefix = "POST /clients/z-fold-7/benchmarks/";
+        const string suffix = "/complete";
+        Assert.StartsWith(prefix, operation, StringComparison.Ordinal);
+        Assert.EndsWith(suffix, operation, StringComparison.Ordinal);
+        Assert.True(Guid.TryParse(operation[prefix.Length..^suffix.Length], out _));
     }
 
     private sealed class BeaconServerProcess : IAsyncDisposable
@@ -106,6 +139,7 @@ public sealed class FakeEndpointLiveTests
                 $"--Beacon:Security:IdentityPath={Path.Combine(stateDirectory, "identity.pfx")}");
             startInfo.ArgumentList.Add(
                 $"--Beacon:Security:CredentialsPath={Path.Combine(stateDirectory, "credentials.json")}");
+            startInfo.ArgumentList.Add("--Beacon:TestHost:SeedBenchmarkEvidence=false");
 
             var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
             DataReceivedEventHandler observeOutput = (_, args) =>

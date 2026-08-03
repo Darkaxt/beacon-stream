@@ -67,11 +67,117 @@ public final class BeaconViewModelTest {
         BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
         BeaconApiClient.GameSelection game = BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131");
 
-        model.preflightAndPlan(new BeaconApiClient.ProfilePatch(), capabilities(), telemetry(), game);
+        model.preflightAndPlan(capabilities(), telemetry(), game);
 
-        assertEquals("patch,capabilities,telemetry,plan", service.actions());
+        assertEquals("capabilities,telemetry,plan", service.actions());
         assertEquals(game.gameId, service.lastGame.gameId);
         assertEquals("plan body", model.latestPlan());
+    }
+
+    @Test
+    public void foregroundSetupAndDepartureAreIdempotent() throws Exception {
+        FakeService service = new FakeService();
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
+
+        model.setForegroundDesired(true);
+        assertTrue(model.onForeground(capabilities()));
+        assertTrue(model.onForeground(capabilities()));
+        model.onBackground();
+        model.onBackground();
+
+        assertEquals("hello,capabilities,beacon active,beacon inactive", service.actions());
+    }
+
+    @Test
+    public void failedInactiveTransitionCanBeRetried() throws Exception {
+        FakeService service = new FakeService();
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
+
+        model.setForegroundDesired(true);
+        assertTrue(model.onForeground(capabilities()));
+        service.next = new BeaconApiClient.BeaconResult(503, "unavailable");
+        model.onBackground();
+        service.next = new BeaconApiClient.BeaconResult(200, "ok");
+        model.reconcileBackground();
+
+        assertEquals(
+            "hello,capabilities,beacon active,beacon inactive,beacon inactive",
+            service.actions());
+    }
+
+    @Test
+    public void lostActiveResponseStillTriggersInactiveOnDeparture() throws Exception {
+        FakeService service = new FakeService();
+        service.loseNextActiveResponse();
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
+
+        model.setForegroundDesired(true);
+        assertThrows(IOException.class, () -> model.onForeground(capabilities()));
+        model.onBackground();
+
+        assertEquals(
+            "hello,capabilities,beacon active,beacon inactive",
+            service.actions());
+    }
+
+    @Test
+    public void foregroundDoesNotAnnounceActiveWhenHelloFails() throws Exception {
+        FakeService service = new FakeService();
+        service.next = new BeaconApiClient.BeaconResult(503, "unavailable");
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
+
+        model.setForegroundDesired(true);
+        assertFalse(model.onForeground(capabilities()));
+        model.onBackground();
+
+        assertEquals("hello", service.actions());
+    }
+
+    @Test
+    public void departureDuringForegroundSetupPreventsLateActiveAnnouncement() throws Exception {
+        FakeService service = new FakeService();
+        service.blockCapabilities();
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+
+        try {
+            model.setForegroundDesired(true);
+            CompletableFuture<Boolean> entering = CompletableFuture.supplyAsync(() -> {
+                try {
+                    return model.onForeground(capabilities());
+                } catch (IOException failure) {
+                    throw new CompletionException(failure);
+                }
+            }, executor);
+
+            service.awaitCapabilitiesStarted();
+            model.setForegroundDesired(false);
+            service.releaseCapabilities();
+
+            assertFalse(entering.get());
+            model.onBackground();
+            assertEquals("hello,capabilities", service.actions());
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    public void staleDepartureReconciliationDoesNotOverrideNewForegroundDesire() throws Exception {
+        FakeService service = new FakeService();
+        BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service);
+
+        model.setForegroundDesired(true);
+        assertTrue(model.onForeground(capabilities()));
+        model.setForegroundDesired(false);
+        model.setForegroundDesired(true);
+        model.reconcileBackground();
+
+        assertEquals("hello,capabilities,beacon active", service.actions());
+
+        model.setForegroundDesired(false);
+        model.reconcileBackground();
+        assertEquals("hello,capabilities,beacon active,beacon inactive", service.actions());
     }
 
     @Test
@@ -315,7 +421,6 @@ public final class BeaconViewModelTest {
             CompletableFuture<Void> launch = CompletableFuture.runAsync(() -> {
                 try {
                     model.preflightBenchmarkAndLaunch(
-                        new BeaconApiClient.ProfilePatch(),
                         capabilities(),
                         telemetry(),
                         benchmarkRequest("sessionPreflight"),
@@ -327,7 +432,7 @@ public final class BeaconViewModelTest {
             }, executor);
 
             service.awaitBenchmarkPreparation();
-            assertEquals("patch,capabilities,telemetry,benchmark prepare", service.actions());
+            assertEquals("capabilities,telemetry,benchmark prepare", service.actions());
             assertTrue(!launch.isDone());
 
             factory.awaitStartedOrFailure(launch);
@@ -340,7 +445,7 @@ public final class BeaconViewModelTest {
             launch.get();
 
             assertEquals(
-                "patch,capabilities,telemetry,benchmark prepare,benchmark complete,launch",
+                "capabilities,telemetry,benchmark prepare,benchmark complete,launch",
                 service.actions());
             assertEquals(0, service.lastBenchmarkCompletion.toJson().getAsJsonArray("decoderSamples").size());
             assertEquals(1, service.lastBenchmarkCompletion.toJson().getAsJsonArray("powerSamples").size());
@@ -357,14 +462,13 @@ public final class BeaconViewModelTest {
             new RecordingCoreBindings(), frame -> { }, Executors.newSingleThreadExecutor());
         BeaconViewModel model = new BeaconViewModel("z-fold-7", "http://server", service, core);
 
-        model.beacon(true);
         model.sendInput(BeaconApiClient.InputBatch.pointerTap(4, 0.5, 0.5));
         model.stopStream();
         model.disconnect();
         model.quit(new BeaconApiClient.QuitState(false));
         model.emergencyRestore();
 
-        assertEquals("beacon,stop,disconnect,quit,restore", service.actions());
+        assertEquals("stop,disconnect,quit,restore", service.actions());
         assertEquals("stop body", model.latestStream());
         assertEquals("emergency restore: 200", model.status());
     }
@@ -885,6 +989,9 @@ public final class BeaconViewModelTest {
         private final CountDownLatch benchmarkCompleted = new CountDownLatch(1);
         private final CountDownLatch benchmarkCancelled = new CountDownLatch(1);
         private final CountDownLatch benchmarkPrepared = new CountDownLatch(1);
+        private CountDownLatch capabilitiesStarted;
+        private CountDownLatch capabilitiesReleased;
+        private boolean loseNextActiveResponse;
 
         String actions() {
             return actionLog.toString();
@@ -910,18 +1017,39 @@ public final class BeaconViewModelTest {
             benchmarkCancelled.await();
         }
 
+        void blockCapabilities() {
+            capabilitiesStarted = new CountDownLatch(1);
+            capabilitiesReleased = new CountDownLatch(1);
+        }
+
+        void awaitCapabilitiesStarted() throws InterruptedException {
+            capabilitiesStarted.await();
+        }
+
+        void releaseCapabilities() {
+            capabilitiesReleased.countDown();
+        }
+
+        void loseNextActiveResponse() {
+            loseNextActiveResponse = true;
+        }
+
         @Override
         public BeaconApiClient.BeaconResult hello() throws IOException {
             return record("hello");
         }
 
         @Override
-        public BeaconApiClient.BeaconResult patchProfile(BeaconApiClient.ProfilePatch patch) throws IOException {
-            return record("patch");
-        }
-
-        @Override
         public BeaconApiClient.BeaconResult reportCapabilities(BeaconApiClient.ClientCapabilities capabilities) throws IOException {
+            if (capabilitiesStarted != null) {
+                capabilitiesStarted.countDown();
+                try {
+                    capabilitiesReleased.await();
+                } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Capabilities setup interrupted.", failure);
+                }
+            }
             return record("capabilities");
         }
 
@@ -932,7 +1060,12 @@ public final class BeaconViewModelTest {
 
         @Override
         public BeaconApiClient.BeaconResult beacon(boolean active) throws IOException {
-            return record("beacon");
+            BeaconApiClient.BeaconResult result = record(active ? "beacon active" : "beacon inactive");
+            if (active && loseNextActiveResponse) {
+                loseNextActiveResponse = false;
+                throw new IOException("Active response was lost.");
+            }
+            return result;
         }
 
         @Override

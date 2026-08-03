@@ -510,7 +510,7 @@ public sealed class BenchmarkApiTests(BeaconServerTestFactory factory) : IClassF
             $"/clients/{clientId}/plan",
             new { gameId = "steam-shortcut:3767414131" });
         HttpResponseMessage patch = await client.PatchAsJsonAsync(
-            $"/clients/{clientId}/profile",
+            $"/admin/clients/{clientId}/profile",
             new { codecPreference = "hevc" });
         HttpResponseMessage rescoredPlan = await client.PostAsJsonAsync(
             $"/clients/{clientId}/plan",
@@ -554,7 +554,7 @@ public sealed class BenchmarkApiTests(BeaconServerTestFactory factory) : IClassF
             });
         Assert.Equal(HttpStatusCode.OK, complete.StatusCode);
         HttpResponseMessage patch = await client.PatchAsJsonAsync(
-            $"/clients/{clientId}/profile",
+            $"/admin/clients/{clientId}/profile",
             new { codecPreference = "hevc" });
         Assert.Equal(HttpStatusCode.OK, patch.StatusCode);
 

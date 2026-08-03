@@ -6,6 +6,7 @@ import android.content.IntentFilter;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.wifi.WifiInfo;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.PowerManager;
@@ -96,12 +97,19 @@ public final class AndroidSystemTelemetrySource implements AndroidDeviceTelemetr
 
             NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(network);
             if (capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
-                return "wifi";
+                if (capabilities.getTransportInfo() instanceof WifiInfo wifiInfo) {
+                    return wifiBand(wifiInfo.getFrequency());
+                }
             }
         } catch (SecurityException ex) {
             return "";
         }
 
         return "";
+    }
+
+    static String wifiBand(int frequencyMhz) {
+        String observedBand = AndroidBenchmarkFingerprintProbe.wifiBand(frequencyMhz);
+        return observedBand == null ? "" : observedBand;
     }
 }

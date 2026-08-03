@@ -147,7 +147,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         Assert.Contains("Input forwarding failed.", rendered, StringComparison.Ordinal);
     }
     [Fact]
-    public async Task HelloReturnsZFoldProfileAndEditableFields()
+    public async Task HelloReturnsZFoldProfileWithoutEditableFields()
     {
         HttpClient client = factory.CreateClient();
 
@@ -171,8 +171,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         Assert.Equal(2560, selectedMode.GetProperty("width").GetInt32());
         Assert.Equal(1600, selectedMode.GetProperty("height").GetInt32());
         Assert.Equal(120, selectedMode.GetProperty("refreshHz").GetInt32());
-        Assert.Contains(root.GetProperty("editableFields").EnumerateArray(), field => field.GetString() == "preferredWidth");
-        Assert.DoesNotContain(root.GetProperty("editableFields").EnumerateArray(), field => field.GetString() == "mode");
+        Assert.False(root.TryGetProperty("editableFields", out _));
     }
 
     [Fact]
@@ -214,6 +213,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         Assert.Equal(HttpStatusCode.OK, completed.StatusCode);
         using JsonDocument credentialDocument = await JsonDocument.ParseAsync(await completed.Content.ReadAsStreamAsync());
         string credential = Assert.IsType<string>(credentialDocument.RootElement.GetProperty("credential").GetString());
+        Assert.False(credentialDocument.RootElement.TryGetProperty("editableFields", out _));
 
         HttpResponseMessage unauthenticated = await client.GetAsync($"/clients/{clientId}/profile");
         var authenticatedRequest = new HttpRequestMessage(HttpMethod.Get, $"/clients/{clientId}/profile");
@@ -299,7 +299,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
                 clientId,
                 name = "Gaming Tablet"
             });
-            HttpResponseMessage patch = await firstClient.PatchAsJsonAsync($"/clients/{clientId}/profile", new
+            HttpResponseMessage patch = await firstClient.PatchAsJsonAsync($"/admin/clients/{clientId}/profile", new
             {
                 preferredWidth = 1920,
                 preferredHeight = 1080,
@@ -342,7 +342,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
     }
 
     [Fact]
-    public async Task PatchRejectsGlobalOrDisplayPolicyFields()
+    public async Task ClientProfilePatchRouteIsNotExposed()
     {
         HttpClient client = factory.CreateClient();
 
@@ -351,9 +351,29 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             mode = "mirror"
         });
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        string body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("not editable", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AndroidPartialTelemetryKeepsUnavailableNetworkMeasurementsUnknown()
+    {
+        HttpClient client = factory.CreateClient();
+        string clientId = $"android-partial-telemetry-{Guid.NewGuid():N}";
+        await client.PostAsJsonAsync("/clients/hello", new { clientId, name = "Android Partial" });
+
+        HttpResponseMessage response = await client.PostAsJsonAsync($"/clients/{clientId}/telemetry", new
+        {
+            batteryPercent = 72,
+            thermalState = "nominal"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var telemetry = factory.Services
+            .GetRequiredService<InMemoryClientStore>()
+            .GetTelemetry(clientId);
+        Assert.Null(telemetry.RttMs);
+        Assert.Null(telemetry.PacketLossPercent);
+        Assert.Equal(72, telemetry.BatteryPercent);
     }
 
     [Fact]
@@ -483,7 +503,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             clientId,
             name = "Bitrate Cap Client"
         });
-        await client.PatchAsJsonAsync($"/clients/{clientId}/profile", new
+        await client.PatchAsJsonAsync($"/admin/clients/{clientId}/profile", new
         {
             bitrateCapMbps = 40
         });

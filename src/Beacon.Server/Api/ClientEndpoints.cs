@@ -20,21 +20,6 @@ public static class ClientEndpoints
     private static readonly JsonSerializerOptions WebJsonOptions = CreateWebJsonOptions();
     private static readonly TimeSpan MaximumBenchmarkEvidenceAge = TimeSpan.FromDays(7);
 
-    private static readonly string[] EditableFields =
-    [
-        "preferredWidth",
-        "preferredHeight",
-        "preferredRefreshHz",
-        "hdrPreference",
-        "codecPreference",
-        "qualityMode",
-        "bitrateCapMbps",
-        "audioMode",
-        "keepAppRunningOnDisconnect"
-    ];
-
-    private static readonly HashSet<string> EditableFieldSet = new(EditableFields, StringComparer.OrdinalIgnoreCase);
-
     public static IEndpointRouteBuilder MapClientEndpoints(this IEndpointRouteBuilder endpoints)
     {
         RouteGroupBuilder clients = endpoints.MapGroup("/clients");
@@ -88,7 +73,6 @@ public static class ClientEndpoints
                 clientId = approved.ClientId,
                 credential = approved.Credential,
                 profile,
-                editableFields = EditableFields,
             });
         });
 
@@ -96,35 +80,6 @@ public static class ClientEndpoints
             store.GetProfile(clientId) is { } profile
                 ? Results.Ok(profile)
                 : Results.NotFound(new { error = $"Client '{clientId}' is not registered." }));
-
-        clients.MapPatch("/{clientId}/profile", (string clientId, JsonElement body, InMemoryClientStore store) =>
-        {
-            ClientProfile? profile = store.GetProfile(clientId);
-            if (profile is null)
-            {
-                return Results.NotFound(new { error = $"Client '{clientId}' is not registered." });
-            }
-
-            foreach (JsonProperty property in body.EnumerateObject())
-            {
-                if (!EditableFieldSet.Contains(property.Name))
-                {
-                    return Results.BadRequest(new { error = $"Field '{property.Name}' is not editable from the client." });
-                }
-            }
-
-            ClientProfilePatch patch = CreatePatch(body);
-            try
-            {
-                ClientProfile updated = ClientProfilePatcher.ApplyApkPatch(profile, patch);
-                store.SaveProfile(updated);
-                return Results.Ok(updated);
-            }
-            catch (InvalidClientProfilePatchException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-        });
 
         clients.MapPost("/{clientId}/capabilities", (string clientId, EndpointCapabilities capabilities, InMemoryClientStore store) =>
         {
@@ -1197,7 +1152,6 @@ public static class ClientEndpoints
     {
         clientId = profile.ClientId.Value,
         profile,
-        editableFields = EditableFields,
     };
 
     private static GameDescriptor CreateRequestedGame(PlanRequest request) =>
@@ -1209,28 +1163,6 @@ public static class ClientEndpoints
             new GameArtwork(null, "none"),
             Installed: true,
             new GameProcessHints(null, null));
-
-    private static ClientProfilePatch CreatePatch(JsonElement body) =>
-        new(
-            PreferredWidth: ReadInt(body, "preferredWidth"),
-            PreferredHeight: ReadInt(body, "preferredHeight"),
-            PreferredRefreshHz: ReadInt(body, "preferredRefreshHz"),
-            HdrPreference: ReadHdrPreference(body, "hdrPreference"),
-            CodecPreference: ReadString(body, "codecPreference"),
-            QualityMode: ReadString(body, "qualityMode"),
-            BitrateCapMbps: ReadInt(body, "bitrateCapMbps"),
-            AudioMode: ReadString(body, "audioMode"),
-            KeepAppRunningOnDisconnect: ReadBool(body, "keepAppRunningOnDisconnect"));
-
-    private static int? ReadInt(JsonElement body, string propertyName) =>
-        body.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.Number
-            ? value.GetInt32()
-            : null;
-
-    private static bool? ReadBool(JsonElement body, string propertyName) =>
-        body.TryGetProperty(propertyName, out JsonElement value)
-            ? value.GetBoolean()
-            : null;
 
     private static async Task<DisconnectRequest> ReadDisconnectRequestAsync(
         HttpRequest request,
@@ -1278,28 +1210,6 @@ public static class ClientEndpoints
         {
             throw new BadHttpRequestException(invalidJsonMessage, ex);
         }
-    }
-
-    private static string? ReadString(JsonElement body, string propertyName) =>
-        body.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
-
-    private static HdrPreference? ReadHdrPreference(JsonElement body, string propertyName)
-    {
-        if (!body.TryGetProperty(propertyName, out JsonElement value))
-        {
-            return null;
-        }
-
-        if (value.ValueKind == JsonValueKind.Number)
-        {
-            return (HdrPreference)value.GetInt32();
-        }
-
-        return value.ValueKind == JsonValueKind.String && Enum.TryParse(value.GetString(), ignoreCase: true, out HdrPreference preference)
-            ? preference
-            : null;
     }
 
     private static void PublishInputDiagnostic(

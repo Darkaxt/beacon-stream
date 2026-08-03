@@ -9,6 +9,7 @@ public final class AutomaticBenchmarkGateTest {
     @Test
     public void duplicateCallbacksDoNotRepeatInFlightOrCompletedFingerprints() {
         AutomaticBenchmarkGate gate = new AutomaticBenchmarkGate();
+        gate.enable();
 
         assertTrue(gate.begin("network-a"));
         assertFalse(gate.begin("network-a"));
@@ -19,6 +20,7 @@ public final class AutomaticBenchmarkGateTest {
     @Test
     public void changedFingerprintSupersedesInFlightRunAndStaleCompletionCannotWin() {
         AutomaticBenchmarkGate gate = new AutomaticBenchmarkGate();
+        gate.enable();
 
         assertTrue(gate.begin("network-a"));
         assertTrue(gate.begin("network-b"));
@@ -31,9 +33,24 @@ public final class AutomaticBenchmarkGateTest {
     @Test
     public void failedFingerprintCanBeRetried() {
         AutomaticBenchmarkGate gate = new AutomaticBenchmarkGate();
+        gate.enable();
 
         assertTrue(gate.begin("network-a"));
         gate.finish("network-a", false);
         assertTrue(gate.begin("network-a"));
+    }
+
+    @Test
+    public void departureBlocksChangedNetworkUntilNextArrival() {
+        AutomaticBenchmarkGate gate = new AutomaticBenchmarkGate();
+        gate.enable();
+        assertTrue(gate.begin("network-a"));
+        gate.finish("network-a", true);
+
+        gate.disable();
+        assertFalse(gate.begin("network-b"));
+
+        gate.enable();
+        assertTrue(gate.begin("network-b"));
     }
 }

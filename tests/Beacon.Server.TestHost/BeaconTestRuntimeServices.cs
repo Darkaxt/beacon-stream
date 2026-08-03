@@ -22,6 +22,8 @@ public static class BeaconTestRuntimeServices
 {
     public const string ProductionStreamWorkerConfigurationKey =
         "Beacon:TestHost:UseProductionStreamWorker";
+    public const string SeedBenchmarkEvidenceConfigurationKey =
+        "Beacon:TestHost:SeedBenchmarkEvidence";
 
     public static IServiceCollection UseBeaconFakeRuntime(
         this IServiceCollection services,
@@ -31,6 +33,10 @@ public static class BeaconTestRuntimeServices
             configuration?[ProductionStreamWorkerConfigurationKey],
             out bool configuredProductionStreamWorker)
             && configuredProductionStreamWorker;
+        bool seedBenchmarkEvidence = !bool.TryParse(
+            configuration?[SeedBenchmarkEvidenceConfigurationKey],
+            out bool configuredSeedBenchmarkEvidence)
+            || configuredSeedBenchmarkEvidence;
         if (!useProductionStreamWorker)
         {
             RemoveWorkerRelay(services);
@@ -122,7 +128,9 @@ public static class BeaconTestRuntimeServices
         }
         services.AddSingleton<IBenchmarkEvidenceRepository>(_ =>
             new InMemoryBenchmarkEvidenceRepository(
-                [FakeBenchmarkEvidence.CreateZFold7(DateTimeOffset.UtcNow)]));
+                seedBenchmarkEvidence
+                    ? [FakeBenchmarkEvidence.CreateZFold7(DateTimeOffset.UtcNow)]
+                    : []));
         services.AddSingleton<IGameLibraryProvider>(_ => new StaticGameLibraryProvider(
             "test-seed",
             [

@@ -1,31 +1,5 @@
-export type HdrPreference = 'Off' | 'Prefer' | 'Require';
-export type TelemetryProfileName = 'excellent-lan' | 'congested-lan' | 'high-rtt' | 'packet-loss' | 'low-bitrate-cap' | 'thermal-battery';
 export type BenchmarkTrigger = 'automatic' | 'manual' | 'sessionPreflight';
 export type BenchmarkNetworkProfileName = 'home-wifi' | 'mobile-hotspot';
-
-export const telemetryProfileNames: TelemetryProfileName[] = [
-  'excellent-lan',
-  'congested-lan',
-  'high-rtt',
-  'packet-loss',
-  'low-bitrate-cap',
-  'thermal-battery'
-];
-
-export interface ProfileDraft {
-  clientId: string;
-  preferredWidth: number;
-  preferredHeight: number;
-  preferredRefreshHz: number;
-  hdrPreference: HdrPreference;
-  codecPreference: string;
-  bitrateCapMbps: number | null;
-}
-
-export interface ValidationResult {
-  ok: boolean;
-  message: string;
-}
 
 export interface GameLibrarySnapshot {
   games: GameDescriptor[];
@@ -227,29 +201,6 @@ export interface BenchmarkCompletionPayload {
   }>;
 }
 
-export function createDefaultProfile(): ProfileDraft {
-  return {
-    clientId: 'z-fold-7',
-    preferredWidth: 2560,
-    preferredHeight: 1600,
-    preferredRefreshHz: 120,
-    hdrPreference: 'Prefer',
-    codecPreference: 'auto',
-    bitrateCapMbps: null
-  };
-}
-
-export function validateProfileDraft(profile: ProfileDraft): ValidationResult {
-  if (profile.clientId === 'z-fold-7' && profile.preferredWidth === 2560 && profile.preferredHeight === 1440) {
-    return {
-      ok: false,
-      message: '2560x1440 is blocked for Z Fold 7; keep the 16:10 virtual desktop intent.'
-    };
-  }
-
-  return { ok: true, message: '' };
-}
-
 export function createGamePlanRequest(selectedGameId: string): PlanRequest {
   const gameId = selectedGameId.trim();
   if (gameId !== '') {
@@ -279,21 +230,94 @@ export function createCapabilitiesPayload(): CapabilitiesPayload {
   };
 }
 
-export function createTelemetryPayload(profile: TelemetryProfileName): TelemetryPayload {
-  switch (profile) {
-    case 'congested-lan':
-      return createTelemetry(55, 1.5, 55, 45, 'wifi-6', 60, 'nominal');
-    case 'high-rtt':
-      return createTelemetry(115, 0.5, 35, 80, 'wifi-5', 70, 'nominal');
-    case 'packet-loss':
-      return createTelemetry(22, 3.2, 40, 90, 'wifi-6', 70, 'nominal');
-    case 'low-bitrate-cap':
-      return createTelemetry(8, 0, 30, 35, 'wifi-6', 75, 'nominal');
-    case 'thermal-battery':
-      return createTelemetry(12, 0, 88, 100, 'wifi-6', 9, 'hot');
-    case 'excellent-lan':
-      return createTelemetry(8, 0, 20, 120, 'wifi-7', 80, 'nominal');
+export function createTelemetryPayload(): TelemetryPayload {
+  return createTelemetry(8, 0, 20, 120, '6-ghz', 80, 'nominal');
+}
+
+export class ClientPresence {
+  private desiredActive = false;
+  private active = false;
+  private activationAttempted = false;
+  private reconciliation: Promise<void> = Promise.resolve();
+
+  constructor(private readonly send: (active: boolean) => Promise<void>) {}
+
+  enter(setup: () => Promise<void> = async () => {}): Promise<boolean> {
+    this.desiredActive = true;
+    return this.enqueue(async () => {
+      if (this.active) return true;
+
+      await setup();
+      if (!this.desiredActive) return false;
+
+      this.activationAttempted = true;
+      await this.send(true);
+      this.active = true;
+      if (!this.desiredActive) {
+        await this.send(false);
+        this.active = false;
+        this.activationAttempted = false;
+        return false;
+      }
+      return true;
+    });
   }
+
+  leave(): Promise<void> {
+    this.desiredActive = false;
+    return this.enqueue(async () => {
+      if (this.desiredActive || (!this.active && !this.activationAttempted)) return;
+      await this.send(false);
+      this.active = false;
+      this.activationAttempted = false;
+    });
+  }
+
+  isActive(): boolean {
+    return this.active && this.desiredActive;
+  }
+
+  private enqueue<T>(action: () => Promise<T>): Promise<T> {
+    const result = this.reconciliation.then(action, action);
+    this.reconciliation = result.then(() => undefined, () => undefined);
+    return result;
+  }
+}
+
+export interface ClientCleanupFailure {
+  step: 'inactive' | 'quit';
+  message: string;
+}
+
+export interface ClientCleanupOutcome<T> {
+  result?: T;
+  failures: ClientCleanupFailure[];
+}
+
+export async function leaveAndQuit<T>(
+  presence: ClientPresence,
+  quit: () => Promise<T>
+): Promise<ClientCleanupOutcome<T>> {
+  const failures: ClientCleanupFailure[] = [];
+  let result: T | undefined;
+
+  try {
+    await presence.leave();
+  } catch (failure) {
+    failures.push({ step: 'inactive', message: failureMessage(failure) });
+  }
+
+  try {
+    result = await quit();
+  } catch (failure) {
+    failures.push({ step: 'quit', message: failureMessage(failure) });
+  }
+
+  return { result, failures };
+}
+
+function failureMessage(failure: unknown): string {
+  return failure instanceof Error ? failure.message : String(failure);
 }
 
 export function createBenchmarkPreparePayload(
@@ -474,21 +498,12 @@ export async function getJson<T>(path: string): Promise<T> {
   return readJson<T>(response);
 }
 
-export async function postJson<T>(path: string, body: unknown): Promise<T> {
+export async function postJson<T>(path: string, body: unknown, keepalive = false): Promise<T> {
   const response = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-
-  return readJson<T>(response);
-}
-
-export async function patchJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(path, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    keepalive
   });
 
   return readJson<T>(response);

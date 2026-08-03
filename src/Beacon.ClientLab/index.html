@@ -16,53 +16,9 @@
       </section>
 
       <section class="grid">
-        <form class="panel" id="profileForm">
-          <h2>Client Profile</h2>
+        <section class="panel">
+          <h2>Catalog</h2>
           <div class="fields">
-            <label>
-              <span>Width</span>
-              <input id="widthInput" name="width" type="number" min="1" value="2560" />
-            </label>
-            <label>
-              <span>Height</span>
-              <input id="heightInput" name="height" type="number" min="1" value="1600" />
-            </label>
-            <label>
-              <span>Refresh</span>
-              <input id="refreshInput" name="refresh" type="number" min="1" value="120" />
-            </label>
-            <label>
-              <span>HDR</span>
-              <select id="hdrInput" name="hdr">
-                <option value="Prefer">Prefer</option>
-                <option value="Off">Off</option>
-                <option value="Require">Require</option>
-              </select>
-            </label>
-            <label>
-              <span>Codec</span>
-              <select id="codecInput" name="codec">
-                <option value="auto">Auto</option>
-                <option value="av1">AV1</option>
-                <option value="hevc">HEVC</option>
-                <option value="h264">H.264</option>
-              </select>
-            </label>
-            <label>
-              <span>Bitrate</span>
-              <input id="bitrateInput" name="bitrate" type="number" min="1" placeholder="auto" />
-            </label>
-            <label>
-              <span>Telemetry</span>
-              <select id="telemetryProfileInput" name="telemetry">
-                <option value="excellent-lan">Excellent LAN</option>
-                <option value="congested-lan">Congested LAN</option>
-                <option value="high-rtt">High RTT</option>
-                <option value="packet-loss">Packet loss</option>
-                <option value="low-bitrate-cap">Low bitrate cap</option>
-                <option value="thermal-battery">Thermal/battery</option>
-              </select>
-            </label>
             <label class="game-picker">
               <span>Game</span>
               <select id="gameSelect" name="game">
@@ -78,13 +34,11 @@
               <p id="gameDiagnostics" class="game-meta"></p>
             </div>
           </div>
-          <p id="profileError" class="error" role="alert"></p>
           <div class="actions">
-            <button id="saveButton" type="submit">Save Profile</button>
             <button id="planButton" type="button">Plan</button>
             <button id="launchButton" type="button">Launch</button>
           </div>
-        </form>
+        </section>
 
         <section class="panel">
           <h2>Session</h2>
@@ -98,8 +52,6 @@
           <div class="actions stack">
             <button id="automaticBenchmarkButton" type="button">Automatic Benchmark</button>
             <button id="manualBenchmarkButton" type="button">Manual Benchmark</button>
-            <button id="activeBeaconButton" type="button">Active Beacon</button>
-            <button id="inactiveBeaconButton" type="button">Inactive Beacon</button>
             <button id="inputButton" type="button">Send Pointer</button>
             <button id="keyboardButton" type="button">Send Keyboard</button>
             <button id="disconnectButton" type="button">Disconnect</button>

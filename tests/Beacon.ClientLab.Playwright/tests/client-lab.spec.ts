@@ -1,12 +1,17 @@
 import { expect, test } from '@playwright/test';
 
-test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit, and emergency restore', async ({ page }) => {
+test('simulates the thin client lifecycle without profile mutation', async ({ page }) => {
   const capabilityBodies: unknown[] = [];
   const telemetryBodies: unknown[] = [];
   const benchmarkPrepareBodies: any[] = [];
   const benchmarkCompletionBodies: any[] = [];
   const beaconBodies: unknown[] = [];
   const inputBodies: unknown[] = [];
+  const clientProfileRequests: string[] = [];
+  let resolveInactive: (() => void) | undefined;
+  const inactiveSeen = new Promise<void>(resolve => {
+    resolveInactive = resolve;
+  });
   let homeAutomaticCompleted = false;
   let benchmarkRun = 0;
 
@@ -27,8 +32,7 @@ test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit,
             qualityMode: 'auto',
             bitrateCapMbps: null
           }
-        },
-        editableFields: ['preferredWidth', 'preferredHeight', 'preferredRefreshHz']
+        }
       })
     });
   });
@@ -50,18 +54,10 @@ test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit,
       })
     });
   });
-  await page.route('**/clients/z-fold-7/profile', async route => {
-    if (route.request().method() === 'PATCH') {
-      const body = route.request().postDataJSON();
-      if (body.preferredWidth === 2560 && body.preferredHeight === 1440) {
-        await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: '2560x1440 blocked' }) });
-        return;
-      }
-      await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ok: true }) });
-      return;
+  page.on('request', request => {
+    if (/\/clients\/[^/]+\/profile$/.test(new URL(request.url()).pathname)) {
+      clientProfileRequests.push(request.method());
     }
-
-    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({}) });
   });
   await page.route('**/clients/z-fold-7/capabilities', async route => {
     capabilityBodies.push(route.request().postDataJSON());
@@ -111,6 +107,7 @@ test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit,
   await page.route('**/clients/z-fold-7/beacon', async route => {
     const body = route.request().postDataJSON();
     beaconBodies.push(body);
+    if (body.active === false) resolveInactive?.();
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
@@ -204,26 +201,22 @@ test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit,
   await expect(page.getByRole('heading', { name: 'Beacon Client Lab' })).toBeVisible();
   await page.getByRole('button', { name: 'Hello' }).click();
   await expect(page.getByText('hello z-fold-7')).toBeVisible();
-  await expect(page.getByLabel('Width')).toHaveValue('2560');
-  await expect(page.getByLabel('Height')).toHaveValue('1600');
-  await expect(page.getByLabel('Refresh')).toHaveValue('120');
   await expect(page.getByLabel('Game')).toHaveValue('steam-shortcut:3767414131');
   await expect(page.getByText('steam-shortcut | installed | steam-rungameid')).toBeVisible();
-
-  await page.getByLabel('Height').fill('1440');
-  await page.getByRole('button', { name: 'Save Profile' }).click();
-  await expect(page.getByText('2560x1440')).toBeVisible();
-
-  await page.getByLabel('Height').fill('1600');
-  await page.getByRole('button', { name: 'Active Beacon', exact: true }).click();
   await expect(page.getByText('beacon active client-z-fold-7 prepared')).toBeVisible();
+  await expect(page.getByText('automatic benchmark complete 00000000-0000-0000-0000-000000000001')).toBeVisible();
   expect(beaconBodies).toEqual([{ active: true }]);
+  expect(benchmarkPrepareBodies.map(body => body.trigger)).toEqual(['automatic']);
+  expect(benchmarkCompletionBodies).toHaveLength(1);
+  await expect(page.getByRole('button', { name: 'Save Profile' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Active Beacon' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Inactive Beacon' })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Plan' }).click();
   await expect(page.getByText('virtual-primary')).toBeVisible();
   await expect(page.getByText('Display mode virtual-primary selected by server profile policy.')).toBeVisible();
   await expect(page.getByText('Excellent LAN telemetry kept 120 FPS.')).toBeVisible();
-  expect(capabilityBodies).toHaveLength(1);
+  expect(capabilityBodies).toHaveLength(2);
   expect(telemetryBodies).toHaveLength(1);
   expect(capabilityBodies[0]).toMatchObject({
     maxFps: 120,
@@ -233,18 +226,18 @@ test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit,
     ]
   });
   expect(capabilityBodies[0]).not.toHaveProperty('currentScreenMode');
-  expect(telemetryBodies[0]).toMatchObject({ rttMs: 8, wifiBand: 'wifi-7' });
+  expect(telemetryBodies[0]).toMatchObject({ rttMs: 8, wifiBand: '6-ghz' });
 
   await page.getByRole('button', { name: 'Launch' }).click();
   await expect(page.getByText('streaming client-z-fold-7')).toBeVisible();
   await expect(page.getByText('running av1 120fps')).toBeVisible();
-  expect(capabilityBodies).toHaveLength(2);
+  expect(capabilityBodies).toHaveLength(3);
   expect(telemetryBodies).toHaveLength(2);
-  expect(benchmarkPrepareBodies).toHaveLength(1);
-  expect(benchmarkPrepareBodies[0].trigger).toBe('sessionPreflight');
-  expect(benchmarkCompletionBodies).toHaveLength(1);
-  expect(benchmarkCompletionBodies[0].decoderSamples).toEqual([]);
-  expect(benchmarkCompletionBodies[0].powerSamples).toHaveLength(1);
+  expect(benchmarkPrepareBodies).toHaveLength(2);
+  expect(benchmarkPrepareBodies[1].trigger).toBe('sessionPreflight');
+  expect(benchmarkCompletionBodies).toHaveLength(2);
+  expect(benchmarkCompletionBodies[1].decoderSamples).toEqual([]);
+  expect(benchmarkCompletionBodies[1].powerSamples).toHaveLength(1);
 
   await page.getByRole('button', { name: 'Send Pointer' }).click();
   await expect(page.getByText('input accepted 3 event(s) z-fold-7-steam-shortcut:3767414131')).toBeVisible();
@@ -276,6 +269,31 @@ test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit,
     }
   ]);
 
+  await page.getByRole('button', { name: 'Automatic Benchmark' }).click();
+  await expect(page.getByText('automatic benchmark reuse')).toBeVisible();
+  await page.getByLabel('Benchmark network').selectOption('mobile-hotspot');
+  await expect(page.getByText('automatic benchmark complete 00000000-0000-0000-0000-000000000004')).toBeVisible();
+  await page.getByRole('button', { name: 'Manual Benchmark' }).click();
+  await expect(page.getByText('manual benchmark complete 00000000-0000-0000-0000-000000000005')).toBeVisible();
+
+  expect(benchmarkPrepareBodies).toHaveLength(5);
+  expect(benchmarkPrepareBodies.map(body => body.trigger)).toEqual([
+    'automatic',
+    'sessionPreflight',
+    'automatic',
+    'automatic',
+    'manual'
+  ]);
+  expect(benchmarkPrepareBodies[0].fingerprints.network.saltedNetworkIdHash).toHaveLength(64);
+  expect(benchmarkPrepareBodies[3].fingerprints.network.localNetworkPrefix).toBe('192.168.43.0/24');
+  expect(benchmarkCompletionBodies).toHaveLength(4);
+  expect(benchmarkCompletionBodies[0].networkSamples).toHaveLength(3);
+  expect(benchmarkCompletionBodies[0].decoderSamples[0]).toMatchObject({
+    codec: 'h264',
+    targetFps: 30,
+    configured: true
+  });
+
   await page.getByRole('button', { name: 'Disconnect' }).click();
   await expect(page.getByText('lease retained')).toBeVisible();
 
@@ -285,40 +303,14 @@ test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit,
   await page.getByRole('button', { name: 'Quit' }).click();
   await expect(page.getByText('cleanup evaluated')).toBeVisible();
 
-  await page.getByRole('button', { name: 'Inactive Beacon', exact: true }).click();
-  await expect(page.getByText('beacon inactive client-z-fold-7 removed')).toBeVisible();
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('pagehide'));
+    window.dispatchEvent(new Event('pagehide'));
+  });
+  await inactiveSeen;
   expect(beaconBodies).toEqual([{ active: true }, { active: false }]);
+  expect(clientProfileRequests).toEqual([]);
 
   await page.getByRole('button', { name: 'Restore' }).click();
   await expect(page.getByText('recovered client-z-fold-7')).toBeVisible();
-
-  await page.getByRole('button', { name: 'Automatic Benchmark' }).click();
-  await expect(page.getByText('automatic benchmark complete')).toBeVisible();
-  await page.getByRole('button', { name: 'Automatic Benchmark' }).click();
-  await expect(page.getByText('automatic benchmark reuse')).toBeVisible();
-  await page.getByLabel('Benchmark network').selectOption('mobile-hotspot');
-  await page.getByRole('button', { name: 'Automatic Benchmark' }).click();
-  await expect.poll(() => benchmarkPrepareBodies.length).toBe(4);
-  await expect.poll(() => benchmarkCompletionBodies.length).toBe(3);
-  await page.getByRole('button', { name: 'Manual Benchmark' }).click();
-  await expect.poll(() => benchmarkPrepareBodies.length).toBe(5);
-  await expect.poll(() => benchmarkCompletionBodies.length).toBe(4);
-
-  expect(benchmarkPrepareBodies).toHaveLength(5);
-  expect(benchmarkPrepareBodies.map(body => body.trigger)).toEqual([
-    'sessionPreflight',
-    'automatic',
-    'automatic',
-    'automatic',
-    'manual'
-  ]);
-  expect(benchmarkPrepareBodies[1].fingerprints.network.saltedNetworkIdHash).toHaveLength(64);
-  expect(benchmarkPrepareBodies[3].fingerprints.network.localNetworkPrefix).toBe('192.168.43.0/24');
-  expect(benchmarkCompletionBodies).toHaveLength(4);
-  expect(benchmarkCompletionBodies[1].networkSamples).toHaveLength(3);
-  expect(benchmarkCompletionBodies[1].decoderSamples[0]).toMatchObject({
-    codec: 'h264',
-    targetFps: 30,
-    configured: true
-  });
 });

@@ -59,11 +59,6 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
     }
 
     @Override
-    public BeaconResult patchProfile(ProfilePatch patch) throws IOException {
-        return patch("/clients/" + config.clientId() + "/profile", patch.toJson());
-    }
-
-    @Override
     public BeaconResult reportCapabilities(ClientCapabilities capabilities) throws IOException {
         return post("/clients/" + config.clientId() + "/capabilities", capabilities.toJson());
     }
@@ -153,10 +148,6 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         return send("POST", path, body);
     }
 
-    private BeaconResult patch(String path, JsonObject body) throws IOException {
-        return send("PATCH", path, body);
-    }
-
     private BeaconResult get(String path) throws IOException {
         return send("GET", path, null);
     }
@@ -212,32 +203,6 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
 
         public String summary() {
             return statusCode + " " + body;
-        }
-    }
-
-    public static final class ProfilePatch {
-        public Integer preferredWidth;
-        public Integer preferredHeight;
-        public Integer preferredRefreshHz;
-        public String hdrPreference;
-        public String codecPreference;
-        public String qualityMode;
-        public Integer bitrateCapMbps;
-        public String audioMode;
-        public Boolean keepAppRunningOnDisconnect;
-
-        JsonObject toJson() {
-            JsonObject json = new JsonObject();
-            add(json, "preferredWidth", preferredWidth);
-            add(json, "preferredHeight", preferredHeight);
-            add(json, "preferredRefreshHz", preferredRefreshHz);
-            add(json, "hdrPreference", hdrPreference);
-            add(json, "codecPreference", codecPreference);
-            add(json, "qualityMode", qualityMode);
-            add(json, "bitrateCapMbps", bitrateCapMbps);
-            add(json, "audioMode", audioMode);
-            add(json, "keepAppRunningOnDisconnect", keepAppRunningOnDisconnect);
-            return json;
         }
     }
 
@@ -346,12 +311,12 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
     }
 
     public static final class ClientTelemetry {
-        public int rttMs;
-        public double packetLossPercent;
-        public int decoderLoadPercent;
-        public int estimatedBandwidthMbps;
+        public Integer rttMs;
+        public Double packetLossPercent;
+        public Integer decoderLoadPercent;
+        public Integer estimatedBandwidthMbps;
         public String wifiBand;
-        public int batteryPercent;
+        public Integer batteryPercent;
         public String thermalState;
 
         public ClientTelemetry(int rttMs, double packetLossPercent, int decoderLoadPercent) {
@@ -359,12 +324,12 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         }
 
         public ClientTelemetry(
-            int rttMs,
-            double packetLossPercent,
-            int decoderLoadPercent,
-            int estimatedBandwidthMbps,
+            Integer rttMs,
+            Double packetLossPercent,
+            Integer decoderLoadPercent,
+            Integer estimatedBandwidthMbps,
             String wifiBand,
-            int batteryPercent,
+            Integer batteryPercent,
             String thermalState) {
             this.rttMs = rttMs;
             this.packetLossPercent = packetLossPercent;
@@ -377,16 +342,12 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
 
         JsonObject toJson() {
             JsonObject json = new JsonObject();
-            json.addProperty("rttMs", rttMs);
-            json.addProperty("packetLossPercent", packetLossPercent);
-            json.addProperty("decoderLoadPercent", decoderLoadPercent);
-            if (estimatedBandwidthMbps > 0) {
-                json.addProperty("estimatedBandwidthMbps", estimatedBandwidthMbps);
-            }
+            add(json, "rttMs", rttMs);
+            add(json, "packetLossPercent", packetLossPercent);
+            add(json, "decoderLoadPercent", decoderLoadPercent);
+            add(json, "estimatedBandwidthMbps", estimatedBandwidthMbps);
             add(json, "wifiBand", wifiBand);
-            if (batteryPercent > 0) {
-                json.addProperty("batteryPercent", batteryPercent);
-            }
+            add(json, "batteryPercent", batteryPercent);
             add(json, "thermalState", thermalState);
             return json;
         }

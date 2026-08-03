@@ -3,23 +3,23 @@ import {
   createBenchmarkCompletionPayload,
   createBenchmarkPreparePayload,
   createCapabilitiesPayload,
-  createDefaultProfile,
   createGamePlanRequest,
   createKeyboardInputPayload,
   createPointerGesturePayload,
   createTelemetryPayload,
+  ClientPresence,
+  leaveAndQuit,
   formatBeaconState,
   formatLaunchEvents,
   formatInputAccepted,
   formatPlanDetails,
   formatStreamStop,
-  validateProfileDraft,
   type LaunchResponse,
   type BenchmarkPrepareResponse,
   type PlanResponse
 } from './clientLab';
 
-describe('Client Lab profile validation', () => {
+describe('Client Lab thin client', () => {
   it('reports structured current and supported display mode facts', () => {
     const payload = createCapabilitiesPayload();
 
@@ -34,19 +34,99 @@ describe('Client Lab profile validation', () => {
     expect(payload).not.toHaveProperty('currentScreenMode');
   });
 
-  it('blocks the Z Fold 7 2560x1440 collapse before a profile patch', () => {
-    const profile = createDefaultProfile();
+  it('announces active and inactive once across duplicate lifecycle callbacks', async () => {
+    const transitions: boolean[] = [];
+    const presence = new ClientPresence(async active => {
+      transitions.push(active);
+    });
 
-    const result = validateProfileDraft({ ...profile, preferredHeight: 1440 });
+    await presence.enter();
+    await presence.enter();
+    await presence.leave();
+    await presence.leave();
 
-    expect(result.ok).toBe(false);
-    expect(result.message).toContain('2560x1440');
+    expect(transitions).toEqual([true, false]);
   });
 
-  it('accepts the Z Fold 7 2560x1600 default', () => {
-    const result = validateProfileDraft(createDefaultProfile());
+  it('retries a failed inactive transition on the next departure callback', async () => {
+    const transitions: boolean[] = [];
+    let failInactive = true;
+    const presence = new ClientPresence(async active => {
+      transitions.push(active);
+      if (!active && failInactive) {
+        failInactive = false;
+        throw new Error('inactive unavailable');
+      }
+    });
 
-    expect(result.ok).toBe(true);
+    await presence.enter();
+    await expect(presence.leave()).rejects.toThrow('inactive unavailable');
+    await presence.leave();
+
+    expect(transitions).toEqual([true, false, false]);
+  });
+
+  it('treats a lost active response as possibly active until departure succeeds', async () => {
+    const transitions: boolean[] = [];
+    let loseActiveResponse = true;
+    const presence = new ClientPresence(async active => {
+      transitions.push(active);
+      if (active && loseActiveResponse) {
+        loseActiveResponse = false;
+        throw new Error('active response lost');
+      }
+    });
+
+    await expect(presence.enter()).rejects.toThrow('active response lost');
+    await presence.leave();
+
+    expect(transitions).toEqual([true, false]);
+  });
+
+  it('attempts quit and reports both results when inactive fails', async () => {
+    let quitRequests = 0;
+    const presence = new ClientPresence(async active => {
+      if (!active) throw new Error('inactive unavailable');
+    });
+    await presence.enter();
+
+    const outcome = await leaveAndQuit(presence, async () => {
+      quitRequests++;
+      return { cleanupEvaluated: true, displayRemoved: true };
+    });
+
+    expect(quitRequests).toBe(1);
+    expect(outcome.result).toEqual({ cleanupEvaluated: true, displayRemoved: true });
+    expect(outcome.failures).toEqual([
+      { step: 'inactive', message: 'inactive unavailable' }
+    ]);
+  });
+
+  it('does not announce active when departure occurs during asynchronous setup', async () => {
+    const transitions: boolean[] = [];
+    let releaseSetup: (() => void) | undefined;
+    const setupBlocked = new Promise<void>(resolve => {
+      releaseSetup = resolve;
+    });
+    let setupStarted: (() => void) | undefined;
+    const started = new Promise<void>(resolve => {
+      setupStarted = resolve;
+    });
+    const presence = new ClientPresence(async active => {
+      transitions.push(active);
+    });
+
+    const entering = presence.enter(async () => {
+      setupStarted?.();
+      await setupBlocked;
+    });
+    await started;
+    const leaving = presence.leave();
+    releaseSetup?.();
+
+    expect(await entering).toBe(false);
+    await leaving;
+    expect(transitions).toEqual([]);
   });
 
   it('plans by normalized game id when a catalog entry is selected', () => {
@@ -108,17 +188,17 @@ describe('Client Lab profile validation', () => {
     })).toBe('stopped z-fold-7-steam-shortcut:3767414131');
   });
 
-  it('builds telemetry payloads from named profiles', () => {
-    const payload = createTelemetryPayload('thermal-battery');
+  it('reports fixed simulator telemetry facts without a policy draft', () => {
+    const payload = createTelemetryPayload();
 
     expect(payload).toMatchObject({
-      rttMs: 12,
+      rttMs: 8,
       packetLossPercent: 0,
-      decoderLoadPercent: 88,
-      estimatedBandwidthMbps: 100,
-      wifiBand: 'wifi-6',
-      batteryPercent: 9,
-      thermalState: 'hot'
+      decoderLoadPercent: 20,
+      estimatedBandwidthMbps: 120,
+      wifiBand: '6-ghz',
+      batteryPercent: 80,
+      thermalState: 'nominal'
     });
   });
 
