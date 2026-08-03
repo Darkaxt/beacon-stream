@@ -48,6 +48,12 @@ internal static class FakeHostedBenchmarkWorkerProgram
                 WorkerInstanceId = workerInstanceId,
             },
         }).ConfigureAwait(false);
+        if (string.Equals(mode, "stall-on-initialize", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine("BEACON_FAKE_HOSTED_WORKER_INITIALIZATION_STALLED");
+            await input.CopyToAsync(Stream.Null).ConfigureAwait(false);
+            return 26;
+        }
         await WriteAsync(output, Capabilities(workerInstanceId)).ConfigureAwait(false);
         await WriteAsync(output, new WorkerIpcEnvelope
         {
@@ -90,6 +96,13 @@ internal static class FakeHostedBenchmarkWorkerProgram
             {
                 Console.Error.WriteLine("BEACON_FAKE_HOSTED_WORKER_STOPPED");
                 return 0;
+            }
+            if (string.Equals(mode, "stall-on-shutdown", StringComparison.Ordinal)
+                && request.BodyCase == WorkerIpcEnvelope.BodyOneofCase.ShutdownWorker)
+            {
+                Console.Error.WriteLine("BEACON_FAKE_HOSTED_WORKER_SHUTDOWN_STALLED");
+                await input.CopyToAsync(Stream.Null).ConfigureAwait(false);
+                return 25;
             }
 
             await WriteAsync(output, Completion(request)).ConfigureAwait(false);

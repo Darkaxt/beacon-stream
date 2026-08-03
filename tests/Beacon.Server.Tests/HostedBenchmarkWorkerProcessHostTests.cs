@@ -217,6 +217,253 @@ public sealed class HostedBenchmarkWorkerProcessHostTests
     }
 
     [Fact]
+    public async Task DisposalForceTerminatesChildWithoutRequestingCooperativeShutdown()
+    {
+        const string shutdownStalledMarker = "BEACON_FAKE_HOSTED_WORKER_SHUTDOWN_STALLED";
+        using var fixture = HostedWorkerFixture.Create("stall-on-shutdown");
+        var shutdownCommandObserved = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var host = fixture.CreateHost(diagnosticSink: marker =>
+        {
+            if (string.Equals(marker, shutdownStalledMarker, StringComparison.Ordinal))
+            {
+                shutdownCommandObserved.TrySetResult();
+            }
+        });
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        using Process child = Process.GetProcessById(host.ProcessId);
+        Task processExit = child.WaitForExitAsync();
+        Task disposal = host.DisposeAsync().AsTask();
+        Task firstSignal = await Task.WhenAny(
+            processExit,
+            shutdownCommandObserved.Task,
+            disposal);
+
+        try
+        {
+            Assert.NotSame(shutdownCommandObserved.Task, firstSignal);
+            await disposal;
+            await processExit;
+            Assert.False(shutdownCommandObserved.Task.IsCompleted);
+        }
+        finally
+        {
+            if (!child.HasExited)
+            {
+                child.Kill(entireProcessTree: true);
+                await processExit;
+            }
+            await disposal;
+        }
+    }
+
+    [Fact]
+    public async Task DisposalTerminatesBeforeWaitingForStalledShutdownAndCancelsIt()
+    {
+        const string shutdownStalledMarker = "BEACON_FAKE_HOSTED_WORKER_SHUTDOWN_STALLED";
+        using var fixture = HostedWorkerFixture.Create("stall-on-shutdown");
+        var shutdownStalled = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminationInitiated = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var host = fixture.CreateHost(
+            diagnosticSink: marker =>
+            {
+                if (string.Equals(marker, shutdownStalledMarker, StringComparison.Ordinal))
+                {
+                    shutdownStalled.TrySetResult();
+                }
+            },
+            terminateProcessTree: process =>
+            {
+                terminationInitiated.TrySetResult();
+                process.Kill(entireProcessTree: true);
+            });
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        using Process child = Process.GetProcessById(host.ProcessId);
+        Task processExit = child.WaitForExitAsync();
+        Task shutdown = host.ShutdownAsync(CancellationToken.None);
+        Task? disposal = null;
+
+        try
+        {
+            Task firstSignal = await Task.WhenAny(
+                shutdownStalled.Task,
+                shutdown,
+                processExit);
+            Assert.Same(shutdownStalled.Task, firstSignal);
+            disposal = host.DisposeAsync().AsTask();
+            Assert.True(terminationInitiated.Task.IsCompleted);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => shutdown);
+            await disposal;
+            await processExit;
+        }
+        finally
+        {
+            if (!child.HasExited)
+            {
+                child.Kill(entireProcessTree: true);
+                await processExit;
+            }
+            disposal ??= host.DisposeAsync().AsTask();
+            _ = await Record.ExceptionAsync(() => shutdown);
+            _ = await Record.ExceptionAsync(() => disposal);
+        }
+    }
+
+    [Fact]
+    public async Task DisposalTerminatesBeforeWaitingForStalledInitializationAndCancelsIt()
+    {
+        const string initializationStalledMarker =
+            "BEACON_FAKE_HOSTED_WORKER_INITIALIZATION_STALLED";
+        using var fixture = HostedWorkerFixture.Create("stall-on-initialize");
+        var initializationStalled = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminationInitiated = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var host = fixture.CreateHost(
+            diagnosticSink: marker =>
+            {
+                if (string.Equals(marker, initializationStalledMarker, StringComparison.Ordinal))
+                {
+                    initializationStalled.TrySetResult();
+                }
+            },
+            terminateProcessTree: process =>
+            {
+                terminationInitiated.TrySetResult();
+                process.Kill(entireProcessTree: true);
+            });
+
+        Task initialization = host.EnsureReadyAsync(CancellationToken.None);
+        Process? child = null;
+        Task? processExit = null;
+        Task? disposal = null;
+
+        try
+        {
+            Task firstSignal = await Task.WhenAny(
+                initializationStalled.Task,
+                initialization);
+            Assert.Same(initializationStalled.Task, firstSignal);
+            child = Process.GetProcessById(host.ProcessId);
+            processExit = child.WaitForExitAsync();
+            disposal = host.DisposeAsync().AsTask();
+            Assert.True(terminationInitiated.Task.IsCompleted);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => initialization);
+            await disposal;
+            await processExit;
+        }
+        finally
+        {
+            if (child is not null && !child.HasExited)
+            {
+                child.Kill(entireProcessTree: true);
+                await processExit!;
+            }
+            disposal ??= host.DisposeAsync().AsTask();
+            _ = await Record.ExceptionAsync(() => initialization);
+            _ = await Record.ExceptionAsync(() => disposal);
+            child?.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task DisposalCompletesEventsBeforeProcessExitPublication()
+    {
+        using var fixture = HostedWorkerFixture.Create("normal");
+        var host = fixture.CreateHost(eventCapacity: 1);
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        Assert.True(await host.Events.WaitToReadAsync(CancellationToken.None));
+        using Process child = Process.GetProcessById(host.ProcessId);
+        Task processExit = child.WaitForExitAsync();
+        Task disposal = host.DisposeAsync().AsTask();
+
+        try
+        {
+            Task firstSignal = await Task.WhenAny(processExit, disposal);
+            if (ReferenceEquals(disposal, firstSignal))
+            {
+                await disposal;
+            }
+            else
+            {
+                await processExit;
+            }
+            Assert.True(child.HasExited);
+            Assert.True(host.Events.TryRead(out StreamWorkerEvent? bufferedEvent));
+            Assert.IsType<StreamWorkerConnectionObserved>(bufferedEvent);
+            await disposal;
+
+            Assert.False(host.Events.TryRead(out _));
+            await host.Events.Completion;
+        }
+        finally
+        {
+            if (!child.HasExited)
+            {
+                child.Kill(entireProcessTree: true);
+                await processExit;
+            }
+            _ = await Record.ExceptionAsync(() => disposal);
+        }
+    }
+
+    [Fact]
+    public async Task DisposalReapsWorkerBeforeRethrowingPreGateTerminationFailure()
+    {
+        const string terminationFailureMessage = "injected pre-gate termination failure";
+        using var fixture = HostedWorkerFixture.Create("normal");
+        int terminationAttempts = 0;
+        var host = fixture.CreateHost(terminateProcessTree: process =>
+        {
+            if (Interlocked.Increment(ref terminationAttempts) == 1)
+            {
+                throw new InvalidOperationException(terminationFailureMessage);
+            }
+            process.Kill(entireProcessTree: true);
+        });
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        using Process child = Process.GetProcessById(host.ProcessId);
+        Task processExit = child.WaitForExitAsync();
+        Task disposal = host.DisposeAsync().AsTask();
+        Task firstSignal = await Task.WhenAny(processExit, disposal);
+
+        try
+        {
+            InvalidOperationException failure;
+            if (ReferenceEquals(disposal, firstSignal))
+            {
+                failure = await Assert.ThrowsAsync<InvalidOperationException>(() => disposal);
+            }
+            else
+            {
+                await processExit;
+                failure = await Assert.ThrowsAsync<InvalidOperationException>(() => disposal);
+            }
+
+            Assert.Equal(terminationFailureMessage, failure.Message);
+            Assert.True(child.HasExited);
+            await processExit;
+            Assert.Equal(2, Volatile.Read(ref terminationAttempts));
+            Assert.Equal(0, host.ProcessId);
+        }
+        finally
+        {
+            if (!child.HasExited)
+            {
+                child.Kill(entireProcessTree: true);
+                await processExit;
+            }
+            _ = await Record.ExceptionAsync(() => disposal);
+        }
+    }
+
+    [Fact]
     public async Task StderrDiagnosticsAreBoundedAndDoNotExposeIdentityPath()
     {
         using var fixture = HostedWorkerFixture.Create("diagnostics");
@@ -288,8 +535,10 @@ public sealed class HostedBenchmarkWorkerProcessHostTests
         }
 
         public HostedBenchmarkWorkerProcessHost CreateHost(
+            int eventCapacity = 16,
             int diagnosticCapacity = 16,
-            Action<string>? diagnosticSink = null)
+            Action<string>? diagnosticSink = null,
+            Action<Process>? terminateProcessTree = null)
         {
             HostedBenchmarkWorkerOptions options = HostedBenchmarkWorkerOptions.Create(
                 ExecutablePath,
@@ -297,9 +546,10 @@ public sealed class HostedBenchmarkWorkerProcessHostTests
             return new HostedBenchmarkWorkerProcessHost(
                 options,
                 CreateStartInfo,
-                eventCapacity: 16,
+                eventCapacity,
                 diagnosticCapacity,
-                diagnosticSink);
+                diagnosticSink,
+                terminateProcessTree);
         }
 
         private static ProcessStartInfo CreateStartInfo(HostedBenchmarkWorkerOptions options)

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.StreamWorker.Contracts.Worker.V1;
@@ -16,6 +17,7 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
     private readonly Queue<string> diagnostics = [];
     private readonly int diagnosticCapacity;
     private readonly Action<string>? diagnosticSink;
+    private readonly Action<Process> terminateProcessTree;
     private ActiveWorker? activeWorker;
     private long nextProcessGeneration;
     private int disposed;
@@ -35,7 +37,8 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
         Func<HostedBenchmarkWorkerOptions, ProcessStartInfo> createStartInfo,
         int eventCapacity,
         int diagnosticCapacity,
-        Action<string>? diagnosticSink = null)
+        Action<string>? diagnosticSink = null,
+        Action<Process>? terminateProcessTree = null)
     {
         this.options = options ?? throw new ArgumentNullException(nameof(options));
         this.createStartInfo = createStartInfo ?? throw new ArgumentNullException(nameof(createStartInfo));
@@ -49,6 +52,8 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
         }
         this.diagnosticCapacity = diagnosticCapacity;
         this.diagnosticSink = diagnosticSink;
+        this.terminateProcessTree = terminateProcessTree
+            ?? (static process => process.Kill(entireProcessTree: true));
         eventChannel = Channel.CreateBounded<StreamWorkerEvent>(new BoundedChannelOptions(eventCapacity)
         {
             SingleReader = true,
@@ -121,7 +126,10 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
             return;
         }
 
-        await lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            disposal.Token);
+        await lifecycleGate.WaitAsync(operationCancellation.Token).ConfigureAwait(false);
         try
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
@@ -135,7 +143,7 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
             {
                 await ReleaseWorkerAsync(stale, force: !stale.Process.HasExited).ConfigureAwait(false);
             }
-            await StartWorkerAsync(cancellationToken).ConfigureAwait(false);
+            await StartWorkerAsync(operationCancellation.Token).ConfigureAwait(false);
         }
         finally
         {
@@ -176,10 +184,13 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
     public async Task ShutdownAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
-        await lifecycleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            disposal.Token);
+        await lifecycleGate.WaitAsync(operationCancellation.Token).ConfigureAwait(false);
         try
         {
-            await ShutdownWorkerCoreAsync(cancellationToken).ConfigureAwait(false);
+            await ShutdownWorkerCoreAsync(operationCancellation.Token).ConfigureAwait(false);
         }
         finally
         {
@@ -194,29 +205,41 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
             return;
         }
 
+        disposal.Cancel();
+        eventChannel.Writer.TryComplete();
+        Exception? terminationFailure = null;
+        ActiveWorker? observed = Volatile.Read(ref activeWorker);
+        if (observed is not null)
+        {
+            terminationFailure = TryTerminateWorker(observed);
+        }
+
         await lifecycleGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            try
+            ActiveWorker? active = Volatile.Read(ref activeWorker);
+            if (active is not null)
             {
-                await ShutdownWorkerCoreAsync(CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-                ActiveWorker? active = Volatile.Read(ref activeWorker);
-                if (active is not null)
+                try
                 {
                     await ReleaseWorkerAsync(active, force: true).ConfigureAwait(false);
+                }
+                catch (Exception error)
+                {
+                    terminationFailure ??= error;
                 }
             }
         }
         finally
         {
             lifecycleGate.Release();
-            disposal.Cancel();
-            eventChannel.Writer.TryComplete();
             lifecycleGate.Dispose();
             disposal.Dispose();
+        }
+
+        if (terminationFailure is not null)
+        {
+            ExceptionDispatchInfo.Capture(terminationFailure).Throw();
         }
     }
 
@@ -393,19 +416,13 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
             return;
         }
 
-        if (force && !active.Process.HasExited)
-        {
-            try
-            {
-                active.Process.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException) when (active.Process.HasExited)
-            {
-            }
-        }
-
+        Exception? terminationFailure = null;
         try
         {
+            if (force)
+            {
+                terminationFailure = TryTerminateWorker(active);
+            }
             if (active.Client is not null)
             {
                 await active.Client.DisposeAsync().ConfigureAwait(false);
@@ -426,6 +443,44 @@ public sealed class HostedBenchmarkWorkerProcessHost : IStreamWorkerHost, IAsync
                 await Task.WhenAll(active.StderrDrain, active.ExitPublication).ConfigureAwait(false);
                 active.Process.Dispose();
             }
+        }
+
+        if (terminationFailure is not null)
+        {
+            ExceptionDispatchInfo.Capture(terminationFailure).Throw();
+        }
+    }
+
+    private Exception? TryTerminateWorker(ActiveWorker active)
+    {
+        try
+        {
+            terminateProcessTree(active.Process);
+            return null;
+        }
+        catch (Exception error)
+        {
+            return ProcessExitedOrDisposed(active.Process) ? null : error;
+        }
+    }
+
+    private static bool ProcessExitedOrDisposed(Process process)
+    {
+        try
+        {
+            return process.HasExited;
+        }
+        catch (ObjectDisposedException)
+        {
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 
