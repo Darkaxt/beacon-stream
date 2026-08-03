@@ -101,6 +101,23 @@ the same session, but the APK currently captures touch and physical controller e
 hardware mouse/keyboard capture must use per-client capabilities, including captured relative mouse
 movement for games, without introducing global input modes or affecting the phone controller path.
 
+Android-device motion is also a registered version-one capability, but it follows the basic tablet
+input slice rather than expanding R2. It does not require a motion-capable virtual gamepad or Windows
+kernel driver. Beacon still needs timestamped gyroscope and accelerometer capture in the APK, transport
+through the authenticated input channel, and a session-owned DSU/Cemuhook UDP server bound to Windows
+loopback for Cemu-class emulators. The existing controller route remains independent. Until the DSU
+exchange is proven, motion is reported as unsupported and is never silently remapped to mouse,
+right-stick, or virtual-controller input.
+
+Codec planning and benchmark contracts already model H.264, HEVC, and AV1, including per-client
+capabilities and measured codec results. The full server-interpreted benchmark owns automatic codec
+selection and persists a ranked qualified set; launch planning consumes that result, while the
+lightweight session preflight may move only to another benchmark-qualified fallback. The production
+Worker currently advertises, encodes, and transports H.264 only. That is sufficient for the bounded
+R2 transaction and first packaged prerelease, but not for final version-one completion. Production
+HEVC and AV1 must reuse the same Worker, Beacon transport, StreamCore, benchmark, and planner
+boundaries. A server-owned client profile may explicitly constrain the benchmark candidates.
+
 ## Next Falsifiable Proof
 
 Run the guarded production transaction in physical-client mode from the Z Fold 7 with the installed
@@ -114,6 +131,17 @@ After that R2 proof, add the bounded tablet input slice: hardware keyboard down/
 mouse navigation, captured relative movement, buttons, and wheel through the existing authenticated
 input stream. Its acceptance must prove mouse and keyboard on the tablet profile while the separate
 phone profile continues to expose controller input.
+
+The following motion slice must detect the Android device gyroscope and accelerometer, normalize and
+transport timestamped samples, publish them through a loopback DSU/Cemuhook server, cleanly unregister
+listeners with the owning session, and pass a fake Cemu-style DSU version/list/subscribe/data exchange
+before advertising motion support. Physical acceptance then verifies orientation, latency, and drift.
+
+After the first packaged prerelease, add production HEVC and AV1 as codec adapters behind the existing
+Worker and StreamCore contracts. Acceptance must benchmark all server/client-supported candidates,
+prove independent H.264, HEVC, and AV1 sessions in emulator or Client Lab, and prove on physical
+hardware that an AV1-capable client can receive an AV1 plan while unsupported or unsustainable clients
+fall back with an explicit reason.
 
 ## Prior Evidence
 

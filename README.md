@@ -33,7 +33,11 @@ repository state. Delivery follows the outcome-driven
 The immediate target is R2: one playable Z Fold 7 transaction using the existing Beacon-owned path.
 R2 adds synchronized audio, one production controller route, automatic and manual physical-client
 benchmarking, a sustainable server-owned plan, and a sustained catalog-to-restore gameplay session.
-HDR, additional codecs, multi-client work, packaging, and broad UI polish remain deferred.
+Tablet mouse/keyboard capture, Android-device motion, HDR, production HEVC/AV1, multi-client work,
+packaging, and broad UI polish remain deferred past the controller-focused R2 transaction. H.264 is
+the proven prerelease path, not the version-one codec ceiling; the server-interpreted benchmark ranks
+H.264, HEVC, and AV1 per client from measured encoder, decoder, network, latency, thermal, and power
+evidence, and the session plan consumes that result.
 
 `2560x1600` is not a universal client default. Production planning uses each client's reported
 display geometry and supported modes, preferring an exact match and then the closest same-aspect

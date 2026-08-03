@@ -1,6 +1,6 @@
 # Personal Streaming Orchestrator Design
 
-Status: authoritative architecture-recovery revision, 2026-07-10
+Status: authoritative architecture-recovery revision, 2026-08-04
 
 ## Purpose
 
@@ -23,6 +23,9 @@ The release sequence is:
 2. R2 adds only audio, controller input, physical-client benchmarking, and a playable Z Fold 7
    transaction.
 3. R3 packages the proven system and publishes a clean-machine-validated prerelease.
+4. Version-one completion adds the remaining registered client-input slices and production HEVC/AV1
+   paths through the same proven architecture. These capabilities do not delay the first usable
+   prerelease, but H.264-only operation does not satisfy the final version-one contract.
 
 Older unchecked milestone items are historical evidence, not parallel requirements. This execution
 reset does not weaken Beacon's architecture, security, server-owned policy, virtual-display
@@ -151,7 +154,7 @@ User-visible responsibilities:
 - Show the server-owned Windows application/game catalog.
 - Select and launch one entry.
 - Present the active stream.
-- Forward touch, keyboard, mouse, and controller input supported by the device.
+- Forward touch, keyboard, mouse, controller, and Android-device motion input supported by the device.
 - Stop the session.
 - Request owning-session emergency recovery.
 - Edit local-only interaction and presentation settings.
@@ -162,6 +165,7 @@ Allowed local settings include:
 
 - Touch layout and gesture mapping.
 - Controller overlay and button mapping.
+- Device-motion enablement, calibration, sensitivity, and axis inversion.
 - Haptics.
 - Local UI density and theme.
 - Wake lock behavior.
@@ -281,6 +285,9 @@ This register is the implementation contract.
 - `REQ-BENCH-009`: A manual Benchmark action always permits a new full run.
 - `REQ-BENCH-010`: Benchmark state and results are stored server-side by client, network fingerprint, hardware revision, benchmark schema, and execution timestamp.
 - `REQ-BENCH-011`: Automatic benchmark triggers are event-driven and must not use a periodic watchdog.
+- `REQ-BENCH-012`: The full benchmark tests every codec mutually supported by the server encoder and client decoder, then the server ranks the sustainable H.264, HEVC, and AV1 candidates using measured decode, encode, network, latency, thermal, and power evidence.
+- `REQ-BENCH-013`: The persisted benchmark result contains the selected codec, ranked qualified fallbacks, rejected candidates, and a concrete reason for every selection or rejection. The APK reports measurements but does not make this decision.
+- `REQ-BENCH-014`: The lightweight session preflight confirms that the selected benchmark result remains viable under current network congestion and server load. It may move only to another benchmark-qualified candidate and records the reason; it does not guess an untested codec.
 
 ### Network Benchmark
 
@@ -304,7 +311,7 @@ This register is the implementation contract.
 - `REQ-HW-007`: Full calibration includes sustained workloads long enough to expose thermal throttling and unstable advertised modes.
 - `REQ-HW-008`: The planner must reject a mode that the active benchmark cannot sustain even if Android advertises it.
 - `REQ-HW-009`: Hardware benchmark failures are facts and must not crash the APK or alter server policy directly.
-- `REQ-HW-010`: Emulator benchmarks are valid for protocol and lifecycle testing but cannot certify physical-device HDR, thermal, touch, controller, or radio behavior.
+- `REQ-HW-010`: Emulator benchmarks are valid for protocol and lifecycle testing but cannot certify physical-device HDR, thermal, touch, controller, gyroscope, or radio behavior.
 
 ### Session Planning
 
@@ -318,6 +325,8 @@ This register is the implementation contract.
 - `REQ-PLAN-008`: The plan records a human-readable reason for every downgrade or fallback.
 - `REQ-PLAN-009`: If an explicitly required capability cannot be provided, launch fails before display or application side effects.
 - `REQ-PLAN-010`: The APK receives the executable plan for display and diagnostics but cannot modify it.
+- `REQ-PLAN-011`: The executable plan consumes the latest valid server-interpreted benchmark codec selection for that client and network/hardware fingerprint; it never assumes one codec is universally best or independently guesses a codec at launch.
+- `REQ-PLAN-012`: A manual codec preference is server-owned per-client policy. It may constrain the candidates, but launch still fails or falls back according to that policy when the measured path cannot sustain the requested codec.
 
 ### Virtual Display Lifecycle
 
@@ -376,7 +385,7 @@ This register is the implementation contract.
 - `REQ-STREAM-004`: Video, audio, control, input, metrics, and shutdown belong to one coherent session lifecycle.
 - `REQ-STREAM-005`: Media transport supports ordered frame reconstruction, bounded reordering, explicit loss evidence, and recovery suitable for low-latency gaming.
 - `REQ-STREAM-006`: Reliable control must not cause video head-of-line blocking.
-- `REQ-STREAM-007`: The protocol supports H.264 first, then HEVC and AV1 through the same contract rather than alternate routes.
+- `REQ-STREAM-007`: The version-one protocol and production Worker support H.264, HEVC, and AV1 through the same contract rather than alternate routes. H.264 is the bootstrap and prerelease path, not the final codec ceiling.
 - `REQ-STREAM-008`: The protocol supports SDR first and extends the same path to 10-bit HDR.
 - `REQ-STREAM-009`: Audio and input use the same authenticated session identity as video.
 - `REQ-STREAM-010`: Stream state changes are event-driven; no descriptor polling, startup sleep, cancellation timeout, or watchdog owns lifecycle.
@@ -384,6 +393,25 @@ This register is the implementation contract.
 - `REQ-STREAM-012`: StreamCore stop releases transport, decoder, audio, input, Surface, and native resources exactly once.
 - `REQ-STREAM-013`: No launch URI, Android intent, endpoint-role map, RTSP session URL, wrapper manifest, or runtime descriptor file appears in the production client contract.
 - `REQ-STREAM-014`: Low-level transport libraries may be reused internally, but users and higher-level Beacon modules see only the Beacon protocol.
+
+### Input Capabilities
+
+- `REQ-INPUT-001`: Each client reports touch, keyboard, mouse, controller, and Android-device motion capabilities independently; Beacon has no global or mutually exclusive input mode.
+- `REQ-INPUT-002`: A session may carry every input category supported by that client without one category disabling another.
+- `REQ-INPUT-003`: Version-one motion input originates from the Android device IMU, independently of any attached controller adapter; controller-provided motion is not required.
+- `REQ-INPUT-004`: Motion samples carry a monotonic source timestamp, three-axis angular velocity, three-axis acceleration, and an explicit normalized coordinate system. Beacon never fabricates motion capability when either required sensor is absent.
+- `REQ-INPUT-005`: Motion enablement, calibration, sensitivity, and axis inversion are client-local interaction settings and do not alter server stream policy.
+- `REQ-INPUT-006`: The Windows host publishes the active client's motion as a DSU/Cemuhook-compatible UDP server on loopback, using `127.0.0.1:26760` by default, so Cemu-class emulators can consume it independently from the normal virtual-controller route.
+- `REQ-INPUT-007`: DSU is an application-level interoperability adapter, not a Windows kernel driver or a replacement gamepad backend. Beacon never silently converts device motion to mouse, right-stick, or virtual-controller input.
+- `REQ-INPUT-008`: The DSU adapter is owned by the authenticated Beacon session. Sensor capture and publication start only when that client advertises motion, survive a transient media reconnect with the owning session, and stop deterministically on session quit or administrative termination.
+- `REQ-INPUT-009`: Failure to bind the configured DSU endpoint or loss of device-motion input reports motion as unavailable with a concrete diagnostic; it does not fail controller input, streaming, or display restoration.
+- `REQ-INPUT-010`: Static tests verify sensor normalization, timestamps, DSU framing, protocol version, CRC, and axis conversion. Dynamic tests use a loopback DSU client that performs the same version, port-list, subscription, and motion-data exchange expected by Cemu; physical-device acceptance verifies orientation, latency, and drift.
+
+The interoperability boundary follows the documented
+[Cemuhook Android motion-source model](https://cemuhook.sshnuke.net/padudpserver.html). Current Cemu is
+a DSU client whose default provider is `127.0.0.1:26760` and whose motion integration consumes both
+acceleration and gyroscope fields from DSU data responses. Beacon therefore transports Android sensor
+samples inside its authenticated session and publishes DSU only on the Windows loopback boundary.
 
 ### HDR
 
@@ -417,7 +445,7 @@ This register is the implementation contract.
 - `REQ-TEST-006`: Android emulator runs the real APK, StreamCore, Surface decoder, benchmark workflow, catalog selection, launch, stop, and reconnect.
 - `REQ-TEST-007`: Real Windows display integration tests remain explicit and manually runnable because they change topology.
 - `REQ-TEST-008`: A production vertical-slice test runs in an isolated environment containing only Beacon and its declared platform prerequisites, and proves Beacon-owned capture to emulator presentation. Workstation validation is confined to Beacon's dependency graph, packaged artifacts, process tree, and owned endpoints; it must not enumerate, query, trace, or control another installed streaming product.
-- `REQ-TEST-009`: Physical phone testing is reserved for final decoder quality, 120 Hz, HDR, thermals, Wi-Fi behavior, touch, controllers, audio, and human experience.
+- `REQ-TEST-009`: Physical phone testing is reserved for final decoder quality, 120 Hz, HDR, thermals, Wi-Fi behavior, touch, controllers, gyroscope, audio, and human experience.
 - `REQ-TEST-010`: Static checks prevent upstream compatibility types, wrapper configuration, and duplicate Android routes from re-entering protected boundaries.
 
 ## Beacon Session Contract
@@ -606,10 +634,10 @@ The following are explicit removal targets unless the recovery inventory proves 
 - Z Fold 7 benchmark selects a sustainable network/hardware profile.
 - `2560x1600` intent is preserved.
 - 120 FPS is selected only when the complete measured path sustains it.
-- Touch, controller, keyboard, audio, thermals, Wi-Fi behavior, HDR, and human experience are validated on hardware.
+- Touch, controller, keyboard, mouse, gyroscope, audio, thermals, Wi-Fi behavior, HDR, and human experience are validated on hardware.
 
 ## Definition Of Completion
 
-Beacon version one is complete when it can be installed without Apollo or Sunshine, register the APK, automatically benchmark the current network and hardware, show the normalized Windows app/game catalog, compute a server-owned plan, create and activate the correct per-client virtual display, launch the selected application, stream through one Beacon-owned data plane, accept client input, stop or recover safely, and restore the laptop to a verified physical-primary state.
+Beacon version one is complete when it can be installed without Apollo or Sunshine, register the APK, automatically benchmark the current network and hardware, show the normalized Windows app/game catalog, compute a server-owned plan, create and activate the correct per-client virtual display, launch the selected application, stream H.264, HEVC, or AV1 through one Beacon-owned data plane according to per-client evidence, accept client input, stop or recover safely, and restore the laptop to a verified physical-primary state.
 
 No compatibility layer, wrapper mode, alternate Android route, or client-side streaming policy is required to achieve that result.
