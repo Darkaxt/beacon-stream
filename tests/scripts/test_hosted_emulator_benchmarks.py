@@ -98,6 +98,7 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
         self.curl = self._script("curl", """
             printf 'curl %s\n' "$*" >> "${BEACON_FAKE_CALL_LOG}"
             url="${!#}"
+            manual_trigger="${BEACON_FAKE_MANUAL_TRIGGER:-Manual}"
             if [[ "${url}" == */identity ]]; then
               printf '{"publicKeyFingerprint":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}\n'
               exit 0
@@ -116,9 +117,9 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
               if [[ "${count}" -eq 1 ]]; then
                 benchmarks='[]'
               elif [[ "${count}" -eq 2 ]]; then
-                benchmarks='[{"runId":"00000000-0000-0000-0000-000000000001","trigger":"manual","completedAt":"2026-07-14T20:00:00Z","selectedResult":{"codec":"h264"}}]'
+                printf -v benchmarks '[{"runId":"00000000-0000-0000-0000-000000000001","trigger":"%s","completedAt":"2026-07-14T20:00:00Z","selectedResult":{"codec":"h264"}}]' "${manual_trigger}"
               else
-                benchmarks='[{"runId":"00000000-0000-0000-0000-000000000002","trigger":"sessionPreflight","completedAt":"2026-07-14T20:01:00Z","selectedResult":{"codec":"h264"}},{"runId":"00000000-0000-0000-0000-000000000001","trigger":"manual","completedAt":"2026-07-14T20:00:00Z","selectedResult":{"codec":"h264"}}]'
+                printf -v benchmarks '[{"runId":"00000000-0000-0000-0000-000000000002","trigger":"SessionPreflight","completedAt":"2026-07-14T20:01:00Z","selectedResult":{"codec":"h264"}},{"runId":"00000000-0000-0000-0000-000000000001","trigger":"%s","completedAt":"2026-07-14T20:00:00Z","selectedResult":{"codec":"h264"}}]' "${manual_trigger}"
               fi
               printf '{"clients":[{"clientId":"z-fold-7","benchmarks":%s}],"diagnostics":[{"operation":"worker.transport_authenticated"},{"operation":"worker.transport_disconnected"}]}\n' "${benchmarks}"
               exit 0
@@ -172,6 +173,15 @@ class HostedEmulatorBenchmarkRunnerTests(unittest.TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertNotIn("BEACON_HOSTED_EMULATOR_BENCHMARKS_OK", result.stdout + result.stderr)
+        self.assertTrue(self.server_stopped.exists())
+
+    def test_runner_rejects_wrong_benchmark_trigger_and_still_cleans_server(self):
+        result = self._run({"BEACON_FAKE_MANUAL_TRIGGER": "Automatic"})
+
+        self.assertNotEqual(0, result.returncode)
+        combined = result.stdout + result.stderr
+        self.assertIn("Certified manual benchmark evidence is unavailable.", combined)
+        self.assertNotIn("BEACON_HOSTED_EMULATOR_BENCHMARKS_OK", combined)
         self.assertTrue(self.server_stopped.exists())
 
     def test_runner_emits_scoped_transport_diagnostics_on_instrumentation_failure(self):

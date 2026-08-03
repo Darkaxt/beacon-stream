@@ -259,12 +259,17 @@ if len(clients) != 1:
 benchmarks = clients[0].get("benchmarks", [])
 if any(value.get("completedAt") is None for value in benchmarks):
     raise SystemExit("Hosted benchmark snapshot retained a pending run.")
+
+def normalized_trigger(value):
+    trigger = value.get("trigger")
+    return trigger.casefold() if isinstance(trigger, str) else None
+
 if phase == "certified-manual" and not any(
-        value.get("trigger") == "manual" and value.get("selectedResult")
+        normalized_trigger(value) == "manual" and value.get("selectedResult")
         for value in benchmarks):
     raise SystemExit("Certified manual benchmark evidence is unavailable.")
 if phase == "certified-preflight" and not any(
-        value.get("trigger") == "sessionPreflight" and value.get("selectedResult")
+        normalized_trigger(value) == "sessionpreflight" and value.get("selectedResult")
         for value in benchmarks):
     raise SystemExit("Certified session-preflight evidence is unavailable.")
 if phase == "certified-preflight":
