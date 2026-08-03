@@ -1,6 +1,6 @@
 # Beacon Release Blocker
 
-Updated: 2026-08-02
+Updated: 2026-08-03
 
 ## Last Complete Outcome
 
@@ -50,19 +50,34 @@ reports `driverReady=true`, physical `DISPLAY5` primary at `2560x1600@240`, mirr
 leases. The final guarded controller rerun was not started because the Windows input desktop was
 `Screen-saver`, so the existing fail-closed topology gate remained intact.
 
+The R2 audio path is now implemented from Windows WASAPI loopback capture and Opus encode through
+the authenticated Worker transport, native Android Opus decode, JNI PCM delivery, and one
+generation-owned `AudioTrack`. Retained evidence in
+`.artifacts/gate5-production-3fc9419b28e74b8a92b58e78a5a89313/` records the owned SessionProbe
+tone on the virtual primary, 72 PCM frames written during the initial connection, and 63 after a
+fresh-ticket reconnect. The product runner emitted `BEACON_GATE5_PRODUCTION_SESSION_OK`; its outer
+script then failed only because a redundant DisplayConfig restore rejected missing source-mode
+metadata after `/internal` had already restored a verified physical-only topology.
+
+The redundant restore is now idempotent. A following run proved both outer restore calls, zero
+leases, and physical-only verification, but also exposed a delayed hybrid-panel collapse after two
+apparently stable topology heartbeats. Commit `6feac4b` raises the production topology quorum to four
+matching heartbeat observations and resets it on any path, fingerprint, or desired-state change.
+Signed Host Agent workflow `30776554104` deployed that exact revision through the supervised
+bootstrap.
+
 ## Current Blocker
 
-No R2 implementation blocker has been established. The next product slice is synchronized audio:
-one Windows capture source, one Opus transport path, and one Android playback sink bound to the
-existing Beacon session. The guarded controller transaction is retained for the final integrated
-confirmation when the Windows input desktop is `Default`; it does not block audio implementation.
+No R2 implementation blocker has been established. The installed topology quorum and complete audio
+path need one final guarded emulator transaction from the interactive `Default` desktop. Windows is
+currently on the secure `Screen-saver` input desktop, so no display lease is being created.
 
 ## Next Falsifiable Proof
 
-The next proof must carry audible, ordered Opus audio from one Windows session capture source through
-the authenticated Worker/StreamCore connection to Android playback, then stop and release capture,
-decoder, and playback ownership on explicit quit. It must not change the established display, video,
-controller, reconnect, quit, or recovery behavior.
+The next proof must rerun the guarded production transaction with the installed four-heartbeat
+quorum, retain ordered PCM writes on initial connect and reconnect, exit the outer runner with zero,
+and independently verify one physical primary display, zero leases, and no heartbeat. Physical
+Z Fold 7 audible confirmation remains the final human audio check.
 
 ## Prior Evidence
 
