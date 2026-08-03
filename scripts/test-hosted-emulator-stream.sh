@@ -52,14 +52,28 @@ endpoint_pid=""
 endpoint_output_fd=""
 remote_prepared=false
 
+stop_endpoint() {
+  "${adb_command}" -s "${serial}" shell \
+    "if [ -f ${remote_directory}/endpoint.pid ]; then kill \$(cat ${remote_directory}/endpoint.pid) 2>/dev/null || true; fi" \
+    >/dev/null 2>&1 || true
+}
+
+drain_endpoint_output() {
+  endpoint_output="$(cat <&"${endpoint_output_fd}")"
+  if wait "${endpoint_pid}"; then
+    endpoint_status=0
+  else
+    endpoint_status=$?
+  fi
+  endpoint_pid=""
+}
+
 cleanup() {
   local status=$?
   trap - EXIT
   if [[ "${remote_prepared}" == true ]]; then
     if [[ -n "${endpoint_pid}" ]]; then
-      "${adb_command}" -s "${serial}" shell \
-        "if [ -f ${remote_directory}/endpoint.pid ]; then kill \$(cat ${remote_directory}/endpoint.pid) 2>/dev/null || true; fi" \
-        >/dev/null 2>&1 || true
+      stop_endpoint
     fi
     "${adb_command}" -s "${serial}" shell rm -rf "${remote_directory}" \
       >/dev/null 2>&1 || true
@@ -138,34 +152,41 @@ fi
 readonly endpoint_port="${BASH_REMATCH[1]}"
 
 instrumentation_output=""
-if ! instrumentation_output="$(
+instrumentation_status=0
+if instrumentation_output="$(
   "${adb_command}" -s "${serial}" shell am instrument -w -r \
     -e hostedStreamEndpointPort "${endpoint_port}" \
     -e hostedStreamPublicKeyFingerprint "${fingerprint}" \
     -e class "${test_method}" \
     "${test_runner}" 2>&1
 )"; then
+  :
+else
+  instrumentation_status=$?
+fi
+if (( instrumentation_status != 0 )); then
   printf '%s\n' "${instrumentation_output}" >&2
+  stop_endpoint
+  drain_endpoint_output
+  printf '%s\n' "${readiness}" "${endpoint_output}" >&2
   echo "Hosted stream instrumentation failed." >&2
   exit 1
 fi
 printf '%s\n' "${instrumentation_output}"
 if ! grep -Fq "OK (1 test)" <<<"${instrumentation_output}"; then
+  stop_endpoint
+  drain_endpoint_output
+  printf '%s\n' "${readiness}" "${endpoint_output}" >&2
   echo "Hosted stream instrumentation did not pass." >&2
   exit 1
 fi
 
-endpoint_output="$(cat <&"${endpoint_output_fd}")"
-if wait "${endpoint_pid}"; then
-  :
-else
-  endpoint_status=$?
-  endpoint_pid=""
+drain_endpoint_output
+if (( endpoint_status != 0 )); then
   printf '%s\n' "${readiness}" "${endpoint_output}" >&2
   echo "Hosted endpoint failed with exit code ${endpoint_status}." >&2
   exit 1
 fi
-endpoint_pid=""
 printf '%s\n' "${readiness}" "${endpoint_output}"
 
 client_evidence="$(

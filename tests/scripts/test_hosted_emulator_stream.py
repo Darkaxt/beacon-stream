@@ -21,6 +21,9 @@ class HostedEmulatorStreamRunnerTests(unittest.TestCase):
         self.build_root = self.root / "android-build"
         self.instrumentation_called = self.root / "instrumentation-called.txt"
         self.endpoint_output_wait_entered = self.root / "endpoint-output-wait-entered.txt"
+        self.endpoint_failure_reported = self.root / "endpoint-failure-reported.txt"
+        self.endpoint_process_pid = self.root / "endpoint-process.pid"
+        self.endpoint_stop_requested = self.root / "endpoint-stop-requested.txt"
         self.bin.mkdir()
 
         runner = self.repository / "scripts" / RUNNER.name
@@ -50,13 +53,39 @@ class HostedEmulatorStreamRunnerTests(unittest.TestCase):
             if [[ "${arguments}" == *"get-state"* ]]; then
               printf 'device\n'
             elif [[ "${arguments}" == *"BeaconHostedEmulatorEndpoint --certificate"* ]]; then
+              printf '%s\n' "${BASHPID}" > "${BEACON_FAKE_ENDPOINT_PROCESS_PID}"
               printf 'BEACON_HOSTED_ENDPOINT_READY 43127\n'
               while [[ ! -f "${BEACON_FAKE_INSTRUMENTATION_CALLED}" ]]; do :; done
+              if [[ "${BEACON_FAKE_SCENARIO}" == "success" ]]; then
+                printf 'BEACON_HOSTED_ENDPOINT_AUTHENTICATED 1\n'
+                printf 'BEACON_HOSTED_ENDPOINT_FRAMES 30\n'
+                printf 'BEACON_HOSTED_ENDPOINT_RENDERED_FEEDBACK 30\n'
+                printf 'BEACON_HOSTED_ENDPOINT_STOPPED 1\n'
+                exit 0
+              fi
+              printf 'BEACON_HOSTED_ENDPOINT_FAILURE feedback boundary rejected\n'
+              printf 'reported\n' > "${BEACON_FAKE_ENDPOINT_FAILURE_REPORTED}"
+              while :; do :; done
+            elif [[ "${arguments}" == *"endpoint.pid"*"kill"* ]]; then
+              printf 'requested\n' > "${BEACON_FAKE_ENDPOINT_STOP_REQUESTED}"
+              kill "$(/bin/cat "${BEACON_FAKE_ENDPOINT_PROCESS_PID}")"
             elif [[ "${arguments}" == *"shell am instrument"* ]]; then
               printf 'called\n' > "${BEACON_FAKE_INSTRUMENTATION_CALLED}"
-              printf 'java.lang.IllegalArgumentException: selectedAudio is required for a stream grant.\n'
-              printf 'FAILURES!!!\n'
-              exit 0
+              if [[ "${BEACON_FAKE_SCENARIO}" == "command-failure" ]]; then
+                while [[ ! -f "${BEACON_FAKE_ENDPOINT_FAILURE_REPORTED}" ]]; do :; done
+                printf 'INSTRUMENTATION_FAILED: feedback\n'
+                exit 23
+              elif [[ "${BEACON_FAKE_SCENARIO}" == "junit-failure" ]]; then
+                while [[ ! -f "${BEACON_FAKE_ENDPOINT_FAILURE_REPORTED}" ]]; do :; done
+                printf 'java.lang.IllegalArgumentException: selectedAudio is required for a stream grant.\n'
+                printf 'FAILURES!!!\n'
+                exit 0
+              fi
+              printf 'INSTRUMENTATION_STATUS: ok\n'
+              printf 'OK (1 test)\n'
+            elif [[ "${arguments}" == *"logcat -d"* ]]; then
+              printf 'BEACON_HOSTED_STREAM_FRAMES 30\n'
+              printf 'BEACON_HOSTED_STREAM_PIXEL_VARIANTS 2\n'
             fi
         """)
         self._script("openssl", """
@@ -88,20 +117,44 @@ class HostedEmulatorStreamRunnerTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def test_zero_exit_junit_failure_is_rejected_before_endpoint_output_wait(self):
-        result = self._run()
+    def test_nonzero_instrumentation_failure_stops_and_drains_endpoint(self):
+        result = self._run("command-failure")
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("INSTRUMENTATION_FAILED: feedback", result.stderr)
+        self.assertIn(
+            "BEACON_HOSTED_ENDPOINT_FAILURE feedback boundary rejected",
+            result.stderr,
+        )
+        self.assertIn("Hosted stream instrumentation failed.", result.stderr)
+        self.assertTrue(self.endpoint_stop_requested.exists())
+        self.assertTrue(self.endpoint_output_wait_entered.exists())
+
+    def test_zero_exit_junit_failure_stops_and_drains_endpoint(self):
+        result = self._run("junit-failure")
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn(
             "selectedAudio is required for a stream grant.",
-            result.stdout + result.stderr,
+            result.stdout,
         )
-        self.assertFalse(
-            self.endpoint_output_wait_entered.exists(),
-            "runner entered endpoint-output wait after failed JUnit output",
+        self.assertIn(
+            "BEACON_HOSTED_ENDPOINT_FAILURE feedback boundary rejected",
+            result.stderr,
         )
+        self.assertIn("Hosted stream instrumentation did not pass.", result.stderr)
+        self.assertTrue(self.endpoint_stop_requested.exists())
+        self.assertTrue(self.endpoint_output_wait_entered.exists())
 
-    def _run(self):
+    def test_success_keeps_marker_and_does_not_stop_endpoint(self):
+        result = self._run("success")
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertIn("INSTRUMENTATION_STATUS: ok", result.stdout)
+        self.assertIn("BEACON_HOSTED_EMULATOR_STREAM_OK", result.stdout)
+        self.assertFalse(self.endpoint_stop_requested.exists())
+
+    def _run(self, scenario):
         environment = os.environ.copy()
         shell_path = ":".join((
             self._shell_path(self.bin),
@@ -118,6 +171,10 @@ class HostedEmulatorStreamRunnerTests(unittest.TestCase):
             "BEACON_ANDROID_BUILD_ROOT": self.build_root,
             "BEACON_FAKE_INSTRUMENTATION_CALLED": self.instrumentation_called,
             "BEACON_FAKE_ENDPOINT_OUTPUT_WAIT_ENTERED": self.endpoint_output_wait_entered,
+            "BEACON_FAKE_ENDPOINT_FAILURE_REPORTED": self.endpoint_failure_reported,
+            "BEACON_FAKE_ENDPOINT_PROCESS_PID": self.endpoint_process_pid,
+            "BEACON_FAKE_ENDPOINT_STOP_REQUESTED": self.endpoint_stop_requested,
+            "BEACON_FAKE_SCENARIO": scenario,
             "HOME": self.root / "home",
             "PATH": shell_path,
         }
