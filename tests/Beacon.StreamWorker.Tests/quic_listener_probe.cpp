@@ -1248,7 +1248,42 @@ int run_worker_process_probe(
     populate_benchmark_plan(
         *prepare.mutable_prepare_benchmark()->mutable_plan());
   }
-  if (!exchange_worker_command(channel, prepare, responses, events)) {
+  const bool prepare_exchanged =
+      exchange_worker_command(channel, prepare, responses, events);
+  if (!prepare_exchanged) {
+    const worker_v1::WorkerCompletion *completion =
+        !responses.empty() &&
+                responses.back().body_case() ==
+                    worker_v1::WorkerIpcEnvelope::kWorkerCompletion
+            ? &responses.back().worker_completion()
+            : nullptr;
+    const auto disposition = beacon::worker::tests::classify_probe_prepare(
+        {.video_mode = mode == WorkerProcessProbeMode::video,
+         .advertised_video_available =
+             capabilities.worker_capabilities().video_available(),
+         .advertised_audio_available =
+             capabilities.worker_capabilities().audio_available(),
+         .exchange_succeeded = prepare_exchanged,
+         .has_completion = completion != nullptr,
+         .completion_succeeded =
+             completion != nullptr && completion->succeeded(),
+         .capability_unavailable =
+             completion != nullptr &&
+             completion->error_code() ==
+                 worker_v1::WORKER_ERROR_CODE_CAPABILITY_UNAVAILABLE});
+    if (disposition == beacon::worker::tests::ProbePrepareDisposition::
+                           unsupported_video_hardware) {
+      std::printf(
+          "BEACON_WORKER_VIDEO_FAILURE PREPARE CAPABILITY_UNAVAILABLE\n");
+      return 99;
+    }
+    if (disposition ==
+        beacon::worker::tests::ProbePrepareDisposition::worker_rejected) {
+      std::printf("BEACON_WORKER_PREPARE_FAILURE %d\n",
+                  static_cast<int>(completion->error_code()));
+      return 88;
+    }
+    std::printf("BEACON_WORKER_PREPARE_EXCHANGE_FAILURE\n");
     return 88;
   }
 

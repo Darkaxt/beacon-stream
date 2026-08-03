@@ -90,8 +90,10 @@ try {
     }
     elseif ($AllowUnsupportedVideoHardware -and
         $nativeExitCode -eq 99 -and
-        $nativeOutput -eq 'BEACON_WORKER_VIDEO_FAILURE CAPTURE 5') {
-        Write-Host 'BEACON_WORKER_VIDEO_UNAVAILABLE NVIDIA_ADAPTER_MISSING'
+        $nativeOutput -in @(
+            'BEACON_WORKER_VIDEO_FAILURE PREPARE CAPABILITY_UNAVAILABLE',
+            'BEACON_WORKER_VIDEO_FAILURE CAPTURE 5')) {
+        Write-Host $nativeOutput
     }
     else {
         throw "Native Worker IPC/QUIC integration failed with exit code ${nativeExitCode}: $nativeOutput"

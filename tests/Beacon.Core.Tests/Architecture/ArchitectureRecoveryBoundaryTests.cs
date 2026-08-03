@@ -161,6 +161,9 @@ public sealed class ArchitectureRecoveryBoundaryTests
         string processHostTests = File.ReadAllText(ToPlatformPath(
             root,
             "tests/Beacon.Platform.Windows.Tests/Streaming/StreamWorkerProcessHostTests.cs"));
+        string nativeProbe = File.ReadAllText(ToPlatformPath(
+            root,
+            "tests/Beacon.StreamWorker.Tests/quic_listener_probe.cpp"));
 
         Assert.Contains("[switch]$AllowUnsupportedVideoHardware", script, StringComparison.Ordinal);
         Assert.Contains(
@@ -176,6 +179,29 @@ public sealed class ArchitectureRecoveryBoundaryTests
             "BEACON_WORKER_VIDEO_FAILURE CAPTURE 5",
             script,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "BEACON_WORKER_VIDEO_FAILURE PREPARE CAPABILITY_UNAVAILABLE",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "BEACON_WORKER_VIDEO_FAILURE PREPARE CAPABILITY_UNAVAILABLE",
+            nativeProbe,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "WORKER_ERROR_CODE_CAPABILITY_UNAVAILABLE",
+            nativeProbe,
+            StringComparison.Ordinal);
+        Assert.Contains(".video_available()", nativeProbe, StringComparison.Ordinal);
+        Assert.Contains(".audio_available()", nativeProbe, StringComparison.Ordinal);
+        Assert.Contains(
+            "BEACON_WORKER_PREPARE_FAILURE",
+            nativeProbe,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "BEACON_WORKER_PREPARE_EXCHANGE_FAILURE",
+            nativeProbe,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("$nativeExitCode -eq 88", script, StringComparison.Ordinal);
         Assert.Contains(
             "./scripts/test-stream-worker-integration.ps1 -AllowUnsupportedVideoHardware",
             workflow,
