@@ -23,9 +23,10 @@ The release sequence is:
 2. R2 adds only audio, controller input, physical-client benchmarking, and a playable Z Fold 7
    transaction.
 3. R3 packages the proven system and publishes a clean-machine-validated prerelease.
-4. Version-one completion adds the remaining registered client-input slices and production HEVC/AV1
-   paths through the same proven architecture. These capabilities do not delay the first usable
-   prerelease, but H.264-only operation does not satisfy the final version-one contract.
+4. Version-one completion adds the remaining registered client-input slices, production HEVC/AV1
+   paths, and virtual-display recovery closure through the same proven architecture. These
+   capabilities do not delay the first usable prerelease, but H.264-only operation or recovery that
+   is proven only during a normal unlocked session does not satisfy the final version-one contract.
 
 Older unchecked milestone items are historical evidence, not parallel requirements. This execution
 reset does not weaken Beacon's architecture, security, server-owned policy, virtual-display
@@ -350,6 +351,18 @@ This register is the implementation contract.
 - `REQ-DISP-018`: Beacon derives heartbeat cadence from the driver-reported watchdog contract, shares one control session across its own concurrent leases, and closes it after the final Beacon lease is released.
 - `REQ-DISP-019`: Beacon does not read or write Apollo settings, control the Apollo service or process, reuse Apollo lifecycle state, or require Apollo to keep SudoVDA displays alive.
 - `REQ-DISP-020`: Beacon does not rewrite machine-wide SudoVDA watchdog or monitor-capacity configuration. Driver capacity exhaustion and heartbeat failures are reported as explicit readiness or session faults.
+- `REQ-DISP-021`: The privileged HostAgent is the single writer of an ACL-protected atomic recovery journal for each owned lease. The journal contains client identity, display GUID, intended mode and topology supplied by Beacon Service, last completed privileged lifecycle phase, and the verified physical baseline needed for compensation; Beacon Service may query but not independently rewrite it.
+- `REQ-DISP-022`: HostAgent startup reconciles exact SudoVDA display identities against its recovery journal before accepting a display command, and Beacon Service startup adopts that reconciled inventory before accepting a launch. Beacon may repair, restore, or remove only displays proven to be Beacon-owned; unrelated virtual or physical displays remain untouched.
+- `REQ-DISP-023`: A verified physical-only baseline is captured before the first topology mutation and replaced only while no Beacon lease exists and Windows exposes a stable physical-only topology. A missing or corrupt current snapshot falls back to that verified baseline rather than an inferred generic layout.
+- `REQ-DISP-024`: Recovery chooses restore-before-remove or remove-before-restore from observed topology and retained baseline evidence, then independently verifies the final physical-primary state. Neither ordering is assumed universally safe.
+- `REQ-DISP-025`: A HostAgent-owned production recovery supervisor, not only an acceptance-test guard, observes Windows power resume, session unlock, sign-out, shutdown, Beacon Service loss/restart, and HostAgent restart events. Beacon Service remains the policy owner while available; the supervisor owns privileged compensation and any user-session helper dispatch recorded in the journal.
+- `REQ-DISP-026`: Driver disablement, disappearance, protocol mismatch, failed heartbeat, or device restart is diagnosed against the exact expected PnP instance. Safe re-enable or restart is performed only through the privileged HostAgent, is serialized against display and driver-update transactions, and is verified before streaming resumes.
+- `REQ-DISP-027`: Recovery does not use a timeout or fixed retry count as lifecycle authority. It advances on driver acknowledgements, PnP state changes, Windows topology generations, process exits, power/session events, and explicit administrative cancellation; heartbeat intervals report liveness only.
+- `REQ-DISP-028`: GPU-driver reset, hybrid-GPU adapter migration, dock or external-monitor hotplug, and display-identity renumbering force a fresh all-path inventory and name mapping before Beacon reapplies an owned topology. Cached `DISPLAYx` names are never treated as durable identity.
+- `REQ-DISP-029`: Topology or driver repair preserves the owned application and session whenever the inactive-client **AND** no-owned-work cleanup gate is false. Repair cannot silently convert a retained session into teardown.
+- `REQ-DISP-030`: Unexpected Beacon Service, StreamWorker, HostAgent, or recovery-supervisor termination leaves enough durable evidence for the surviving or restarted owner to restore or resume deterministically without deleting unrelated displays. If client or owned-work state cannot be proven after a crash, recovery restores physical control but preserves the journaled lease and application until the inactive-client **AND** no-owned-work condition can be recomputed.
+- `REQ-DISP-031`: Recovery diagnostics expose the triggering Windows or driver event, journal revision, exact owned identities, baseline source, selected compensation order, every observed topology generation, and final verification result.
+- `REQ-DISP-032`: Beacon cannot claim its virtual-display pipeline more robust than an upstream implementation until the production recovery matrix passes on the target laptop and at least one clean Windows installation.
 
 ### Session Ownership And Cleanup
 
@@ -447,6 +460,12 @@ samples inside its authenticated session and publishes DSU only on the Windows l
 - `REQ-TEST-008`: A production vertical-slice test runs in an isolated environment containing only Beacon and its declared platform prerequisites, and proves Beacon-owned capture to emulator presentation. Workstation validation is confined to Beacon's dependency graph, packaged artifacts, process tree, and owned endpoints; it must not enumerate, query, trace, or control another installed streaming product.
 - `REQ-TEST-009`: Physical phone testing is reserved for final decoder quality, 120 Hz, HDR, thermals, Wi-Fi behavior, touch, controllers, gyroscope, audio, and human experience.
 - `REQ-TEST-010`: Static checks prevent upstream compatibility types, wrapper configuration, and duplicate Android routes from re-entering protected boundaries.
+- `REQ-TEST-011`: Deterministic recovery tests inject service, Worker, HostAgent, and recovery-supervisor termination at every display lifecycle phase and verify journal-driven compensation without deleting an unowned display.
+- `REQ-TEST-012`: Deterministic Windows-boundary tests inject power/session events, PnP disable/re-enable, driver reconnect, GPU reset, hotplug, topology renumbering, and missing-current-snapshot conditions through production interfaces.
+- `REQ-TEST-013`: Guarded real-topology tests prove normal quit, rapid reconnect, lock/unlock, sleep/resume, hibernate/resume, sign-out/sign-in, service restart, HostAgent restart, GPU-driver restart, and dock/external-monitor changes from a recorded physical baseline back to independently verified physical control.
+- `REQ-TEST-014`: Every destructive real-topology test arms an independent production-equivalent recovery owner before mutation and records restore-before-remove plus remove-before-restore behavior where both orders are applicable.
+- `REQ-TEST-015`: Recovery acceptance verifies that owned applications survive topology repair while active and that inactive **AND** no-owned-work remains the only automatic lease-removal condition.
+- `REQ-TEST-016`: Clean-machine validation installs the driver and HostAgent, creates and recovers a lease, exercises a verified driver update and rollback, uninstalls Beacon, and leaves the pre-install physical topology intact.
 
 ## Beacon Session Contract
 
@@ -507,6 +526,11 @@ Candidate upstream primitives include:
 - Android codec and rendering adapters.
 - Windows input injection and controller support.
 - SudoVDA integration and topology lessons.
+- Vibeshine/Vibepollo recovery-registry ownership, driver re-enable/restart, exact-device reclaim,
+  display-database restoration, and hybrid-GPU recovery behavior. Candidate references include
+  [`virtual_display_recovery_registry.h`](https://github.com/Nonary/vibeshine/blob/vibe/src/platform/windows/virtual_display_recovery_registry.h),
+  [`virtual_display_cleanup.cpp`](https://github.com/Nonary/vibeshine/blob/vibe/src/platform/windows/virtual_display_cleanup.cpp),
+  and [`virtual_display_sunshine.cpp`](https://github.com/Nonary/vibeshine/blob/vibe/src/platform/windows/virtual_display_sunshine.cpp).
 
 Each candidate is classified before retention:
 
@@ -638,6 +662,6 @@ The following are explicit removal targets unless the recovery inventory proves 
 
 ## Definition Of Completion
 
-Beacon version one is complete when it can be installed without Apollo or Sunshine, register the APK, automatically benchmark the current network and hardware, show the normalized Windows app/game catalog, compute a server-owned plan, create and activate the correct per-client virtual display, launch the selected application, stream H.264, HEVC, or AV1 through one Beacon-owned data plane according to per-client evidence, accept client input, stop or recover safely, and restore the laptop to a verified physical-primary state.
+Beacon version one is complete when it can be installed without Apollo or Sunshine, register the APK, automatically benchmark the current network and hardware, show the normalized Windows app/game catalog, compute a server-owned plan, create and activate the correct per-client virtual display, launch the selected application, stream H.264, HEVC, or AV1 through one Beacon-owned data plane according to per-client evidence, accept client input, stop or recover safely, and restore the laptop to a verified physical-primary state after normal termination, component failure, power/session transitions, driver restart, and material display-topology change.
 
 No compatibility layer, wrapper mode, alternate Android route, or client-side streaming policy is required to achieve that result.
