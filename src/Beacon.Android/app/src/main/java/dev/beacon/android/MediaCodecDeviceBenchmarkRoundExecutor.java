@@ -1,12 +1,17 @@
 package dev.beacon.android;
 
+import android.util.Log;
+
 import java.util.concurrent.Executor;
+import java.util.function.BiConsumer;
 
 final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRoundExecutor {
+    private static final String LogTag = "BeaconBenchmark";
     private final EncodedVideoCodecFactory codecFactory;
     private final BenchmarkVectorRepository vectors;
     private final BenchmarkPresentationSurfaceFactory surfaces;
     private final Executor finalizer;
+    private final BiConsumer<String, RuntimeException> cleanupFailureReporter;
 
     MediaCodecDeviceBenchmarkRoundExecutor(
         EncodedVideoCodecFactory codecFactory,
@@ -23,13 +28,33 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
         BenchmarkVectorRepository vectors,
         BenchmarkPresentationSurfaceFactory surfaces,
         Executor finalizer) {
-        if (codecFactory == null || vectors == null || surfaces == null || finalizer == null) {
+        this(
+            codecFactory,
+            vectors,
+            surfaces,
+            finalizer,
+            MediaCodecDeviceBenchmarkRoundExecutor::logCleanupFailure);
+    }
+
+    MediaCodecDeviceBenchmarkRoundExecutor(
+        EncodedVideoCodecFactory codecFactory,
+        BenchmarkVectorRepository vectors,
+        BenchmarkPresentationSurfaceFactory surfaces,
+        Executor finalizer,
+        BiConsumer<String, RuntimeException> cleanupFailureReporter) {
+        if (codecFactory == null || vectors == null || surfaces == null || finalizer == null ||
+            cleanupFailureReporter == null) {
             throw new IllegalArgumentException("MediaCodec benchmark dependencies are required.");
         }
         this.codecFactory = codecFactory;
         this.vectors = vectors;
         this.surfaces = surfaces;
         this.finalizer = finalizer;
+        this.cleanupFailureReporter = cleanupFailureReporter;
+    }
+
+    private static void logCleanupFailure(String diagnostic, RuntimeException failure) {
+        Log.w(LogTag, "BEACON_DECODER_CLEANUP_ERROR " + diagnostic, failure);
     }
 
     @Override
@@ -55,7 +80,8 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
             round,
             vectorSamples.expectedFrameCount(),
             observer,
-            finalizer);
+            finalizer,
+            cleanupFailureReporter);
         try {
             BenchmarkPresentationSurface surface = surfaces.create(
                 round.width(),
@@ -90,6 +116,7 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
         private final Observer observer;
         private final DecoderBenchmarkMeasurements measurements;
         private final Executor finalizer;
+        private final BiConsumer<String, RuntimeException> cleanupFailureReporter;
         private EncodedVideoCodec codec;
         private BenchmarkPresentationSurface surface;
         private boolean started;
@@ -100,10 +127,12 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
             BeaconBenchmarkHardwarePlan.DecoderRound round,
             int expectedFrames,
             Observer observer,
-            Executor finalizer) {
+            Executor finalizer,
+            BiConsumer<String, RuntimeException> cleanupFailureReporter) {
             this.round = round;
             this.observer = observer;
             this.finalizer = finalizer;
+            this.cleanupFailureReporter = cleanupFailureReporter;
             this.measurements = new DecoderBenchmarkMeasurements(round, expectedFrames);
         }
 
@@ -189,17 +218,17 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
         }
 
         private void finish(boolean configured) {
-            int cleanupErrors = cleanup();
+            cleanup();
             BeaconBenchmarkCompletionRequest.DecoderSample sample;
             synchronized (this) {
                 if (finished) return;
                 finished = true;
-                sample = measurements.toSample(configured, cleanupErrors);
+                sample = measurements.toSample(configured);
             }
             observer.onCompleted(sample);
         }
 
-        private int cleanup() {
+        private void cleanup() {
             EncodedVideoCodec ownedCodec;
             BenchmarkPresentationSurface ownedSurface;
             boolean stop;
@@ -211,29 +240,37 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
                 surface = null;
                 started = false;
             }
-            int errors = 0;
             if (ownedCodec != null) {
                 try {
                     if (stop) {
                         ownedCodec.stop();
                     }
                 } catch (RuntimeException failure) {
-                    errors++;
+                    reportCleanupFailure("codec.stop", failure);
                 }
                 try {
                     ownedCodec.release();
                 } catch (RuntimeException failure) {
-                    errors++;
+                    reportCleanupFailure("codec.release", failure);
                 }
             }
             if (ownedSurface != null) {
                 try {
                     ownedSurface.close();
                 } catch (RuntimeException failure) {
-                    errors++;
+                    reportCleanupFailure("surface.close", failure);
                 }
             }
-            return errors;
+        }
+
+        private void reportCleanupFailure(String operation, RuntimeException failure) {
+            cleanupFailureReporter.accept(
+                "operation=" + operation +
+                    " codec=" + round.codec() +
+                    " profile=" + round.profile() +
+                    " size=" + round.width() + "x" + round.height() +
+                    " targetFps=" + round.targetFps(),
+                failure);
         }
 
         @Override

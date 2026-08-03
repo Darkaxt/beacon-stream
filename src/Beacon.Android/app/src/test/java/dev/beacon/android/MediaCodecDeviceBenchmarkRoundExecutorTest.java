@@ -7,6 +7,8 @@ import org.junit.Test;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -115,16 +117,20 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
     }
 
     @Test
-    public void cleanupFailureIsCountedAndDoesNotPreventSurfaceReleaseOrCompletion() {
+    public void cleanupFailuresDoNotBecomeDecoderOutputErrors() {
         RecordingCodec codec = new RecordingCodec();
         codec.stopFailure = new IllegalStateException("stop failed");
+        codec.releaseFailure = new IllegalStateException("release failed");
         RecordingSurfaceFactory surfaces = new RecordingSurfaceFactory();
+        List<String> cleanupDiagnostics = new ArrayList<>();
         MediaCodecDeviceBenchmarkRoundExecutor executor =
             new MediaCodecDeviceBenchmarkRoundExecutor(
                 ignored -> codec,
                 ignored -> twoFrameVector(),
                 surfaces,
-                Runnable::run);
+                Runnable::run,
+                (diagnostic, failure) -> cleanupDiagnostics.add(
+                    diagnostic + ": " + failure.getMessage()));
         RecordingRoundObserver observer = new RecordingRoundObserver();
 
         executor.start(round(), observer);
@@ -135,7 +141,32 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
         surfaces.observer.onFramePresented(first.presentationTimeUs(), 10_000_000);
         codec.observer.onEndOfStream();
 
+        assertTrue(observer.sample.toJson().toString().contains("\"outputErrors\":0"));
+        assertEquals(List.of(
+            "operation=codec.stop codec=h264 profile=high size=1280x720 targetFps=60: stop failed",
+            "operation=codec.release codec=h264 profile=high size=1280x720 targetFps=60: release failed"),
+            cleanupDiagnostics);
+        assertTrue(codec.released);
+        assertTrue(surfaces.closed);
+    }
+
+    @Test
+    public void codecCallbackFailureRemainsAReportedDecoderOutputError() {
+        RecordingCodec codec = new RecordingCodec();
+        RecordingSurfaceFactory surfaces = new RecordingSurfaceFactory();
+        MediaCodecDeviceBenchmarkRoundExecutor executor =
+            new MediaCodecDeviceBenchmarkRoundExecutor(
+                ignored -> codec,
+                ignored -> twoFrameVector(),
+                surfaces,
+                Runnable::run);
+        RecordingRoundObserver observer = new RecordingRoundObserver();
+
+        executor.start(round(), observer);
+        codec.observer.onError(new IllegalStateException("decoder callback failed"));
+
         assertTrue(observer.sample.toJson().toString().contains("\"outputErrors\":1"));
+        assertTrue(codec.stopped);
         assertTrue(codec.released);
         assertTrue(surfaces.closed);
     }
@@ -170,6 +201,7 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
         private EncodedVideoCodecObserver observer;
         private RuntimeException configurationFailure;
         private RuntimeException stopFailure;
+        private RuntimeException releaseFailure;
         private boolean stopped;
         private boolean released;
 
@@ -197,7 +229,10 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
             stopped = true;
             if (stopFailure != null) throw stopFailure;
         }
-        @Override public void release() { released = true; }
+        @Override public void release() {
+            released = true;
+            if (releaseFailure != null) throw releaseFailure;
+        }
     }
 
     private static final class RecordingSurfaceFactory implements BenchmarkPresentationSurfaceFactory {

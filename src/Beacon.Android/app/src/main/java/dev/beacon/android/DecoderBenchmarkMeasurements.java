@@ -47,9 +47,7 @@ final class DecoderBenchmarkMeasurements {
         outputErrors++;
     }
 
-    BeaconBenchmarkCompletionRequest.DecoderSample toSample(
-        boolean configured,
-        int additionalOutputErrors) {
+    BeaconBenchmarkCompletionRequest.DecoderSample toSample(boolean configured) {
         double durationSeconds = firstInputNs == Long.MAX_VALUE || lastOutputNs <= firstInputNs
             ? 0.0
             : (lastOutputNs - firstInputNs) / 1_000_000_000.0;
@@ -70,7 +68,7 @@ final class DecoderBenchmarkMeasurements {
                 ? null
                 : percentile95(presentationLatenciesMs),
             Math.max(0, expectedFrames - presentedFrames),
-            outputErrors + additionalOutputErrors,
+            outputErrors,
             false,
             false);
     }
