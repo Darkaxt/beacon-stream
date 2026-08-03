@@ -74,7 +74,7 @@ public sealed class DisplayProbeAppTests
     }
 
     [Fact]
-    public async Task RecoverCommandRemovesDisplayAfterInitialRestoreFailure()
+    public async Task RecoverCommandRemovesDisplayAfterInitialRestoreFailureAndVerifiesPhysicalPrimary()
     {
         var api = new ProbeWindowsDisplayApi
         {
@@ -92,7 +92,6 @@ public sealed class DisplayProbeAppTests
                 refreshHz: 120)
         };
         api.RestoreResults.Enqueue(DisplayApiResult.Fail("physical primary was not verified"));
-        api.RestoreResults.Enqueue(DisplayApiResult.Ok());
         using var output = new StringWriter();
 
         int exitCode = await DisplayProbeApp.RunAsync(
@@ -103,8 +102,9 @@ public sealed class DisplayProbeAppTests
 
         Assert.Equal(0, exitCode);
         Assert.Contains("recover: success", output.ToString());
-        Assert.Equal(2, api.RestoreCalls);
+        Assert.Equal(1, api.RestoreCalls);
         Assert.Equal("client-z-fold-7", Assert.Single(api.RemovedDisplays));
+        Assert.True(api.CurrentTopology.PhysicalPrimaryVerified);
     }
 
     [Fact]
