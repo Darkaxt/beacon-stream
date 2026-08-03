@@ -546,6 +546,9 @@ public sealed class StreamWorkerProcessHostTests
             authorizationContext.RuntimeGeneration,
             Prepare("integration-session"),
             CancellationToken.None);
+        Assert.True(
+            prepare.Completion.WorkerCompletion.Succeeded,
+            $"StreamWorker prepare failed ({prepare.Completion.WorkerCompletion.ErrorCode}).");
         StreamRuntimeAuthorizationResult authorization = await authorizer.AuthorizeAsync(
             new StreamRuntimeAuthorization(
                 "integration-session",
@@ -556,12 +559,14 @@ public sealed class StreamWorkerProcessHostTests
                 authorizationContext.RuntimeGeneration,
                 DateTimeOffset.UtcNow.AddMinutes(2)),
             CancellationToken.None);
+        Assert.True(authorization.Success, authorization.Error);
         StreamRuntimeAuthorizationResult revocation = await authorizer.RevokeAsync(
             new StreamRuntimeRevocation(
                 "integration-session",
                 Enumerable.Repeat((byte)0x5a, 32).ToArray(),
                 authorizationContext.RuntimeGeneration),
             CancellationToken.None);
+        Assert.True(revocation.Success, revocation.Error);
         StreamWorkerCommandResponse start = await host.SendAsync(
             authorizationContext.RuntimeGeneration,
             new WorkerIpcEnvelope
@@ -570,6 +575,9 @@ public sealed class StreamWorkerProcessHostTests
                 StartMedia = new StartMedia(),
             },
             CancellationToken.None);
+        Assert.True(
+            start.Completion.WorkerCompletion.Succeeded,
+            $"StreamWorker start failed ({start.Completion.WorkerCompletion.ErrorCode}).");
         StreamWorkerCommandResponse stop = await host.SendAsync(
             authorizationContext.RuntimeGeneration,
             new WorkerIpcEnvelope
@@ -578,13 +586,11 @@ public sealed class StreamWorkerProcessHostTests
                 StopMedia = new StopMedia { Reason = StopMediaReason.Explicit },
             },
             CancellationToken.None);
+        Assert.True(
+            stop.Completion.WorkerCompletion.Succeeded,
+            $"StreamWorker stop failed ({stop.Completion.WorkerCompletion.ErrorCode}).");
 
         Assert.True(host.IsReady);
-        Assert.True(authorization.Success);
-        Assert.True(revocation.Success);
-        Assert.True(prepare.Completion.WorkerCompletion.Succeeded);
-        Assert.True(start.Completion.WorkerCompletion.Succeeded);
-        Assert.True(stop.Completion.WorkerCompletion.Succeeded);
         Assert.Equal(0ul, start.Events.Single(e => e.BodyCase == WorkerIpcEnvelope.BodyOneofCase.MediaMetrics)
             .MediaMetrics.EncodedFrames);
 
@@ -622,6 +628,11 @@ public sealed class StreamWorkerProcessHostTests
             MinimumBitrateKbps = 1000,
             InitialBitrateKbps = 45000,
             MaximumBitrateKbps = 90000,
+            AudioCodec = WorkerAudioCodec.Opus,
+            AudioSampleRateHz = 48_000,
+            AudioChannelCount = 2,
+            AudioFrameDurationUs = 20_000,
+            AudioBitrateBps = 96_000,
         },
     };
 

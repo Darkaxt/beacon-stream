@@ -353,6 +353,7 @@ public final class BeaconStreamCoreInstrumentationTest {
         monitor.addLifecycleCallback(callback);
         instrumentation.runOnMainSync(activity::finish);
         destroyed.await();
+        activity.awaitWorkerCleanupForInstrumentation();
         monitor.removeLifecycleCallback(callback);
         assertTrue(activity.isDestroyed());
         assertTrue(!ownedCore.isOpen());
@@ -1320,7 +1321,7 @@ public final class BeaconStreamCoreInstrumentationTest {
         return BeaconStreamSession.parse(
             "https://beacon.example",
             "client",
-            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"" + sessionId + "\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"}}}");
+            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"" + sessionId + "\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"},\"selectedAudio\":{\"codec\":\"opus\",\"sampleRateHz\":48000,\"channelCount\":2,\"frameDurationUs\":20000,\"bitrateBps\":96000}}}");
     }
 
     private static ByteBuffer directBuffer(int... values) {

@@ -26,6 +26,7 @@ import android.widget.TextView;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -35,6 +36,7 @@ public final class BeaconActivity extends Activity {
     private static final String[] UI_DENSITY_VALUES = new String[] { "comfortable", "dense", "large" };
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final CountDownLatch workerCleanupComplete = new CountDownLatch(1);
     private final List<BeaconGameCatalog.GameEntry> gameEntries = new ArrayList<>();
     private final BeaconTouchInputMapper touchInputMapper = new BeaconTouchInputMapper();
     private final AndroidGamepadMapper gamepadInputMapper = new AndroidGamepadMapper();
@@ -131,7 +133,16 @@ public final class BeaconActivity extends Activity {
             benchmarkChangeMonitor.close();
         }
         if (modelSession != null) {
-            executor.execute(modelSession::close);
+            BeaconViewModelSession closingSession = modelSession;
+            executor.execute(() -> {
+                try {
+                    closingSession.close();
+                } finally {
+                    workerCleanupComplete.countDown();
+                }
+            });
+        } else {
+            workerCleanupComplete.countDown();
         }
         if (videoSurfaceProvider != null) {
             videoSurfaceProvider.close();
@@ -757,6 +768,10 @@ public final class BeaconActivity extends Activity {
 
     boolean workerExecutorShutdown() {
         return executor.isShutdown();
+    }
+
+    void awaitWorkerCleanupForInstrumentation() throws InterruptedException {
+        workerCleanupComplete.await();
     }
 
     AndroidSurfaceViewProvider videoSurfaceProviderForInstrumentation() {
