@@ -1,6 +1,6 @@
 # Beacon Release Blocker
 
-Updated: 2026-08-03
+Updated: 2026-08-04
 
 ## Last Complete Outcome
 
@@ -85,20 +85,35 @@ the structured version 2 model so existing per-client setup is retained.
 
 ## Current Blocker
 
-R2 is not blocked by an external dependency, but implementation is not complete. The APK still exposes
-server-owned stream/profile controls and client presence is not yet fully automatic. The production
-acceptance path must then be made physical-client capable before the final sustained Z Fold 7 session.
-The fake-display emulator transaction does not substitute for that confirmation.
+The R2 server-side and emulator preflight pipeline is complete. Commit `3639156` made TestHost-owned
+Worker disposal deterministic without a timeout, and CI run `30853338297` passed the full repository
+matrix. The Android job crossed the previously stalled boundary in order: application shutdown,
+`BEACON_HOSTED_WORKER_STOPPED`, then `BEACON_HOSTED_EMULATOR_BENCHMARKS_OK`.
+
+The remaining R2 acceptance blocker is the guarded physical Z Fold 7 transaction. The runner now has
+an isolated physical-client mode, exact physical/emulator client identities, restore-first cleanup,
+and current-invocation instrumentation evidence, but emulator success does not certify the phone's
+radio, decoder, thermal, audio, controller, or human-experience behavior.
+
+Version-one input has one additional implementation gap that is not part of the controller-focused R2
+exit: the authenticated transport and Windows sink accept pointer, keyboard, and controller events in
+the same session, but the APK currently captures touch and physical controller events only. Tablet
+hardware mouse/keyboard capture must use per-client capabilities, including captured relative mouse
+movement for games, without introducing global input modes or affecting the phone controller path.
 
 ## Next Falsifiable Proof
 
-First, the thin APK must complete hello, capability report, automatic presence, benchmark, catalog
-selection, launch, reconnect, quit, and recovery without editing server-owned stream or display policy.
-That flow must pass in the emulator without topology mutation. The following proof must run the guarded
-production transaction from the physical Z Fold 7 with the installed four-heartbeat quorum, retain
-ordered PCM writes on initial connect and reconnect, exit the outer runner with zero, and independently
-verify one physical primary display, zero leases, and no heartbeat. Physical Z Fold 7 audible
-confirmation remains the final human audio check.
+Run the guarded production transaction in physical-client mode from the Z Fold 7 with the installed
+four-heartbeat quorum. It must retain the exact physical client identity, sustainable benchmark plan,
+moving video, ordered PCM writes on initial connect and reconnect, controller input, explicit quit, and
+current-invocation Android evidence; exit the outer runner with zero; and independently verify one
+physical primary display, zero leases, and no heartbeat. Physical Z Fold 7 audible confirmation remains
+the final human audio check.
+
+After that R2 proof, add the bounded tablet input slice: hardware keyboard down/up mapping, absolute
+mouse navigation, captured relative movement, buttons, and wheel through the existing authenticated
+input stream. Its acceptance must prove mouse and keyboard on the tablet profile while the separate
+phone profile continues to expose controller input.
 
 ## Prior Evidence
 
