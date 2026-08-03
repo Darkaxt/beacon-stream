@@ -988,11 +988,8 @@ public final class BeaconStreamCoreInstrumentationTest {
     private static void registerAndLaunch(
         BeaconViewModel model,
         BeaconApiClient.GameSelection game) throws Exception {
-        model.refresh();
-        assertSuccessful(model);
-        model.beacon(true);
-        assertSuccessful(model);
-        model.reportCapabilities(gate3Capabilities());
+        model.setForegroundDesired(true);
+        assertTrue(model.onForeground(gate3Capabilities()));
         assertSuccessful(model);
         model.reportTelemetry(gate3Telemetry());
         assertSuccessful(model);
@@ -1285,7 +1282,7 @@ public final class BeaconStreamCoreInstrumentationTest {
 
     private static BeaconApiClient.ClientTelemetry gate3Telemetry() {
         return new BeaconApiClient.ClientTelemetry(
-            1, 0, 1, 1000, "emulator", 100, "nominal");
+            1, 0.0, 1, 1000, "emulator", 100, "nominal");
     }
 
     private static BeaconApiClient.GameSelection gate3Game() {
