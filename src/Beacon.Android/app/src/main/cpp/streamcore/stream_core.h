@@ -179,6 +179,7 @@ class StreamCore {
   bool send_authenticate();
   bool send_start();
   bool send_start_benchmark();
+  bool flush_pending_decoder_feedback();
   bool drain_assembler_events();
   bool send_request_idr();
   bool send_benchmark_echo(const stream::BenchmarkDatagramHeader &header);
@@ -199,6 +200,7 @@ class StreamCore {
   std::uint64_t feedback_sequence_{};
   std::uint64_t last_complete_sequence_{};
   std::uint64_t last_server_sequence_{};
+  std::optional<stream::v1::DecoderFeedback> pending_decoder_feedback_;
   std::optional<BenchmarkCollectionResult> benchmark_result_;
   State state_{State::idle};
   bool shutdown_{};

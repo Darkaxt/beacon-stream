@@ -22,6 +22,18 @@ std::uint64_t monotonic_us() noexcept {
           .count());
 }
 
+bool is_valid_decoder_state(stream_v1::DecoderState state) noexcept {
+  switch (state) {
+    case stream_v1::DECODER_STATE_READY:
+    case stream_v1::DECODER_STATE_AWAITING_IDR:
+    case stream_v1::DECODER_STATE_FAILED:
+      return true;
+    case stream_v1::DECODER_STATE_UNSPECIFIED:
+    default:
+      return false;
+  }
+}
+
 }  // namespace
 
 #ifndef NDEBUG
@@ -114,6 +126,7 @@ bool StreamCore::start(ConnectionGrant grant) {
   if (state_ != State::idle && state_ != State::stopped && state_ != State::failed) {
     return false;
   }
+  pending_decoder_feedback_.reset();
   const auto selected_limit = derive_maximum_frame_bytes(
       grant.video.width, grant.video.height);
   std::unique_ptr<OpusAudioDecoder> audio_decoder;
@@ -406,10 +419,15 @@ bool StreamCore::send_feedback(const stream_v1::QueueDepthFeedback &feedback) {
 }
 
 bool StreamCore::send_feedback(const stream_v1::DecoderFeedback &feedback) {
-  if (state_ != State::streaming ||
-      feedback.state() == stream_v1::DECODER_STATE_UNSPECIFIED) {
+  if (!is_valid_decoder_state(feedback.state()) ||
+      grant_.benchmark.has_value()) {
     return false;
   }
+  if (state_ == State::connecting || state_ == State::authenticating) {
+    pending_decoder_feedback_ = feedback;
+    return true;
+  }
+  if (state_ != State::streaming) return false;
   stream_v1::FeedbackStreamEnvelope envelope;
   envelope.set_protocol_version(1);
   envelope.set_session_id(grant_.session_id);
@@ -438,6 +456,7 @@ void StreamCore::on_connection_lost() {
 }
 
 void StreamCore::stop() noexcept {
+  pending_decoder_feedback_.reset();
   if (state_ == State::released || state_ == State::stopped) {
     return;
   }
@@ -477,6 +496,7 @@ void StreamCore::stop() noexcept {
 }
 
 void StreamCore::release() noexcept {
+  pending_decoder_feedback_.reset();
   if (released_) {
     return;
   }
@@ -561,7 +581,19 @@ bool StreamCore::send_start() {
     return false;
   }
   transition(State::streaming);
-  return true;
+  return flush_pending_decoder_feedback();
+}
+
+bool StreamCore::flush_pending_decoder_feedback() {
+  if (!pending_decoder_feedback_.has_value()) return true;
+  auto feedback = std::move(*pending_decoder_feedback_);
+  pending_decoder_feedback_.reset();
+  try {
+    if (send_feedback(feedback)) return true;
+  } catch (...) {
+  }
+  fail();
+  return false;
 }
 
 bool StreamCore::send_start_benchmark() {
@@ -598,6 +630,7 @@ void StreamCore::transition(State state) {
 }
 
 void StreamCore::fail() {
+  pending_decoder_feedback_.reset();
   benchmark_collector_.cancel();
   if (!shutdown_) {
     shutdown_ = true;
