@@ -149,7 +149,7 @@ public sealed class ArchitectureRecoveryBoundaryTests
     }
 
     [Fact]
-    public void HostedRunnerVideoExceptionIsExplicitAndNarrow()
+    public void HostedRunnerHardwareExceptionsAreExplicitAndNarrow()
     {
         string root = FindRepositoryRoot();
         string script = File.ReadAllText(ToPlatformPath(
@@ -165,7 +165,10 @@ public sealed class ArchitectureRecoveryBoundaryTests
             root,
             "tests/Beacon.StreamWorker.Tests/quic_listener_probe.cpp"));
 
+        string normalizedScript = script.ReplaceLineEndings("\n");
+
         Assert.Contains("[switch]$AllowUnsupportedVideoHardware", script, StringComparison.Ordinal);
+        Assert.Contains("[switch]$AllowUnsupportedAudioHardware", script, StringComparison.Ordinal);
         Assert.Contains(
             "$env:BEACON_TEST_ALLOW_UNSUPPORTED_VIDEO_HARDWARE = '1'",
             script,
@@ -188,6 +191,14 @@ public sealed class ArchitectureRecoveryBoundaryTests
             nativeProbe,
             StringComparison.Ordinal);
         Assert.Contains(
+            "BEACON_WORKER_AUDIO_FAILURE PREPARE CAPABILITY_UNAVAILABLE",
+            nativeProbe,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "BEACON_WORKER_MEDIA_FAILURE PREPARE CAPABILITY_UNAVAILABLE",
+            nativeProbe,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "WORKER_ERROR_CODE_CAPABILITY_UNAVAILABLE",
             nativeProbe,
             StringComparison.Ordinal);
@@ -203,7 +214,34 @@ public sealed class ArchitectureRecoveryBoundaryTests
             StringComparison.Ordinal);
         Assert.DoesNotContain("$nativeExitCode -eq 88", script, StringComparison.Ordinal);
         Assert.Contains(
-            "./scripts/test-stream-worker-integration.ps1 -AllowUnsupportedVideoHardware",
+            "    elseif ($AllowUnsupportedVideoHardware -and\n" +
+            "        $nativeExitCode -eq 99 -and\n" +
+            "        $nativeOutput -in @(\n" +
+            "            'BEACON_WORKER_VIDEO_FAILURE PREPARE CAPABILITY_UNAVAILABLE',\n" +
+            "            'BEACON_WORKER_VIDEO_FAILURE CAPTURE 5')) {\n" +
+            "        Write-Host $nativeOutput\n" +
+            "    }",
+            normalizedScript,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "    elseif ($AllowUnsupportedAudioHardware -and\n" +
+            "        $nativeExitCode -eq 78 -and\n" +
+            "        $nativeOutput -eq 'BEACON_WORKER_AUDIO_FAILURE PREPARE CAPABILITY_UNAVAILABLE') {\n" +
+            "        Write-Host $nativeOutput\n" +
+            "    }",
+            normalizedScript,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "    elseif ($AllowUnsupportedVideoHardware -and\n" +
+            "        $AllowUnsupportedAudioHardware -and\n" +
+            "        $nativeExitCode -eq 79 -and\n" +
+            "        $nativeOutput -eq 'BEACON_WORKER_MEDIA_FAILURE PREPARE CAPABILITY_UNAVAILABLE') {\n" +
+            "        Write-Host $nativeOutput\n" +
+            "    }",
+            normalizedScript,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "./scripts/test-stream-worker-integration.ps1 -AllowUnsupportedVideoHardware -AllowUnsupportedAudioHardware",
             workflow,
             StringComparison.Ordinal);
         Assert.Contains("Prepare(\"integration-session\")", processHostTests, StringComparison.Ordinal);

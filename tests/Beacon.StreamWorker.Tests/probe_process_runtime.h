@@ -5,6 +5,8 @@ namespace beacon::worker::tests {
 enum class ProbePrepareDisposition {
   succeeded,
   unsupported_video_hardware,
+  unsupported_audio_hardware,
+  unsupported_media_hardware,
   worker_rejected,
   exchange_failed,
 };

@@ -48,10 +48,19 @@ classify_probe_prepare(ProbePrepareFacts facts) noexcept {
   if (!facts.has_completion || facts.completion_succeeded) {
     return ProbePrepareDisposition::exchange_failed;
   }
-  if (facts.video_mode && facts.capability_unavailable &&
-      !facts.advertised_video_available &&
-      facts.advertised_audio_available) {
-    return ProbePrepareDisposition::unsupported_video_hardware;
+  if (facts.video_mode && facts.capability_unavailable) {
+    if (!facts.advertised_video_available &&
+        facts.advertised_audio_available) {
+      return ProbePrepareDisposition::unsupported_video_hardware;
+    }
+    if (facts.advertised_video_available &&
+        !facts.advertised_audio_available) {
+      return ProbePrepareDisposition::unsupported_audio_hardware;
+    }
+    if (!facts.advertised_video_available &&
+        !facts.advertised_audio_available) {
+      return ProbePrepareDisposition::unsupported_media_hardware;
+    }
   }
   return ProbePrepareDisposition::worker_rejected;
 }

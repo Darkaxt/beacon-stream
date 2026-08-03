@@ -1277,6 +1277,18 @@ int run_worker_process_probe(
           "BEACON_WORKER_VIDEO_FAILURE PREPARE CAPABILITY_UNAVAILABLE\n");
       return 99;
     }
+    if (disposition == beacon::worker::tests::ProbePrepareDisposition::
+                           unsupported_audio_hardware) {
+      std::printf(
+          "BEACON_WORKER_AUDIO_FAILURE PREPARE CAPABILITY_UNAVAILABLE\n");
+      return 78;
+    }
+    if (disposition == beacon::worker::tests::ProbePrepareDisposition::
+                           unsupported_media_hardware) {
+      std::printf(
+          "BEACON_WORKER_MEDIA_FAILURE PREPARE CAPABILITY_UNAVAILABLE\n");
+      return 79;
+    }
     if (disposition ==
         beacon::worker::tests::ProbePrepareDisposition::worker_rejected) {
       std::printf("BEACON_WORKER_PREPARE_FAILURE %d\n",

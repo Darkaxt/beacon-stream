@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$WorkerPath = '',
-    [switch]$AllowUnsupportedVideoHardware
+    [switch]$AllowUnsupportedVideoHardware,
+    [switch]$AllowUnsupportedAudioHardware
 )
 
 $ErrorActionPreference = 'Stop'
@@ -93,6 +94,17 @@ try {
         $nativeOutput -in @(
             'BEACON_WORKER_VIDEO_FAILURE PREPARE CAPABILITY_UNAVAILABLE',
             'BEACON_WORKER_VIDEO_FAILURE CAPTURE 5')) {
+        Write-Host $nativeOutput
+    }
+    elseif ($AllowUnsupportedAudioHardware -and
+        $nativeExitCode -eq 78 -and
+        $nativeOutput -eq 'BEACON_WORKER_AUDIO_FAILURE PREPARE CAPABILITY_UNAVAILABLE') {
+        Write-Host $nativeOutput
+    }
+    elseif ($AllowUnsupportedVideoHardware -and
+        $AllowUnsupportedAudioHardware -and
+        $nativeExitCode -eq 79 -and
+        $nativeOutput -eq 'BEACON_WORKER_MEDIA_FAILURE PREPARE CAPABILITY_UNAVAILABLE') {
         Write-Host $nativeOutput
     }
     else {

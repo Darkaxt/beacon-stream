@@ -58,14 +58,14 @@ int main() {
                               .advertised_audio_available = false,
                               .has_completion = true,
                               .capability_unavailable = true}) ==
-      ProbePrepareDisposition::worker_rejected);
+      ProbePrepareDisposition::unsupported_audio_hardware);
   BEACON_TEST_REQUIRE(
       classify_probe_prepare({.video_mode = true,
                               .advertised_video_available = false,
                               .advertised_audio_available = false,
                               .has_completion = true,
                               .capability_unavailable = true}) ==
-      ProbePrepareDisposition::worker_rejected);
+      ProbePrepareDisposition::unsupported_media_hardware);
   BEACON_TEST_REQUIRE(
       classify_probe_prepare({.video_mode = false,
                               .advertised_video_available = false,
@@ -78,6 +78,13 @@ int main() {
                               .advertised_video_available = false,
                               .advertised_audio_available = true,
                               .has_completion = true}) ==
+      ProbePrepareDisposition::worker_rejected);
+  BEACON_TEST_REQUIRE(
+      classify_probe_prepare({.video_mode = true,
+                              .advertised_video_available = true,
+                              .advertised_audio_available = true,
+                              .has_completion = true,
+                              .capability_unavailable = true}) ==
       ProbePrepareDisposition::worker_rejected);
   BEACON_TEST_REQUIRE(
       classify_probe_prepare({.video_mode = true,
