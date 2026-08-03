@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Media;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 
@@ -28,6 +29,8 @@ internal sealed class ProbeForm : Form
 {
     private readonly ProbeEvidence evidence;
     private readonly System.Windows.Forms.Timer animation;
+    private readonly MemoryStream toneStream;
+    private readonly SoundPlayer tonePlayer;
     private readonly bool[] controllerAPressed = new bool[4];
     private int frame;
     private bool controllerStateInitialized;
@@ -44,6 +47,9 @@ internal sealed class ProbeForm : Form
         StartPosition = FormStartPosition.WindowsDefaultLocation;
         WindowState = FormWindowState.Maximized;
         animation = new System.Windows.Forms.Timer { Interval = 16 };
+        toneStream = CreateToneWave();
+        tonePlayer = new SoundPlayer(toneStream);
+        tonePlayer.Load();
         animation.Tick += (_, _) =>
         {
             frame++;
@@ -85,6 +91,7 @@ internal sealed class ProbeForm : Form
 
     private void OnShown(object? sender, EventArgs eventArgs)
     {
+        tonePlayer.PlayLooping();
         Screen screen = Screen.FromControl(this);
         evidence.Write("shown", new
         {
@@ -92,6 +99,7 @@ internal sealed class ProbeForm : Form
             monitor = screen.DeviceName,
             primary = screen.Primary,
             bounds = new { screen.Bounds.X, screen.Bounds.Y, screen.Bounds.Width, screen.Bounds.Height },
+            audioSource = "pcm-sine-48000-stereo",
         });
         Activate();
         Focus();
@@ -112,7 +120,45 @@ internal sealed class ProbeForm : Form
     private void OnFormClosed(object? sender, FormClosedEventArgs eventArgs)
     {
         animation.Stop();
+        tonePlayer.Stop();
+        tonePlayer.Dispose();
+        toneStream.Dispose();
         evidence.Write("closed", new { reason = eventArgs.CloseReason.ToString(), frame });
+    }
+
+    private static MemoryStream CreateToneWave()
+    {
+        const int sampleRate = 48_000;
+        const short channelCount = 2;
+        const short bitsPerSample = 16;
+        const int sampleCount = sampleRate;
+        const int bytesPerSample = bitsPerSample / 8;
+        int dataBytes = sampleCount * channelCount * bytesPerSample;
+        var stream = new MemoryStream(44 + dataBytes);
+        using (var writer = new BinaryWriter(stream, System.Text.Encoding.ASCII, leaveOpen: true))
+        {
+            writer.Write(System.Text.Encoding.ASCII.GetBytes("RIFF"));
+            writer.Write(36 + dataBytes);
+            writer.Write(System.Text.Encoding.ASCII.GetBytes("WAVEfmt "));
+            writer.Write(16);
+            writer.Write((short)1);
+            writer.Write(channelCount);
+            writer.Write(sampleRate);
+            writer.Write(sampleRate * channelCount * bytesPerSample);
+            writer.Write((short)(channelCount * bytesPerSample));
+            writer.Write(bitsPerSample);
+            writer.Write(System.Text.Encoding.ASCII.GetBytes("data"));
+            writer.Write(dataBytes);
+            for (int index = 0; index < sampleCount; index++)
+            {
+                short sample = (short)(Math.Sin(2 * Math.PI * 440 * index / sampleRate)
+                    * short.MaxValue * 0.04);
+                writer.Write(sample);
+                writer.Write(sample);
+            }
+        }
+        stream.Position = 0;
+        return stream;
     }
 
     private void PollControllers()

@@ -242,6 +242,7 @@ internal static partial class Program
                     && controller.GetProperty("details").GetProperty("pressed").GetBoolean(),
                 "The catalog application did not receive the Xbox A transition.");
             RequireMarker(firstOutput, "BEACON_GATE5_MOVING_FRAMES 12");
+            RequireMarker(firstOutput, "BEACON_GATE5_AUDIO_PCM_WRITTEN ");
             RequireMarker(firstOutput, "BEACON_GATE5_INPUT_SENT F12");
             RequireMarker(firstOutput, "BEACON_GATE5_CONTROLLER_SENT A_DOWN");
             RequireMarker(firstOutput, "BEACON_GATE5_ACTIVE_DISCONNECT");
@@ -262,6 +263,7 @@ internal static partial class Program
                 fingerprint,
                 gameId).ConfigureAwait(false);
             RequireMarker(reconnectOutput, "BEACON_GATE5_RECONNECT_FRESH_TICKET");
+            RequireMarker(reconnectOutput, "BEACON_GATE5_RECONNECT_AUDIO_PCM_WRITTEN ");
             RequireMarker(reconnectOutput, "BEACON_GATE5_CONTROLLER_SENT A_UP");
             RequireMarker(reconnectOutput, "BEACON_GATE5_QUIT_INACTIVE");
             await AwaitWithHeartbeatAsync(probeExit, "owned catalog process exit")
@@ -792,6 +794,9 @@ internal static partial class Program
     private static void ValidateProbeDisplay(JsonElement shown, string preparedDisplayName)
     {
         JsonElement details = shown.GetProperty("details");
+        Require(
+            RequiredString(details, "audioSource") == "pcm-sine-48000-stereo",
+            "The owned catalog probe did not start its deterministic audio source.");
         Require(
             string.Equals(
                 RequiredString(details, "monitor"),

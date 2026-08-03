@@ -31,6 +31,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
@@ -476,6 +477,7 @@ public final class BeaconStreamCoreInstrumentationTest {
             instrumentation.getTargetContext(), clientId);
         AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
         Gate5VideoRuntime videoRuntime = new Gate5VideoRuntime(instrumentation, evidence);
+        Gate5AudioRuntime audioRuntime = new Gate5AudioRuntime();
         BeaconApiClient api = new BeaconApiClient(
             instrumentation.getTargetContext(), productionClientConfig(arguments, serverUrl, clientId));
         BeaconViewModel model = new BeaconViewModel(
@@ -483,7 +485,8 @@ public final class BeaconStreamCoreInstrumentationTest {
             serverUrl,
             api,
             gate5StreamCoreFactory(evidence, videoRuntime, coreReference),
-            videoRuntime::createSession);
+            videoRuntime::createSession,
+            audioRuntime::createSession);
         try {
             registerAndLaunch(model, BeaconApiClient.GameSelection.byGameId(gameId));
             evidence.recordGrant(model.latestStream());
@@ -494,6 +497,7 @@ public final class BeaconStreamCoreInstrumentationTest {
             evidence.persistForReconnect();
             model.disconnect();
             assertSuccessful(model);
+            audioRuntime.assertPlayback();
         } finally {
             try {
                 model.close();
@@ -507,6 +511,7 @@ public final class BeaconStreamCoreInstrumentationTest {
         assertFirstInvocationEvidence(evidence);
         emit("BEACON_GATE5_MOVING_FRAMES " + videoRuntime.frameCount());
         emit("BEACON_GATE5_PIXEL_VARIANTS " + videoRuntime.pixelVariantCount());
+        emit("BEACON_GATE5_AUDIO_PCM_WRITTEN " + audioRuntime.writtenFrameCount());
         emit("BEACON_GATE5_INPUT_SENT F12");
         emit("BEACON_GATE5_CONTROLLER_SENT A_DOWN");
         emit("BEACON_GATE5_ACTIVE_DISCONNECT");
@@ -525,6 +530,7 @@ public final class BeaconStreamCoreInstrumentationTest {
             instrumentation.getTargetContext(), clientId);
         AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
         Gate5VideoRuntime videoRuntime = new Gate5VideoRuntime(instrumentation, evidence);
+        Gate5AudioRuntime audioRuntime = new Gate5AudioRuntime();
         BeaconApiClient api = new BeaconApiClient(
             instrumentation.getTargetContext(), productionClientConfig(arguments, serverUrl, clientId));
         BeaconViewModel model = new BeaconViewModel(
@@ -532,7 +538,8 @@ public final class BeaconStreamCoreInstrumentationTest {
             serverUrl,
             api,
             gate5StreamCoreFactory(evidence, videoRuntime, coreReference),
-            videoRuntime::createSession);
+            videoRuntime::createSession,
+            audioRuntime::createSession);
         try {
             model.reconnect();
             assertSuccessful(model);
@@ -542,6 +549,7 @@ public final class BeaconStreamCoreInstrumentationTest {
             model.sendInput(BeaconApiClient.InputBatch.controller(3, 0, 12, 0));
             model.quit(new BeaconApiClient.QuitState(false));
             assertSuccessful(model);
+            audioRuntime.assertPlayback();
         } finally {
             try {
                 model.close();
@@ -559,6 +567,7 @@ public final class BeaconStreamCoreInstrumentationTest {
         assertTrue(evidence.transportClosed());
         evidence.clearPersistedReconnect();
         emit("BEACON_GATE5_RECONNECT_FRESH_TICKET");
+        emit("BEACON_GATE5_RECONNECT_AUDIO_PCM_WRITTEN " + audioRuntime.writtenFrameCount());
         emit("BEACON_GATE5_CONTROLLER_SENT A_UP");
         emit("BEACON_GATE5_QUIT_INACTIVE");
     }
@@ -1162,6 +1171,89 @@ public final class BeaconStreamCoreInstrumentationTest {
             } finally {
                 monitor.removeLifecycleCallback(callback);
             }
+        }
+    }
+
+    private static final class Gate5AudioRuntime {
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
+        private final AtomicInteger decodedFrames = new AtomicInteger();
+        private final AtomicInteger writtenFrames = new AtomicInteger();
+        private final AtomicLong lastSequence = new AtomicLong();
+
+        BeaconViewModel.AudioSession createSession(
+            BeaconAudioSession.FailureObserver failureObserver) {
+            ExecutorService executor = Executors.newSingleThreadExecutor(
+                action -> new Thread(action, "beacon-gate5-audio"));
+            BeaconAudioSession delegate = new BeaconAudioSession(
+                executor,
+                (sampleRateHz, channelCount) -> new RecordingAudioOutput(
+                    new AndroidAudioTrackOutput(sampleRateHz, channelCount)),
+                observed -> {
+                    failure.compareAndSet(null, observed);
+                    failureObserver.onFailure(observed);
+                });
+            return new BeaconViewModel.AudioSession() {
+                @Override
+                public void start(
+                    long generation,
+                    BeaconStreamSession.SelectedAudio audio) {
+                    delegate.start(generation, audio);
+                }
+
+                @Override
+                public void onAudioPcm(BeaconStreamCore.DecodedAudioFrame frame) {
+                    long previous = lastSequence.getAndSet(frame.sequence);
+                    if (previous != 0 && frame.sequence <= previous) {
+                        failure.compareAndSet(
+                            null,
+                            new AssertionError(
+                                "Beacon audio sequence did not increase: "
+                                    + previous + " -> " + frame.sequence));
+                    }
+                    decodedFrames.incrementAndGet();
+                    delegate.onAudioPcm(frame);
+                }
+
+                @Override public void stop() { delegate.stop(); }
+
+                @Override public void close() { delegate.close(); }
+            };
+        }
+
+        void assertPlayback() {
+            Throwable observed = failure.get();
+            if (observed != null) {
+                throw new AssertionError("Beacon production audio failed.", observed);
+            }
+            assertTrue("No ordered Opus PCM reached the Android client.",
+                decodedFrames.get() > 0 && lastSequence.get() > 0);
+            assertTrue("No PCM frame was written to the Android audio device.",
+                writtenFrames.get() > 0);
+        }
+
+        int writtenFrameCount() {
+            return writtenFrames.get();
+        }
+
+        private final class RecordingAudioOutput
+            implements BeaconAudioSession.AudioOutput {
+            private final AndroidAudioTrackOutput delegate;
+
+            RecordingAudioOutput(AndroidAudioTrackOutput delegate) {
+                this.delegate = delegate;
+            }
+
+            @Override public void play() { delegate.play(); }
+
+            @Override
+            public void write(ByteBuffer pcm) {
+                delegate.write(pcm);
+                writtenFrames.incrementAndGet();
+            }
+
+            @Override public void stop() { delegate.stop(); }
+
+            @Override public void release() { delegate.release(); }
         }
     }
 
