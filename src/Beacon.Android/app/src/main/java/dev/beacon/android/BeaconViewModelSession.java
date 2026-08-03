@@ -7,6 +7,7 @@ public final class BeaconViewModelSession {
     private BeaconViewModel activeModel;
     private String activeClientId = "";
     private String activeServerUrl = "";
+    private String activePublicKeyFingerprint = "";
 
     public BeaconViewModelSession(Factory factory) {
         if (factory == null) {
@@ -24,7 +25,7 @@ public final class BeaconViewModelSession {
         if (config == null) {
             throw new IllegalArgumentException("Beacon client config is required.");
         }
-        if (isCurrent(config.clientId(), config.serverUrl())) {
+        if (isCurrent(config)) {
             return activeModel;
         }
 
@@ -32,6 +33,7 @@ public final class BeaconViewModelSession {
         BeaconViewModel created = factory.create(config);
         activeClientId = config.clientId();
         activeServerUrl = config.serverUrl();
+        activePublicKeyFingerprint = config.publicKeyFingerprint();
         activeModel = created;
         return activeModel;
     }
@@ -45,9 +47,14 @@ public final class BeaconViewModelSession {
     }
 
     public synchronized BeaconViewModel current(BeaconClientConfig config) {
-        return config != null && isCurrent(config.clientId(), config.serverUrl())
+        return config != null && isCurrent(config)
             ? activeModel
             : null;
+    }
+
+    public synchronized boolean isCurrent(BeaconClientConfig config) {
+        return config != null && isCurrent(config.clientId(), config.serverUrl()) &&
+            activePublicKeyFingerprint.equals(config.publicKeyFingerprint());
     }
 
     public synchronized boolean isCurrent(String clientId, String serverUrl) {
@@ -65,6 +72,7 @@ public final class BeaconViewModelSession {
         activeModel = null;
         activeClientId = "";
         activeServerUrl = "";
+        activePublicKeyFingerprint = "";
         if (model == null) return;
 
         model.setForegroundDesired(false);

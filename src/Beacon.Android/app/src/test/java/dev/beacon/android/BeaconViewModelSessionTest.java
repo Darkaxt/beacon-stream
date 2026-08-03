@@ -39,6 +39,24 @@ public final class BeaconViewModelSessionTest {
     }
 
     @Test
+    public void publicKeyFingerprintChangeReplacesControlPlaneModel() {
+        RecordingModelFactory factory = new RecordingModelFactory();
+        BeaconViewModelSession session = new BeaconViewModelSession(factory);
+        BeaconViewModel first = session.get(new BeaconClientConfig(
+            "https://server",
+            "z-fold-7",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
+
+        BeaconViewModel second = session.get(new BeaconClientConfig(
+            "https://server",
+            "z-fold-7",
+            "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"));
+
+        assertNotSame(first, second);
+        assertEquals(2, factory.created.size());
+    }
+
+    @Test
     public void identityChangeDeactivatesAndQuitsActiveOldModelBeforeReplacement() throws Exception {
         RecordingModelFactory factory = new RecordingModelFactory();
         BeaconViewModelSession session = new BeaconViewModelSession(factory);

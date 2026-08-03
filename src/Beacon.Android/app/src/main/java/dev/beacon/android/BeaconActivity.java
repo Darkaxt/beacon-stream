@@ -1,6 +1,7 @@
 package dev.beacon.android;
 
 import android.app.Activity;
+import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.os.Bundle;
 import android.view.Display;
@@ -50,7 +51,7 @@ public final class BeaconActivity extends Activity {
         AndroidBenchmarkNetworkState.disconnected();
     private boolean automaticBenchmarkEnabled;
     private boolean lifecycleForeground;
-    private volatile boolean automaticPresenceEnabled;
+    private BeaconPresenceCoordinator presenceCoordinator;
     private AndroidDeviceTelemetryProbe telemetryProbe;
     private BeaconLocalSettingsStore localSettingsStore;
     private BeaconLocalSettings localSettings;
@@ -80,13 +81,17 @@ public final class BeaconActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        SharedPreferences preferences = getSharedPreferences("beacon", MODE_PRIVATE);
         localSettingsStore = new BeaconLocalSettingsStore(
-            new SharedPreferencesLocalSettingsStorage(getSharedPreferences("beacon", MODE_PRIVATE)));
+            new SharedPreferencesLocalSettingsStorage(preferences));
+        presenceCoordinator = new BeaconPresenceCoordinator(
+            new BeaconEnrollmentStore(new SharedPreferencesEnrollmentStorage(preferences)));
         localSettings = localSettingsStore.load();
         uiState = BeaconLocalSettingsUiState.from(localSettings, systemDarkTheme());
         telemetryProbe = AndroidDeviceTelemetryProbe.system(this);
         applyWindowFlags(uiState);
         setContentView(createContent());
+        hydrateClientConfig(presenceCoordinator.enrolledConfig());
         modelSession = new BeaconViewModelSession(this::createModel);
         benchmarkFingerprintProbe = new AndroidBenchmarkFingerprintProbe(
             BeaconNetworkIdentityHasher.system(this),
@@ -99,13 +104,10 @@ public final class BeaconActivity extends Activity {
     protected void onStart() {
         super.onStart();
         lifecycleForeground = true;
-        if (automaticPresenceEnabled) {
-            runAction("Reconnect", model -> {
-                model.setForegroundDesired(true);
-                if (model.onForeground(readCapabilities())) {
-                    runOnUiThread(this::enableAutomaticBenchmark);
-                }
-            });
+        BeaconPresenceCoordinator.ActivationAttempt attempt = presenceCoordinator.onForeground();
+        if (attempt != null) {
+            hydrateClientConfig(attempt.config());
+            activatePresence("Automatic connect", attempt);
         }
     }
 
@@ -113,8 +115,12 @@ public final class BeaconActivity extends Activity {
     protected void onStop() {
         lifecycleForeground = false;
         disableAutomaticBenchmark();
-        if (automaticPresenceEnabled && modelSession != null) {
-            BeaconClientConfig config = readClientConfig();
+        if (presenceCoordinator != null && modelSession != null) {
+            BeaconClientConfig config = presenceCoordinator.onBackground();
+            if (config == null) {
+                super.onStop();
+                return;
+            }
             executeWithModel(config, model -> {
                 model.setForegroundDesired(false);
                 try {
@@ -502,14 +508,44 @@ public final class BeaconActivity extends Activity {
 
     private void connect() {
         disableAutomaticBenchmark();
-        automaticPresenceEnabled = true;
-        runAction("Connect", current -> {
-            current.setForegroundDesired(true);
-            automaticPresenceEnabled = current.onForeground(readCapabilities());
-            if (automaticPresenceEnabled) {
-                runOnUiThread(this::enableAutomaticBenchmark);
-            } else {
-                current.setForegroundDesired(false);
+        BeaconClientConfig config;
+        try {
+            config = readClientConfig();
+        } catch (RuntimeException failure) {
+            setStatus("Connect failed: " + failure.getMessage());
+            return;
+        }
+        BeaconPresenceCoordinator.ActivationAttempt attempt =
+            presenceCoordinator.beginExplicitActivation(config);
+        activatePresence("Connect", attempt);
+    }
+
+    private void activatePresence(
+        String label,
+        BeaconPresenceCoordinator.ActivationAttempt attempt) {
+        BeaconClientConfig config = attempt.config();
+        status.setText(label + "...");
+        executeWithModel(config, current -> {
+            try {
+                current.setForegroundDesired(true);
+                if (current.onForeground(readCapabilities())) {
+                    if (!presenceCoordinator.activationSucceeded(attempt)) return;
+                    runOnUiThread(() -> {
+                        if (presenceCoordinator.isCurrent(attempt)) enableAutomaticBenchmark();
+                    });
+                } else {
+                    current.setForegroundDesired(false);
+                    if (!presenceCoordinator.activationFailed(attempt)) return;
+                }
+                String error = current.latestError().isEmpty()
+                    ? ""
+                    : "\nError: " + current.latestError();
+                setActivationStatus(attempt, current.status() + "\nGames: " + current.latestGames() +
+                    "\nPlan: " + current.latestPlan() + "\nStream: " + current.latestStream() +
+                    error);
+            } catch (IOException | RuntimeException failure) {
+                if (!presenceCoordinator.activationFailed(attempt)) return;
+                setActivationStatus(attempt, label + " failed: " + failure.getMessage());
             }
         });
     }
@@ -583,6 +619,13 @@ public final class BeaconActivity extends Activity {
             publicKeyFingerprint.getText().toString());
     }
 
+    private void hydrateClientConfig(BeaconClientConfig config) {
+        if (config == null) return;
+        serverUrl.setText(config.serverUrl());
+        clientId.setText(config.clientId());
+        publicKeyFingerprint.setText(config.publicKeyFingerprint());
+    }
+
     private BeaconViewModel currentModelIfPresent() {
         try {
             return modelSession.current(readClientConfig());
@@ -594,7 +637,7 @@ public final class BeaconActivity extends Activity {
     private void executeWithModel(
         BeaconClientConfig config,
         BeaconViewModelSession.ModelAction action) {
-        if (!modelSession.isCurrent(config.clientId(), config.serverUrl())) {
+        if (!modelSession.isCurrent(config)) {
             disableAutomaticBenchmark();
         }
         modelSession.execute(executor, config, action);
@@ -639,6 +682,14 @@ public final class BeaconActivity extends Activity {
 
     private void setStatus(String value) {
         runOnUiThread(() -> status.setText(value));
+    }
+
+    private void setActivationStatus(
+        BeaconPresenceCoordinator.ActivationAttempt attempt,
+        String value) {
+        runOnUiThread(() -> {
+            if (presenceCoordinator.isCurrent(attempt)) status.setText(value);
+        });
     }
 
     private void saveLocalSettings() {
@@ -830,7 +881,7 @@ public final class BeaconActivity extends Activity {
     }
 
     private void leaveAndQuit(BeaconViewModel model) throws IOException {
-        automaticPresenceEnabled = false;
+        presenceCoordinator.explicitQuit();
         disableAutomaticBenchmark();
         model.setForegroundDesired(false);
         try {
