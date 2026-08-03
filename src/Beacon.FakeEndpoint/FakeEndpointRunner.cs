@@ -16,7 +16,6 @@ public sealed record FakeEndpointScript(
     bool VirtualDisplayHdrSupported,
     int MaxFps,
     bool LowLatencyDecode,
-    string? CurrentScreenMode,
     string TelemetryProfile,
     int RttMs,
     double PacketLossPercent,
@@ -44,7 +43,6 @@ public sealed record FakeEndpointScript(
             VirtualDisplayHdrSupported: false,
             MaxFps: 120,
             LowLatencyDecode: true,
-            CurrentScreenMode: "2560x1600@120",
             TelemetryProfile: "excellent-lan",
             RttMs: 8,
             PacketLossPercent: 0,
@@ -205,7 +203,21 @@ public sealed class FakeEndpointRunner(HttpClient httpClient)
             virtualDisplayHdrSupported = script.VirtualDisplayHdrSupported,
             maxFps = script.MaxFps,
             lowLatencyDecode = script.LowLatencyDecode,
-            currentScreenMode = script.CurrentScreenMode
+            currentDisplayMode = new
+            {
+                width = script.Width,
+                height = script.Height,
+                refreshHz = script.RefreshHz
+            },
+            supportedDisplayModes = new[]
+            {
+                new
+                {
+                    width = script.Width,
+                    height = script.Height,
+                    refreshHz = script.RefreshHz
+                }
+            }
         };
 
     private static object CreateTelemetry(FakeEndpointScript script) =>

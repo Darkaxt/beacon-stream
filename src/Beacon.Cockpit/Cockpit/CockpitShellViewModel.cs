@@ -581,9 +581,11 @@ public sealed class CockpitShellViewModel : ObservableObject
         }
 
         ProfileName = selected.Profile.Name;
-        ProfilePreferredWidth = selected.Profile.Display.PreferredWidth;
-        ProfilePreferredHeight = selected.Profile.Display.PreferredHeight;
-        ProfilePreferredRefreshHz = selected.Profile.Display.PreferredRefreshHz;
+        CockpitDisplayMode? displayMode =
+            selected.Profile.Display.PreferredMode ?? selected.Profile.Display.SelectedMode;
+        ProfilePreferredWidth = displayMode?.Width ?? 0;
+        ProfilePreferredHeight = displayMode?.Height ?? 0;
+        ProfilePreferredRefreshHz = displayMode?.RefreshHz ?? 0;
         ProfileHdrPreference = selected.Profile.Display.HdrPreference;
         ProfileMode = selected.Profile.Display.Mode;
         ProfileRestorePhysicalDisplayOnEnd = selected.Profile.Display.RestorePhysicalDisplayOnEnd;

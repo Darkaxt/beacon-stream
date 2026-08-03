@@ -1,9 +1,10 @@
+using Beacon.Core.Clients;
+
 namespace Beacon.Core.Displays;
 
 public sealed record DisplayPreferences(
-    int PreferredWidth,
-    int PreferredHeight,
-    int PreferredRefreshHz,
+    ClientDisplayMode? PreferredMode,
+    ClientDisplayMode? SelectedMode,
     HdrPreference HdrPreference,
     string Mode,
     bool RestorePhysicalDisplayOnEnd,

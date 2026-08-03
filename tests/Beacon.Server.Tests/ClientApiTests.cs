@@ -23,6 +23,61 @@ namespace Beacon.Server.Tests;
 public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixture<BeaconServerTestFactory>
 {
     [Fact]
+    public async Task StructuredCapabilitiesPersistFullHdPolicyUsedByBeaconPreparation()
+    {
+        string clientId = $"full-hd-handheld-{Guid.NewGuid():N}";
+        var display = new FakeDisplayBackend();
+        WebApplicationFactory<Program> displayFactory = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IDisplayBackend>();
+                services.AddSingleton<IDisplayBackend>(display);
+            }));
+        HttpClient client = displayFactory.CreateClient();
+        HttpResponseMessage hello = await client.PostAsJsonAsync("/clients/hello", new
+        {
+            clientId,
+            name = "Full HD Handheld"
+        });
+        Assert.Equal(HttpStatusCode.OK, hello.StatusCode);
+
+        HttpResponseMessage capabilityResponse = await client.PostAsJsonAsync($"/clients/{clientId}/capabilities", new
+        {
+            av1 = false,
+            hevc = true,
+            h264 = true,
+            hdr10 = false,
+            virtualDisplayHdrSupported = false,
+            maxFps = 120,
+            lowLatencyDecode = true,
+            currentDisplayMode = new { width = 1920, height = 1080, refreshHz = 60 },
+            supportedDisplayModes = new[]
+            {
+                new { width = 1920, height = 1080, refreshHz = 60 },
+                new { width = 1280, height = 720, refreshHz = 120 }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.OK, capabilityResponse.StatusCode);
+        HttpResponseMessage profileResponse = await client.GetAsync($"/clients/{clientId}/profile");
+        using JsonDocument profileDocument = await JsonDocument.ParseAsync(
+            await profileResponse.Content.ReadAsStreamAsync());
+        JsonElement selected = profileDocument.RootElement
+            .GetProperty("display")
+            .GetProperty("selectedMode");
+        Assert.Equal(1920, selected.GetProperty("width").GetInt32());
+        Assert.Equal(1080, selected.GetProperty("height").GetInt32());
+        Assert.Equal(60, selected.GetProperty("refreshHz").GetInt32());
+
+        HttpResponseMessage beacon = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/beacon",
+            new { active = true });
+
+        Assert.Equal(HttpStatusCode.OK, beacon.StatusCode);
+        Assert.Equal($"client-{clientId}:1920x1080@60:hdr=Prefer", Assert.Single(display.PrepareCalls));
+    }
+
+    [Fact]
     public async Task AdminSnapshotRendersWorkerEvidenceAsSanitizedMetadata()
     {
         var journal = new InMemoryDiagnosticEventJournal();
@@ -107,8 +162,15 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         JsonElement root = document.RootElement;
 
         Assert.Equal("z-fold-7", root.GetProperty("clientId").GetString());
-        Assert.Equal(2560, root.GetProperty("profile").GetProperty("display").GetProperty("preferredWidth").GetInt32());
-        Assert.Equal(1600, root.GetProperty("profile").GetProperty("display").GetProperty("preferredHeight").GetInt32());
+        JsonElement display = root.GetProperty("profile").GetProperty("display");
+        JsonElement preferredMode = display.GetProperty("preferredMode");
+        JsonElement selectedMode = display.GetProperty("selectedMode");
+        Assert.Equal(2560, preferredMode.GetProperty("width").GetInt32());
+        Assert.Equal(1600, preferredMode.GetProperty("height").GetInt32());
+        Assert.Equal(120, preferredMode.GetProperty("refreshHz").GetInt32());
+        Assert.Equal(2560, selectedMode.GetProperty("width").GetInt32());
+        Assert.Equal(1600, selectedMode.GetProperty("height").GetInt32());
+        Assert.Equal(120, selectedMode.GetProperty("refreshHz").GetInt32());
         Assert.Contains(root.GetProperty("editableFields").EnumerateArray(), field => field.GetString() == "preferredWidth");
         Assert.DoesNotContain(root.GetProperty("editableFields").EnumerateArray(), field => field.GetString() == "mode");
     }
@@ -185,8 +247,9 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
 
         Assert.Equal(clientId, root.GetProperty("clientId").GetString());
         Assert.Equal("Windows Handheld", root.GetProperty("profile").GetProperty("name").GetString());
-        Assert.Equal(2560, root.GetProperty("profile").GetProperty("display").GetProperty("preferredWidth").GetInt32());
-        Assert.Equal(1600, root.GetProperty("profile").GetProperty("display").GetProperty("preferredHeight").GetInt32());
+        JsonElement display = root.GetProperty("profile").GetProperty("display");
+        Assert.Equal(JsonValueKind.Null, display.GetProperty("preferredMode").ValueKind);
+        Assert.Equal(JsonValueKind.Null, display.GetProperty("selectedMode").ValueKind);
     }
 
     [Fact]
@@ -238,6 +301,8 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             });
             HttpResponseMessage patch = await firstClient.PatchAsJsonAsync($"/clients/{clientId}/profile", new
             {
+                preferredWidth = 1920,
+                preferredHeight = 1080,
                 preferredRefreshHz = 90,
                 codecPreference = "hevc",
                 bitrateCapMbps = 45
@@ -260,9 +325,10 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
 
             Assert.Equal(clientId, root.GetProperty("clientId").GetString());
             Assert.Equal("Gaming Tablet", root.GetProperty("name").GetString());
-            Assert.Equal(2560, root.GetProperty("display").GetProperty("preferredWidth").GetInt32());
-            Assert.Equal(1600, root.GetProperty("display").GetProperty("preferredHeight").GetInt32());
-            Assert.Equal(90, root.GetProperty("display").GetProperty("preferredRefreshHz").GetInt32());
+            JsonElement preferredMode = root.GetProperty("display").GetProperty("preferredMode");
+            Assert.Equal(1920, preferredMode.GetProperty("width").GetInt32());
+            Assert.Equal(1080, preferredMode.GetProperty("height").GetInt32());
+            Assert.Equal(90, preferredMode.GetProperty("refreshHz").GetInt32());
             Assert.Equal("hevc", root.GetProperty("stream").GetProperty("codecPreference").GetString());
             Assert.Equal(45, root.GetProperty("stream").GetProperty("bitrateCapMbps").GetInt32());
         }
@@ -375,7 +441,12 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             hevc = true,
             h264 = true,
             hdr10 = false,
-            virtualDisplayHdrSupported = false
+            virtualDisplayHdrSupported = false,
+            currentDisplayMode = new { width = 2560, height = 1600, refreshHz = 120 },
+            supportedDisplayModes = new[]
+            {
+                new { width = 2560, height = 1600, refreshHz = 120 }
+            }
         });
         await CompleteBenchmarkAsync(client, clientId, codec: "hevc", fps: 60, throughputMbps: 36, rttMs: 95);
         HttpResponseMessage plan = await client.PostAsJsonAsync($"/clients/{clientId}/plan", new
@@ -423,7 +494,12 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             h264 = true,
             hdr10 = false,
             virtualDisplayHdrSupported = false,
-            maxFps = 120
+            maxFps = 120,
+            currentDisplayMode = new { width = 2560, height = 1600, refreshHz = 120 },
+            supportedDisplayModes = new[]
+            {
+                new { width = 2560, height = 1600, refreshHz = 120 }
+            }
         });
         await CompleteBenchmarkAsync(client, clientId, codec: "av1", fps: 120, throughputMbps: 100, rttMs: 8);
 
@@ -494,7 +570,12 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             hevc = true,
             h264 = true,
             hdr10 = false,
-            virtualDisplayHdrSupported = false
+            virtualDisplayHdrSupported = false,
+            currentDisplayMode = new { width = 2560, height = 1600, refreshHz = 120 },
+            supportedDisplayModes = new[]
+            {
+                new { width = 2560, height = 1600, refreshHz = 120 }
+            }
         });
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
@@ -574,7 +655,11 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             hdr10 = false,
             virtualDisplayHdrSupported = false,
             maxFps = 60,
-            currentScreenMode = "1280x720@60"
+            currentDisplayMode = new { width = 1280, height = 720, refreshHz = 60 },
+            supportedDisplayModes = new[]
+            {
+                new { width = 1280, height = 720, refreshHz = 60 }
+            }
         });
         await CompleteBenchmarkAsync(
             client,
@@ -598,8 +683,8 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         Assert.Equal(720, selectedVideo.GetProperty("height").GetInt32());
         SessionPlan savedPlan = Assert.IsType<SessionPlan>(
             streamingFactory.Services.GetRequiredService<InMemorySessionStore>().Get("z-fold-7"));
-        Assert.Equal(2560, savedPlan.Display.Width);
-        Assert.Equal(1600, savedPlan.Display.Height);
+        Assert.Equal(1280, savedPlan.Display.Width);
+        Assert.Equal(720, savedPlan.Display.Height);
         Assert.Equal(1280, savedPlan.Stream.Width);
         Assert.Equal(720, savedPlan.Stream.Height);
     }

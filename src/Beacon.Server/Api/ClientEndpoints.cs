@@ -128,8 +128,25 @@ public static class ClientEndpoints
 
         clients.MapPost("/{clientId}/capabilities", (string clientId, EndpointCapabilities capabilities, InMemoryClientStore store) =>
         {
-            store.SaveCapabilities(clientId, capabilities);
-            return Results.Ok(new { clientId, accepted = true });
+            if (store.GetProfile(clientId) is null)
+            {
+                return Results.NotFound(new { error = $"Client '{clientId}' is not registered." });
+            }
+
+            try
+            {
+                ClientProfile updated = store.SaveCapabilities(clientId, capabilities);
+                return Results.Ok(new
+                {
+                    clientId,
+                    accepted = true,
+                    selectedDisplayMode = updated.Display.SelectedMode
+                });
+            }
+            catch (ArgumentException error)
+            {
+                return Results.BadRequest(new { error = error.Message });
+            }
         });
 
         clients.MapPost("/{clientId}/telemetry", (string clientId, TelemetrySnapshot telemetry, InMemoryClientStore store) =>

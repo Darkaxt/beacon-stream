@@ -355,7 +355,13 @@ public sealed class CockpitShellViewModelTests
             "z-fold-7",
             new CockpitClientProfile(
                 "Z Fold 7",
-                new CockpitDisplayProfile(2560, 1600, 120, "Prefer", "virtual-primary", true, true),
+                new CockpitDisplayProfile(
+                    new CockpitDisplayMode(2560, 1600, 120),
+                    new CockpitDisplayMode(2560, 1600, 120),
+                    "Prefer",
+                    "virtual-primary",
+                    true,
+                    true),
                 new CockpitStreamProfile("auto", "auto", null),
                 new CockpitAudioProfile("stereo"),
                 new CockpitSessionProfile(false, true)));

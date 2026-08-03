@@ -1,10 +1,15 @@
 package dev.beacon.android;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import android.content.Context;
 
 public final class BeaconApiClient implements BeaconViewModel.BeaconService {
@@ -236,6 +241,43 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         }
     }
 
+    public static final class ClientDisplayMode {
+        public final int width;
+        public final int height;
+        public final int refreshHz;
+
+        public ClientDisplayMode(int width, int height, int refreshHz) {
+            this.width = width;
+            this.height = height;
+            this.refreshHz = refreshHz;
+        }
+
+        JsonObject toJson() {
+            JsonObject json = new JsonObject();
+            json.addProperty("width", width);
+            json.addProperty("height", height);
+            json.addProperty("refreshHz", refreshHz);
+            return json;
+        }
+
+        @Override
+        public boolean equals(Object value) {
+            if (this == value) {
+                return true;
+            }
+            if (!(value instanceof ClientDisplayMode)) {
+                return false;
+            }
+            ClientDisplayMode mode = (ClientDisplayMode)value;
+            return width == mode.width && height == mode.height && refreshHz == mode.refreshHz;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(width, height, refreshHz);
+        }
+    }
+
     public static final class ClientCapabilities {
         public boolean av1;
         public boolean hevc;
@@ -244,10 +286,20 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         public boolean virtualDisplayHdrSupported;
         public int maxFps;
         public boolean lowLatencyDecode;
-        public String currentScreenMode;
+        public ClientDisplayMode currentDisplayMode;
+        public List<ClientDisplayMode> supportedDisplayModes;
 
         public ClientCapabilities(boolean av1, boolean hevc, boolean h264, boolean hdr10, boolean virtualDisplayHdrSupported) {
-            this(av1, hevc, h264, hdr10, virtualDisplayHdrSupported, 120, true, null);
+            this(
+                av1,
+                hevc,
+                h264,
+                hdr10,
+                virtualDisplayHdrSupported,
+                120,
+                true,
+                null,
+                Collections.emptyList());
         }
 
         public ClientCapabilities(
@@ -258,7 +310,8 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             boolean virtualDisplayHdrSupported,
             int maxFps,
             boolean lowLatencyDecode,
-            String currentScreenMode) {
+            ClientDisplayMode currentDisplayMode,
+            List<ClientDisplayMode> supportedDisplayModes) {
             this.av1 = av1;
             this.hevc = hevc;
             this.h264 = h264;
@@ -266,7 +319,9 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             this.virtualDisplayHdrSupported = virtualDisplayHdrSupported;
             this.maxFps = maxFps;
             this.lowLatencyDecode = lowLatencyDecode;
-            this.currentScreenMode = currentScreenMode;
+            this.currentDisplayMode = currentDisplayMode;
+            this.supportedDisplayModes = Collections.unmodifiableList(
+                new ArrayList<>(supportedDisplayModes == null ? Collections.emptyList() : supportedDisplayModes));
         }
 
         JsonObject toJson() {
@@ -278,7 +333,14 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             json.addProperty("virtualDisplayHdrSupported", virtualDisplayHdrSupported);
             json.addProperty("maxFps", maxFps);
             json.addProperty("lowLatencyDecode", lowLatencyDecode);
-            add(json, "currentScreenMode", currentScreenMode);
+            if (currentDisplayMode != null) {
+                json.add("currentDisplayMode", currentDisplayMode.toJson());
+            }
+            JsonArray modes = new JsonArray();
+            for (ClientDisplayMode mode : supportedDisplayModes) {
+                modes.add(mode.toJson());
+            }
+            json.add("supportedDisplayModes", modes);
             return json;
         }
     }

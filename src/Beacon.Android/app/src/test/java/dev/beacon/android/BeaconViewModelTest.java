@@ -571,7 +571,9 @@ public final class BeaconViewModelTest {
     }
 
     private static BeaconApiClient.ClientCapabilities capabilities() {
-        return new BeaconApiClient.ClientCapabilities(true, true, true, false, false, 120, true, "2560x1600@120");
+        BeaconApiClient.ClientDisplayMode mode = new BeaconApiClient.ClientDisplayMode(2560, 1600, 120);
+        return new BeaconApiClient.ClientCapabilities(
+            true, true, true, false, false, 120, true, mode, Arrays.asList(mode));
     }
 
     private static BeaconApiClient.ClientTelemetry telemetry() {

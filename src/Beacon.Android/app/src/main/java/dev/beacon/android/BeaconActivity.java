@@ -761,11 +761,26 @@ public final class BeaconActivity extends Activity {
     }
 
     private BeaconApiClient.ClientCapabilities readCapabilities() {
+        Display display = getWindowManager().getDefaultDisplay();
+        if (display == null) {
+            throw new IllegalStateException("Android display facts are unavailable.");
+        }
+        Display.Mode currentMode = display.getMode();
+        List<BeaconApiClient.ClientDisplayMode> supportedModes = new ArrayList<>();
+        for (Display.Mode mode : display.getSupportedModes()) {
+            supportedModes.add(toClientDisplayMode(mode));
+        }
         return capabilityProbe.read(
-            readRequiredInteger(width),
-            readRequiredInteger(height),
-            readRequiredInteger(refreshHz),
+            toClientDisplayMode(currentMode),
+            supportedModes,
             screenHdr10Supported());
+    }
+
+    private static BeaconApiClient.ClientDisplayMode toClientDisplayMode(Display.Mode mode) {
+        return new BeaconApiClient.ClientDisplayMode(
+            mode.getPhysicalWidth(),
+            mode.getPhysicalHeight(),
+            Math.max(1, Math.round(mode.getRefreshRate())));
     }
 
     private BeaconApiClient.ClientTelemetry readTelemetry() {

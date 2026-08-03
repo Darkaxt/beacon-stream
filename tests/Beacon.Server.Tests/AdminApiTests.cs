@@ -558,9 +558,10 @@ public sealed class AdminApiTests(BeaconServerTestFactory factory) : IClassFixtu
         using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
         JsonElement root = document.RootElement;
 
-        Assert.Equal(2560, root.GetProperty("display").GetProperty("preferredWidth").GetInt32());
-        Assert.Equal(1600, root.GetProperty("display").GetProperty("preferredHeight").GetInt32());
-        Assert.Equal(90, root.GetProperty("display").GetProperty("preferredRefreshHz").GetInt32());
+        JsonElement preferredMode = root.GetProperty("display").GetProperty("preferredMode");
+        Assert.Equal(2560, preferredMode.GetProperty("width").GetInt32());
+        Assert.Equal(1600, preferredMode.GetProperty("height").GetInt32());
+        Assert.Equal(90, preferredMode.GetProperty("refreshHz").GetInt32());
         Assert.Equal("physical-blackout", root.GetProperty("display").GetProperty("mode").GetString());
         Assert.False(root.GetProperty("display").GetProperty("restorePhysicalDisplayOnEnd").GetBoolean());
         Assert.False(root.GetProperty("display").GetProperty("forbidMirrorMode").GetBoolean());

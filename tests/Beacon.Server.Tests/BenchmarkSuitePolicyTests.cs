@@ -44,7 +44,8 @@ public sealed class BenchmarkSuitePolicyTests
             VirtualDisplayHdrSupported: false,
             MaxFps: 60,
             LowLatencyDecode: true,
-            CurrentScreenMode: "1280x720@60");
+            CurrentDisplayMode: new ClientDisplayMode(1280, 720, 60),
+            SupportedDisplayModes: [new ClientDisplayMode(1280, 720, 60)]);
 
         BenchmarkHardwarePlan plan = BenchmarkSuitePolicy.CreateHardware(
             BenchmarkTrigger.Manual,

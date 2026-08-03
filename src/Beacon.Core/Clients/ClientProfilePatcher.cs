@@ -6,17 +6,15 @@ public static class ClientProfilePatcher
 {
     public static ClientProfile ApplyApkPatch(ClientProfile profile, ClientProfilePatch patch)
     {
-        int width = patch.PreferredWidth ?? profile.Display.PreferredWidth;
-        int height = patch.PreferredHeight ?? profile.Display.PreferredHeight;
-        int refresh = patch.PreferredRefreshHz ?? profile.Display.PreferredRefreshHz;
-
-        ValidateAspectRatioIntent(profile, width, height);
+        ClientDisplayMode? preferredMode = ApplyPreferredMode(
+            profile,
+            patch.PreferredWidth,
+            patch.PreferredHeight,
+            patch.PreferredRefreshHz);
 
         var display = profile.Display with
         {
-            PreferredWidth = width,
-            PreferredHeight = height,
-            PreferredRefreshHz = refresh,
+            PreferredMode = preferredMode,
             HdrPreference = patch.HdrPreference ?? profile.Display.HdrPreference
         };
 
@@ -42,17 +40,15 @@ public static class ClientProfilePatcher
 
     public static ClientProfile ApplyAdminPatch(ClientProfile profile, ClientProfileAdminPatch patch)
     {
-        int width = patch.PreferredWidth ?? profile.Display.PreferredWidth;
-        int height = patch.PreferredHeight ?? profile.Display.PreferredHeight;
-        int refresh = patch.PreferredRefreshHz ?? profile.Display.PreferredRefreshHz;
-
-        ValidateAspectRatioIntent(profile, width, height);
+        ClientDisplayMode? preferredMode = ApplyPreferredMode(
+            profile,
+            patch.PreferredWidth,
+            patch.PreferredHeight,
+            patch.PreferredRefreshHz);
 
         var display = profile.Display with
         {
-            PreferredWidth = width,
-            PreferredHeight = height,
-            PreferredRefreshHz = refresh,
+            PreferredMode = preferredMode,
             HdrPreference = patch.HdrPreference ?? profile.Display.HdrPreference,
             Mode = string.IsNullOrWhiteSpace(patch.Mode) ? profile.Display.Mode : patch.Mode.Trim(),
             RestorePhysicalDisplayOnEnd = patch.RestorePhysicalDisplayOnEnd ?? profile.Display.RestorePhysicalDisplayOnEnd,
@@ -80,11 +76,38 @@ public static class ClientProfilePatcher
         return profile with { Display = display, Stream = stream, Audio = audio, Session = session };
     }
 
-    private static void ValidateAspectRatioIntent(ClientProfile profile, int width, int height)
+    private static ClientDisplayMode? ApplyPreferredMode(
+        ClientProfile profile,
+        int? width,
+        int? height,
+        int? refreshHz)
     {
-        if (profile.ClientId.Value == "z-fold-7" && width == 2560 && height == 1440)
+        if (width is null && height is null && refreshHz is null)
+        {
+            return profile.Display.PreferredMode;
+        }
+
+        ClientDisplayMode? baseline = profile.Display.PreferredMode ?? profile.Display.SelectedMode;
+        if ((width ?? baseline?.Width) is not { } resolvedWidth ||
+            (height ?? baseline?.Height) is not { } resolvedHeight ||
+            (refreshHz ?? baseline?.RefreshHz) is not { } resolvedRefresh)
+        {
+            throw new InvalidClientProfilePatchException(
+                "Width, height, and refresh rate are all required before a client display preference can be selected.");
+        }
+
+        var mode = new ClientDisplayMode(resolvedWidth, resolvedHeight, resolvedRefresh);
+        if (!mode.IsValid)
+        {
+            throw new InvalidClientProfilePatchException(
+                "Client display width, height, and refresh rate must be positive.");
+        }
+
+        if (profile.ClientId.Value == "z-fold-7" && mode.Width == 2560 && mode.Height == 1440)
         {
             throw new InvalidClientProfilePatchException("Z Fold 7 profile must not collapse 2560x1600 intent to 2560x1440.");
         }
+
+        return mode;
     }
 }

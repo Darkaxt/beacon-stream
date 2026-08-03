@@ -18,7 +18,13 @@ public final class AndroidDeviceCapabilityProbeTest {
             new AndroidCodecDescriptor(false, new String[] { "video/hevc", "audio/mp4a-latm" }, true, true),
             new AndroidCodecDescriptor(false, new String[] { "video/av01" }, false, false))));
 
-        BeaconApiClient.ClientCapabilities capabilities = probe.read(2560, 1600, 120, true);
+        BeaconApiClient.ClientDisplayMode current = new BeaconApiClient.ClientDisplayMode(2560, 1600, 120);
+        BeaconApiClient.ClientCapabilities capabilities = probe.read(
+            current,
+            Arrays.asList(
+                new BeaconApiClient.ClientDisplayMode(1920, 1200, 60),
+                current),
+            true);
 
         assertTrue(capabilities.h264);
         assertTrue(capabilities.hevc);
@@ -27,7 +33,8 @@ public final class AndroidDeviceCapabilityProbeTest {
         assertTrue(capabilities.hdr10);
         assertFalse(capabilities.virtualDisplayHdrSupported);
         assertEquals(120, capabilities.maxFps);
-        assertEquals("2560x1600@120", capabilities.currentScreenMode);
+        assertEquals(current, capabilities.currentDisplayMode);
+        assertEquals(2, capabilities.supportedDisplayModes.size());
     }
 
     @Test
@@ -36,14 +43,17 @@ public final class AndroidDeviceCapabilityProbeTest {
             new AndroidCodecDescriptor(true, new String[] { "video/avc" }, true, true),
             new AndroidCodecDescriptor(false, new String[] { "audio/opus" }, true, true))));
 
-        BeaconApiClient.ClientCapabilities capabilities = probe.read(1920, 1200, 60, true);
+        BeaconApiClient.ClientCapabilities capabilities = probe.read(
+            new BeaconApiClient.ClientDisplayMode(1920, 1200, 60),
+            Collections.singletonList(new BeaconApiClient.ClientDisplayMode(1920, 1200, 60)),
+            true);
 
         assertFalse(capabilities.h264);
         assertFalse(capabilities.hevc);
         assertFalse(capabilities.av1);
         assertFalse(capabilities.lowLatencyDecode);
         assertFalse(capabilities.hdr10);
-        assertEquals("1920x1200@60", capabilities.currentScreenMode);
+        assertEquals(new BeaconApiClient.ClientDisplayMode(1920, 1200, 60), capabilities.currentDisplayMode);
     }
 
     @Test
@@ -51,8 +61,9 @@ public final class AndroidDeviceCapabilityProbeTest {
         AndroidDeviceCapabilityProbe probe = new AndroidDeviceCapabilityProbe(new FakeCodecCatalog(Collections.singletonList(
             new AndroidCodecDescriptor(false, new String[] { "video/hevc" }, false, true))));
 
-        BeaconApiClient.ClientCapabilities noScreenHdr = probe.read(2560, 1600, 120, false);
-        BeaconApiClient.ClientCapabilities screenHdr = probe.read(2560, 1600, 120, true);
+        BeaconApiClient.ClientDisplayMode mode = new BeaconApiClient.ClientDisplayMode(2560, 1600, 120);
+        BeaconApiClient.ClientCapabilities noScreenHdr = probe.read(mode, Collections.singletonList(mode), false);
+        BeaconApiClient.ClientCapabilities screenHdr = probe.read(mode, Collections.singletonList(mode), true);
 
         assertFalse(noScreenHdr.hdr10);
         assertTrue(screenHdr.hdr10);
@@ -63,10 +74,13 @@ public final class AndroidDeviceCapabilityProbeTest {
         AndroidDeviceCapabilityProbe probe = new AndroidDeviceCapabilityProbe(new FakeCodecCatalog(Collections.singletonList(
             new AndroidCodecDescriptor(false, new String[] { "video/avc" }, false, false))));
 
-        BeaconApiClient.ClientCapabilities capabilities = probe.read(1280, 800, 0, false);
+        BeaconApiClient.ClientCapabilities capabilities = probe.read(
+            new BeaconApiClient.ClientDisplayMode(1280, 800, 0),
+            Collections.singletonList(new BeaconApiClient.ClientDisplayMode(1280, 800, 0)),
+            false);
 
         assertEquals(1, capabilities.maxFps);
-        assertEquals("1280x800@1", capabilities.currentScreenMode);
+        assertEquals(new BeaconApiClient.ClientDisplayMode(1280, 800, 1), capabilities.currentDisplayMode);
     }
 
     private static final class FakeCodecCatalog implements AndroidCodecCatalog {

@@ -31,10 +31,11 @@ public sealed record CockpitClientProfile(
     CockpitAudioProfile Audio,
     CockpitSessionProfile Session);
 
+public sealed record CockpitDisplayMode(int Width, int Height, int RefreshHz);
+
 public sealed record CockpitDisplayProfile(
-    int PreferredWidth,
-    int PreferredHeight,
-    int PreferredRefreshHz,
+    CockpitDisplayMode? PreferredMode,
+    CockpitDisplayMode? SelectedMode,
     string HdrPreference,
     string Mode,
     bool RestorePhysicalDisplayOnEnd,

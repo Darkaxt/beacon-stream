@@ -27,6 +27,15 @@ public static class SessionPlanner
             throw new ArgumentException("Benchmark evidence revision is required.", nameof(benchmark));
         }
 
+        ClientDisplayMode? selectedDisplayMode = profile.Display.SelectedMode;
+        if (selectedDisplayMode is null || !selectedDisplayMode.IsValid)
+        {
+            return new SessionPlanResult(
+                false,
+                null,
+                $"Client '{profile.ClientId.Value}' has no valid server-selected display mode.");
+        }
+
         SelectedBenchmarkResult measured = benchmark.SelectedResult;
         try
         {
@@ -56,7 +65,7 @@ public static class SessionPlanner
         }
 
         int fps = Math.Min(
-            profile.Display.PreferredRefreshHz,
+            selectedDisplayMode.RefreshHz,
             Math.Min(Math.Max(1, capabilities.MaxFps), Math.Max(1, measured.MaxSustainableFps)));
         int bitrate = measured.InitialBitrateMbps;
         bool bitrateCapApplied = false;
@@ -101,11 +110,12 @@ public static class SessionPlanner
             TenBitPresentationVerified: measured.TenBitPresentationVerified,
             HdrPresentationVerified: measured.HdrPresentationVerified);
 
-        return CreatePlan(profile, capabilities, game, selection);
+        return CreatePlan(profile, selectedDisplayMode, capabilities, game, selection);
     }
 
     private static SessionPlanResult CreatePlan(
         ClientProfile profile,
+        ClientDisplayMode selectedDisplayMode,
         EndpointCapabilities capabilities,
         GameDescriptor game,
         StreamPlanningSelection selection)
@@ -130,14 +140,14 @@ public static class SessionPlanner
         string hdrReason = CreateHdrReason(profile.Display.HdrPreference, hdrEnabled, hdrBlocker);
         string displayReason =
             $"{CreateDisplayModeReason(profile.Display.Mode)} " +
-            $"Display geometry {profile.Display.PreferredWidth}x{profile.Display.PreferredHeight} " +
-            $"comes from registered client policy. {hdrReason}";
+            $"Display mode {selectedDisplayMode} is the persisted server selection from reported client modes. " +
+            $"{hdrReason}";
 
         var display = new PlannedDisplay(
             DisplayId: DisplayLease.CreateDisplayId(profile.ClientId),
-            Width: profile.Display.PreferredWidth,
-            Height: profile.Display.PreferredHeight,
-            RefreshHz: profile.Display.PreferredRefreshHz,
+            Width: selectedDisplayMode.Width,
+            Height: selectedDisplayMode.Height,
+            RefreshHz: selectedDisplayMode.RefreshHz,
             Mode: profile.Display.Mode,
             HdrPreference: profile.Display.HdrPreference,
             HdrEnabled: hdrEnabled,

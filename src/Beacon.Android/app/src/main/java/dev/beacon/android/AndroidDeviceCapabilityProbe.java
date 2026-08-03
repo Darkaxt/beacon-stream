@@ -1,5 +1,8 @@
 package dev.beacon.android;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 
 public final class AndroidDeviceCapabilityProbe {
@@ -14,11 +17,25 @@ public final class AndroidDeviceCapabilityProbe {
     }
 
     public BeaconApiClient.ClientCapabilities read(
-        int width,
-        int height,
-        int refreshHz,
+        BeaconApiClient.ClientDisplayMode currentDisplayMode,
+        List<BeaconApiClient.ClientDisplayMode> supportedDisplayModes,
         boolean screenHdr10Supported) {
-        int safeRefreshHz = Math.max(1, refreshHz);
+        if (currentDisplayMode == null) {
+            throw new IllegalArgumentException("Current display mode is required.");
+        }
+        BeaconApiClient.ClientDisplayMode current = sanitize(currentDisplayMode);
+        List<BeaconApiClient.ClientDisplayMode> supported = new ArrayList<>();
+        for (BeaconApiClient.ClientDisplayMode mode :
+            supportedDisplayModes == null ? Collections.<BeaconApiClient.ClientDisplayMode>emptyList() : supportedDisplayModes) {
+            BeaconApiClient.ClientDisplayMode sanitized = sanitize(mode);
+            if (!supported.contains(sanitized)) {
+                supported.add(sanitized);
+            }
+        }
+        if (!supported.contains(current)) {
+            supported.add(current);
+        }
+        int maxFps = supported.stream().mapToInt(mode -> mode.refreshHz).max().orElse(current.refreshHz);
         boolean av1 = false;
         boolean hevc = false;
         boolean h264 = false;
@@ -57,8 +74,19 @@ public final class AndroidDeviceCapabilityProbe {
             h264,
             screenHdr10Supported && decoderHdr10,
             false,
-            safeRefreshHz,
+            maxFps,
             lowLatency,
-            width + "x" + height + "@" + safeRefreshHz);
+            current,
+            supported);
+    }
+
+    private static BeaconApiClient.ClientDisplayMode sanitize(BeaconApiClient.ClientDisplayMode mode) {
+        if (mode == null || mode.width <= 0 || mode.height <= 0) {
+            throw new IllegalArgumentException("Display mode width and height must be positive.");
+        }
+        return new BeaconApiClient.ClientDisplayMode(
+            mode.width,
+            mode.height,
+            Math.max(1, mode.refreshHz));
     }
 }

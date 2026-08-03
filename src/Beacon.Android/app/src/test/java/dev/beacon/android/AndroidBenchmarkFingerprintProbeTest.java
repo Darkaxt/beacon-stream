@@ -63,8 +63,9 @@ public final class AndroidBenchmarkFingerprintProbeTest {
     }
 
     private static BeaconApiClient.ClientCapabilities capabilities() {
+        BeaconApiClient.ClientDisplayMode mode = new BeaconApiClient.ClientDisplayMode(1280, 720, 60);
         return new BeaconApiClient.ClientCapabilities(
-            false, false, true, false, false, 60, true, "1280x720@60");
+            false, false, true, false, false, 60, true, mode, Arrays.asList(mode));
     }
 
     private static final class MemorySaltStorage

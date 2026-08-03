@@ -8,4 +8,5 @@ public sealed record EndpointCapabilities(
     bool VirtualDisplayHdrSupported,
     int MaxFps = 120,
     bool LowLatencyDecode = true,
-    string? CurrentScreenMode = null);
+    ClientDisplayMode? CurrentDisplayMode = null,
+    IReadOnlyList<ClientDisplayMode>? SupportedDisplayModes = null);

@@ -77,18 +77,28 @@ remains pending. An independent post-run check found the physical `DISPLAY5` pri
 heartbeat. This proves the fake-display emulator transaction, not R2 completion; final physical Z Fold
 7 confirmation remains required.
 
+Client display planning now consumes structured current and supported mode facts from Android,
+Client Lab, and FakeEndpoint. The server persists one complete selected mode per client, prefers an
+exact configured target, preserves aspect ratio during fallback, and no longer assigns the universal
+`2560x1600` default to newly registered clients. Version 1 scalar profile files migrate atomically to
+the structured version 2 model so existing per-client setup is retained.
+
 ## Current Blocker
 
-No R2 implementation blocker has been established. The fake-display emulator transaction is complete,
-but it does not substitute for final physical Z Fold 7 confirmation through the guarded production
-display path.
+R2 is not blocked by an external dependency, but implementation is not complete. The APK still exposes
+server-owned stream/profile controls and client presence is not yet fully automatic. The production
+acceptance path must then be made physical-client capable before the final sustained Z Fold 7 session.
+The fake-display emulator transaction does not substitute for that confirmation.
 
 ## Next Falsifiable Proof
 
-The next proof must run the guarded production transaction from the physical Z Fold 7 with the
-installed four-heartbeat quorum, retain ordered PCM writes on initial connect and reconnect, exit the
-outer runner with zero, and independently verify one physical primary display, zero leases, and no
-heartbeat. Physical Z Fold 7 audible confirmation remains the final human audio check.
+First, the thin APK must complete hello, capability report, automatic presence, benchmark, catalog
+selection, launch, reconnect, quit, and recovery without editing server-owned stream or display policy.
+That flow must pass in the emulator without topology mutation. The following proof must run the guarded
+production transaction from the physical Z Fold 7 with the installed four-heartbeat quorum, retain
+ordered PCM writes on initial connect and reconnect, exit the outer runner with zero, and independently
+verify one physical primary display, zero leases, and no heartbeat. Physical Z Fold 7 audible
+confirmation remains the final human audio check.
 
 ## Prior Evidence
 

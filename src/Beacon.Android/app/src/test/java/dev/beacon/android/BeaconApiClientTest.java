@@ -103,12 +103,24 @@ public final class BeaconApiClientTest {
         FakeTransport transport = new FakeTransport();
         BeaconApiClient client = new BeaconApiClient(new BeaconClientConfig("http://server", "z-fold-7"), transport);
 
-        client.reportCapabilities(new BeaconApiClient.ClientCapabilities(true, true, true, false, false, 120, true, "2560x1600@120"));
+        BeaconApiClient.ClientDisplayMode current = new BeaconApiClient.ClientDisplayMode(2560, 1600, 120);
+        client.reportCapabilities(new BeaconApiClient.ClientCapabilities(
+            true,
+            true,
+            true,
+            false,
+            false,
+            120,
+            true,
+            current,
+            Arrays.asList(current, new BeaconApiClient.ClientDisplayMode(1920, 1200, 60))));
 
         assertEquals("/clients/z-fold-7/capabilities", transport.path);
         assertTrue(transport.body.contains("\"maxFps\":120"));
         assertTrue(transport.body.contains("\"lowLatencyDecode\":true"));
-        assertTrue(transport.body.contains("\"currentScreenMode\":\"2560x1600@120\""));
+        assertTrue(transport.body.contains("\"currentDisplayMode\":{\"width\":2560,\"height\":1600,\"refreshHz\":120}"));
+        assertTrue(transport.body.contains("\"supportedDisplayModes\":["));
+        assertFalse(transport.body.contains("currentScreenMode"));
     }
 
     @Test

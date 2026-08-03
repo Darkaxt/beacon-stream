@@ -579,6 +579,23 @@ public sealed class BenchmarkApiTests(BeaconServerTestFactory factory) : IClassF
     {
         HttpResponseMessage hello = await client.PostAsJsonAsync("/clients/hello", new { clientId, name = clientId });
         Assert.Equal(HttpStatusCode.OK, hello.StatusCode);
+
+        HttpResponseMessage capabilities = await client.PostAsJsonAsync($"/clients/{clientId}/capabilities", new
+        {
+            av1 = true,
+            hevc = true,
+            h264 = true,
+            hdr10 = true,
+            virtualDisplayHdrSupported = false,
+            maxFps = 120,
+            lowLatencyDecode = true,
+            currentDisplayMode = new { width = 2560, height = 1600, refreshHz = 120 },
+            supportedDisplayModes = new[]
+            {
+                new { width = 2560, height = 1600, refreshHz = 120 }
+            }
+        });
+        Assert.Equal(HttpStatusCode.OK, capabilities.StatusCode);
     }
 
     private static object CreateFingerprints(int wifiChannel = 37) => new

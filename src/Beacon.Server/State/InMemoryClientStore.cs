@@ -69,7 +69,8 @@ public sealed class InMemoryClientStore
     {
         lock (gate)
         {
-            profiles[profile.ClientId.Value] = profile;
+            ClientProfile resolved = ResolveDisplayPolicy(profile);
+            profiles[resolved.ClientId.Value] = resolved;
             PersistProfiles();
         }
     }
@@ -98,12 +99,43 @@ public sealed class InMemoryClientStore
         WithLock(() => capabilities.GetValueOrDefault(clientId)
         ?? new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: true, VirtualDisplayHdrSupported: false));
 
-    public void SaveCapabilities(string clientId, EndpointCapabilities value)
+    public ClientProfile SaveCapabilities(string clientId, EndpointCapabilities value)
     {
         lock (gate)
         {
+            if (!profiles.TryGetValue(clientId, out ClientProfile? profile))
+            {
+                throw new KeyNotFoundException($"Client '{clientId}' is not registered.");
+            }
+
+            ClientDisplayMode selectedMode = ClientDisplayModeSelectionPolicy.Select(
+                profile.Display.PreferredMode,
+                value);
+            ClientProfile resolved = profile with
+            {
+                Display = profile.Display with { SelectedMode = selectedMode }
+            };
             capabilities[clientId] = value;
+            profiles[clientId] = resolved;
+            PersistProfiles();
+            return resolved;
         }
+    }
+
+    private ClientProfile ResolveDisplayPolicy(ClientProfile profile)
+    {
+        if (!capabilities.TryGetValue(profile.ClientId.Value, out EndpointCapabilities? current))
+        {
+            return profile;
+        }
+
+        ClientDisplayMode selectedMode = ClientDisplayModeSelectionPolicy.Select(
+            profile.Display.PreferredMode,
+            current);
+        return profile with
+        {
+            Display = profile.Display with { SelectedMode = selectedMode }
+        };
     }
 
     public TelemetrySnapshot GetTelemetry(string clientId) =>
