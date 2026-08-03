@@ -9,8 +9,8 @@ device facts, game selection, and control requests.
 ## Current State
 
 Architecture Recovery Gates 0-4 and the R1 integrated production transaction define the current
-repository state. Delivery follows the outcome-driven
-[`R1/R2/R3` execution plan](docs/superpowers/plans/2026-08-01-beacon-release-outcome-gates.md):
+repository state. Delivery now follows the outcome-driven
+[`core-hardening` execution plan](docs/superpowers/plans/2026-08-04-beacon-core-hardening-outcome-gates.md):
 
 - Core, Server, Cockpit, Client Lab, FakeEndpoint, and Android expose protocol-neutral
   Beacon session state.
@@ -30,14 +30,14 @@ repository state. Delivery follows the outcome-driven
   disconnect and fresh-ticket reconnect, quit, released ownership, and verified physical-only
   restoration. R1 is integration evidence, not a playable user release.
 
-The immediate target is R2: one playable Z Fold 7 transaction using the existing Beacon-owned path.
-R2 adds synchronized audio, one production controller route, automatic and manual physical-client
-benchmarking, a sustainable server-owned plan, and a sustained catalog-to-restore gameplay session.
-Tablet mouse/keyboard capture, Android-device motion, HDR, production HEVC/AV1, multi-client work,
-packaging, and broad UI polish remain deferred past the controller-focused R2 transaction. H.264 is
-the proven prerelease path, not the version-one codec ceiling; the server-interpreted benchmark ranks
-H.264, HEVC, and AV1 per client from measured encoder, decoder, network, latency, thermal, and power
-evidence, and the session plan consumes that result.
+The playable R2 transaction is paused. Core Stage 1 first selects and hardens one HDR-capable
+virtual-display driver through durable recovery and clean-machine evidence. Core Stage 2 then proves
+one complete production HDR path from Windows Advanced Color through 10-bit encoding and physical
+Android presentation. The current Worker remains H.264 SDR only; HDR policy and diagnostics are
+static-tested behavior, not a functional HDR stream. Audio, controller, physical-client benchmark,
+tablet input, motion, remaining codecs, multi-client work, packaging, and UI work cannot become the
+active target until both core stages pass or an explicit HDR feasibility decision changes the
+product requirement.
 
 `2560x1600` is not a universal client default. Production planning uses each client's reported
 display geometry and supported modes, preferring an exact match and then the closest same-aspect
@@ -244,8 +244,8 @@ instead of maintaining an exception ledger.
 ## Authority
 
 - Authoritative requirements: `docs/superpowers/specs/2026-06-03-personal-streaming-orchestrator-design.md`
-- Authoritative execution policy: `docs/superpowers/specs/2026-08-01-beacon-80-20-release-execution-design.md`
-- Active release-outcome plan: `docs/superpowers/plans/2026-08-01-beacon-release-outcome-gates.md`
+- Authoritative execution policy: `docs/superpowers/specs/2026-08-04-beacon-core-hardening-execution-design.md`
+- Active release-outcome plan: `docs/superpowers/plans/2026-08-04-beacon-core-hardening-outcome-gates.md`
 - Recovery inventory: `docs/source-audits/2026-07-10-beacon-architecture-recovery-inventory.md`
 - Gates 0-2 plan: `docs/superpowers/plans/2026-07-10-beacon-stream-architecture-recovery-gates-0-2.md`
 - Native streaming source audit: `docs/source-audits/2026-07-10-beacon-streamworker-streamcore.md`

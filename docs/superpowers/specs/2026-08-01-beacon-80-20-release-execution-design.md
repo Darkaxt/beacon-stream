@@ -1,5 +1,10 @@
 # Beacon 80/20 Release Execution Design
 
+Status: superseded on 2026-08-04 by
+`2026-08-04-beacon-core-hardening-execution-design.md`. Retained as historical evidence for the
+completed H.264 SDR integration transaction; it no longer governs delivery priority or release
+claims.
+
 Status: authoritative execution-policy revision, 2026-08-01
 
 ## Purpose

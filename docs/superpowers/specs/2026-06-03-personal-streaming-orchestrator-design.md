@@ -14,23 +14,26 @@ This document replaces compatibility-first assumptions introduced during the fir
 
 The architecture in this document remains authoritative. Delivery priority, progress reporting,
 and release claims are governed by
-`2026-08-01-beacon-80-20-release-execution-design.md` and
-`../plans/2026-08-01-beacon-release-outcome-gates.md`.
+`2026-08-04-beacon-core-hardening-execution-design.md` and
+`../plans/2026-08-04-beacon-core-hardening-outcome-gates.md`.
 
 The release sequence is:
 
-1. R1 proves one complete H.264 SDR transaction in the Android emulator.
-2. R2 adds only audio, controller input, physical-client benchmarking, and a playable Z Fold 7
-   transaction.
-3. R3 packages the proven system and publishes a clean-machine-validated prerelease.
-4. Version-one completion adds the remaining registered client-input slices, production HEVC/AV1
-   paths, and virtual-display recovery closure through the same proven architecture. These
-   capabilities do not delay the first usable prerelease, but H.264-only operation or recovery that
-   is proven only during a normal unlocked session does not satisfy the final version-one contract.
+1. The completed R1 H.264 SDR transaction remains useful integration evidence, but it is not core
+   completion.
+2. Core Stage 1 selects and hardens one virtual-display driver boundary, beginning with a decisive
+   HDR-capability feasibility probe and ending with durable recovery validation.
+3. Core Stage 2 implements and validates the complete HDR chain from the selected virtual display
+   through physical Android presentation.
+4. Only after Core Stages 1 and 2 pass may delivery resume on the playable-client, remaining input,
+   remaining codec, packaging, and prerelease outcomes.
+5. If no viable HDR path can be proven, execution stops with a concrete boundary report and requires
+   a product decision. SDR fallback is valid session behavior but is not an HDR acceptance result.
 
 Older unchecked milestone items are historical evidence, not parallel requirements. This execution
 reset does not weaken Beacon's architecture, security, server-owned policy, virtual-display
-lifecycle, or inactive **AND** no-owned-work invariants.
+lifecycle, HDR truthfulness, physical-display integrity, or inactive **AND** no-owned-work
+invariants.
 
 ## Core Thesis
 
@@ -75,7 +78,7 @@ These invariants are non-negotiable.
 7. Fake implementations exist only for deterministic tests and use the same Beacon-owned contracts.
 8. Display, application, session, and recovery ownership remain in Beacon Service, never in StreamWorker or the APK.
 9. Benchmark measurements are facts. Only Beacon Service selects streaming settings.
-10. New feature work remains frozen until architecture recovery and one Beacon-owned emulator vertical slice pass their acceptance gates.
+10. Secondary feature work remains frozen until the selected virtual-display driver and the complete HDR path pass their core acceptance gates.
 11. Privileged Windows execution is isolated in one Beacon Host Agent that implements typed mechanics without owning session policy.
 
 ## Product Components
@@ -363,6 +366,10 @@ This register is the implementation contract.
 - `REQ-DISP-030`: Unexpected Beacon Service, StreamWorker, HostAgent, or recovery-supervisor termination leaves enough durable evidence for the surviving or restarted owner to restore or resume deterministically without deleting unrelated displays. If client or owned-work state cannot be proven after a crash, recovery restores physical control but preserves the journaled lease and application until the inactive-client **AND** no-owned-work condition can be recomputed.
 - `REQ-DISP-031`: Recovery diagnostics expose the triggering Windows or driver event, journal revision, exact owned identities, baseline source, selected compensation order, every observed topology generation, and final verification result.
 - `REQ-DISP-032`: Beacon cannot claim its virtual-display pipeline more robust than an upstream implementation until the production recovery matrix passes on the target laptop and at least one clean Windows installation.
+- `REQ-DISP-033`: Every implementation stage that can mutate Windows display or driver state captures a verified physical baseline and arms an independent recovery owner before its first mutation.
+- `REQ-DISP-034`: Every such stage ends by proving the internal physical panel is active and primary at its captured baseline resolution, refresh, orientation, and aspect ratio; mirror mode is disabled; no inactive-session Beacon lease or virtual output remains; the driver control session is closed; and the input desktop is locally usable.
+- `REQ-DISP-035`: A failed physical-display integrity closeout fails the entire stage, blocks all later work, retains diagnostics, and invokes compensating recovery. A successful feature assertion cannot override a failed laptop-integrity assertion.
+- `REQ-DISP-036`: Driver selection is evidence-driven. Beacon first probes the current SudoVDA path, then evaluates an adapted Nonary `libvirtualdisplay`/Vibeshine driver primitive when SudoVDA cannot prove the required HDR and lifecycle contracts. Beacon does not silently replace its product architecture with Vibeshine.
 
 ### Session Ownership And Cleanup
 
@@ -436,6 +443,11 @@ samples inside its authenticated session and publishes DSU only on the Windows l
 - `REQ-HDR-006`: The complete chain is driver/virtual display, Windows Advanced Color, capture, 10-bit conversion, encoder, Beacon protocol metadata, decoder, and client display presentation.
 - `REQ-HDR-007`: Beacon never fabricates HDR capability when Windows or Android reports SDR.
 - `REQ-HDR-008`: HDR activation and fallback reasons appear in the plan and operational journal.
+- `REQ-HDR-009`: Production capability is reported only from production-path evidence. Mock endpoint capabilities, planner tests, API success, or an accepted Advanced Color request cannot establish HDR support.
+- `REQ-HDR-010`: HDR acceptance runs with server policy `require` and proves all boundaries in `REQ-HDR-006`, including Windows reporting HDR supported and active with at least 10 bits per channel, a 10-bit encoded bitstream with correct color metadata, and Android reporting HDR presentation on the physical display.
+- `REQ-HDR-011`: The production Worker must advertise `hdr10=true` only when its selected capture, conversion, encoder, and protocol path can execute that contract. The Android client must advertise HDR10 only when decoder, 10-bit vector, display, and presentation evidence all pass.
+- `REQ-HDR-012`: HDR requires at least one production 10-bit codec path. HEVC Main10 is the default implementation candidate; AV1 10-bit may be selected first when measured server and client evidence makes it the viable path. H.264 SDR cannot satisfy HDR acceptance.
+- `REQ-HDR-013`: If the driver, Windows, GPU encoder, protocol, decoder, or client display blocks HDR after candidate evaluation, Beacon records the exact failing boundary, preserves working SDR behavior, and stops for a product decision. It does not declare HDR complete through fallback.
 
 ### Recovery And Diagnostics
 
@@ -466,6 +478,8 @@ samples inside its authenticated session and publishes DSU only on the Windows l
 - `REQ-TEST-014`: Every destructive real-topology test arms an independent production-equivalent recovery owner before mutation and records restore-before-remove plus remove-before-restore behavior where both orders are applicable.
 - `REQ-TEST-015`: Recovery acceptance verifies that owned applications survive topology repair while active and that inactive **AND** no-owned-work remains the only automatic lease-removal condition.
 - `REQ-TEST-016`: Clean-machine validation installs the driver and HostAgent, creates and recovers a lease, exercises a verified driver update and rollback, uninstalls Beacon, and leaves the pre-install physical topology intact.
+- `REQ-TEST-017`: Capability status uses the ordered states `absent`, `modeled`, `static-tested`, `emulator-validated`, `target-laptop-validated`, and `physical-client-validated`. Reporting cannot collapse these states into a single `implemented` or `validated` label.
+- `REQ-TEST-018`: Every core-stage artifact set contains the pre-mutation physical baseline, driver and binary identities, production-path capability evidence, failure injections, final topology snapshot, and independent laptop-integrity closeout.
 
 ## Beacon Session Contract
 
@@ -589,7 +603,11 @@ No source is retained merely because tests already exist or implementation effor
 - Select and launch one server-catalog application.
 - Stop, reconnect, and restore through Beacon-owned components with no Apollo or Sunshine dependency.
 
-Only after Gate 5 passes may work resume on audio, richer input, HEVC/AV1, HDR, physical-device validation, and UI refinement.
+Gate 5 proved the first H.264 SDR integration transaction. It does not authorize secondary feature
+expansion. Execution next follows Core Stage 1 driver hardening and Core Stage 2 HDR closure in the
+authoritative core-hardening plan. Audio, controller, and benchmark work already present remains
+preserved, but new work on richer input, remaining codecs, packaging, multi-client behavior, or UI
+refinement stays frozen until both core stages close.
 
 ## Deletion Targets
 
@@ -618,7 +636,8 @@ The following are explicit removal targets unless the recovery inventory proves 
 - Browser streaming.
 - Mirror mode.
 - Full live adaptation before the initial benchmark-driven planner is stable.
-- HDR as a blocker for stable SDR streaming.
+- Forcing HDR on a client or server boundary that reports no HDR support. Working SDR remains the
+  fallback, but proving or decisively rejecting the product's HDR path is a core-hardening gate.
 
 ## Acceptance Gates
 
@@ -653,6 +672,32 @@ The following are explicit removal targets unless the recovery inventory proves 
 - Session cleanup restores verified physical-primary state under the server-owned **inactive AND no-owned-work** rule.
 - Logs and snapshots expose Beacon state without secrets or compatibility artifacts.
 
+### Core Stage 1: Driver Capability And Recovery
+
+- The selected driver proves HDR-capable IddCx/Advanced Color behavior before Beacon invests in its
+  long-term lifecycle integration.
+- Driver install, update, rollback, lease creation, heartbeat, exact-identity reconciliation, and
+  removal are serialized through the HostAgent boundary.
+- A durable HostAgent-owned journal and production recovery supervisor compensate component crashes,
+  power/session transitions, PnP faults, driver restart, GPU reset, and topology identity changes.
+- The target-laptop recovery matrix and one clean-machine driver lifecycle complete without deleting
+  an unowned display or terminating owned work.
+- The stage ends with the mandatory physical-display integrity closeout in `REQ-DISP-034`.
+
+### Core Stage 2: End-To-End HDR
+
+- A virtual display is created for the physical client at its planned aspect-correct mode and Windows
+  reports HDR supported and active with at least 10 bits per channel.
+- Production capture, conversion, one 10-bit codec, Beacon transport metadata, Android decoding, and
+  physical-display presentation pass under `HdrPreference.Require`.
+- The retained evidence distinguishes every HDR boundary and proves that no SDR fallback satisfied
+  the HDR assertion.
+- `off` and `prefer` still prove stable SDR behavior, and an unsupported client receives a recorded
+  fallback reason without topology churn.
+- The stage ends with the mandatory physical-display integrity closeout in `REQ-DISP-034`.
+- If any boundary is not technically viable after the planned candidate evaluation, the stage exits
+  as `decision-required`, not passed, and further feature work remains frozen.
+
 ### Physical Device Final Confirmation
 
 - Z Fold 7 benchmark selects a sustainable network/hardware profile.
@@ -662,6 +707,6 @@ The following are explicit removal targets unless the recovery inventory proves 
 
 ## Definition Of Completion
 
-Beacon version one is complete when it can be installed without Apollo or Sunshine, register the APK, automatically benchmark the current network and hardware, show the normalized Windows app/game catalog, compute a server-owned plan, create and activate the correct per-client virtual display, launch the selected application, stream H.264, HEVC, or AV1 through one Beacon-owned data plane according to per-client evidence, accept client input, stop or recover safely, and restore the laptop to a verified physical-primary state after normal termination, component failure, power/session transitions, driver restart, and material display-topology change.
+Beacon version one is complete when it can be installed without Apollo or Sunshine, register the APK, automatically benchmark the current network and hardware, show the normalized Windows app/game catalog, compute a server-owned plan, create and activate the correct per-client virtual display, launch the selected application, stream H.264, HEVC, or AV1 through one Beacon-owned data plane according to per-client evidence, present HDR when the complete measured chain supports it, accept client input, stop or recover safely, and restore the laptop to a verified physical-primary state after normal termination, component failure, power/session transitions, driver restart, and material display-topology change.
 
 No compatibility layer, wrapper mode, alternate Android route, or client-side streaming policy is required to achieve that result.

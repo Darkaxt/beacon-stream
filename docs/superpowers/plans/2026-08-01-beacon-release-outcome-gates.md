@@ -1,5 +1,9 @@
 # Beacon Release Outcome Gates Implementation Plan
 
+Status: superseded on 2026-08-04 by
+`2026-08-04-beacon-core-hardening-outcome-gates.md`. Retained as historical evidence for R1; its R2
+and R3 sequencing is no longer active.
+
 > **For agentic workers:** Execute one release checkpoint at a time. Keep one active blocker,
 > prove the next observable product state, commit and push that evidence, and stop at each release
 > boundary. Do not expand the active outcome with deferred capabilities.

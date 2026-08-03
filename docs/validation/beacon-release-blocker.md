@@ -31,9 +31,21 @@ verified physical-only topology.
 
 ## Active Outcome
 
-R2 Playable Personal Build: complete one sustained game session from the Z Fold 7 through the existing
-Beacon-owned path, with synchronized audio, production controller input, physical-client benchmarking,
-a sustainable server-owned plan, reconnect, quit, and verified physical restore.
+Core Stage 1 Driver Capability And Recovery: select one virtual-display driver only after it proves a
+real HDR-capable 10-bit Windows output, then close its durable ownership, update, reconciliation, and
+abnormal-event recovery matrix. Core Stage 2 end-to-end HDR blocks all later product work.
+
+The completed R1 transaction is H.264 SDR integration evidence. It does not establish HDR, production
+HEVC/AV1, or durable driver recovery. The production Worker currently advertises `hdr10=false`,
+rejects HDR plans, and emits H.264 SDR. HDR planner and diagnostics tests establish truthful fallback
+behavior only.
+
+Every driver/topology checkpoint must arm an independent recovery owner and end with the laptop's
+internal panel independently verified active and primary at its captured physical baseline, mirror
+mode disabled, no inactive-session Beacon virtual output or lease, closed heartbeat/control state,
+and a usable interactive desktop.
+
+## Paused Secondary Evidence
 
 The controller slice is implemented end to end. Retained evidence in
 `.artifacts/gate5-production-4988126f3e98478baab10bbe5fc6a477/` shows the normal APK path delivering
@@ -85,63 +97,36 @@ the structured version 2 model so existing per-client setup is retained.
 
 ## Current Blocker
 
-The R2 server-side and emulator preflight pipeline is complete. Commit `3639156` made TestHost-owned
-Worker disposal deterministic without a timeout, and CI run `30853338297` passed the full repository
-matrix. The Android job crossed the previously stalled boundary in order: application shutdown,
-`BEACON_HOSTED_WORKER_STOPPED`, then `BEACON_HOSTED_EMULATOR_BENCHMARKS_OK`.
+The first blocker is driver/HDR feasibility, not the paused physical-client R2 transaction. Historical
+target-laptop SudoVDA probe evidence reported Windows Advanced Color unsupported, 8 bits per channel,
+and `ERROR_NOT_SUPPORTED` when changing HDR state. That evidence is not current enough to reject HDR,
+but it is sufficient to prohibit assuming the existing driver works.
 
-The remaining R2 acceptance blocker is the guarded physical Z Fold 7 transaction. The runner now has
-an isolated physical-client mode, exact physical/emulator client identities, restore-first cleanup,
-and current-invocation instrumentation evidence, but emulator success does not certify the phone's
-radio, decoder, thermal, audio, controller, or human-experience behavior.
+The active plan must run one guarded, current capability transaction against the packaged SudoVDA
+revision. If it fails, the same transaction evaluates a pinned fork of Nonary `libvirtualdisplay`,
+whose current source implements the IddCx 1.10 HDR DDIs, FP16 capability, 10-bit mode/dithering data,
+HDR metadata handling, and driver-record generation fencing. Source support is candidate evidence;
+only the Windows postcondition on this laptop selects the driver.
 
-Version-one input has one additional implementation gap that is not part of the controller-focused R2
-exit: the authenticated transport and Windows sink accept pointer, keyboard, and controller events in
-the same session, but the APK currently captures touch and physical controller events only. Tablet
-hardware mouse/keyboard capture must use per-client capabilities, including captured relative mouse
-movement for games, without introducing global input modes or affecting the phone controller path.
-
-Android-device motion is also a registered version-one capability, but it follows the basic tablet
-input slice rather than expanding R2. It does not require a motion-capable virtual gamepad or Windows
-kernel driver. Beacon still needs timestamped gyroscope and accelerometer capture in the APK, transport
-through the authenticated input channel, and a session-owned DSU/Cemuhook UDP server bound to Windows
-loopback for Cemu-class emulators. The existing controller route remains independent. Until the DSU
-exchange is proven, motion is reported as unsupported and is never silently remapped to mouse,
-right-stick, or virtual-controller input.
-
-Codec planning and benchmark contracts already model H.264, HEVC, and AV1, including per-client
-capabilities and measured codec results. The full server-interpreted benchmark owns automatic codec
-selection and persists a ranked qualified set; launch planning consumes that result, while the
-lightweight session preflight may move only to another benchmark-qualified fallback. The production
-Worker currently advertises, encodes, and transports H.264 only. That is sufficient for the bounded
-R2 transaction and first packaged prerelease, but not for final version-one completion. Production
-HEVC and AV1 must reuse the same Worker, Beacon transport, StreamCore, benchmark, and planner
-boundaries. A server-owned client profile may explicitly constrain the benchmark candidates.
+After selection, Core Stage 1 still lacks a HostAgent-owned display recovery journal, startup
+reconciliation, production recovery supervisor, abnormal-event matrix, and clean-machine proof. Core
+Stage 2 then lacks the entire production HDR stream: HDR-preserving capture, 10-bit conversion,
+HEVC Main10 or AV1 10-bit encoding, Beacon HDR metadata, StreamCore decoding, and physical Android HDR
+presentation. These boundaries cannot be reported as implemented from planner or fallback tests.
 
 ## Next Falsifiable Proof
 
-Run the guarded production transaction in physical-client mode from the Z Fold 7 with the installed
-four-heartbeat quorum. It must retain the exact physical client identity, sustainable benchmark plan,
-moving video, ordered PCM writes on initial connect and reconnect, controller input, explicit quit, and
-current-invocation Android evidence; exit the outer runner with zero; and independently verify one
-physical primary display, zero leases, and no heartbeat. Physical Z Fold 7 audible confirmation remains
-the final human audio check.
+Implement `scripts/test-virtual-display-driver-capability.ps1` and run it first against the exact
+packaged SudoVDA binary, with the independent display guard armed before monitor creation. The proof
+must record driver identity, IddCx runtime, exact per-client output, Advanced Color 2 flags, active
+color mode, bits per channel, pixel encoding, and topology generations. It must then remove the test
+lease and independently verify the internal panel active and primary at its captured physical mode,
+mirror disabled, zero Beacon leases, no heartbeat, and a usable input desktop.
 
-After that R2 proof, add the bounded tablet input slice: hardware keyboard down/up mapping, absolute
-mouse navigation, captured relative movement, buttons, and wheel through the existing authenticated
-input stream. Its acceptance must prove mouse and keyboard on the tablet profile while the separate
-phone profile continues to expose controller input.
-
-The following motion slice must detect the Android device gyroscope and accelerometer, normalize and
-transport timestamped samples, publish them through a loopback DSU/Cemuhook server, cleanly unregister
-listeners with the owning session, and pass a fake Cemu-style DSU version/list/subscribe/data exchange
-before advertising motion support. Physical acceptance then verifies orientation, latency, and drift.
-
-After the first packaged prerelease, add production HEVC and AV1 as codec adapters behind the existing
-Worker and StreamCore contracts. Acceptance must benchmark all server/client-supported candidates,
-prove independent H.264, HEVC, and AV1 sessions in emulator or Client Lab, and prove on physical
-hardware that an AV1-capable client can receive an AV1 plan while unsupported or unsustainable clients
-fall back with an explicit reason.
+If SudoVDA cannot produce an HDR-supported, HDR-active 10-bit output, repeat the exact transaction with
+a pinned `Darkaxt/libvirtualdisplay` fork. If neither candidate succeeds, stop and publish the exact
+driver/Windows boundary for a product decision; do not proceed to controller, tablet, motion, remaining
+codec, packaging, or UI work.
 
 ## Prior Evidence
 
