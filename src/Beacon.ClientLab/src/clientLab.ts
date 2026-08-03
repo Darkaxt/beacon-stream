@@ -101,6 +101,12 @@ export interface StreamStopResponse {
   stream: StreamState | null;
 }
 
+export interface ClientDisplayMode {
+  width: number;
+  height: number;
+  refreshHz: number;
+}
+
 export interface CapabilitiesPayload {
   av1: boolean;
   hevc: boolean;
@@ -109,7 +115,8 @@ export interface CapabilitiesPayload {
   virtualDisplayHdrSupported: boolean;
   maxFps: number;
   lowLatencyDecode: boolean;
-  currentScreenMode: string;
+  currentDisplayMode: ClientDisplayMode;
+  supportedDisplayModes: ClientDisplayMode[];
 }
 
 export interface TelemetryPayload {
@@ -257,6 +264,8 @@ export function createGamePlanRequest(selectedGameId: string): PlanRequest {
 }
 
 export function createCapabilitiesPayload(): CapabilitiesPayload {
+  const currentDisplayMode = { width: 2560, height: 1600, refreshHz: 120 };
+
   return {
     av1: true,
     hevc: true,
@@ -265,7 +274,8 @@ export function createCapabilitiesPayload(): CapabilitiesPayload {
     virtualDisplayHdrSupported: false,
     maxFps: 120,
     lowLatencyDecode: true,
-    currentScreenMode: '2560x1600@120'
+    currentDisplayMode,
+    supportedDisplayModes: [currentDisplayMode]
   };
 }
 

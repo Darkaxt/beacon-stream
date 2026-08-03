@@ -225,7 +225,14 @@ test('simulates hello, profile patch, beacon, plan, disconnect, reconnect, quit,
   await expect(page.getByText('Excellent LAN telemetry kept 120 FPS.')).toBeVisible();
   expect(capabilityBodies).toHaveLength(1);
   expect(telemetryBodies).toHaveLength(1);
-  expect(capabilityBodies[0]).toMatchObject({ maxFps: 120, currentScreenMode: '2560x1600@120' });
+  expect(capabilityBodies[0]).toMatchObject({
+    maxFps: 120,
+    currentDisplayMode: { width: 2560, height: 1600, refreshHz: 120 },
+    supportedDisplayModes: [
+      { width: 2560, height: 1600, refreshHz: 120 }
+    ]
+  });
+  expect(capabilityBodies[0]).not.toHaveProperty('currentScreenMode');
   expect(telemetryBodies[0]).toMatchObject({ rttMs: 8, wifiBand: 'wifi-7' });
 
   await page.getByRole('button', { name: 'Launch' }).click();

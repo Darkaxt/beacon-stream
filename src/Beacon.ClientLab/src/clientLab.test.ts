@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createBenchmarkCompletionPayload,
   createBenchmarkPreparePayload,
+  createCapabilitiesPayload,
   createDefaultProfile,
   createGamePlanRequest,
   createKeyboardInputPayload,
@@ -19,6 +20,20 @@ import {
 } from './clientLab';
 
 describe('Client Lab profile validation', () => {
+  it('reports structured current and supported display mode facts', () => {
+    const payload = createCapabilitiesPayload();
+
+    expect(payload.currentDisplayMode).toEqual({
+      width: 2560,
+      height: 1600,
+      refreshHz: 120
+    });
+    expect(payload.supportedDisplayModes).toEqual([
+      { width: 2560, height: 1600, refreshHz: 120 }
+    ]);
+    expect(payload).not.toHaveProperty('currentScreenMode');
+  });
+
   it('blocks the Z Fold 7 2560x1440 collapse before a profile patch', () => {
     const profile = createDefaultProfile();
 
