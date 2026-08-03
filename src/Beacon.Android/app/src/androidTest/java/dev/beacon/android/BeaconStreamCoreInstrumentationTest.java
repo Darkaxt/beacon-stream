@@ -338,9 +338,18 @@ public final class BeaconStreamCoreInstrumentationTest {
         Intent intent = new Intent(instrumentation.getTargetContext(), BeaconActivity.class)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         BeaconActivity activity = (BeaconActivity) instrumentation.startActivitySync(intent);
+        RecordingCleanupService cleanupService = new RecordingCleanupService();
         AtomicReference<BeaconViewModel> model = new AtomicReference<>();
-        instrumentation.runOnMainSync(
-            () -> model.set(activity.createOwnedModelForInstrumentation()));
+        instrumentation.runOnMainSync(() -> {
+            BeaconViewModel ownedModel = activity.createOwnedModelForInstrumentation(cleanupService);
+            ownedModel.setForegroundDesired(true);
+            try {
+                assertTrue(ownedModel.onForeground(gate3Capabilities()));
+            } catch (IOException failure) {
+                throw new AssertionError("In-memory cleanup fixture failed to activate.", failure);
+            }
+            model.set(ownedModel);
+        });
         BeaconStreamCore ownedCore = model.get().ownedStreamCore();
         assertTrue(ownedCore.isOpen());
         CountDownLatch destroyed = new CountDownLatch(1);
@@ -359,6 +368,9 @@ public final class BeaconStreamCoreInstrumentationTest {
         assertTrue(!ownedCore.isOpen());
         assertTrue(ownedCore.callbackExecutorShutdown());
         assertTrue(activity.workerExecutorShutdown());
+        assertEquals(
+            "hello,capabilities,beacon active,beacon inactive,quit",
+            cleanupService.actions());
     }
 
     @Test
@@ -1329,6 +1341,53 @@ public final class BeaconStreamCoreInstrumentationTest {
         for (int value : values) buffer.put((byte) value);
         buffer.flip();
         return buffer;
+    }
+
+    private static final class RecordingCleanupService
+        implements BeaconViewModel.BeaconService {
+        private final BeaconApiClient.BeaconResult success =
+            new BeaconApiClient.BeaconResult(200, "{}");
+        private final StringBuilder actions = new StringBuilder();
+
+        private synchronized BeaconApiClient.BeaconResult record(String action) {
+            if (actions.length() > 0) actions.append(',');
+            actions.append(action);
+            return success;
+        }
+
+        synchronized String actions() {
+            return actions.toString();
+        }
+
+        @Override public BeaconApiClient.BeaconResult hello() { return record("hello"); }
+        @Override public BeaconApiClient.BeaconResult reportCapabilities(
+            BeaconApiClient.ClientCapabilities capabilities) {
+            return record("capabilities");
+        }
+        @Override public BeaconApiClient.BeaconResult reportTelemetry(
+            BeaconApiClient.ClientTelemetry telemetry) {
+            return record("telemetry");
+        }
+        @Override public BeaconApiClient.BeaconResult beacon(boolean active) {
+            return record(active ? "beacon active" : "beacon inactive");
+        }
+        @Override public BeaconApiClient.BeaconResult games() { return record("games"); }
+        @Override public BeaconApiClient.BeaconResult requestPlan(
+            BeaconApiClient.GameSelection game) {
+            return record("plan");
+        }
+        @Override public BeaconApiClient.BeaconResult launch(
+            BeaconApiClient.GameSelection game) {
+            return record("launch");
+        }
+        @Override public BeaconApiClient.BeaconResult stopStream() { return record("stop"); }
+        @Override public BeaconApiClient.BeaconResult disconnect() { return record("disconnect"); }
+        @Override public BeaconApiClient.BeaconResult quit(BeaconApiClient.QuitState state) {
+            return record("quit");
+        }
+        @Override public BeaconApiClient.BeaconResult emergencyRestore() {
+            return record("restore");
+        }
     }
 
     private static final class RecordingBindings implements BeaconStreamCore.Bindings {

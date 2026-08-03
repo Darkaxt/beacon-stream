@@ -747,23 +747,30 @@ public final class BeaconActivity extends Activity {
     }
 
     private BeaconViewModel createModel(BeaconClientConfig config) {
+        return createModel(config, new BeaconApiClient(this, config));
+    }
+
+    private BeaconViewModel createModel(
+        BeaconClientConfig config,
+        BeaconViewModel.BeaconService service) {
         return new BeaconViewModel(
             config.clientId(),
             config.serverUrl(),
-            new BeaconApiClient(this, config),
+            service,
             failureObserver -> new BeaconVideoSession(
                 videoSurfaceProvider,
                 failureObserver),
             BeaconAudioSession::new);
     }
 
-    BeaconViewModel createOwnedModelForInstrumentation() {
-        publicKeyFingerprint.setText(
-            "0000000000000000000000000000000000000000000000000000000000000000");
-        return modelSession.get(new BeaconClientConfig(
-            "https://127.0.0.1",
-            "instrumentation-client",
-            publicKeyFingerprint.getText().toString()));
+    BeaconViewModel createOwnedModelForInstrumentation(
+        BeaconViewModel.BeaconService service) {
+        BeaconClientConfig config = new BeaconClientConfig(
+            "in-memory://instrumentation",
+            "instrumentation-client");
+        modelSession = new BeaconViewModelSession(
+            fixtureConfig -> createModel(fixtureConfig, service));
+        return modelSession.get(config);
     }
 
     boolean workerExecutorShutdown() {
