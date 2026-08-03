@@ -12,9 +12,11 @@ public final class BeaconViewModel implements AutoCloseable {
     private final String serverUrl;
     private final StreamCoreFactory streamCoreFactory;
     private final VideoSessionFactory videoSessionFactory;
+    private final AudioSessionFactory audioSessionFactory;
     private final BeaconBenchmarkCoordinator benchmarkCoordinator;
     private BeaconStreamCore streamCore;
     private VideoSession videoSession;
+    private AudioSession audioSession;
     private boolean creatingStreamCore;
     private boolean closed;
 
@@ -31,16 +33,18 @@ public final class BeaconViewModel implements AutoCloseable {
             serverUrl,
             service,
             null,
-            (sink, failureObserver, benchmarkObserver) -> new BeaconStreamCore(
-                sink,
+            (videoSink, audioSink, failureObserver, benchmarkObserver) -> new BeaconStreamCore(
+                videoSink,
+                audioSink,
                 () -> { },
                 failureObserver,
                 benchmarkObserver),
+            null,
             null);
     }
 
     BeaconViewModel(String clientId, String serverUrl, BeaconService service, BeaconStreamCore streamCore) {
-        this(clientId, serverUrl, service, streamCore, null, null);
+        this(clientId, serverUrl, service, streamCore, null, null, null);
     }
 
     BeaconViewModel(
@@ -48,7 +52,7 @@ public final class BeaconViewModel implements AutoCloseable {
         String serverUrl,
         BeaconService service,
         StreamCoreFactory streamCoreFactory) {
-        this(clientId, serverUrl, service, null, streamCoreFactory, null);
+        this(clientId, serverUrl, service, null, streamCoreFactory, null, null);
     }
 
     BeaconViewModel(
@@ -61,12 +65,14 @@ public final class BeaconViewModel implements AutoCloseable {
             serverUrl,
             service,
             null,
-            (sink, failureObserver, benchmarkObserver) -> new BeaconStreamCore(
-                sink,
+            (videoSink, audioSink, failureObserver, benchmarkObserver) -> new BeaconStreamCore(
+                videoSink,
+                audioSink,
                 () -> { },
                 failureObserver,
                 benchmarkObserver),
-            videoSessionFactory);
+            videoSessionFactory,
+            null);
     }
 
     BeaconViewModel(
@@ -81,7 +87,47 @@ public final class BeaconViewModel implements AutoCloseable {
             service,
             null,
             streamCoreFactory,
-            videoSessionFactory);
+            videoSessionFactory,
+            null);
+    }
+
+    BeaconViewModel(
+        String clientId,
+        String serverUrl,
+        BeaconService service,
+        StreamCoreFactory streamCoreFactory,
+        VideoSessionFactory videoSessionFactory,
+        AudioSessionFactory audioSessionFactory) {
+        this(
+            clientId,
+            serverUrl,
+            service,
+            null,
+            streamCoreFactory,
+            videoSessionFactory,
+            audioSessionFactory);
+    }
+
+    BeaconViewModel(
+        String clientId,
+        String serverUrl,
+        BeaconService service,
+        VideoSessionFactory videoSessionFactory,
+        AudioSessionFactory audioSessionFactory) {
+        this(
+            clientId,
+            serverUrl,
+            service,
+            null,
+            (videoSink, audioSink, failureObserver, benchmarkObserver) ->
+                new BeaconStreamCore(
+                    videoSink,
+                    audioSink,
+                    () -> { },
+                    failureObserver,
+                    benchmarkObserver),
+            videoSessionFactory,
+            audioSessionFactory);
     }
 
     private BeaconViewModel(
@@ -90,13 +136,15 @@ public final class BeaconViewModel implements AutoCloseable {
         BeaconService service,
         BeaconStreamCore streamCore,
         StreamCoreFactory streamCoreFactory,
-        VideoSessionFactory videoSessionFactory) {
+        VideoSessionFactory videoSessionFactory,
+        AudioSessionFactory audioSessionFactory) {
         this.clientId = clientId;
         this.serverUrl = serverUrl;
         this.service = service;
         this.streamCore = streamCore;
         this.streamCoreFactory = streamCoreFactory;
         this.videoSessionFactory = videoSessionFactory;
+        this.audioSessionFactory = audioSessionFactory;
         this.benchmarkCoordinator = new BeaconBenchmarkCoordinator(
             service,
             new BeaconBenchmarkCoordinator.ResultObserver() {
@@ -299,6 +347,7 @@ public final class BeaconViewModel implements AutoCloseable {
     public void close() {
         BeaconStreamCore owned;
         VideoSession ownedVideo;
+        AudioSession ownedAudio;
         synchronized (this) {
             if (closed) return;
             closed = true;
@@ -307,8 +356,13 @@ public final class BeaconViewModel implements AutoCloseable {
             streamCore = null;
             ownedVideo = videoSession;
             videoSession = null;
+            ownedAudio = audioSession;
+            audioSession = null;
         }
         Throwable failure = null;
+        if (ownedAudio != null) {
+            failure = captureCleanupFailure(failure, ownedAudio::close);
+        }
         if (ownedVideo != null) {
             failure = captureCleanupFailure(failure, ownedVideo::close);
         }
@@ -324,27 +378,42 @@ public final class BeaconViewModel implements AutoCloseable {
         BeaconStreamCore core = requireStreamCore();
         long generation = core.start(session);
         VideoSession video = videoSession;
-        if (video == null) return;
-        if (session.selectedVideo() == null) {
-            video.stop();
-        } else {
-            try {
-                video.start(core, generation, session.selectedVideo());
-            } catch (RuntimeException | Error failure) {
-                stopFailedVideoStart(video, core, failure);
-                throw failure;
+        AudioSession audio = audioSession;
+        try {
+            if (session.selectedAudio() == null) {
+                if (audio != null) audio.stop();
+            } else if (audio != null) {
+                audio.start(generation, session.selectedAudio());
             }
+            if (session.selectedVideo() == null) {
+                if (video != null) video.stop();
+            } else if (video != null) {
+                video.start(core, generation, session.selectedVideo());
+            }
+        } catch (RuntimeException | Error failure) {
+            stopFailedMediaStart(video, audio, core, failure);
+            throw failure;
         }
     }
 
-    private static void stopFailedVideoStart(
+    private static void stopFailedMediaStart(
         VideoSession video,
+        AudioSession audio,
         BeaconStreamCore core,
         Throwable failure) {
-        try {
-            video.stop();
-        } catch (RuntimeException | Error cleanupFailure) {
-            failure.addSuppressed(cleanupFailure);
+        if (audio != null) {
+            try {
+                audio.stop();
+            } catch (RuntimeException | Error cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+        }
+        if (video != null) {
+            try {
+                video.stop();
+            } catch (RuntimeException | Error cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
         }
         try {
             core.stop();
@@ -384,20 +453,27 @@ public final class BeaconViewModel implements AutoCloseable {
         }
         BeaconStreamCore created = null;
         VideoSession createdVideo = null;
+        AudioSession createdAudio = null;
         boolean accepted = false;
         try {
             createdVideo = videoSessionFactory == null
                 ? null
                 : videoSessionFactory.create(
                     failure -> recordFailure("decoder", failure));
+            createdAudio = audioSessionFactory == null
+                ? null
+                : audioSessionFactory.create(
+                    failure -> recordFailure("audio", failure));
             created = factory.create(
                 createdVideo == null ? frame -> { } : createdVideo,
+                createdAudio == null ? frame -> { } : createdAudio,
                 benchmarkCoordinator::onStreamCoreFailure,
                 benchmarkCoordinator::onNetworkCompleted);
             synchronized (this) {
                 if (!closed) {
                     streamCore = created;
                     videoSession = createdVideo;
+                    audioSession = createdAudio;
                     accepted = true;
                 }
                 creatingStreamCore = false;
@@ -406,6 +482,9 @@ public final class BeaconViewModel implements AutoCloseable {
         } catch (RuntimeException | Error error) {
             if (createdVideo != null) {
                 captureCleanupFailure(error, createdVideo::close);
+            }
+            if (createdAudio != null) {
+                captureCleanupFailure(error, createdAudio::close);
             }
             synchronized (this) {
                 creatingStreamCore = false;
@@ -417,6 +496,9 @@ public final class BeaconViewModel implements AutoCloseable {
             Throwable failure = new IllegalStateException("BeaconViewModel is closed.");
             if (createdVideo != null) {
                 failure = captureCleanupFailure(failure, createdVideo::close);
+            }
+            if (createdAudio != null) {
+                failure = captureCleanupFailure(failure, createdAudio::close);
             }
             failure = captureCleanupFailure(failure, created::close);
             rethrowCleanupFailure(failure);
@@ -478,6 +560,8 @@ public final class BeaconViewModel implements AutoCloseable {
     }
 
     private void stopOwnedStreamCore() {
+        AudioSession audio = audioSession;
+        if (audio != null) audio.stop();
         VideoSession video = videoSession;
         if (video != null) video.stop();
         BeaconStreamCore owned = streamCore;
@@ -540,7 +624,8 @@ public final class BeaconViewModel implements AutoCloseable {
 
     interface StreamCoreFactory {
         BeaconStreamCore create(
-            BeaconStreamCore.EncodedFrameSink sink,
+            BeaconStreamCore.EncodedFrameSink videoSink,
+            BeaconStreamCore.DecodedAudioSink audioSink,
             BeaconStreamCore.FailureObserver failureObserver,
             BeaconStreamCore.BenchmarkObserver benchmarkObserver);
     }
@@ -556,6 +641,18 @@ public final class BeaconViewModel implements AutoCloseable {
 
     interface VideoSessionFactory {
         VideoSession create(BeaconVideoFeedbackBridge.FailureObserver failureObserver);
+    }
+
+    interface AudioSession extends BeaconStreamCore.DecodedAudioSink, AutoCloseable {
+        void start(
+            long generation,
+            BeaconStreamSession.SelectedAudio audio);
+        void stop();
+        @Override void close();
+    }
+
+    interface AudioSessionFactory {
+        AudioSession create(BeaconAudioSession.FailureObserver failureObserver);
     }
 
 }

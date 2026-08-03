@@ -1,6 +1,7 @@
 #pragma once
 
 #include "benchmark_collector.h"
+#include "opus_audio_decoder.h"
 #include "stream_control.pb.h"
 
 #include <array>
@@ -139,6 +140,7 @@ class FrameSink {
  public:
   virtual ~FrameSink() = default;
   virtual void frame(EncodedFrame frame) = 0;
+  virtual void audio(DecodedAudioFrame frame) = 0;
   virtual void state_changed(State state) = 0;
 };
 
@@ -187,6 +189,7 @@ class StreamCore {
   FrameSink &sink_;
   class FrameAssemblerHolder;
   std::unique_ptr<FrameAssemblerHolder> assembler_;
+  std::unique_ptr<OpusAudioDecoder> audio_decoder_;
   BenchmarkCollector benchmark_collector_;
   std::uint32_t maximum_frame_bytes_{};
   ConnectionGrant grant_;

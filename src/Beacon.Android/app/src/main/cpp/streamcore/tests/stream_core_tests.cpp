@@ -4,11 +4,14 @@
 #include "beacon/stream/media_datagram.h"
 #include "test_failure.h"
 
+#include <opus.h>
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cmath>
 #include <new>
 #include <optional>
 #include <span>
@@ -84,8 +87,12 @@ struct FakeSink final : android_stream::FrameSink {
     if (throw_on_state) throw std::runtime_error("injected sink failure");
     states.push_back(value);
   }
+  void audio(android_stream::DecodedAudioFrame value) override {
+    audio_frames.push_back(std::move(value));
+  }
 
   std::vector<android_stream::EncodedFrame> frames;
+  std::vector<android_stream::DecodedAudioFrame> audio_frames;
   std::vector<android_stream::State> states;
   bool throw_on_state{};
 };
@@ -261,10 +268,12 @@ std::vector<std::byte> media_datagram(
     std::uint16_t chunk_index, std::uint16_t chunk_count,
     std::uint32_t payload_offset, std::span<const std::byte> bytes,
     beacon::stream::MediaDatagramFlags flags =
-        beacon::stream::MediaDatagramFlags::none) {
+        beacon::stream::MediaDatagramFlags::none,
+    beacon::stream::MediaKind media_kind =
+        beacon::stream::MediaKind::video) {
   beacon::stream::MediaDatagramHeader header{
       .version = beacon::stream::media_datagram_version,
-      .media_kind = beacon::stream::MediaKind::video,
+      .media_kind = media_kind,
       .flags = flags,
       .sequence = sequence,
       .presentation_time_us = sequence * 1000,
@@ -283,6 +292,33 @@ std::vector<std::byte> media_datagram(
   std::ranges::copy(bytes,
                     result.begin() + beacon::stream::media_datagram_header_bytes);
   return result;
+}
+
+std::vector<std::byte> opus_packet(float phase) {
+  int error = OPUS_OK;
+  OpusEncoder *encoder = opus_encoder_create(
+      static_cast<opus_int32>(android_stream::opus_sample_rate_hz),
+      static_cast<int>(android_stream::opus_channel_count),
+      OPUS_APPLICATION_RESTRICTED_LOWDELAY, &error);
+  BEACON_TEST_REQUIRE(encoder != nullptr);
+  BEACON_TEST_REQUIRE(error == OPUS_OK);
+  std::array<float, android_stream::opus_frame_interleaved_samples> pcm{};
+  for (std::size_t frame = 0;
+       frame < android_stream::opus_frame_samples_per_channel; ++frame) {
+    const float sample = 0.2F * std::sin(
+        phase + static_cast<float>(frame) * 0.03F);
+    pcm[frame * 2] = sample;
+    pcm[frame * 2 + 1] = sample;
+  }
+  std::array<unsigned char, 1275> encoded{};
+  const int encoded_bytes = opus_encode_float(
+      encoder, pcm.data(),
+      static_cast<int>(android_stream::opus_frame_samples_per_channel),
+      encoded.data(), static_cast<opus_int32>(encoded.size()));
+  opus_encoder_destroy(encoder);
+  BEACON_TEST_REQUIRE(encoded_bytes > 0);
+  const auto begin = reinterpret_cast<const std::byte *>(encoded.data());
+  return {begin, begin + encoded_bytes};
 }
 
 std::vector<std::byte> benchmark_datagram(
@@ -563,6 +599,48 @@ void frame_limit_is_derived_from_selected_resolution() {
       0, 2, 0, one)));
 }
 
+void audio_datagrams_decode_to_pcm_without_entering_video_assembly() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(grant()));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+  const auto packet = opus_packet(0.0F);
+
+  BEACON_TEST_REQUIRE(core.receive_datagram(media_datagram(
+      1, static_cast<std::uint32_t>(packet.size()), 0, 1, 0, packet,
+      beacon::stream::MediaDatagramFlags::end_of_access_unit,
+      beacon::stream::MediaKind::audio)));
+
+  BEACON_TEST_REQUIRE(sink.frames.empty());
+  BEACON_TEST_REQUIRE(sink.audio_frames.size() == 1);
+  BEACON_TEST_REQUIRE(sink.audio_frames[0].sequence == 1);
+  BEACON_TEST_REQUIRE(sink.audio_frames[0].presentation_time_us == 1000);
+  BEACON_TEST_REQUIRE(
+      sink.audio_frames[0].interleaved_pcm.size() ==
+      android_stream::opus_frame_interleaved_samples);
+}
+
+void multi_chunk_audio_datagrams_are_rejected_without_video_side_effects() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(grant()));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+  const auto packet = opus_packet(0.0F);
+
+  BEACON_TEST_REQUIRE(!core.receive_datagram(media_datagram(
+      1, static_cast<std::uint32_t>(packet.size() + 1), 0, 2, 0, packet,
+      beacon::stream::MediaDatagramFlags::none,
+      beacon::stream::MediaKind::audio)));
+
+  BEACON_TEST_REQUIRE(sink.frames.empty());
+  BEACON_TEST_REQUIRE(sink.audio_frames.empty());
+  BEACON_TEST_REQUIRE(transport.sends.size() == 2);
+}
+
 void assembler_loss_requests_one_idr_until_recovery() {
   FakeTransport transport;
   FakeSink sink;
@@ -775,6 +853,8 @@ int main() {
     sequences_are_monotonic_per_typed_channel();
     decoder_feedback_and_reset_requests_preserve_typed_payloads();
     frame_limit_is_derived_from_selected_resolution();
+    audio_datagrams_decode_to_pcm_without_entering_video_assembly();
+    multi_chunk_audio_datagrams_are_rejected_without_video_side_effects();
     assembler_loss_requests_one_idr_until_recovery();
     close_faults_never_skip_transport_release();
     capacity_eviction_recovered_by_same_idr_sends_no_request();

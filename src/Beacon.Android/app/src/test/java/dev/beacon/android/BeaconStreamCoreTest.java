@@ -3,6 +3,7 @@ package dev.beacon.android;
 import org.junit.Test;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -67,6 +68,46 @@ public final class BeaconStreamCoreTest {
         assertTrue(frame.bytes.isDirect());
         assertTrue(frame.bytes.isReadOnly());
         assertArrayEquals(new byte[] { 0, 0, 0, 1, 0x67 }, bytes(frame.bytes));
+        core.close();
+    }
+
+    @Test
+    public void decodedAudioPcmUsesTheGenerationScopedCallbackExecutor() throws Exception {
+        RecordingBindings bindings = new RecordingBindings();
+        ExecutorService executor = Executors.newSingleThreadExecutor(
+            action -> new Thread(action, "beacon-media-callback"));
+        CountDownLatch delivered = new CountDownLatch(1);
+        AtomicReference<String> callbackThread = new AtomicReference<>();
+        AtomicReference<BeaconStreamCore.DecodedAudioFrame> observed =
+            new AtomicReference<>();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings,
+            frame -> { },
+            frame -> {
+                callbackThread.set(Thread.currentThread().getName());
+                observed.set(frame);
+                delivered.countDown();
+            },
+            executor);
+        core.start(session("audio-pcm"));
+        ByteBuffer pcm = ByteBuffer.allocateDirect(1_920 * Float.BYTES)
+            .order(ByteOrder.nativeOrder());
+        pcm.putFloat(0.25F);
+        pcm.position(0);
+
+        bindings.callbacks.onAudioPcm(pcm, 20_000, 1, 1, false);
+
+        delivered.await();
+        BeaconStreamCore.DecodedAudioFrame frame = observed.get();
+        assertNotNull(frame);
+        assertEquals("beacon-media-callback", callbackThread.get());
+        assertEquals(20_000, frame.presentationTimeUs);
+        assertEquals(1, frame.sequence);
+        assertFalse(frame.concealed);
+        assertTrue(frame.pcm.isDirect());
+        assertTrue(frame.pcm.isReadOnly());
+        assertEquals(1_920 * Float.BYTES, frame.pcm.remaining());
+        assertEquals(0.25F, frame.pcm.order(ByteOrder.nativeOrder()).getFloat(), 0.0001F);
         core.close();
     }
 
@@ -146,7 +187,7 @@ public final class BeaconStreamCoreTest {
         BeaconStreamSession session = BeaconStreamSession.parse(
             "https://beacon.example",
             "client",
-            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"s\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"}}}");
+            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"s\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"},\"selectedAudio\":{\"codec\":\"opus\",\"sampleRateHz\":48000,\"channelCount\":2,\"frameDurationUs\":20000,\"bitrateBps\":96000}}}");
 
         core.start(session);
         core.start(session);
@@ -575,7 +616,7 @@ public final class BeaconStreamCoreTest {
         return BeaconStreamSession.parse(
             "https://beacon.example",
             "client",
-            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"" + ticket + "\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"" + sessionId + "\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"}}}");
+            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"" + ticket + "\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"" + sessionId + "\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"},\"selectedAudio\":{\"codec\":\"opus\",\"sampleRateHz\":48000,\"channelCount\":2,\"frameDurationUs\":20000,\"bitrateBps\":96000}}}");
     }
 
     private static BeaconStreamSession benchmarkSession() {

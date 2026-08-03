@@ -116,6 +116,17 @@ bool StreamCore::start(ConnectionGrant grant) {
   }
   const auto selected_limit = derive_maximum_frame_bytes(
       grant.video.width, grant.video.height);
+  std::unique_ptr<OpusAudioDecoder> audio_decoder;
+  if (!grant.benchmark.has_value()) {
+    if (grant.audio.codec != stream_v1::AUDIO_CODEC_OPUS ||
+        grant.audio.sample_rate_hz != opus_sample_rate_hz ||
+        grant.audio.channel_count != opus_channel_count ||
+        grant.audio.frame_duration_us != opus_frame_duration_us) {
+      return false;
+    }
+    audio_decoder = std::make_unique<OpusAudioDecoder>();
+    if (!audio_decoder->ready()) return false;
+  }
   if (grant.benchmark.has_value()) {
     const BenchmarkGrant &benchmark = *grant.benchmark;
     if (benchmark.run_id.empty() || benchmark.schema_version == 0 ||
@@ -135,6 +146,7 @@ bool StreamCore::start(ConnectionGrant grant) {
       std::min(maximum_frame_bytes_, selected_limit));
   grant_ = std::move(grant);
   assembler_ = std::move(replacement);
+  audio_decoder_ = std::move(audio_decoder);
   session_bytes_.clear();
   session_sequence_ = 0;
   input_sequence_ = 0;
@@ -273,6 +285,24 @@ bool StreamCore::receive_datagram(std::span<const std::byte> bytes,
   }
   if (state_ != State::streaming) {
     return false;
+  }
+  const auto parsed = stream::parse_media_datagram(bytes);
+  if (parsed.error != stream::MediaDatagramError::none) return false;
+  if (parsed.header.media_kind == stream::MediaKind::audio) {
+    if (audio_decoder_ == nullptr || parsed.header.chunk_index != 0 ||
+        parsed.header.chunk_count != 1 || parsed.header.payload_offset != 0 ||
+        parsed.header.frame_bytes != parsed.header.payload_bytes ||
+        parsed.header.flags != stream::MediaDatagramFlags::end_of_access_unit) {
+      return false;
+    }
+    auto result = audio_decoder_->decode(
+        parsed.payload, parsed.header.sequence,
+        parsed.header.presentation_time_us);
+    if (result.status == AudioDecodeStatus::failed) return false;
+    for (auto &frame : result.frames) {
+      sink_.audio(std::move(frame));
+    }
+    return true;
   }
   auto result = assembler_->value.push(bytes);
   if (!drain_assembler_events()) return false;

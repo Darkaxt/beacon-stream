@@ -53,6 +53,23 @@ target_link_libraries(BeaconAudioMediaPacketizerTests PRIVATE Beacon::StreamProt
 add_test(NAME BeaconStreamProtocol.AudioMediaPacketizer COMMAND BeaconAudioMediaPacketizerTests)
 
 add_executable(
+  BeaconAndroidOpusAudioDecoderTests
+  ../../src/Beacon.Android/app/src/main/cpp/streamcore/opus_audio_decoder.cpp
+  ../../src/Beacon.Android/app/src/main/cpp/streamcore/tests/opus_audio_decoder_tests.cpp
+)
+target_include_directories(
+  BeaconAndroidOpusAudioDecoderTests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ../../src/Beacon.Android/app/src/main/cpp/streamcore
+)
+target_link_libraries(BeaconAndroidOpusAudioDecoderTests PRIVATE opus)
+add_test(
+  NAME BeaconAndroid.OpusAudioDecoder
+  COMMAND BeaconAndroidOpusAudioDecoderTests
+)
+
+add_executable(
   BeaconAccessUnitVectorTests
   access_unit_vector.cpp
   access_unit_vector_tests.cpp
@@ -69,6 +86,7 @@ if(WIN32)
   add_executable(
     BeaconAndroidStreamCoreHostTests
     ../../src/Beacon.Android/app/src/main/cpp/streamcore/benchmark_collector.cpp
+    ../../src/Beacon.Android/app/src/main/cpp/streamcore/opus_audio_decoder.cpp
     ../../src/Beacon.Android/app/src/main/cpp/streamcore/stream_core.cpp
     ../../src/Beacon.Android/app/src/main/cpp/streamcore/tests/stream_core_tests.cpp
   )
@@ -83,6 +101,7 @@ if(WIN32)
     PRIVATE
       Beacon::StreamContracts
       Beacon::StreamProtocol
+      opus
   )
   target_compile_options(
     BeaconAndroidStreamCoreHostTests

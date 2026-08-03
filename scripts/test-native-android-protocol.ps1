@@ -22,6 +22,7 @@ $tests = @(
     'BeaconFrameAssemblerTests',
     'BeaconServerSessionProtocolTests',
     'BeaconVideoMediaPacketizerTests',
+    'BeaconAndroidOpusAudioDecoderTests',
     'BeaconAccessUnitVectorTests',
     'BeaconHostedEmulatorEndpointServerTests',
     'BeaconMsQuicTransportTests',

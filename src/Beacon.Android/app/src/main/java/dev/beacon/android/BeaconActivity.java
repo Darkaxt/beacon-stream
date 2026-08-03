@@ -715,7 +715,8 @@ public final class BeaconActivity extends Activity {
             new BeaconApiClient(this, config),
             failureObserver -> new BeaconVideoSession(
                 videoSurfaceProvider,
-                failureObserver));
+                failureObserver),
+            BeaconAudioSession::new);
     }
 
     BeaconViewModel createOwnedModelForInstrumentation() {

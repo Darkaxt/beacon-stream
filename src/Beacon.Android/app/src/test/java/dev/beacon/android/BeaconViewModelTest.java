@@ -105,11 +105,12 @@ public final class BeaconViewModelTest {
             "z-fold-7",
             "https://server",
             service,
-            (sink, failureObserver, benchmarkObserver) -> {
+            (sink, audioSink, failureObserver, benchmarkObserver) -> {
                 allocations.incrementAndGet();
                 return new BeaconStreamCore(
                     new RecordingCoreBindings(),
                     sink,
+                    audioSink,
                     Executors.newSingleThreadExecutor());
             });
 
@@ -183,22 +184,28 @@ public final class BeaconViewModelTest {
     }
 
     @Test
-    public void videoGrantBindsTheBeaconPipelineAndRoutesCompleteAccessUnits() throws Exception {
+    public void mediaGrantBindsVideoAndAudioToTheSameGeneration() throws Exception {
         FakeService service = new FakeService();
         service.next = new BeaconApiClient.BeaconResult(200, grantBody());
         RecordingBenchmarkCoreFactory coreFactory = new RecordingBenchmarkCoreFactory();
         RecordingVideoSession video = new RecordingVideoSession();
+        RecordingAudioSession audio = new RecordingAudioSession();
         BeaconViewModel model = new BeaconViewModel(
             "z-fold-7",
             "https://server",
             service,
             coreFactory,
-            failureObserver -> video);
+            failureObserver -> video,
+            failureObserver -> audio);
 
         model.launch(BeaconApiClient.GameSelection.byGameId("steam:1"));
         coreFactory.bindings.callbacks.onFrame(
             directBuffer(1, 2, 3), 4, 5, coreFactory.bindings.generation, true, true);
+        coreFactory.bindings.callbacks.onAudioPcm(
+            directPcm(0.25F), 20_000, 1,
+            coreFactory.bindings.generation, false);
         video.frameReceived.await();
+        audio.frameReceived.await();
         model.stopStream();
         model.close();
 
@@ -211,6 +218,13 @@ public final class BeaconViewModelTest {
         assertEquals(1280, video.video.width());
         assertEquals(720, video.video.height());
         assertEquals(60, video.video.framesPerSecondNumerator());
+        assertEquals(1, audio.startCount);
+        assertEquals(1, audio.frameCount);
+        assertEquals(1, audio.stopCount);
+        assertEquals(1, audio.closeCount);
+        assertEquals(video.generation, audio.generation);
+        assertEquals("opus", audio.audio.codec());
+        assertEquals(48_000, audio.audio.sampleRateHz());
     }
 
     @Test
@@ -246,7 +260,7 @@ public final class BeaconViewModelTest {
             "z-fold-7",
             "https://server",
             new FakeService(),
-            (sink, failureObserver, benchmarkObserver) -> {
+            (sink, audioSink, failureObserver, benchmarkObserver) -> {
                 throw new IllegalStateException("core create failed");
             },
             failureObserver -> video);
@@ -374,7 +388,7 @@ public final class BeaconViewModelTest {
         AtomicInteger allocations = new AtomicInteger();
         BeaconViewModel model = new BeaconViewModel(
             "z-fold-7", "https://server", service,
-            (sink, failureObserver, benchmarkObserver) -> {
+            (sink, audioSink, failureObserver, benchmarkObserver) -> {
                 allocations.incrementAndGet();
                 throw new AssertionError("StreamCore allocated after close.");
             });
@@ -433,7 +447,7 @@ public final class BeaconViewModelTest {
         RecordingDeviceBenchmarkRunner deviceRunner = new RecordingDeviceBenchmarkRunner();
         BeaconViewModel model = new BeaconViewModel(
             "z-fold-7", "https://server", service,
-            (sink, failureObserver, benchmarkObserver) -> {
+            (sink, audioSink, failureObserver, benchmarkObserver) -> {
                 allocations.incrementAndGet();
                 throw new AssertionError("Reused evidence allocated StreamCore.");
             });
@@ -457,9 +471,10 @@ public final class BeaconViewModelTest {
         RecordingDeviceBenchmarkRunner deviceRunner = new RecordingDeviceBenchmarkRunner();
         BeaconViewModel model = new BeaconViewModel(
             "z-fold-7", "https://server", service,
-            (sink, failureObserver, benchmarkObserver) -> new BeaconStreamCore(
+            (sink, audioSink, failureObserver, benchmarkObserver) -> new BeaconStreamCore(
                 new RejectingCoreBindings(),
                 sink,
+                audioSink,
                 Executors.newSingleThreadExecutor(),
                 () -> { },
                 failureObserver,
@@ -568,7 +583,7 @@ public final class BeaconViewModelTest {
     }
 
     private static String grantBody(String ticket) {
-        return "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"" + ticket + "\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"s\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"}}}";
+        return "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"" + ticket + "\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"s\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"},\"selectedAudio\":{\"codec\":\"opus\",\"sampleRateHz\":48000,\"channelCount\":2,\"frameDurationUs\":20000,\"bitrateBps\":96000}}}";
     }
 
     private static BeaconBenchmarkPrepareRequest benchmarkRequest(String trigger) {
@@ -652,6 +667,14 @@ public final class BeaconViewModelTest {
         return result;
     }
 
+    private static ByteBuffer directPcm(float firstSample) {
+        ByteBuffer result = ByteBuffer.allocateDirect(1_920 * Float.BYTES)
+            .order(java.nio.ByteOrder.nativeOrder());
+        result.putFloat(firstSample);
+        result.position(0);
+        return result;
+    }
+
     private static final class RecordingVideoSession implements BeaconViewModel.VideoSession {
         private long generation;
         private BeaconStreamSession.SelectedVideo video;
@@ -685,6 +708,32 @@ public final class BeaconViewModelTest {
         }
     }
 
+    private static final class RecordingAudioSession implements BeaconViewModel.AudioSession {
+        private long generation;
+        private BeaconStreamSession.SelectedAudio audio;
+        private int startCount;
+        private int frameCount;
+        private int stopCount;
+        private int closeCount;
+        private final CountDownLatch frameReceived = new CountDownLatch(1);
+
+        @Override
+        public void start(
+            long generation,
+            BeaconStreamSession.SelectedAudio audio) {
+            this.generation = generation;
+            this.audio = audio;
+            startCount++;
+        }
+
+        @Override public void onAudioPcm(BeaconStreamCore.DecodedAudioFrame frame) {
+            frameCount++;
+            frameReceived.countDown();
+        }
+        @Override public void stop() { stopCount++; }
+        @Override public void close() { closeCount++; }
+    }
+
     private static final class RecordingCoreBindings implements BeaconStreamCore.Bindings {
         int startCount;
         int inputCount;
@@ -714,11 +763,13 @@ public final class BeaconViewModelTest {
         @Override
         public BeaconStreamCore create(
             BeaconStreamCore.EncodedFrameSink sink,
+            BeaconStreamCore.DecodedAudioSink audioSink,
             BeaconStreamCore.FailureObserver failureObserver,
             BeaconStreamCore.BenchmarkObserver benchmarkObserver) {
             return new BeaconStreamCore(
                 bindings,
                 sink,
+                audioSink,
                 Executors.newSingleThreadExecutor(),
                 () -> { },
                 failureObserver,

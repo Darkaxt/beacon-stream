@@ -1,6 +1,7 @@
 package dev.beacon.android;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -11,6 +12,7 @@ import java.util.concurrent.CountDownLatch;
 public final class BeaconStreamCore implements AutoCloseable {
     private final Bindings bindings;
     private final EncodedFrameSink sink;
+    private final DecodedAudioSink audioSink;
     private final ExecutorService callbackExecutor;
     private final FeedbackObserver feedbackObserver;
     private final FailureObserver failureObserver;
@@ -53,8 +55,23 @@ public final class BeaconStreamCore implements AutoCloseable {
         FailureObserver failureObserver,
         BenchmarkObserver benchmarkObserver) {
         this(
+            sink,
+            frame -> { },
+            feedbackObserver,
+            failureObserver,
+            benchmarkObserver);
+    }
+
+    BeaconStreamCore(
+        EncodedFrameSink sink,
+        DecodedAudioSink audioSink,
+        FeedbackObserver feedbackObserver,
+        FailureObserver failureObserver,
+        BenchmarkObserver benchmarkObserver) {
+        this(
             new JniBindings(),
             sink,
+            audioSink,
             Executors.newSingleThreadExecutor(r -> new Thread(r, "beacon-frame-callback")),
             feedbackObserver,
             failureObserver,
@@ -63,6 +80,21 @@ public final class BeaconStreamCore implements AutoCloseable {
 
     BeaconStreamCore(Bindings bindings, EncodedFrameSink sink, ExecutorService callbackExecutor) {
         this(bindings, sink, callbackExecutor, () -> { }, stage -> { });
+    }
+
+    BeaconStreamCore(
+        Bindings bindings,
+        EncodedFrameSink sink,
+        DecodedAudioSink audioSink,
+        ExecutorService callbackExecutor) {
+        this(
+            bindings,
+            sink,
+            audioSink,
+            callbackExecutor,
+            () -> { },
+            stage -> { },
+            result -> { });
     }
 
     BeaconStreamCore(
@@ -89,12 +121,32 @@ public final class BeaconStreamCore implements AutoCloseable {
         FeedbackObserver feedbackObserver,
         FailureObserver failureObserver,
         BenchmarkObserver benchmarkObserver) {
-        if (bindings == null || sink == null || callbackExecutor == null ||
+        this(
+            bindings,
+            sink,
+            frame -> { },
+            callbackExecutor,
+            feedbackObserver,
+            failureObserver,
+            benchmarkObserver);
+    }
+
+    BeaconStreamCore(
+        Bindings bindings,
+        EncodedFrameSink sink,
+        DecodedAudioSink audioSink,
+        ExecutorService callbackExecutor,
+        FeedbackObserver feedbackObserver,
+        FailureObserver failureObserver,
+        BenchmarkObserver benchmarkObserver) {
+        if (bindings == null || sink == null || audioSink == null ||
+            callbackExecutor == null ||
             feedbackObserver == null || failureObserver == null || benchmarkObserver == null) {
             throw new IllegalArgumentException("BeaconStreamCore dependencies are required.");
         }
         this.bindings = bindings;
         this.sink = sink;
+        this.audioSink = audioSink;
         this.callbackExecutor = callbackExecutor;
         this.feedbackObserver = feedbackObserver;
         this.failureObserver = failureObserver;
@@ -135,6 +187,20 @@ public final class BeaconStreamCore implements AutoCloseable {
                     accepted = true;
                 }
                 if (accepted) reportFailure("transport");
+            }
+
+            @Override public void onAudioPcm(
+                ByteBuffer pcm,
+                long presentationTimeUs,
+                long sequence,
+                long generation,
+                boolean concealed) {
+                dispatchAudioPcm(
+                    pcm,
+                    presentationTimeUs,
+                    sequence,
+                    generation,
+                    concealed);
             }
 
             @Override public void onBenchmarkCompleted(
@@ -344,6 +410,12 @@ public final class BeaconStreamCore implements AutoCloseable {
         nativeTestEmitFrame(handle, bytes, presentationTimeUs);
     }
 
+    static void emitNativeAudioPcmForTest(
+        long handle, float[] pcm, long presentationTimeUs) {
+        NativeLibrary.ensureLoaded();
+        nativeTestEmitAudioPcm(handle, pcm, presentationTimeUs);
+    }
+
     static void releaseNativeHandleForTest(long handle) {
         NativeLibrary.ensureLoaded();
         nativeRelease(handle);
@@ -460,6 +532,37 @@ public final class BeaconStreamCore implements AutoCloseable {
                 IN_SINK_CALLBACK.set(true);
                 try {
                     sink.onFrame(frame);
+                } finally {
+                    IN_SINK_CALLBACK.remove();
+                }
+            });
+        }
+    }
+
+    private void dispatchAudioPcm(
+        ByteBuffer pcm,
+        long presentationTimeUs,
+        long sequence,
+        long generation,
+        boolean concealed) {
+        DecodedAudioFrame frame = new DecodedAudioFrame(
+            pcm, presentationTimeUs, sequence, concealed);
+        synchronized (this) {
+            long expectedGeneration = startingGeneration != 0
+                ? startingGeneration : activeGeneration;
+            if (!open || stopped || generation == 0 ||
+                generation != expectedGeneration) {
+                return;
+            }
+            callbackExecutor.execute(() -> {
+                synchronized (BeaconStreamCore.this) {
+                    if (!open || stopped || generation != activeGeneration) {
+                        return;
+                    }
+                }
+                IN_SINK_CALLBACK.set(true);
+                try {
+                    audioSink.onAudioPcm(frame);
                 } finally {
                     IN_SINK_CALLBACK.remove();
                 }
@@ -609,6 +712,10 @@ public final class BeaconStreamCore implements AutoCloseable {
         void onFrame(EncodedFrame frame);
     }
 
+    public interface DecodedAudioSink {
+        void onAudioPcm(DecodedAudioFrame frame);
+    }
+
     public enum DecoderState {
         READY(1),
         AWAITING_IDR(2),
@@ -646,6 +753,34 @@ public final class BeaconStreamCore implements AutoCloseable {
 
         private static ByteBuffer readOnlySlice(ByteBuffer source) {
             return source.asReadOnlyBuffer().slice().asReadOnlyBuffer();
+        }
+    }
+
+    public static final class DecodedAudioFrame {
+        private static final int FRAME_BYTES = 1_920 * Float.BYTES;
+
+        public final ByteBuffer pcm;
+        public final long presentationTimeUs;
+        public final long sequence;
+        public final boolean concealed;
+
+        DecodedAudioFrame(
+            ByteBuffer pcm,
+            long presentationTimeUs,
+            long sequence,
+            boolean concealed) {
+            if (pcm == null || !pcm.isDirect() || pcm.remaining() != FRAME_BYTES ||
+                presentationTimeUs < 0 || sequence <= 0) {
+                throw new IllegalArgumentException(
+                    "Decoded audio requires one direct 48 kHz stereo float frame.");
+            }
+            this.pcm = pcm.asReadOnlyBuffer()
+                .slice()
+                .order(ByteOrder.nativeOrder())
+                .asReadOnlyBuffer();
+            this.presentationTimeUs = presentationTimeUs;
+            this.sequence = sequence;
+            this.concealed = concealed;
         }
     }
 
@@ -693,6 +828,12 @@ public final class BeaconStreamCore implements AutoCloseable {
             long generation,
             boolean idr,
             boolean codecConfiguration);
+        default void onAudioPcm(
+            ByteBuffer pcm,
+            long presentationTimeUs,
+            long sequence,
+            long generation,
+            boolean concealed) { }
         void onConnectionLost(long generation);
         default void onBenchmarkCompleted(
             double sustainableThroughputMbps,
@@ -817,6 +958,8 @@ public final class BeaconStreamCore implements AutoCloseable {
     private static native void nativeRelease(long handle);
     private static native void nativeTestEmitFrame(
         long handle, byte[] bytes, long presentationTimeUs);
+    private static native void nativeTestEmitAudioPcm(
+        long handle, float[] pcm, long presentationTimeUs);
     private static native void nativeTestAwaitRegistryIdle();
     private static native int nativeTestRegistrySize();
     private static native boolean nativeTestParseGrant(BeaconStreamSession.NativeGrant grant);

@@ -208,6 +208,11 @@ class JniStreamSession final : public MsQuicClientCallbacks,
           environment->GetMethodID(
               type, "onFrame", "(Ljava/nio/ByteBuffer;JJJZZ)V"),
           "Native frame callback is unavailable.");
+      audio_method_ = require_jni_ref(
+          environment,
+          environment->GetMethodID(
+              type, "onAudioPcm", "(Ljava/nio/ByteBuffer;JJJZ)V"),
+          "Native audio callback is unavailable.");
       loss_method_ = require_jni_ref(
           environment,
           environment->GetMethodID(type, "onConnectionLost", "(J)V"),
@@ -455,6 +460,22 @@ class JniStreamSession final : public MsQuicClientCallbacks,
     }
   }
 
+  void audio(DecodedAudioFrame frame) override {
+    try {
+      const auto handle = handle_;
+      const auto generation = callback_generation_.load(std::memory_order_acquire);
+      DeferredActionQueue::instance().enqueue(
+          destruction_barrier_,
+          [handle, generation, frame = std::move(frame)]() mutable {
+            auto session = sessions().retain(handle);
+            if (session) {
+              session->dispatch_audio_to_java(generation, std::move(frame));
+            }
+          });
+    } catch (...) {
+    }
+  }
+
   void state_changed(State) noexcept override {}
 
 #ifndef NDEBUG
@@ -535,6 +556,57 @@ class JniStreamSession final : public MsQuicClientCallbacks,
     }
     clear_callback_exception(environment);
     environment->DeleteLocalRef(bytes);
+    if (attached) java_vm->DetachCurrentThread();
+  }
+
+  void dispatch_audio_to_java(std::uint64_t generation,
+                              DecodedAudioFrame frame) noexcept {
+    if (callback_generation_.load(std::memory_order_acquire) != generation) return;
+    auto callback = java_callbacks_.try_enter();
+    if (!callback.has_value()) return;
+    JNIEnv *environment = nullptr;
+    bool attached = false;
+    if (java_vm == nullptr) return;
+    if (java_vm->GetEnv(reinterpret_cast<void **>(&environment),
+                        JNI_VERSION_1_6) != JNI_OK) {
+      if (java_vm->AttachCurrentThread(&environment, nullptr) != JNI_OK) return;
+      attached = true;
+    }
+    if (frame.interleaved_pcm.size() >
+        static_cast<std::size_t>(std::numeric_limits<jint>::max()) /
+            sizeof(float)) {
+      if (attached) java_vm->DetachCurrentThread();
+      return;
+    }
+    const auto byte_count = frame.interleaved_pcm.size() * sizeof(float);
+    jobject pcm = environment->CallStaticObjectMethod(
+        byte_buffer_class_, allocate_direct_method_,
+        static_cast<jint>(byte_count));
+    if (pcm == nullptr || environment->ExceptionCheck()) {
+      clear_callback_exception(environment);
+      if (attached) java_vm->DetachCurrentThread();
+      return;
+    }
+    if (byte_count != 0) {
+      void *destination = environment->GetDirectBufferAddress(pcm);
+      if (destination == nullptr || environment->ExceptionCheck()) {
+        clear_callback_exception(environment);
+        environment->DeleteLocalRef(pcm);
+        if (attached) java_vm->DetachCurrentThread();
+        return;
+      }
+      std::memcpy(destination, frame.interleaved_pcm.data(), byte_count);
+    }
+    if (!environment->ExceptionCheck()) {
+      environment->CallVoidMethod(
+          callbacks_, audio_method_, pcm,
+          static_cast<jlong>(frame.presentation_time_us),
+          static_cast<jlong>(frame.sequence),
+          static_cast<jlong>(generation),
+          static_cast<jboolean>(frame.concealed));
+    }
+    clear_callback_exception(environment);
+    environment->DeleteLocalRef(pcm);
     if (attached) java_vm->DetachCurrentThread();
   }
 
@@ -633,6 +705,7 @@ class JniStreamSession final : public MsQuicClientCallbacks,
   jobject callbacks_{};
   jclass byte_buffer_class_{};
   jmethodID frame_method_{};
+  jmethodID audio_method_{};
   jmethodID loss_method_{};
   jmethodID benchmark_method_{};
   jmethodID allocate_direct_method_{};
@@ -1242,6 +1315,52 @@ Java_dev_beacon_android_BeaconStreamCore_nativeTestEmitFrame(
     beacon::android::streamcore::throw_java(
         environment, "java/lang/RuntimeException",
         "Unexpected Beacon native test callback failure.");
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_beacon_android_BeaconStreamCore_nativeTestEmitAudioPcm(
+    JNIEnv *environment, jclass, jlong handle, jfloatArray pcm,
+    jlong presentation_time_us) {
+  auto session = sessions().find_active(static_cast<std::uint64_t>(handle));
+  if (!session) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/IllegalStateException",
+        "Beacon native test handle is unavailable.");
+    return;
+  }
+  try {
+    if (pcm == nullptr) {
+      throw std::invalid_argument("Beacon native test PCM is required.");
+    }
+    const jsize size = environment->GetArrayLength(pcm);
+    beacon::android::streamcore::check_jni(environment);
+    if (size != static_cast<jsize>(
+                    beacon::android::streamcore::opus_frame_interleaved_samples)) {
+      throw std::invalid_argument(
+          "Beacon native test PCM must contain one Opus frame.");
+    }
+    std::vector<float> copied(static_cast<std::size_t>(size));
+    environment->GetFloatArrayRegion(pcm, 0, size, copied.data());
+    beacon::android::streamcore::check_jni(environment);
+    session->audio({.interleaved_pcm = std::move(copied),
+                    .presentation_time_us =
+                        static_cast<std::uint64_t>(presentation_time_us),
+                    .sequence = 1,
+                    .concealed = false});
+  } catch (const beacon::android::streamcore::PendingJniException &) {
+    return;
+  } catch (const std::bad_alloc &) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/OutOfMemoryError",
+        "Could not allocate Beacon native test PCM.");
+  } catch (const std::exception &error) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/IllegalArgumentException", error.what());
+  } catch (...) {
+    beacon::android::streamcore::throw_java(
+        environment, "java/lang/RuntimeException",
+        "Unexpected Beacon native audio callback test failure.");
   }
 }
 

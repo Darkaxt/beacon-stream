@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertThrows;
@@ -261,6 +262,73 @@ public final class BeaconStreamCoreInstrumentationTest {
         loader.close();
         BeaconStreamCore.awaitNativeRegistryIdleForTest();
         assertEquals(0, BeaconStreamCore.nativeRegistrySizeForTest());
+    }
+
+    @Test
+    public void testNativeAudioPcmCrossesJniAndRegistryDrains()
+        throws InterruptedException {
+        BeaconStreamCore loader = new BeaconStreamCore(frame -> { });
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        AtomicReference<ByteBuffer> observed = new AtomicReference<>();
+        BeaconStreamCore.NativeCallbacks callbacks = new BeaconStreamCore.NativeCallbacks() {
+            @Override public void onFrame(
+                ByteBuffer bytes,
+                long presentationTimeUs,
+                long sequence,
+                long generation,
+                boolean idr,
+                boolean codecConfiguration) { }
+
+            @Override public void onAudioPcm(
+                ByteBuffer pcm,
+                long presentationTimeUs,
+                long sequence,
+                long generation,
+                boolean concealed) {
+                assertEquals(20_000, presentationTimeUs);
+                assertEquals(1, sequence);
+                assertTrue(!concealed);
+                observed.set(pcm);
+                callbackEntered.countDown();
+            }
+
+            @Override public void onConnectionLost(long generation) { }
+        };
+        long handle = BeaconStreamCore.createNativeHandleForTest(callbacks);
+        assertTrue(handle != 0);
+        float[] pcm = new float[1_920];
+        pcm[0] = 0.25F;
+
+        BeaconStreamCore.emitNativeAudioPcmForTest(handle, pcm, 20_000);
+
+        callbackEntered.await();
+        assertNotNull(observed.get());
+        assertEquals(1_920 * Float.BYTES, observed.get().remaining());
+        BeaconStreamCore.releaseNativeHandleForTest(handle);
+        loader.close();
+        BeaconStreamCore.awaitNativeRegistryIdleForTest();
+        assertEquals(0, BeaconStreamCore.nativeRegistrySizeForTest());
+    }
+
+    @Test
+    public void testProductionAudioTrackAcceptsOneBeaconPcmFrame() {
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        BeaconAudioSession session = new BeaconAudioSession(failure::set);
+        ByteBuffer pcm = ByteBuffer.allocateDirect(1_920 * Float.BYTES)
+            .order(java.nio.ByteOrder.nativeOrder());
+        pcm.putFloat(0.1F);
+        pcm.position(0);
+
+        session.start(
+            1,
+            new BeaconStreamSession.SelectedAudio(
+                "opus", 48_000, 2, 20_000, 96_000));
+        session.onAudioPcm(new BeaconStreamCore.DecodedAudioFrame(
+            pcm, 20_000, 1, false));
+        session.stop();
+        session.close();
+
+        assertNull(failure.get());
     }
 
     @Test
@@ -928,9 +996,10 @@ public final class BeaconStreamCoreInstrumentationTest {
     private static BeaconViewModel.StreamCoreFactory gate3StreamCoreFactory(
         Gate3SessionEvidence evidence,
         AtomicReference<BeaconStreamCore> coreReference) {
-        return (sink, failureObserver, benchmarkObserver) -> {
+        return (sink, audioSink, failureObserver, benchmarkObserver) -> {
             BeaconStreamCore core = new BeaconStreamCore(
                 sink,
+                audioSink,
                 () -> { },
                 stage -> {
                     evidence.recordStreamFailure(stage);
@@ -946,9 +1015,10 @@ public final class BeaconStreamCoreInstrumentationTest {
         Gate3SessionEvidence evidence,
         Gate5VideoRuntime videoRuntime,
         AtomicReference<BeaconStreamCore> coreReference) {
-        return (sink, failureObserver, benchmarkObserver) -> {
+        return (sink, audioSink, failureObserver, benchmarkObserver) -> {
             BeaconStreamCore core = new BeaconStreamCore(
                 sink,
+                audioSink,
                 () -> { },
                 stage -> {
                     evidence.recordStreamFailure(stage);
