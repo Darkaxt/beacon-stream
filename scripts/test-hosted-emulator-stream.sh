@@ -150,6 +150,10 @@ if ! instrumentation_output="$(
   exit 1
 fi
 printf '%s\n' "${instrumentation_output}"
+if ! grep -Fq "OK (1 test)" <<<"${instrumentation_output}"; then
+  echo "Hosted stream instrumentation did not pass." >&2
+  exit 1
+fi
 
 endpoint_output="$(cat <&"${endpoint_output_fd}")"
 if wait "${endpoint_pid}"; then
@@ -169,7 +173,6 @@ client_evidence="$(
 )"
 printf '%s\n' "${client_evidence}"
 
-grep -Fq "OK (1 test)" <<<"${instrumentation_output}"
 grep -Fq "BEACON_HOSTED_ENDPOINT_AUTHENTICATED 1" <<<"${endpoint_output}"
 grep -Fq "BEACON_HOSTED_ENDPOINT_FRAMES 30" <<<"${endpoint_output}"
 grep -Fq "BEACON_HOSTED_ENDPOINT_RENDERED_FEEDBACK 30" <<<"${endpoint_output}"

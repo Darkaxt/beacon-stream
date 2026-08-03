@@ -162,7 +162,13 @@ public final class HostedEmulatorStreamInstrumentationTest {
                     "\"height\":360," +
                     "\"framesPerSecondNumerator\":30," +
                     "\"framesPerSecondDenominator\":1," +
-                    "\"dynamicRange\":\"sdr\"}}}");
+                    "\"dynamicRange\":\"sdr\"}," +
+                "\"selectedAudio\":{" +
+                    "\"codec\":\"opus\"," +
+                    "\"sampleRateHz\":48000," +
+                    "\"channelCount\":2," +
+                    "\"frameDurationUs\":20000," +
+                    "\"bitrateBps\":96000}}}");
     }
 
     private static void emit(String marker) {
