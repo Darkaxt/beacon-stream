@@ -1,10 +1,13 @@
+using Beacon.Core.Benchmarks;
 using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 using Beacon.Core.Input;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
+using Beacon.Platform.Windows.Displays;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.StreamWorker.Contracts.Framing;
+using Beacon.StreamWorker.Contracts.Stream.V1;
 using Beacon.StreamWorker.Contracts.Worker.V1;
 using System.Threading.Channels;
 
@@ -12,61 +15,20 @@ namespace Beacon.Platform.Windows.Tests.Streaming;
 
 public sealed class StreamWorkerStreamingBackendTests
 {
-    [Fact]
-    public async Task LegacyHostSupportsStableStartAndStopWithoutGenerationInterface()
+    private static WorkerCapabilities AvailableCapabilities()
     {
-        var host = new LegacyRecordingStreamWorkerHost();
-        var backend = new StreamWorkerStreamingBackend(host);
-        SessionPlan plan = CreatePlan();
-
-        StreamingStartResult start = await backend.StartAsync(plan, CancellationToken.None);
-        StreamingStopResult stop = await backend.StopAsync(plan.SessionId, CancellationToken.None);
-
-        Assert.True(start.Success, start.Error);
-        Assert.True(stop.Success, stop.Error);
-        Assert.Equal(
-            [
-                WorkerIpcEnvelope.BodyOneofCase.PrepareSession,
-                WorkerIpcEnvelope.BodyOneofCase.StartMedia,
-                WorkerIpcEnvelope.BodyOneofCase.StopMedia
-            ],
-            host.Commands.Select(command => command.BodyCase));
-    }
-
-    [Fact]
-    public async Task LegacyHostIdentityChangeFailsStartTruthfully()
-    {
-        var host = new LegacyRecordingStreamWorkerHost
+        var capabilities = new WorkerCapabilities
         {
-            ReplaceAfter = WorkerIpcEnvelope.BodyOneofCase.PrepareSession
+            WorkerInstanceId = Google.Protobuf.ByteString.CopyFrom(new byte[] { 1, 2, 3 }),
+            QuicDatagrams = true,
+            MaximumSessions = 1,
+            MaximumFramesPerSecond = 120,
+            VideoAvailable = true
         };
-        var backend = new StreamWorkerStreamingBackend(host);
-
-        StreamingStartResult result = await backend.StartAsync(CreatePlan(), CancellationToken.None);
-
-        Assert.False(result.Success);
-        Assert.Equal("Beacon StreamWorker generation changed during stream start.", result.Error);
-        Assert.Empty(backend.GetSessions());
-        Assert.False(host.MediaStarted);
-    }
-
-    [Fact]
-    public async Task LegacyStartMediaReplacementIsShutDownBeforeGenerationFailure()
-    {
-        var host = new LegacyRecordingStreamWorkerHost
-        {
-            ReplaceAfter = WorkerIpcEnvelope.BodyOneofCase.StartMedia
-        };
-        var backend = new StreamWorkerStreamingBackend(host);
-
-        StreamingStartResult result = await backend.StartAsync(CreatePlan(), CancellationToken.None);
-
-        Assert.False(result.Success);
-        Assert.Equal("Beacon StreamWorker generation changed during stream start.", result.Error);
-        Assert.Equal(1, host.ShutdownCalls);
-        Assert.False(host.IsReady);
-        Assert.False(host.MediaStarted);
-        Assert.Empty(backend.GetSessions());
+        capabilities.VideoCodecs.Add(WorkerVideoCodec.H264);
+        capabilities.VideoEncoders.Add(WorkerVideoEncoder.Nvenc);
+        capabilities.CaptureMethods.Add(WorkerCaptureMethod.WindowsGraphicsCapture);
+        return capabilities;
     }
 
     [Fact]
@@ -86,6 +48,54 @@ public sealed class StreamWorkerStreamingBackendTests
         Assert.Empty(backend.GetSessions());
         Assert.False(host.MediaStarted);
         Assert.False(host.IsReady);
+    }
+
+    [Fact]
+    public async Task StartCancellationAfterDispatchStopsTheUntrackedWorkerGeneration()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var host = new RecordingStreamWorkerHost
+        {
+            StartMediaDispatched = cancellation.Cancel,
+        };
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            backend.StartAsync(CreatePlan(), cancellation.Token));
+
+        Assert.Equal(
+            [
+                WorkerIpcEnvelope.BodyOneofCase.PrepareSession,
+                WorkerIpcEnvelope.BodyOneofCase.StartMedia,
+                WorkerIpcEnvelope.BodyOneofCase.StopMedia,
+            ],
+            host.GenerationBoundCommands.Select(command => command.BodyCase));
+        Assert.Empty(backend.GetSessions());
+        Assert.False(host.MediaStarted);
+    }
+
+    [Fact]
+    public async Task StartIpcFailureAfterDispatchStopsTheUntrackedWorkerGeneration()
+    {
+        var host = new RecordingStreamWorkerHost
+        {
+            StartMediaFailureAfterDispatch = new IOException("simulated response loss"),
+        };
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        IOException failure = await Assert.ThrowsAsync<IOException>(() =>
+            backend.StartAsync(CreatePlan(), CancellationToken.None));
+
+        Assert.Equal("simulated response loss", failure.Message);
+        Assert.Equal(
+            [
+                WorkerIpcEnvelope.BodyOneofCase.PrepareSession,
+                WorkerIpcEnvelope.BodyOneofCase.StartMedia,
+                WorkerIpcEnvelope.BodyOneofCase.StopMedia,
+            ],
+            host.GenerationBoundCommands.Select(command => command.BodyCase));
+        Assert.Empty(backend.GetSessions());
+        Assert.False(host.MediaStarted);
     }
 
     [Fact]
@@ -139,6 +149,9 @@ public sealed class StreamWorkerStreamingBackendTests
         Assert.Equal(81, batch.Sequence);
         Assert.Equal(0x1Eu, Assert.Single(batch.Events).Keyboard?.ScanCode);
         Assert.Equal(started.RuntimeGeneration, runtimeEvents.GetBoundRuntimeGeneration(plan.SessionId));
+        Assert.Equal(
+            new StreamWorkerRuntimeSnapshot(1, 1, 0, 0, 1),
+            backend.GetRuntimeSnapshot());
     }
 
     [Fact]
@@ -173,7 +186,7 @@ public sealed class StreamWorkerStreamingBackendTests
     }
 
     [Fact]
-    public async Task FeedbackMediaAndDisconnectRequireExactBinding()
+    public async Task TransportDisconnectClearsBindingButRetainsRuntimeForFreshGeneration()
     {
         var host = new RecordingStreamWorkerHost();
         var backend = new StreamWorkerStreamingBackend(host);
@@ -193,6 +206,13 @@ public sealed class StreamWorkerStreamingBackendTests
             new StreamWorkerTransportDisconnected(1, plan.SessionId, 7)));
         Assert.False(runtimeEvents.IsCurrent(
             new StreamWorkerMediaEvidence(1, plan.SessionId, 7, 9, 10, 11)));
+        StreamingSessionState retained = Assert.IsType<StreamingSessionState>(
+            await backend.GetSessionAsync(plan.SessionId, CancellationToken.None));
+        Assert.Equal("running", retained.State);
+        Assert.True(runtimeEvents.TryBind(
+            new StreamWorkerTransportAuthenticated(1, plan.SessionId, 8, 1300)));
+        Assert.True(runtimeEvents.IsCurrent(
+            new StreamWorkerMediaEvidence(1, plan.SessionId, 8, 10, 11, 12)));
     }
 
     [Fact]
@@ -298,7 +318,9 @@ public sealed class StreamWorkerStreamingBackendTests
     public async Task StartMapsPlanAndStopKeepsWorkerReady()
     {
         var host = new RecordingStreamWorkerHost();
-        var backend = new StreamWorkerStreamingBackend(host);
+        var backend = new StreamWorkerStreamingBackend(
+            host,
+            new FixedDisplayNameResolver(@"\\.\DISPLAY7"));
         SessionPlan plan = CreatePlan();
 
         StreamingPreflightResult preflight = await backend.CheckReadinessAsync(plan, CancellationToken.None);
@@ -314,18 +336,192 @@ public sealed class StreamWorkerStreamingBackendTests
         Assert.Equal(3, host.Commands.Count);
         PrepareSession prepare = Assert.IsType<PrepareSession>(host.Commands[0].PrepareSession);
         Assert.Equal("Z Fold 7", host.Commands[0].SessionId);
-        Assert.Equal(2560u, prepare.Width);
-        Assert.Equal(1600u, prepare.Height);
+        Assert.Equal("virtual-z-fold-7", prepare.DisplayTarget);
+        Assert.Equal(@"\\.\DISPLAY7", prepare.DisplayDeviceName);
+        Assert.Equal(1280u, prepare.Width);
+        Assert.Equal(720u, prepare.Height);
         Assert.Equal(120u, prepare.FramesPerSecondNumerator);
         Assert.Equal(WorkerVideoCodec.H264, prepare.VideoCodec);
         Assert.Equal(WorkerDynamicRange.Sdr, prepare.DynamicRange);
+        Assert.Equal(VideoProfile.H264High, prepare.VideoProfile);
+        Assert.Equal(8u, prepare.VideoBitDepth);
+        Assert.Equal(ColorPrimaries.Bt709, prepare.ColorPrimaries);
+        Assert.Equal(TransferFunction.Bt709, prepare.TransferFunction);
+        Assert.Equal(MatrixCoefficients.Bt709, prepare.MatrixCoefficients);
+        Assert.Equal(ColorRange.Limited, prepare.ColorRange);
+        Assert.True(prepare.HdrStaticInfo.IsEmpty);
+        Assert.False(prepare.HdrStaticInfoInBitstream);
         Assert.Equal(45000u, prepare.InitialBitrateKbps);
+        Assert.Equal(WorkerAudioCodec.Opus, prepare.AudioCodec);
+        Assert.Equal(48_000u, prepare.AudioSampleRateHz);
+        Assert.Equal(2u, prepare.AudioChannelCount);
+        Assert.Equal(20_000u, prepare.AudioFrameDurationUs);
+        Assert.Equal(96_000u, prepare.AudioBitrateBps);
         Assert.Equal(WorkerIpcEnvelope.BodyOneofCase.StartMedia, host.Commands[1].BodyCase);
         Assert.Equal("0.0.0.0", host.Commands[1].StartMedia.ListenAddress);
         Assert.Equal(0u, host.Commands[1].StartMedia.ListenPort);
         Assert.Equal(WorkerIpcEnvelope.BodyOneofCase.StopMedia, host.Commands[2].BodyCase);
         Assert.True(host.IsReady);
         Assert.Equal(0, host.ShutdownCalls);
+        Assert.Equal(
+            new StreamWorkerRuntimeSnapshot(1, 0, 0, 0, 0),
+            backend.GetRuntimeSnapshot());
+    }
+
+    [Fact]
+    public async Task MissingWindowsDisplayMappingFailsBeforeWorkerReadiness()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(
+            host,
+            new FixedDisplayNameResolver(null));
+
+        StreamingPreflightResult result = await backend.CheckReadinessAsync(
+            CreatePlan(),
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("Windows display target", result.Error, StringComparison.Ordinal);
+        Assert.Equal(0, host.EnsureReadyCalls);
+        Assert.Empty(host.Commands);
+    }
+
+    [Fact]
+    public async Task BenchmarkStartMapsExactPlanAndStopKeepsWorkerReady()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        IBenchmarkRuntime benchmarkRuntime = backend;
+        var plan = new BenchmarkRuntimePlan(
+            Guid.Parse("3c13df40-26c4-40c6-8414-268734f1024d"),
+            new ClientId("z-fold-7"),
+            BenchmarkTrigger.Manual,
+            new BenchmarkTransportPlan(64, 65_536, 256, 1000, 1_000_000));
+        host.StartMediaEvents[0].SessionId = plan.SessionId;
+
+        BenchmarkRuntimeStartResult start = await benchmarkRuntime.StartAsync(
+            plan,
+            CancellationToken.None);
+        BenchmarkRuntimeStopResult stop = await benchmarkRuntime.StopAsync(
+            plan.SessionId,
+            CancellationToken.None);
+
+        BenchmarkRuntimeState started = Assert.IsType<BenchmarkRuntimeState>(start.Runtime);
+        Assert.True(start.Success, start.Error);
+        Assert.Equal("running", started.State);
+        Assert.Equal(51234, started.ActiveListenerPort);
+        Assert.Equal(plan.Revision, started.PlanRevision);
+        Assert.Equal(16, started.RunToken.Length);
+        Assert.True(stop.Success, stop.Error);
+        Assert.Equal("stopped", stop.Runtime?.State);
+        Assert.Equal(
+            [
+                WorkerIpcEnvelope.BodyOneofCase.PrepareBenchmark,
+                WorkerIpcEnvelope.BodyOneofCase.StartMedia,
+                WorkerIpcEnvelope.BodyOneofCase.StopMedia
+            ],
+            host.Commands.Select(command => command.BodyCase));
+        PrepareBenchmark prepare = host.Commands[0].PrepareBenchmark;
+        Assert.Equal(plan.RunId.ToString("D"), prepare.Plan.RunId);
+        Assert.Equal((uint)plan.SchemaVersion, prepare.Plan.SchemaVersion);
+        Assert.Equal(64u, prepare.Plan.ReliableRound.PacketCount);
+        Assert.Equal(65_536u, prepare.Plan.ReliableRound.PayloadBytes);
+        Assert.Equal(256u, prepare.Plan.DatagramRound.PacketCount);
+        Assert.Equal(1000u, prepare.Plan.DatagramRound.PayloadBytes);
+        Assert.Equal(1_000_000UL, prepare.Plan.DatagramRound.MeasurementIntervalUs);
+        Assert.Equal(started.RunToken, prepare.Plan.RunToken.ToByteArray());
+        Assert.True(host.IsReady);
+        Assert.Equal(0, host.ShutdownCalls);
+        Assert.Equal(
+            new StreamWorkerRuntimeSnapshot(0, 0, 1, 0, 0),
+            backend.GetRuntimeSnapshot());
+    }
+
+    [Fact]
+    public async Task NetworkBenchmarkRemainsAvailableWhenProductionVideoIsUnavailable()
+    {
+        var host = new RecordingStreamWorkerHost();
+        host.Capabilities.VideoAvailable = false;
+        host.Capabilities.VideoUnavailableBoundary = DiagnosticBoundary.Capture;
+        host.Capabilities.VideoUnavailableCode = 5;
+        var backend = new StreamWorkerStreamingBackend(host);
+        IBenchmarkRuntime benchmarkRuntime = backend;
+        var plan = new BenchmarkRuntimePlan(
+            Guid.Parse("cf46ab44-9650-41cf-8e59-909b4fb3b591"),
+            new ClientId("z-fold-7"),
+            BenchmarkTrigger.Manual,
+            new BenchmarkTransportPlan(16, 4096, 16, 1000, 250_000));
+        host.StartMediaEvents[0].SessionId = plan.SessionId;
+
+        BenchmarkRuntimeStartResult start = await benchmarkRuntime.StartAsync(
+            plan,
+            CancellationToken.None);
+        BenchmarkRuntimeStopResult stop = await benchmarkRuntime.StopAsync(
+            plan.SessionId,
+            CancellationToken.None);
+
+        Assert.True(start.Success, start.Error);
+        Assert.True(stop.Success, stop.Error);
+        Assert.Equal(
+            [
+                WorkerIpcEnvelope.BodyOneofCase.PrepareBenchmark,
+                WorkerIpcEnvelope.BodyOneofCase.StartMedia,
+                WorkerIpcEnvelope.BodyOneofCase.StopMedia
+            ],
+            host.Commands.Select(command => command.BodyCase));
+    }
+
+    [Fact]
+    public async Task BenchmarkRuntimeAcceptsOnlyItsBoundBenchmarkEvents()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        IBenchmarkRuntime benchmarkRuntime = backend;
+        IStreamWorkerRuntimeEvents runtimeEvents = backend;
+        var plan = new BenchmarkRuntimePlan(
+            Guid.Parse("bcfb3bd7-e863-4e1d-b68f-86d694baf6c3"),
+            new ClientId("z-fold-7"),
+            BenchmarkTrigger.SessionPreflight,
+            new BenchmarkTransportPlan(16, 32_768, 64, 1000, 250_000));
+        host.StartMediaEvents[0].SessionId = plan.SessionId;
+        Assert.True((await benchmarkRuntime.StartAsync(plan, CancellationToken.None)).Success);
+
+        Assert.True(runtimeEvents.TryBind(new StreamWorkerTransportAuthenticated(
+            ProcessGeneration: 1,
+            plan.SessionId,
+            WorkerSessionGeneration: 7,
+            MaximumDatagramBytes: 1200)));
+        Assert.True(runtimeEvents.IsCurrent(new StreamWorkerFeedbackReceived(
+            ProcessGeneration: 1,
+            plan.SessionId,
+            WorkerSessionGeneration: 7,
+            Sequence: 1,
+            StreamWorkerFeedbackKind.Benchmark,
+            PrimaryValue: 1000,
+            SecondaryValue: 20,
+            Count: 64)));
+        Assert.True(runtimeEvents.IsCurrent(new StreamWorkerFeedbackReceived(
+            ProcessGeneration: 1,
+            plan.SessionId,
+            WorkerSessionGeneration: 7,
+            Sequence: 2,
+            StreamWorkerFeedbackKind.BenchmarkDatagramEcho,
+            PrimaryValue: 2,
+            SecondaryValue: 7,
+            Count: 0)));
+        Assert.False(runtimeEvents.IsCurrent(new StreamWorkerFeedbackReceived(
+            ProcessGeneration: 1,
+            plan.SessionId,
+            WorkerSessionGeneration: 7,
+            Sequence: 3,
+            StreamWorkerFeedbackKind.Decoder,
+            PrimaryValue: 0,
+            SecondaryValue: 0,
+            Count: 0)));
+        Assert.True(runtimeEvents.TryDisconnect(new StreamWorkerTransportDisconnected(
+            ProcessGeneration: 1,
+            plan.SessionId,
+            WorkerSessionGeneration: 7)));
     }
 
     [Fact]
@@ -514,7 +710,137 @@ public sealed class StreamWorkerStreamingBackendTests
         StreamingPreflightResult result = await backend.CheckReadinessAsync(plan, CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Contains("h264", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("AV1", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("production", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(host.Commands);
+    }
+
+    [Fact]
+    public async Task HevcMain10Hdr10MapsExactPrepareTupleAndRequiresTruthfulWorkerCapability()
+    {
+        var host = new RecordingStreamWorkerHost();
+        host.Capabilities.VideoCodecs.Add(WorkerVideoCodec.Hevc);
+        host.Capabilities.Hdr10 = true;
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan() with
+        {
+            Display = CreatePlan().Display with
+            {
+                HdrPreference = HdrPreference.Require,
+                HdrEnabled = true,
+                HdrMode = "hdr10",
+            },
+            Stream = CreatePlan().Stream with
+            {
+                Codec = "hevc",
+                CodecProfile = "main10",
+                BitDepth = 10,
+                TenBitPresentationVerified = true,
+                HdrPresentationVerified = true,
+                ColorPrimaries = "bt2020",
+                TransferFunction = "pq",
+                MatrixCoefficients = "bt2020-ncl",
+                ColorRange = "limited",
+                HdrStaticInfo = Hdr10StaticMetadata.CreateCta8613Descriptor(),
+                HdrStaticInfoInBitstream = true,
+            },
+        };
+
+        StreamingStartResult result = await backend.StartAsync(plan, CancellationToken.None);
+
+        Assert.True(result.Success);
+        PrepareSession prepare = Assert.IsType<PrepareSession>(host.Commands[0].PrepareSession);
+        Assert.Equal(WorkerVideoCodec.Hevc, prepare.VideoCodec);
+        Assert.Equal(WorkerDynamicRange.Hdr10, prepare.DynamicRange);
+        Assert.Equal(VideoProfile.HevcMain10, prepare.VideoProfile);
+        Assert.Equal(10u, prepare.VideoBitDepth);
+        Assert.Equal(ColorPrimaries.Bt2020, prepare.ColorPrimaries);
+        Assert.Equal(TransferFunction.Pq, prepare.TransferFunction);
+        Assert.Equal(MatrixCoefficients.Bt2020NonConstantLuminance, prepare.MatrixCoefficients);
+        Assert.Equal(ColorRange.Limited, prepare.ColorRange);
+        Assert.Equal(25, prepare.HdrStaticInfo.Length);
+        Assert.Equal(Hdr10StaticMetadata.Cta8613Descriptor.ToArray(), prepare.HdrStaticInfo.ToByteArray());
+        Assert.True(prepare.HdrStaticInfoInBitstream);
+    }
+
+    [Fact]
+    public async Task HevcMain10Hdr10FailsWhenWorkerOnlyAdvertisesHevcCodec()
+    {
+        var host = new RecordingStreamWorkerHost();
+        host.Capabilities.VideoCodecs.Add(WorkerVideoCodec.Hevc);
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan() with
+        {
+            Display = CreatePlan().Display with { HdrEnabled = true, HdrMode = "hdr10" },
+            Stream = CreatePlan().Stream with
+            {
+                Codec = "hevc",
+                CodecProfile = "main10",
+                BitDepth = 10,
+                TenBitPresentationVerified = true,
+                HdrPresentationVerified = true,
+                ColorPrimaries = "bt2020",
+                TransferFunction = "pq",
+                MatrixCoefficients = "bt2020-ncl",
+                ColorRange = "limited",
+                HdrStaticInfo = Hdr10StaticMetadata.CreateCta8613Descriptor(),
+                HdrStaticInfoInBitstream = true,
+            },
+        };
+
+        StreamingPreflightResult result = await backend.CheckReadinessAsync(plan, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("HDR10", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(host.Commands);
+    }
+
+    [Fact]
+    public async Task WorkerCapabilitiesAdvertiseHevcOnlyAsTheCompleteHdr10Path()
+    {
+        var host = new RecordingStreamWorkerHost();
+        host.Capabilities.VideoCodecs.Add(WorkerVideoCodec.Hevc);
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        StreamingBackendHealth codecOnly = await backend.GetHealthAsync(CancellationToken.None);
+        host.Capabilities.Hdr10 = true;
+        StreamingBackendHealth completeTuple = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.DoesNotContain("hevc", codecOnly.Capabilities.Codecs);
+        Assert.False(codecOnly.Capabilities.Hdr10);
+        Assert.Contains("hevc", completeTuple.Capabilities.Codecs);
+        Assert.True(completeTuple.Capabilities.Hdr10);
+    }
+
+    [Fact]
+    public async Task MixedHevcHdr10ColorimetryFailsBeforeWorkerReadiness()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan() with
+        {
+            Display = CreatePlan().Display with { HdrEnabled = true, HdrMode = "hdr10" },
+            Stream = CreatePlan().Stream with
+            {
+                Codec = "hevc",
+                CodecProfile = "main10",
+                BitDepth = 10,
+                TenBitPresentationVerified = true,
+                HdrPresentationVerified = true,
+                ColorPrimaries = "bt2020",
+                TransferFunction = "bt709",
+                MatrixCoefficients = "bt2020-ncl",
+                ColorRange = "limited",
+                HdrStaticInfo = Hdr10StaticMetadata.CreateCta8613Descriptor(),
+                HdrStaticInfoInBitstream = true,
+            },
+        };
+
+        StreamingPreflightResult result = await backend.CheckReadinessAsync(plan, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("exact", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, host.EnsureReadyCalls);
         Assert.Empty(host.Commands);
     }
 
@@ -540,14 +866,83 @@ public sealed class StreamWorkerStreamingBackendTests
         {
             ReadinessError = new StreamWorkerProcessExitedException(23),
         };
+        host.MarkWorkerExited();
         var backend = new StreamWorkerStreamingBackend(host);
 
         StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
 
-        Assert.False(health.Ready);
-        Assert.Equal("unavailable", health.State);
-        Assert.Equal("Beacon StreamWorker failed readiness verification.", health.Diagnostic);
+        Assert.True(health.Ready);
+        Assert.Equal("idle", health.State);
+        Assert.Equal("Beacon StreamWorker is stopped and will start on demand.", health.Diagnostic);
         Assert.DoesNotContain("23", health.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HealthInspectionDoesNotStartDormantWorker()
+    {
+        var host = new RecordingStreamWorkerHost();
+        host.MarkWorkerExited();
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.True(health.Ready);
+        Assert.Equal("idle", health.State);
+        Assert.Contains("on demand", health.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, host.EnsureReadyCalls);
+        Assert.Empty(host.Commands);
+    }
+
+    [Fact]
+    public async Task ProductionHealthNeverAdvertisesFakeCaptureOrEncoding()
+    {
+        var backend = new StreamWorkerStreamingBackend(new RecordingStreamWorkerHost());
+
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.Equal(["nvenc"], health.Capabilities.Encoders);
+        Assert.Equal(["wgc"], health.Capabilities.CaptureMethods);
+        Assert.DoesNotContain("fake", health.Capabilities.Encoders);
+        Assert.DoesNotContain("fake", health.Capabilities.CaptureMethods);
+    }
+
+    [Fact]
+    public async Task UnavailableProductionVideoFailsStreamingHealthAndPreflightWithTypedDiagnostic()
+    {
+        var host = new RecordingStreamWorkerHost();
+        host.Capabilities.VideoAvailable = false;
+        host.Capabilities.VideoUnavailableBoundary = DiagnosticBoundary.Encoder;
+        host.Capabilities.VideoUnavailableCode = 7;
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        StreamingBackendHealth health = await backend.GetHealthAsync(CancellationToken.None);
+        StreamingPreflightResult preflight = await backend.CheckReadinessAsync(
+            CreatePlan(),
+            CancellationToken.None);
+
+        Assert.False(health.Ready);
+        Assert.Equal("Beacon StreamWorker production video is unavailable (encoder:7).", health.Diagnostic);
+        Assert.Equal(["encoder:7"], health.Diagnostics);
+        Assert.False(preflight.Success);
+        Assert.Equal(health.Diagnostic, preflight.Error);
+        Assert.Empty(host.Commands);
+    }
+
+    [Fact]
+    public async Task CapabilitiesFromAnotherWorkerCannotAuthorizePreflight()
+    {
+        var host = new RecordingStreamWorkerHost();
+        host.Capabilities.WorkerInstanceId = Google.Protobuf.ByteString.CopyFrom(
+            new byte[] { 9, 9, 9 });
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        StreamingPreflightResult preflight = await backend.CheckReadinessAsync(
+            CreatePlan(),
+            CancellationToken.None);
+
+        Assert.False(preflight.Success);
+        Assert.Equal("Beacon StreamWorker is not ready.", preflight.Error);
+        Assert.Empty(host.Commands);
     }
 
     private static SessionPlan CreatePlan() => new(
@@ -566,13 +961,34 @@ public sealed class StreamWorkerStreamingBackendTests
             "test"),
         new PlannedStream(
             "h264",
+            1280,
+            720,
             120,
             45,
             "beacon-quic",
             "adaptive",
             "test",
             Guid.Parse("33acde60-b29f-4f03-b2b2-f51337bdb9a5"),
-            "test-benchmark-revision"));
+            "test-benchmark-revision")
+        {
+            CodecProfile = "high",
+            BitDepth = 8,
+            ColorPrimaries = "bt709",
+            TransferFunction = "bt709",
+            MatrixCoefficients = "bt709",
+            ColorRange = "limited",
+        },
+        new PlannedAudio("opus", 48_000, 2, 20_000, 96_000, "R2 test audio."));
+
+    private sealed class FixedDisplayNameResolver(string? displayName)
+        : IWindowsDisplayNameResolver
+    {
+        public bool TryResolveDisplayName(string displayId, out string? resolved)
+        {
+            resolved = displayName;
+            return resolved is not null;
+        }
+    }
 
     private static WorkerIpcEnvelope TransportReady(uint port) => new()
     {
@@ -582,7 +998,7 @@ public sealed class StreamWorkerStreamingBackendTests
         WorkerTransportReady = new WorkerTransportReady { ListenerPort = port },
     };
 
-    private sealed class RecordingStreamWorkerHost : IStreamWorkerHost, IGenerationBoundStreamWorkerHost
+    private sealed class RecordingStreamWorkerHost : IStreamWorkerHost
     {
         private readonly Channel<StreamWorkerEvent> events = Channel.CreateUnbounded<StreamWorkerEvent>();
         private byte[] workerInstanceId = [1, 2, 3];
@@ -598,6 +1014,8 @@ public sealed class StreamWorkerStreamingBackendTests
         public bool IsReady { get; private set; } = true;
 
         public ReadOnlyMemory<byte> WorkerInstanceId => workerInstanceId;
+
+        public WorkerCapabilities Capabilities { get; } = AvailableCapabilities();
 
         public ChannelReader<StreamWorkerEvent> Events => events.Reader;
 
@@ -625,6 +1043,10 @@ public sealed class StreamWorkerStreamingBackendTests
         public bool ExitAfterPrepare { get; set; }
 
         public bool MediaStarted { get; private set; }
+
+        public Action? StartMediaDispatched { get; set; }
+
+        public Exception? StartMediaFailureAfterDispatch { get; set; }
 
         public int EnsureReadyCalls { get; private set; }
 
@@ -659,6 +1081,8 @@ public sealed class StreamWorkerStreamingBackendTests
         public void ReplaceWorker(byte[] replacementWorkerInstanceId)
         {
             workerInstanceId = replacementWorkerInstanceId;
+            Capabilities.WorkerInstanceId = Google.Protobuf.ByteString.CopyFrom(
+                replacementWorkerInstanceId);
             CurrentProcessGeneration++;
             IsReady = true;
         }
@@ -674,7 +1098,7 @@ public sealed class StreamWorkerStreamingBackendTests
             return Task.CompletedTask;
         }
 
-        public Task<StreamWorkerCommandResponse> SendAsync(
+        private Task<StreamWorkerCommandResponse> SendCoreAsync(
             WorkerIpcEnvelope command,
             CancellationToken cancellationToken)
         {
@@ -730,10 +1154,20 @@ public sealed class StreamWorkerStreamingBackendTests
                 throw new StreamWorkerGenerationChangedException(expectedProcessGeneration);
             }
             GenerationBoundCommands.Add(command.Clone());
-            StreamWorkerCommandResponse response = await SendAsync(command, cancellationToken);
+            StreamWorkerCommandResponse response = await SendCoreAsync(command, cancellationToken);
             if (command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.StartMedia)
             {
                 MediaStarted = true;
+                StartMediaDispatched?.Invoke();
+                cancellationToken.ThrowIfCancellationRequested();
+                if (StartMediaFailureAfterDispatch is not null)
+                {
+                    throw StartMediaFailureAfterDispatch;
+                }
+            }
+            if (command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.StopMedia)
+            {
+                MediaStarted = false;
             }
             if (ExitAfterPrepare
                 && command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.PrepareSession)
@@ -751,64 +1185,4 @@ public sealed class StreamWorkerStreamingBackendTests
         }
     }
 
-    private sealed class LegacyRecordingStreamWorkerHost : IStreamWorkerHost
-    {
-        private byte[] workerInstanceId = [1, 2, 3];
-        private ulong requestId;
-
-        public bool IsReady { get; private set; } = true;
-
-        public ReadOnlyMemory<byte> WorkerInstanceId => workerInstanceId;
-
-        public WorkerIpcEnvelope.BodyOneofCase ReplaceAfter { get; init; }
-
-        public bool MediaStarted { get; private set; }
-
-        public int ShutdownCalls { get; private set; }
-
-        public List<WorkerIpcEnvelope> Commands { get; } = [];
-
-        public Task EnsureReadyAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public Task<StreamWorkerCommandResponse> SendAsync(
-            WorkerIpcEnvelope command,
-            CancellationToken cancellationToken)
-        {
-            Commands.Add(command.Clone());
-            ulong currentRequestId = ++requestId;
-            IReadOnlyList<WorkerIpcEnvelope> events = [];
-            if (command.BodyCase == WorkerIpcEnvelope.BodyOneofCase.StartMedia)
-            {
-                MediaStarted = true;
-                WorkerIpcEnvelope transportReady = TransportReady(51234);
-                transportReady.RequestId = currentRequestId;
-                events = [transportReady];
-            }
-            if (command.BodyCase == ReplaceAfter)
-            {
-                workerInstanceId = [9, 8, 7];
-            }
-            return Task.FromResult(new StreamWorkerCommandResponse(
-                new WorkerIpcEnvelope
-                {
-                    ProtocolVersion = ProtocolVersion.Current,
-                    RequestId = currentRequestId,
-                    SessionId = command.SessionId,
-                    WorkerCompletion = new WorkerCompletion
-                    {
-                        Succeeded = true,
-                        ErrorCode = WorkerErrorCode.None
-                    }
-                },
-                events));
-        }
-
-        public Task ShutdownAsync(CancellationToken cancellationToken)
-        {
-            ShutdownCalls++;
-            IsReady = false;
-            MediaStarted = false;
-            return Task.CompletedTask;
-        }
-    }
 }

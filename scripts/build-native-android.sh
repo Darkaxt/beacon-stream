@@ -10,6 +10,11 @@ if [[ "${configuration}" != "Debug" && "${configuration}" != "Release" ]]; then
   exit 1
 fi
 readonly configuration_dir="${configuration,,}"
+if [[ "${configuration}" == "Debug" ]]; then
+  readonly x86_64_build_testing="ON"
+else
+  readonly x86_64_build_testing="OFF"
+fi
 
 if [[ -z "${BEACON_ANDROID_NDK_ROOT:-}" ]]; then
   echo "BEACON_ANDROID_NDK_ROOT must name the pinned Linux NDK root." >&2
@@ -19,6 +24,7 @@ fi
 export ANDROID_NDK_ROOT="${BEACON_ANDROID_NDK_ROOT}"
 export ANDROID_NDK_HOME="${BEACON_ANDROID_NDK_ROOT}"
 export PATH="${BEACON_ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64/bin:${PATH}"
+export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}"
 
 bash "${script_dir}/bootstrap-native-dependencies-linux.sh"
 
@@ -27,11 +33,13 @@ export BEACON_PROTOC_EXECUTABLE="$(bash "${script_dir}/install-protoc-linux.sh")
 cd "${repository_root}/native"
 cmake --fresh --preset android-x86_64 \
   -B "${HOME}/.cache/beacon/build/android-x86_64-${configuration_dir}" \
-  -DCMAKE_BUILD_TYPE="${configuration}"
+  -DCMAKE_BUILD_TYPE="${configuration}" \
+  -DBUILD_TESTING="${x86_64_build_testing}"
 cmake --build "${HOME}/.cache/beacon/build/android-x86_64-${configuration_dir}"
 cmake --fresh --preset android-arm64 \
   -B "${HOME}/.cache/beacon/build/android-arm64-${configuration_dir}" \
-  -DCMAKE_BUILD_TYPE="${configuration}"
+  -DCMAKE_BUILD_TYPE="${configuration}" \
+  -DBUILD_TESTING=OFF
 cmake --build "${HOME}/.cache/beacon/build/android-arm64-${configuration_dir}"
 
 readonly staging_parent="${repository_root}/src/Beacon.Android/app/build/generated/jniLibs"

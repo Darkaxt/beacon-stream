@@ -74,7 +74,7 @@ public sealed class DisplayProbeAppTests
     }
 
     [Fact]
-    public async Task RecoverCommandRemovesDisplayAfterInitialRestoreFailure()
+    public async Task RecoverCommandRemovesDisplayAfterInitialRestoreFailureAndVerifiesPhysicalPrimary()
     {
         var api = new ProbeWindowsDisplayApi
         {
@@ -92,7 +92,6 @@ public sealed class DisplayProbeAppTests
                 refreshHz: 120)
         };
         api.RestoreResults.Enqueue(DisplayApiResult.Fail("physical primary was not verified"));
-        api.RestoreResults.Enqueue(DisplayApiResult.Ok());
         using var output = new StringWriter();
 
         int exitCode = await DisplayProbeApp.RunAsync(
@@ -103,11 +102,100 @@ public sealed class DisplayProbeAppTests
 
         Assert.Equal(0, exitCode);
         Assert.Contains("recover: success", output.ToString());
-        Assert.Equal(2, api.RestoreCalls);
+        Assert.Equal(1, api.RestoreCalls);
         Assert.Equal("client-z-fold-7", Assert.Single(api.RemovedDisplays));
+        Assert.True(api.CurrentTopology.PhysicalPrimaryVerified);
     }
 
-    private sealed class ProbeWindowsDisplayApi : IWindowsDisplayApi
+    [Fact]
+    public async Task DriverSessionCommandHoldsReportsAndReleasesDriverControlWithoutCreatingDisplay()
+    {
+        var api = new ProbeWindowsDisplayApi();
+        using var output = new StringWriter();
+
+        int exitCode = await DisplayProbeApp.RunAsync(
+            api,
+            ["driver-session"],
+            output,
+            TextWriter.Null);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("driver-session: success", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("watchdog=3s", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("heartbeat=active", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("probe-driver-session", Assert.Single(api.HeldDisplayIds));
+        Assert.Equal("probe-driver-session", Assert.Single(api.ReleasedDisplayIds));
+        Assert.Empty(api.CreatedDisplays);
+    }
+
+    [Fact]
+    public async Task DiagnoseCreateHeldLeavesLeaseHeldAndReportsObservedTopology()
+    {
+        var api = new ProbeWindowsDisplayApi
+        {
+            AfterCreateTopology = DisplayTopologySnapshot.Extended(
+                physicalDisplayId: "physical-laptop-panel",
+                virtualDisplayId: "client-z-fold-7",
+                width: 2560,
+                height: 1600,
+                refreshHz: 120,
+                virtualPrimary: false)
+        };
+        using var output = new StringWriter();
+
+        int exitCode = await DisplayProbeApp.RunAsync(
+            api,
+            [
+                "diagnose-create-held",
+                "--client", "z-fold-7",
+                "--width", "2560",
+                "--height", "1600",
+                "--refresh", "120"
+            ],
+            output,
+            TextWriter.Null);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("create: success", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("client-z-fold-7", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal("client-z-fold-7", Assert.Single(api.HeldDisplayIds));
+        Assert.Empty(api.ReleasedDisplayIds);
+    }
+
+    [Fact]
+    public async Task RemoveCommandReleasesTheDriverLeaseAfterNativeRemoval()
+    {
+        var api = new ProbeWindowsDisplayApi
+        {
+            CurrentTopology = DisplayTopologySnapshot.Extended(
+                physicalDisplayId: "physical-laptop-panel",
+                virtualDisplayId: "client-z-fold-7",
+                width: 2560,
+                height: 1600,
+                refreshHz: 120,
+                virtualPrimary: false),
+            AfterRemoveTopology = DisplayTopologySnapshot.PhysicalOnly(
+                physicalDisplayId: "physical-laptop-panel",
+                width: 2560,
+                height: 1600,
+                refreshHz: 120)
+        };
+        api.HeldDisplayIds.Add("client-z-fold-7");
+        using var output = new StringWriter();
+
+        int exitCode = await DisplayProbeApp.RunAsync(
+            api,
+            ["remove", "--client", "z-fold-7"],
+            output,
+            TextWriter.Null);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("remove: success", output.ToString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("client-z-fold-7", Assert.Single(api.RemovedDisplays));
+        Assert.Equal("client-z-fold-7", Assert.Single(api.ReleasedDisplayIds));
+    }
+
+    private sealed class ProbeWindowsDisplayApi : IWindowsDisplayApi, IWindowsDisplayLeaseSession
     {
         public DisplayTopologySnapshot CurrentTopology { get; set; } =
             DisplayTopologySnapshot.PhysicalOnly("physical-laptop-panel", 2560, 1600, 120);
@@ -124,9 +212,20 @@ public sealed class DisplayProbeAppTests
 
         public List<string> RemovedDisplays { get; } = [];
 
+        public List<string> HeldDisplayIds { get; } = [];
+
+        public List<string> ReleasedDisplayIds { get; } = [];
+
         public int PrimaryCalls { get; private set; }
 
         public int RestoreCalls { get; private set; }
+
+        public SudoVdaDriverLeaseSessionSnapshot Snapshot => new(
+            LeaseCount: HeldDisplayIds.Count - ReleasedDisplayIds.Count,
+            WatchdogTimeoutSeconds: 3,
+            HeartbeatActive: HeldDisplayIds.Count > ReleasedDisplayIds.Count,
+            Healthy: true,
+            Diagnostic: "probe heartbeat healthy");
 
         public DisplayDriverStatus GetDriverStatus() => new(true, "SudoVDA driver is ready.");
 
@@ -184,5 +283,25 @@ public sealed class DisplayProbeAppTests
 
         public Task<DisplayHdrCapability> QueryHdrCapabilityAsync(string displayId, CancellationToken cancellationToken) =>
             Task.FromResult(new DisplayHdrCapability(false, false, "SDR only."));
+
+        public Task<DisplayApiResult> SetHdrStateAsync(
+            string displayId,
+            bool enabled,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(DisplayApiResult.Ok());
+
+        public Task<SudoVdaDriverLeaseHoldResult> HoldAsync(
+            string displayId,
+            CancellationToken cancellationToken)
+        {
+            HeldDisplayIds.Add(displayId);
+            return Task.FromResult(SudoVdaDriverLeaseHoldResult.Held());
+        }
+
+        public Task ReleaseAsync(string displayId, CancellationToken cancellationToken)
+        {
+            ReleasedDisplayIds.Add(displayId);
+            return Task.CompletedTask;
+        }
     }
 }

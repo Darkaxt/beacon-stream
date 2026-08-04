@@ -2,7 +2,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Beacon.Core\Beacon.Core.csproj" />
+    <ProjectReference Include="..\Beacon.HostAgent.Contracts\Beacon.HostAgent.Contracts.csproj" />
     <ProjectReference Include="..\Beacon.StreamWorker.Contracts\Beacon.StreamWorker.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Nefarius.ViGEm.Client" Version="1.21.256" />
   </ItemGroup>
 
   <PropertyGroup>

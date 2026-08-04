@@ -8,7 +8,9 @@ using Beacon.Core.Games;
 using Beacon.Core.Input;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
+using Beacon.Server.Benchmarks;
 using Beacon.Server.State;
+using Beacon.Server.Streaming;
 using Beacon.Server.Security;
 
 namespace Beacon.Server.Api;
@@ -17,21 +19,6 @@ public static class ClientEndpoints
 {
     private static readonly JsonSerializerOptions WebJsonOptions = CreateWebJsonOptions();
     private static readonly TimeSpan MaximumBenchmarkEvidenceAge = TimeSpan.FromDays(7);
-
-    private static readonly string[] EditableFields =
-    [
-        "preferredWidth",
-        "preferredHeight",
-        "preferredRefreshHz",
-        "hdrPreference",
-        "codecPreference",
-        "qualityMode",
-        "bitrateCapMbps",
-        "audioMode",
-        "keepAppRunningOnDisconnect"
-    ];
-
-    private static readonly HashSet<string> EditableFieldSet = new(EditableFields, StringComparer.OrdinalIgnoreCase);
 
     public static IEndpointRouteBuilder MapClientEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -86,7 +73,6 @@ public static class ClientEndpoints
                 clientId = approved.ClientId,
                 credential = approved.Credential,
                 profile,
-                editableFields = EditableFields,
             });
         });
 
@@ -95,39 +81,27 @@ public static class ClientEndpoints
                 ? Results.Ok(profile)
                 : Results.NotFound(new { error = $"Client '{clientId}' is not registered." }));
 
-        clients.MapPatch("/{clientId}/profile", (string clientId, JsonElement body, InMemoryClientStore store) =>
+        clients.MapPost("/{clientId}/capabilities", (string clientId, EndpointCapabilities capabilities, InMemoryClientStore store) =>
         {
-            ClientProfile? profile = store.GetProfile(clientId);
-            if (profile is null)
+            if (store.GetProfile(clientId) is null)
             {
                 return Results.NotFound(new { error = $"Client '{clientId}' is not registered." });
             }
 
-            foreach (JsonProperty property in body.EnumerateObject())
-            {
-                if (!EditableFieldSet.Contains(property.Name))
-                {
-                    return Results.BadRequest(new { error = $"Field '{property.Name}' is not editable from the client." });
-                }
-            }
-
-            ClientProfilePatch patch = CreatePatch(body);
             try
             {
-                ClientProfile updated = ClientProfilePatcher.ApplyApkPatch(profile, patch);
-                store.SaveProfile(updated);
-                return Results.Ok(updated);
+                ClientProfile updated = store.SaveCapabilities(clientId, capabilities);
+                return Results.Ok(new
+                {
+                    clientId,
+                    accepted = true,
+                    selectedDisplayMode = updated.Display.SelectedMode
+                });
             }
-            catch (InvalidClientProfilePatchException ex)
+            catch (ArgumentException error)
             {
-                return Results.BadRequest(new { error = ex.Message });
+                return Results.BadRequest(new { error = error.Message });
             }
-        });
-
-        clients.MapPost("/{clientId}/capabilities", (string clientId, EndpointCapabilities capabilities, InMemoryClientStore store) =>
-        {
-            store.SaveCapabilities(clientId, capabilities);
-            return Results.Ok(new { clientId, accepted = true });
         });
 
         clients.MapPost("/{clientId}/telemetry", (string clientId, TelemetrySnapshot telemetry, InMemoryClientStore store) =>
@@ -141,10 +115,12 @@ public static class ClientEndpoints
                 ? Results.NotFound(new { error = $"Client '{clientId}' is not registered." })
                 : Results.Ok(new { clientId, runs = store.GetBenchmarkEvidence(clientId) }));
 
-        clients.MapPost("/{clientId}/benchmarks/prepare", (
+        clients.MapPost("/{clientId}/benchmarks/prepare", async (
             string clientId,
             JsonElement body,
-            InMemoryClientStore store) =>
+            InMemoryClientStore store,
+            BenchmarkRuntimeOrchestrator benchmarkRuntime,
+            CancellationToken cancellationToken) =>
         {
             if (store.GetProfile(clientId) is null)
             {
@@ -180,12 +156,66 @@ public static class ClientEndpoints
                 return Results.BadRequest(new { error = "Benchmark fingerprints are invalid." });
             }
 
+            if (request.Trigger == BenchmarkTrigger.SessionPreflight &&
+                store.GetLatestBenchmarkHardwareEvidence(
+                    clientId,
+                    request.Fingerprints.Hardware,
+                    DateTimeOffset.UtcNow,
+                    MaximumBenchmarkEvidenceAge) is null)
+            {
+                return Results.Conflict(new
+                {
+                    error = "A completed full hardware benchmark is required before session preflight."
+                });
+            }
+
             BenchmarkPreparationResult preparation = store.PrepareBenchmarkRun(
                 new ClientId(clientId),
                 request.Trigger,
                 request.Fingerprints,
                 DateTimeOffset.UtcNow,
                 MaximumBenchmarkEvidenceAge);
+            BenchmarkTransportPlan transportPlan = BenchmarkSuitePolicy.Create(request.Trigger);
+            BenchmarkHardwarePlan hardwarePlan = BenchmarkSuitePolicy.CreateHardware(
+                request.Trigger,
+                store.GetCapabilities(clientId));
+            if (preparation.Disposition == BenchmarkPreparationDisposition.Reuse)
+            {
+                return Results.Ok(new
+                {
+                    disposition = "reuse",
+                    runId = preparation.Evidence.RunId,
+                    evidenceRevision = preparation.Evidence.Revision,
+                    selectedResult = preparation.Evidence.SelectedResult,
+                    transportPlan,
+                    hardwarePlan,
+                    networkCoverage = BenchmarkSuitePolicy.Coverage(transportPlan),
+                    connection = (object?)null,
+                    reason = preparation.Reason
+                });
+            }
+
+            Guid[] supersededRunIds = store.GetBenchmarkEvidence(clientId)
+                .Where(value => value.RunId != preparation.Evidence.RunId)
+                .Where(value => value.CompletedAt is null)
+                .Select(value => value.RunId)
+                .ToArray();
+            var runtimePlan = new BenchmarkRuntimePlan(
+                preparation.Evidence.RunId,
+                new ClientId(clientId),
+                request.Trigger,
+                transportPlan);
+            BenchmarkRuntimeGrantResult grant = await benchmarkRuntime.StartAsync(
+                runtimePlan,
+                supersededRunIds,
+                cancellationToken);
+            if (!grant.Success || grant.Connection is null)
+            {
+                return Results.Problem(
+                    grant.Error ?? "Benchmark runtime failed to provide a connection grant.",
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
             return Results.Ok(new
             {
                 disposition = preparation.Disposition switch
@@ -199,16 +229,54 @@ public static class ClientEndpoints
                     ? null
                     : preparation.Evidence.Revision,
                 selectedResult = preparation.Evidence.SelectedResult,
-                networkCoverage = BenchmarkSuitePolicy.NetworkCoverage,
+                transportPlan,
+                hardwarePlan,
+                networkCoverage = BenchmarkSuitePolicy.Coverage(transportPlan),
+                connection = grant.Connection,
                 reason = preparation.Reason
             });
         });
 
-        clients.MapPost("/{clientId}/benchmarks/{runId:guid}/complete", (
+        clients.MapPost("/{clientId}/benchmarks/{runId:guid}/cancel", async (
+            string clientId,
+            Guid runId,
+            InMemoryClientStore store,
+            BenchmarkRuntimeOrchestrator benchmarkRuntime,
+            CancellationToken cancellationToken) =>
+        {
+            BenchmarkEvidence? pending = store.GetBenchmarkEvidence(runId);
+            if (pending is null || !pending.ClientId.Value.Equals(clientId, StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.NotFound(new { error = "Benchmark run was not found for this client." });
+            }
+            if (pending.CompletedAt is not null)
+            {
+                return Results.Conflict(new { error = "Completed benchmark runs cannot be cancelled." });
+            }
+
+            string? cleanupError = await benchmarkRuntime.StopAsync(
+                clientId,
+                runId,
+                cancellationToken);
+            if (cleanupError is not null)
+            {
+                return Results.Problem(
+                    cleanupError,
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+
+            return store.TryCancelBenchmarkEvidence(runId, clientId)
+                ? Results.Ok(new { runId, state = "cancelled" })
+                : Results.Conflict(new { error = "Benchmark run was completed or replaced concurrently." });
+        });
+
+        clients.MapPost("/{clientId}/benchmarks/{runId:guid}/complete", async (
             string clientId,
             Guid runId,
             BenchmarkCompletionRequest request,
-            InMemoryClientStore store) =>
+            InMemoryClientStore store,
+            BenchmarkRuntimeOrchestrator benchmarkRuntime,
+            CancellationToken cancellationToken) =>
         {
             BenchmarkEvidence? pending = store.GetBenchmarkEvidence(runId);
             if (pending is null || !pending.ClientId.Value.Equals(clientId, StringComparison.OrdinalIgnoreCase))
@@ -236,22 +304,60 @@ public static class ClientEndpoints
 
             try
             {
+                BenchmarkTransportPlan transportPlan = BenchmarkSuitePolicy.Create(pending.Trigger);
+                NetworkBenchmarkCoverage coverage = BenchmarkSuitePolicy.Coverage(transportPlan);
+                IReadOnlyList<DecoderBenchmarkSample> decoderSamples = request.DecoderSamples;
+                IReadOnlyList<EndpointPowerSample> powerSamples = request.PowerSamples;
+                if (pending.Trigger == BenchmarkTrigger.SessionPreflight)
+                {
+                    if (request.DecoderSamples.Count != 0 || request.PowerSamples.Count == 0)
+                    {
+                        return Results.BadRequest(new
+                        {
+                            error = "Session preflight accepts network and current power samples only."
+                        });
+                    }
+
+                    BenchmarkEvidence? hardware = store.GetLatestBenchmarkHardwareEvidence(
+                        clientId,
+                        pending.Fingerprints.Hardware,
+                        DateTimeOffset.UtcNow,
+                        MaximumBenchmarkEvidenceAge);
+                    if (hardware is null)
+                    {
+                        return Results.Conflict(new
+                        {
+                            error = "The full hardware benchmark required by session preflight is unavailable."
+                        });
+                    }
+                    decoderSamples = hardware.DecoderSamples;
+                }
                 var scoringInput = new BenchmarkScoringInput(
                     request.NetworkSamples,
-                    request.DecoderSamples,
-                    request.PowerSamples,
+                    decoderSamples,
+                    powerSamples,
                     profile.Stream.CodecPreference,
-                    BenchmarkSuitePolicy.NetworkCoverage);
+                    coverage);
                 SelectedBenchmarkResult selected = BenchmarkScorer.Select(scoringInput);
                 BenchmarkEvidence completed = pending with
                 {
                     CompletedAt = DateTimeOffset.UtcNow,
                     NetworkSamples = request.NetworkSamples.ToArray(),
-                    DecoderSamples = request.DecoderSamples.ToArray(),
-                    PowerSamples = request.PowerSamples.ToArray(),
+                    DecoderSamples = decoderSamples.ToArray(),
+                    PowerSamples = powerSamples.ToArray(),
                     SelectedResult = selected,
-                    NetworkCoverage = BenchmarkSuitePolicy.NetworkCoverage
+                    NetworkCoverage = coverage
                 };
+                string? cleanupError = await benchmarkRuntime.StopAsync(
+                    clientId,
+                    runId,
+                    cancellationToken);
+                if (cleanupError is not null)
+                {
+                    return Results.Problem(
+                        cleanupError,
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
                 if (!store.TryCompleteBenchmarkEvidence(runId, clientId, completed, out BenchmarkEvidence? committed))
                 {
                     return Results.Conflict(new { error = "Benchmark run was completed or replaced concurrently." });
@@ -305,12 +411,8 @@ public static class ClientEndpoints
             InMemoryClientStore clients,
             InMemorySessionStore sessions,
             GameLibraryService games,
-            DisplayLeaseManager leases,
-            IDisplayBackend displayBackend,
-            IGameLauncher launcher,
-            ISessionOwnershipTracker ownership,
-            IStreamingBackend streaming,
-            StreamTicketProvisioningService ticketProvisioning,
+            StreamSessionLaunchService launchService,
+            IClientInputSessionLifecycle inputLifecycle,
             BeaconServerIdentity serverIdentity,
             CancellationToken cancellationToken) =>
         {
@@ -328,100 +430,38 @@ public static class ClientEndpoints
 
             var resolved = (ResolvedPlan)resolution;
 
-            StreamingPreflightResult streamingPreflight = await streaming.CheckReadinessAsync(resolved.Plan, cancellationToken);
-            if (!streamingPreflight.Success)
-            {
-                return Results.Problem(
-                    streamingPreflight.Error,
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
-
-            DisplayLeaseResult leaseResult = await leases.EnsureLeaseAsync(resolved.Profile, cancellationToken);
-            if (!leaseResult.Success || leaseResult.Lease is null)
-            {
-                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
-            }
-
-            sessions.Save(resolved.Plan);
-
-            GameLaunchResult launchResult = await launcher.LaunchAsync(
-                new GameLaunchRequest(resolved.Game, resolved.Plan, leaseResult.Lease.DisplayId),
-                cancellationToken);
-            if (!launchResult.Success || launchResult.State is null)
-            {
-                DisplayRestoreResult restore = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
-                string restoreStatus = restore.Success
-                    ? "Physical primary restore requested after game launch failure."
-                    : $"Physical primary restore failed after game launch failure: {restore.Error}";
-
-                return Results.Problem(
-                    $"{launchResult.Error} {restoreStatus}",
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
-
-            await ownership.RecordLaunchAsync(resolved.Plan, launchResult.State, cancellationToken);
-
-            StreamTicketProvisioningResult ticketResult = await ticketProvisioning.ProvisionAsync(
+            StreamSessionLaunchResult launch = await launchService.LaunchAsync(
                 clientId,
-                resolved.Plan.SessionId,
-                resolved.Plan.Revision,
+                resolved.Profile,
+                resolved.Game,
+                resolved.Plan,
                 cancellationToken);
-            if (!ticketResult.Success || ticketResult.Ticket is null)
+            if (!launch.Success
+                || launch.Lease is null
+                || launch.Launch is null
+                || launch.Stream is null
+                || launch.Ticket is null)
             {
                 return Results.Problem(
-                    ticketResult.Error,
+                    launch.Error,
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
-            IssuedStreamTicket issuedTicket = ticketResult.Ticket;
-
-            StreamingStartResult streamResult = await streaming.StartAsync(resolved.Plan, cancellationToken);
-            if (!streamResult.Success
-                || streamResult.Session is null
-                || !string.Equals(streamResult.Session.State, "running", StringComparison.Ordinal)
-                || streamResult.Session.ActiveListenerPort is not (> 0 and <= 65_535)
-                || streamResult.Session.RuntimeGeneration == Guid.Empty)
-            {
-                string streamError = streamResult.Error
-                    ?? $"Stream session '{resolved.Plan.SessionId}' has no active streaming runtime.";
-                string stopStatus = string.Empty;
-                if (streamResult.Success)
-                {
-                    StreamingStopResult stopped = await streaming.StopRuntimeAsync(
-                        resolved.Plan.SessionId,
-                        streamResult.Session?.RuntimeGeneration ?? Guid.Empty,
-                        cancellationToken);
-                    stopStatus = stopped.Success
-                        ? " Streaming runtime stopped after invalid metadata."
-                        : $" Streaming runtime stop compensation failed after invalid metadata: {stopped.Error}.";
-                }
-                StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
-                    clientId,
-                    resolved.Plan.SessionId,
-                    cancellationToken);
-                string revocationStatus = revoked.Success
-                    ? "Stream ticket revoked after stream start failure."
-                    : $"Stream ticket revocation failed after stream start failure: {revoked.Error}";
-                DisplayRestoreResult restore = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
-                string restoreStatus = restore.Success
-                    ? "Physical primary restore requested after stream start failure."
-                    : $"Physical primary restore failed after stream start failure: {restore.Error}";
-
-                return Results.Problem(
-                    $"{streamError}{stopStatus} {revocationStatus} {restoreStatus}",
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
+            await inputLifecycle.PrepareSessionAsync(
+                resolved.Plan.SessionId,
+                cancellationToken);
+            sessions.Save(resolved.Plan);
 
             return Results.Ok(new
             {
                 clientId,
-                displayId = leaseResult.Lease.DisplayId,
+                displayId = launch.Lease.DisplayId,
                 state = "streaming",
-                launch = launchResult.State,
-                stream = streamResult.Session,
+                launch = launch.Launch,
+                stream = launch.Stream,
                 connection = CreateConnectionGrant(
                     resolved.Plan,
-                    streamResult.Session,
-                    issuedTicket,
+                    launch.Stream,
+                    launch.Ticket,
                     serverIdentity),
             });
         });
@@ -484,6 +524,8 @@ public static class ClientEndpoints
             InMemorySessionStore sessions,
             DisplayLeaseManager leases,
             ISessionOwnershipTracker ownership,
+            IStreamingBackend streaming,
+            StreamTicketProvisioningService ticketProvisioning,
             CancellationToken cancellationToken) =>
         {
             ClientProfile? profile = clients.GetProfile(clientId);
@@ -516,6 +558,38 @@ public static class ClientEndpoints
             SessionOwnershipSnapshot? ownershipSnapshot = plan is null
                 ? null
                 : await ownership.GetSnapshotAsync(plan.SessionId, cancellationToken);
+            StreamingSessionState? stream = plan is null
+                ? null
+                : await streaming.GetSessionAsync(plan.SessionId, cancellationToken);
+            if (plan is not null && ownershipSnapshot?.HasOwnedWork != true)
+            {
+                if (IsActiveRuntime(stream))
+                {
+                    StreamingStopResult stopped = await streaming.StopRuntimeAsync(
+                        plan.SessionId,
+                        stream!.RuntimeGeneration,
+                        cancellationToken);
+                    if (!stopped.Success)
+                    {
+                        return Results.Problem(
+                            stopped.Error,
+                            statusCode: StatusCodes.Status503ServiceUnavailable);
+                    }
+
+                    stream = stopped.Session;
+                }
+
+                StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
+                    clientId,
+                    plan.SessionId,
+                    cancellationToken);
+                if (!revoked.Success)
+                {
+                    return Results.Problem(
+                        revoked.Error,
+                        statusCode: StatusCodes.Status503ServiceUnavailable);
+                }
+            }
             bool displayRemoved = await leases.CleanupIfAllowedAsync(
                 displayId,
                 clientActive: false,
@@ -535,6 +609,7 @@ public static class ClientEndpoints
                 displayId,
                 leasePrepared = false,
                 displayRemoved,
+                stream,
                 ownership = ownershipSnapshot
             });
         });
@@ -648,6 +723,7 @@ public static class ClientEndpoints
             DisplayLeaseManager leases,
             IStreamingBackend streaming,
             ISessionOwnershipTracker ownership,
+            StreamTicketProvisioningService ticketProvisioning,
             CancellationToken cancellationToken) =>
         {
             DisconnectRequest request = await ReadDisconnectRequestAsync(httpRequest, cancellationToken);
@@ -657,16 +733,38 @@ public static class ClientEndpoints
             SessionOwnershipSnapshot? ownershipSnapshot = null;
             if (plan is not null)
             {
-                StreamingStopResult stop = await streaming.StopAsync(plan.SessionId, cancellationToken);
-                if (!stop.Success)
-                {
-                    return Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
-                }
-
-                stream = stop.Session;
+                stream = await streaming.GetSessionAsync(plan.SessionId, cancellationToken);
                 if (!request.ClientActive)
                 {
                     ownershipSnapshot = await ownership.GetSnapshotAsync(plan.SessionId, cancellationToken);
+                    if (ownershipSnapshot?.HasOwnedWork != true
+                        && stream is not null
+                        && string.Equals(stream.State, "running", StringComparison.Ordinal)
+                        && stream.RuntimeGeneration != Guid.Empty)
+                    {
+                        StreamingStopResult stop = await streaming.StopRuntimeAsync(
+                            plan.SessionId,
+                            stream.RuntimeGeneration,
+                            cancellationToken);
+                        if (!stop.Success)
+                        {
+                            return Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+                        }
+
+                        stream = stop.Session;
+                    }
+
+                    StreamTicketProvisioningResult revoked =
+                        await ticketProvisioning.RevokeSessionAsync(
+                            clientId,
+                            plan.SessionId,
+                            cancellationToken);
+                    if (!revoked.Success)
+                    {
+                        return Results.Problem(
+                            revoked.Error,
+                            statusCode: StatusCodes.Status503ServiceUnavailable);
+                    }
                 }
             }
 
@@ -700,9 +798,7 @@ public static class ClientEndpoints
             string clientId,
             InMemoryClientStore clients,
             InMemorySessionStore sessions,
-            DisplayLeaseManager leases,
-            IStreamingBackend streaming,
-            StreamTicketProvisioningService ticketProvisioning,
+            StreamSessionReconnectService reconnectService,
             BeaconServerIdentity serverIdentity,
             CancellationToken cancellationToken) =>
         {
@@ -720,63 +816,30 @@ public static class ClientEndpoints
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
 
-            StreamingSessionState? streamingSession = await streaming.GetSessionAsync(
-                plan.SessionId,
-                cancellationToken);
-            if (streamingSession is null
-                || !string.Equals(streamingSession.State, "running", StringComparison.Ordinal)
-                || streamingSession.ActiveListenerPort is not (> 0 and <= 65_535)
-                || streamingSession.RuntimeGeneration == Guid.Empty)
-            {
-                return Results.Problem(
-                    $"Stream session '{plan.SessionId}' has no active streaming runtime.",
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
-
-            DisplayLeaseResult leaseResult = await leases.EnsureLeaseAsync(profile, cancellationToken);
-            if (!leaseResult.Success || leaseResult.Lease is null)
-            {
-                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
-            }
-
-            StreamTicketProvisioningResult ticketResult = await ticketProvisioning.ProvisionAsync(
+            StreamSessionReconnectResult reconnect = await reconnectService.ReconnectAsync(
                 clientId,
-                plan.SessionId,
-                plan.Revision,
+                profile,
+                plan,
                 cancellationToken);
-            if (!ticketResult.Success || ticketResult.Ticket is null)
+            if (!reconnect.Success
+                || reconnect.Lease is null
+                || reconnect.Stream is null
+                || reconnect.Ticket is null)
             {
                 return Results.Problem(
-                    ticketResult.Error,
+                    reconnect.Error ?? "Reconnect transaction failed.",
                     statusCode: StatusCodes.Status503ServiceUnavailable);
             }
-            IssuedStreamTicket replacement = ticketResult.Ticket;
-            StreamingSessionState? confirmedStreamingSession = await streaming.GetSessionAsync(
-                plan.SessionId,
-                cancellationToken);
-            if (!IsSameActiveRuntime(streamingSession, confirmedStreamingSession))
-            {
-                StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
-                    clientId,
-                    plan.SessionId,
-                    cancellationToken);
-                string revocationStatus = revoked.Success
-                    ? "Reconnect ticket revoked."
-                    : $"Reconnect ticket revocation failed: {revoked.Error}";
-                return Results.Problem(
-                    $"Stream session '{plan.SessionId}' changed while provisioning reconnect ticket. " +
-                    revocationStatus,
-                    statusCode: StatusCodes.Status503ServiceUnavailable);
-            }
+
             return Results.Ok(new
             {
                 clientId,
-                displayId = leaseResult.Lease.DisplayId,
+                displayId = reconnect.Lease.DisplayId,
                 state = "reconnected",
                 connection = CreateConnectionGrant(
                     plan,
-                    confirmedStreamingSession!,
-                    replacement,
+                    reconnect.Stream,
+                    reconnect.Ticket,
                     serverIdentity),
             });
         });
@@ -789,20 +852,29 @@ public static class ClientEndpoints
             ISessionOwnershipTracker ownership,
             IStreamingBackend streaming,
             StreamTicketProvisioningService ticketProvisioning,
+            IClientInputSessionLifecycle inputLifecycle,
             CancellationToken cancellationToken) =>
         {
             SessionPlan? plan = sessions.Get(clientId);
             StreamingSessionState? stream = null;
             SessionOwnershipSnapshot? ownershipSnapshot = null;
+            SessionOwnedWorkTerminationResult? ownedWorkTermination = null;
             if (plan is not null)
             {
-                StreamingStopResult stop = await streaming.StopAsync(plan.SessionId, cancellationToken);
-                if (!stop.Success)
+                stream = await streaming.GetSessionAsync(plan.SessionId, cancellationToken);
+                if (IsActiveRuntime(stream))
                 {
-                    return Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
-                }
+                    StreamingStopResult stop = await streaming.StopRuntimeAsync(
+                        plan.SessionId,
+                        stream!.RuntimeGeneration,
+                        cancellationToken);
+                    if (!stop.Success)
+                    {
+                        return Results.Problem(stop.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+                    }
 
-                stream = stop.Session;
+                    stream = stop.Session;
+                }
                 StreamTicketProvisioningResult revoked = await ticketProvisioning.RevokeSessionAsync(
                     clientId,
                     plan.SessionId,
@@ -813,7 +885,21 @@ public static class ClientEndpoints
                         revoked.Error,
                         statusCode: StatusCodes.Status503ServiceUnavailable);
                 }
+                await inputLifecycle.ReleaseSessionAsync(plan.SessionId, cancellationToken);
                 ownershipSnapshot = await ownership.GetSnapshotAsync(plan.SessionId, cancellationToken);
+                if (ownershipSnapshot?.HasOwnedWork == true)
+                {
+                    ownedWorkTermination = await ownership.TerminateOwnedWorkAsync(
+                        plan.SessionId,
+                        cancellationToken);
+                    ownershipSnapshot = await ownership.GetSnapshotAsync(plan.SessionId, cancellationToken);
+                }
+                else if (ownershipSnapshot is not null)
+                {
+                    await ownership.ClearAsync(plan.SessionId, cancellationToken);
+                    ownedWorkTermination = SessionOwnedWorkTerminationResult.Ok([]);
+                    ownershipSnapshot = null;
+                }
             }
 
             bool removed = await leases.CleanupIfAllowedAsync(
@@ -828,7 +914,15 @@ public static class ClientEndpoints
                 await ownership.ClearAsync(plan.SessionId, cancellationToken);
             }
 
-            return Results.Ok(new { clientId, cleanupEvaluated = true, displayRemoved = removed, stream, ownership = ownershipSnapshot });
+            return Results.Ok(new
+            {
+                clientId,
+                cleanupEvaluated = true,
+                displayRemoved = removed,
+                stream,
+                ownedWorkTermination,
+                ownership = ownershipSnapshot
+            });
         });
 
         clients.MapPost("/{clientId}/emergency-restore", async (
@@ -920,28 +1014,55 @@ public static class ClientEndpoints
             Ticket: ticket.Ticket,
             ExpiresAt: ticket.ExpiresAt,
             PlanRevision: plan.Revision,
-            PlanExplanation: $"{plan.Display.Reason} {plan.Stream.Reason}",
+            PlanExplanation: $"{plan.Display.Reason} {plan.Stream.Reason} {plan.Audio.Reason}",
             SessionId: plan.SessionId,
             Port: streamingSession.ActiveListenerPort!.Value,
             PublicKeyFingerprint: serverIdentity.PublicKeyFingerprint,
             SelectedVideo: new SelectedVideoGrant(
                 Codec: plan.Stream.Codec,
-                Width: plan.Display.Width,
-                Height: plan.Display.Height,
+                Width: plan.Stream.Width,
+                Height: plan.Stream.Height,
                 FramesPerSecondNumerator: plan.Stream.Fps,
                 FramesPerSecondDenominator: 1,
-                DynamicRange: plan.Display.HdrMode));
+                DynamicRange: plan.Display.HdrMode,
+                Profile: SelectedVideoProfileWireName(plan.Stream.Codec, plan.Stream.CodecProfile),
+                BitDepth: plan.Stream.BitDepth,
+                ColorPrimaries: plan.Stream.ColorPrimaries,
+                TransferFunction: plan.Stream.TransferFunction,
+                MatrixCoefficients: MatrixCoefficientsWireName(plan.Stream.MatrixCoefficients),
+                ColorRange: plan.Stream.ColorRange,
+                HdrStaticInfo: plan.Stream.HdrStaticInfo,
+                HdrStaticInfoInBitstream: plan.Stream.HdrStaticInfoInBitstream),
+            SelectedAudio: new SelectedAudioGrant(
+                Codec: plan.Audio.Codec,
+                SampleRateHz: plan.Audio.SampleRateHz,
+                ChannelCount: plan.Audio.ChannelCount,
+                FrameDurationUs: plan.Audio.FrameDurationUs,
+                BitrateBps: plan.Audio.BitrateBps));
 
-    private static bool IsSameActiveRuntime(
-        StreamingSessionState expected,
-        StreamingSessionState? actual) =>
-        actual is not null
-        && string.Equals(actual.State, "running", StringComparison.Ordinal)
-        && actual.ActiveListenerPort is > 0 and <= 65_535
-        && actual.RuntimeGeneration != Guid.Empty
-        && string.Equals(actual.SessionId, expected.SessionId, StringComparison.Ordinal)
-        && actual.ActiveListenerPort == expected.ActiveListenerPort
-        && actual.RuntimeGeneration == expected.RuntimeGeneration;
+    private static string SelectedVideoProfileWireName(string codec, string profile) =>
+        (codec.Trim().ToLowerInvariant(), profile.Trim().ToLowerInvariant()) switch
+        {
+            ("h264", "high") => "h264High",
+            ("hevc", "main10") => "hevcMain10",
+            _ => throw new InvalidOperationException(
+                $"Unsupported selected video profile tuple '{codec}/{profile}'.")
+        };
+
+    private static string MatrixCoefficientsWireName(string value) =>
+        value.Trim().ToLowerInvariant() switch
+        {
+            "bt709" => "bt709",
+            "bt2020-ncl" => "bt2020NonConstantLuminance",
+            _ => throw new InvalidOperationException(
+                $"Unsupported selected video matrix coefficients '{value}'.")
+        };
+
+    private static bool IsActiveRuntime(StreamingSessionState? session) =>
+        session is not null
+        && string.Equals(session.State, "running", StringComparison.Ordinal)
+        && session.ActiveListenerPort is > 0 and <= 65_535
+        && session.RuntimeGeneration != Guid.Empty;
 
     private sealed record ConnectionGrant(
         int ProtocolVersion,
@@ -952,7 +1073,8 @@ public static class ClientEndpoints
         string SessionId,
         int Port,
         string PublicKeyFingerprint,
-        SelectedVideoGrant SelectedVideo);
+        SelectedVideoGrant SelectedVideo,
+        SelectedAudioGrant SelectedAudio);
 
     private sealed record SelectedVideoGrant(
         string Codec,
@@ -960,7 +1082,22 @@ public static class ClientEndpoints
         int Height,
         int FramesPerSecondNumerator,
         int FramesPerSecondDenominator,
-        string DynamicRange);
+        string DynamicRange,
+        string Profile,
+        int BitDepth,
+        string ColorPrimaries,
+        string TransferFunction,
+        string MatrixCoefficients,
+        string ColorRange,
+        byte[] HdrStaticInfo,
+        bool HdrStaticInfoInBitstream);
+
+    private sealed record SelectedAudioGrant(
+        string Codec,
+        int SampleRateHz,
+        int ChannelCount,
+        int FrameDurationUs,
+        int BitrateBps);
 
     private static async Task<PlanResolutionResult> ResolvePlanAsync(
         string clientId,
@@ -983,6 +1120,7 @@ public static class ClientEndpoints
             return new PlanResolutionFailure(gameResolution.Error);
         }
 
+        EndpointCapabilities capabilities = clients.GetCapabilities(clientId);
         BenchmarkPlanEvidence? benchmark;
         try
         {
@@ -991,6 +1129,16 @@ public static class ClientEndpoints
                 DateTimeOffset.UtcNow,
                 MaximumBenchmarkEvidenceAge,
                 profile.Stream.CodecPreference);
+            if (benchmark is not null
+                && profile.Stream.CodecPreference.Trim().ToLowerInvariant() is "" or "auto"
+                && !IsProductionBenchmarkTuple(benchmark.SelectedResult, capabilities))
+            {
+                benchmark = GetConservativeProductionFallback(
+                    clients,
+                    clientId,
+                    capabilities,
+                    benchmark);
+            }
         }
         catch (Exception error) when (error is InvalidOperationException or ArgumentException)
         {
@@ -1008,7 +1156,7 @@ public static class ClientEndpoints
 
         SessionPlanResult planResult = SessionPlanner.CreatePlan(
             profile,
-            clients.GetCapabilities(clientId),
+            capabilities,
             benchmark,
             gameResolution.Game!);
         if (!planResult.Success || planResult.Plan is null)
@@ -1018,6 +1166,54 @@ public static class ClientEndpoints
 
         return new ResolvedPlan(profile, gameResolution.Game!, planResult.Plan);
     }
+
+    private static BenchmarkPlanEvidence GetConservativeProductionFallback(
+        InMemoryClientStore clients,
+        string clientId,
+        EndpointCapabilities capabilities,
+        BenchmarkPlanEvidence original)
+    {
+        string[] candidates = capabilities.H264
+            ? ["h264"]
+            : capabilities.Hevc && capabilities.Hdr10 && capabilities.VirtualDisplayHdrSupported
+                ? ["hevc"]
+                : [];
+        foreach (string codec in candidates)
+        {
+            try
+            {
+                BenchmarkPlanEvidence? fallback = clients.GetLatestBenchmarkPlanEvidence(
+                    clientId,
+                    DateTimeOffset.UtcNow,
+                    MaximumBenchmarkEvidenceAge,
+                    codec);
+                if (fallback is not null && IsProductionBenchmarkTuple(fallback.SelectedResult, capabilities))
+                {
+                    return fallback;
+                }
+            }
+            catch (Exception error) when (error is InvalidOperationException or ArgumentException)
+            {
+            }
+        }
+        return original;
+    }
+
+    private static bool IsProductionBenchmarkTuple(
+        SelectedBenchmarkResult selected,
+        EndpointCapabilities capabilities) =>
+        selected.Codec.Equals("h264", StringComparison.OrdinalIgnoreCase)
+            && selected.Profile.Equals("high", StringComparison.OrdinalIgnoreCase)
+            && selected.BitDepth == 8
+            && capabilities.H264
+        || selected.Codec.Equals("hevc", StringComparison.OrdinalIgnoreCase)
+            && selected.Profile.Equals("main10", StringComparison.OrdinalIgnoreCase)
+            && selected.BitDepth == 10
+            && selected.TenBitPresentationVerified
+            && selected.HdrPresentationVerified
+            && capabilities.Hevc
+            && capabilities.Hdr10
+            && capabilities.VirtualDisplayHdrSupported;
 
     private static async Task<GameResolution> ResolveRequestedGameAsync(
         PlanRequest request,
@@ -1049,7 +1245,6 @@ public static class ClientEndpoints
     {
         clientId = profile.ClientId.Value,
         profile,
-        editableFields = EditableFields,
     };
 
     private static GameDescriptor CreateRequestedGame(PlanRequest request) =>
@@ -1061,28 +1256,6 @@ public static class ClientEndpoints
             new GameArtwork(null, "none"),
             Installed: true,
             new GameProcessHints(null, null));
-
-    private static ClientProfilePatch CreatePatch(JsonElement body) =>
-        new(
-            PreferredWidth: ReadInt(body, "preferredWidth"),
-            PreferredHeight: ReadInt(body, "preferredHeight"),
-            PreferredRefreshHz: ReadInt(body, "preferredRefreshHz"),
-            HdrPreference: ReadHdrPreference(body, "hdrPreference"),
-            CodecPreference: ReadString(body, "codecPreference"),
-            QualityMode: ReadString(body, "qualityMode"),
-            BitrateCapMbps: ReadInt(body, "bitrateCapMbps"),
-            AudioMode: ReadString(body, "audioMode"),
-            KeepAppRunningOnDisconnect: ReadBool(body, "keepAppRunningOnDisconnect"));
-
-    private static int? ReadInt(JsonElement body, string propertyName) =>
-        body.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.Number
-            ? value.GetInt32()
-            : null;
-
-    private static bool? ReadBool(JsonElement body, string propertyName) =>
-        body.TryGetProperty(propertyName, out JsonElement value)
-            ? value.GetBoolean()
-            : null;
 
     private static async Task<DisconnectRequest> ReadDisconnectRequestAsync(
         HttpRequest request,
@@ -1130,28 +1303,6 @@ public static class ClientEndpoints
         {
             throw new BadHttpRequestException(invalidJsonMessage, ex);
         }
-    }
-
-    private static string? ReadString(JsonElement body, string propertyName) =>
-        body.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
-
-    private static HdrPreference? ReadHdrPreference(JsonElement body, string propertyName)
-    {
-        if (!body.TryGetProperty(propertyName, out JsonElement value))
-        {
-            return null;
-        }
-
-        if (value.ValueKind == JsonValueKind.Number)
-        {
-            return (HdrPreference)value.GetInt32();
-        }
-
-        return value.ValueKind == JsonValueKind.String && Enum.TryParse(value.GetString(), ignoreCase: true, out HdrPreference preference)
-            ? preference
-            : null;
     }
 
     private static void PublishInputDiagnostic(

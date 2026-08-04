@@ -36,6 +36,26 @@ public sealed class WindowsGameLauncherTests
         Assert.True(command.UseShellExecute);
     }
 
+    [Fact]
+    public void SelectOwnedProcessId_DoesNotClaimShellHandlerProcess()
+    {
+        int? processId = WindowsGameLauncher.SelectOwnedProcessId(
+            useShellExecute: true,
+            startedProcessId: 7654);
+
+        Assert.Null(processId);
+    }
+
+    [Fact]
+    public void SelectOwnedProcessId_ClaimsDirectlyStartedProcess()
+    {
+        int? processId = WindowsGameLauncher.SelectOwnedProcessId(
+            useShellExecute: false,
+            startedProcessId: 7654);
+
+        Assert.Equal(7654, processId);
+    }
+
     private static GameLaunchRequest CreateRequest(GameDescriptor game) =>
         new(game, CreatePlan(game), "client-z-fold-7");
 
@@ -57,11 +77,14 @@ public sealed class WindowsGameLauncherTests
             new PlannedDisplay("client-z-fold-7", 2560, 1600, 120, "virtual-primary", HdrPreference.Prefer, false, "sdr", "HDR unavailable."),
             new PlannedStream(
                 "av1",
+                2560,
+                1600,
                 120,
                 65,
                 "lan-direct",
                 "adaptive",
                 "Test benchmark evidence.",
                 Guid.Parse("33acde60-b29f-4f03-b2b2-f51337bdb9a5"),
-                "test-benchmark-revision"));
+                "test-benchmark-revision"),
+            new PlannedAudio("opus", 48_000, 2, 20_000, 96_000, "R2 test audio."));
 }

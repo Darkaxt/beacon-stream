@@ -4,11 +4,14 @@
 #include "beacon/stream/media_datagram.h"
 #include "test_failure.h"
 
+#include <opus.h>
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cmath>
 #include <new>
 #include <optional>
 #include <span>
@@ -49,8 +52,19 @@ struct FakeTransport final : android_stream::Transport {
   }
   bool send(android_stream::StreamRole role,
             std::vector<std::byte> bytes) override {
-    if (throw_on_send) throw std::runtime_error("injected send failure");
+    send_attempts.push_back(role);
+    if (throw_on_send &&
+        (!throw_send_role.has_value() || *throw_send_role == role)) {
+      throw std::runtime_error("injected send failure");
+    }
+    if (fail_send_role == role) return false;
     sends.push_back({role, std::move(bytes)});
+    return true;
+  }
+  bool send_final(android_stream::StreamRole role,
+                  std::vector<std::byte> bytes) override {
+    if (throw_on_send) throw std::runtime_error("injected send failure");
+    final_sends.push_back({role, std::move(bytes)});
     return true;
   }
   void shutdown() override {
@@ -61,10 +75,14 @@ struct FakeTransport final : android_stream::Transport {
 
   android_stream::Endpoint endpoint;
   std::vector<android_stream::StreamRole> opened;
+  std::vector<android_stream::StreamRole> send_attempts;
   std::vector<Send> sends;
+  std::vector<Send> final_sends;
   int shutdown_count{};
   int release_count{};
   int connect_count{};
+  std::optional<android_stream::StreamRole> fail_send_role;
+  std::optional<android_stream::StreamRole> throw_send_role;
   bool throw_on_send{};
   bool throw_on_shutdown{};
 };
@@ -77,8 +95,12 @@ struct FakeSink final : android_stream::FrameSink {
     if (throw_on_state) throw std::runtime_error("injected sink failure");
     states.push_back(value);
   }
+  void audio(android_stream::DecodedAudioFrame value) override {
+    audio_frames.push_back(std::move(value));
+  }
 
   std::vector<android_stream::EncodedFrame> frames;
+  std::vector<android_stream::DecodedAudioFrame> audio_frames;
   std::vector<android_stream::State> states;
   bool throw_on_state{};
 };
@@ -117,7 +139,51 @@ android_stream::ConnectionGrant grant() {
                   .height = 1080,
                   .fps_numerator = 60,
                   .fps_denominator = 1,
-                  .dynamic_range = stream_v1::DYNAMIC_RANGE_SDR};
+                  .dynamic_range = stream_v1::DYNAMIC_RANGE_SDR,
+                  .profile = stream_v1::VIDEO_PROFILE_H264_HIGH,
+                  .bit_depth = 8,
+                  .color_primaries = stream_v1::COLOR_PRIMARIES_BT709,
+                  .transfer_function = stream_v1::TRANSFER_FUNCTION_BT709,
+                  .matrix_coefficients = stream_v1::MATRIX_COEFFICIENTS_BT709,
+                  .color_range = stream_v1::COLOR_RANGE_LIMITED,
+                  .hdr_static_info = {},
+                  .hdr_static_info_in_bitstream = false};
+  result.audio = {.codec = stream_v1::AUDIO_CODEC_OPUS,
+                  .sample_rate_hz = 48'000,
+                  .channel_count = 2,
+                  .frame_duration_us = 20'000,
+                  .bitrate_bps = 96'000};
+  return result;
+}
+
+std::vector<std::byte> valid_hdr_static_info() {
+  return {
+      std::byte{0}, std::byte{0x48}, std::byte{0x8a}, std::byte{0x08},
+      std::byte{0x39}, std::byte{0x34}, std::byte{0x21}, std::byte{0xaa},
+      std::byte{0x9b}, std::byte{0x96}, std::byte{0x19}, std::byte{0xfc},
+      std::byte{0x08}, std::byte{0x13}, std::byte{0x3d}, std::byte{0x42},
+      std::byte{0x40}, std::byte{0xe8}, std::byte{0x03}, std::byte{0x32},
+      std::byte{0x00}, std::byte{0xe8}, std::byte{0x03}, std::byte{0x90},
+      std::byte{0x01}};
+}
+
+android_stream::ConnectionGrant benchmark_grant() {
+  auto result = grant();
+  result.benchmark = android_stream::BenchmarkGrant{
+      .run_id = "11111111-1111-1111-1111-111111111111",
+      .run_token = {std::byte{0x00}, std::byte{0x01}, std::byte{0x02},
+                    std::byte{0x03}, std::byte{0x04}, std::byte{0x05},
+                    std::byte{0x06}, std::byte{0x07}, std::byte{0x08},
+                    std::byte{0x09}, std::byte{0x0a}, std::byte{0x0b},
+                    std::byte{0x0c}, std::byte{0x0d}, std::byte{0x0e},
+                    std::byte{0x0f}},
+      .schema_version = 3,
+      .reliable_packet_count = 4,
+      .reliable_payload_bytes = 1024,
+      .reliable_measurement_interval_us = 500'000,
+      .datagram_packet_count = 8,
+      .datagram_payload_bytes = 1000,
+      .datagram_measurement_interval_us = 500'000};
   return result;
 }
 
@@ -126,6 +192,15 @@ stream_v1::SessionStreamEnvelope parse_session(std::span<const std::byte> bytes)
   stream_v1::SessionStreamEnvelope message;
   BEACON_TEST_REQUIRE(message.ParseFromArray(message_bytes.data(),
                                  static_cast<int>(message_bytes.size())));
+  return message;
+}
+
+stream_v1::FeedbackStreamEnvelope parse_feedback(
+    std::span<const std::byte> bytes) {
+  const auto message_bytes = payload(bytes);
+  stream_v1::FeedbackStreamEnvelope message;
+  BEACON_TEST_REQUIRE(message.ParseFromArray(
+      message_bytes.data(), static_cast<int>(message_bytes.size())));
   return message;
 }
 
@@ -148,15 +223,84 @@ std::vector<std::byte> accepted_reply(std::uint64_t sequence = 1) {
   return bytes;
 }
 
+void stop_finishes_the_reliable_session_stream_before_connection_shutdown() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(grant()));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+
+  core.stop();
+
+  BEACON_TEST_REQUIRE(transport.final_sends.size() == 1);
+  BEACON_TEST_REQUIRE(transport.final_sends.front().role ==
+                      android_stream::StreamRole::session);
+  const auto stop = parse_session(transport.final_sends.front().bytes);
+  BEACON_TEST_REQUIRE(stop.body_case() ==
+                      stream_v1::SessionStreamEnvelope::kStopSession);
+  BEACON_TEST_REQUIRE(stop.stop_session().reason() ==
+                      stream_v1::SESSION_STOP_REASON_CLIENT_REQUEST);
+  BEACON_TEST_REQUIRE(transport.shutdown_count == 0);
+}
+
+std::vector<std::byte> framed_session(
+    const stream_v1::SessionStreamEnvelope &message) {
+  std::vector<std::byte> bytes(4U + message.ByteSizeLong());
+  const auto size = static_cast<std::uint32_t>(message.ByteSizeLong());
+  bytes[0] = static_cast<std::byte>(size >> 24U);
+  bytes[1] = static_cast<std::byte>(size >> 16U);
+  bytes[2] = static_cast<std::byte>(size >> 8U);
+  bytes[3] = static_cast<std::byte>(size);
+  BEACON_TEST_REQUIRE(
+      message.SerializeToArray(bytes.data() + 4, static_cast<int>(size)));
+  return bytes;
+}
+
+std::vector<std::byte> reliable_benchmark_chunk(std::uint64_t envelope_sequence,
+                                                 std::uint64_t packet_sequence) {
+  stream_v1::SessionStreamEnvelope message;
+  message.set_protocol_version(1);
+  message.set_session_id("session-1");
+  message.set_sequence(envelope_sequence);
+  auto *chunk = message.mutable_benchmark_reliable_chunk();
+  chunk->set_run_id("11111111-1111-1111-1111-111111111111");
+  chunk->set_round_id(1);
+  chunk->set_sequence(packet_sequence);
+  chunk->set_sent_at_us(100 + packet_sequence);
+  chunk->set_payload(std::string(1024, 'b'));
+  return framed_session(message);
+}
+
+std::vector<std::byte> benchmark_completed() {
+  stream_v1::SessionStreamEnvelope message;
+  message.set_protocol_version(1);
+  message.set_session_id("session-1");
+  message.set_sequence(6);
+  auto *completed = message.mutable_benchmark_round_completed();
+  completed->set_run_id("11111111-1111-1111-1111-111111111111");
+  completed->set_round_id(2);
+  completed->set_expected_packet_count(8);
+  completed->set_payload_bytes(1000);
+  for (std::uint64_t sequence = 0; sequence < 7; ++sequence) {
+    auto *rtt = completed->add_rtt_observations();
+    rtt->set_sequence(sequence);
+    rtt->set_rtt_us(2'000 + sequence);
+  }
+  return framed_session(message);
+}
+
 std::vector<std::byte> media_datagram(
     std::uint64_t sequence, std::uint32_t frame_bytes,
     std::uint16_t chunk_index, std::uint16_t chunk_count,
     std::uint32_t payload_offset, std::span<const std::byte> bytes,
     beacon::stream::MediaDatagramFlags flags =
-        beacon::stream::MediaDatagramFlags::none) {
+        beacon::stream::MediaDatagramFlags::none,
+    beacon::stream::MediaKind media_kind =
+        beacon::stream::MediaKind::video) {
   beacon::stream::MediaDatagramHeader header{
       .version = beacon::stream::media_datagram_version,
-      .media_kind = beacon::stream::MediaKind::video,
+      .media_kind = media_kind,
       .flags = flags,
       .sequence = sequence,
       .presentation_time_us = sequence * 1000,
@@ -174,6 +318,52 @@ std::vector<std::byte> media_datagram(
           result.data(), beacon::stream::media_datagram_header_bytes}));
   std::ranges::copy(bytes,
                     result.begin() + beacon::stream::media_datagram_header_bytes);
+  return result;
+}
+
+std::vector<std::byte> opus_packet(float phase) {
+  int error = OPUS_OK;
+  OpusEncoder *encoder = opus_encoder_create(
+      static_cast<opus_int32>(android_stream::opus_sample_rate_hz),
+      static_cast<int>(android_stream::opus_channel_count),
+      OPUS_APPLICATION_RESTRICTED_LOWDELAY, &error);
+  BEACON_TEST_REQUIRE(encoder != nullptr);
+  BEACON_TEST_REQUIRE(error == OPUS_OK);
+  std::array<float, android_stream::opus_frame_interleaved_samples> pcm{};
+  for (std::size_t frame = 0;
+       frame < android_stream::opus_frame_samples_per_channel; ++frame) {
+    const float sample = 0.2F * std::sin(
+        phase + static_cast<float>(frame) * 0.03F);
+    pcm[frame * 2] = sample;
+    pcm[frame * 2 + 1] = sample;
+  }
+  std::array<unsigned char, 1275> encoded{};
+  const int encoded_bytes = opus_encode_float(
+      encoder, pcm.data(),
+      static_cast<int>(android_stream::opus_frame_samples_per_channel),
+      encoded.data(), static_cast<opus_int32>(encoded.size()));
+  opus_encoder_destroy(encoder);
+  BEACON_TEST_REQUIRE(encoded_bytes > 0);
+  const auto begin = reinterpret_cast<const std::byte *>(encoded.data());
+  return {begin, begin + encoded_bytes};
+}
+
+std::vector<std::byte> benchmark_datagram(
+    const std::array<std::byte, 16> &run_token, std::uint64_t sequence,
+    std::uint64_t sent_at_us, std::uint32_t payload_bytes) {
+  std::vector<std::byte> result(
+      beacon::stream::benchmark_datagram_header_bytes + payload_bytes,
+      std::byte{0x44});
+  const beacon::stream::BenchmarkDatagramHeader header{
+      .run_token = run_token,
+      .round_id = 2,
+      .sequence = sequence,
+      .sent_at_us = sent_at_us,
+      .payload_bytes = payload_bytes};
+  BEACON_TEST_REQUIRE(beacon::stream::serialize_benchmark_datagram_header(
+      header,
+      std::span<std::byte, beacon::stream::benchmark_datagram_header_bytes>{
+          result.data(), beacon::stream::benchmark_datagram_header_bytes}));
   return result;
 }
 
@@ -209,6 +399,130 @@ void accepted_auth_starts_selected_video() {
   BEACON_TEST_REQUIRE(start.start_session().selected_video().width() == 1920);
   BEACON_TEST_REQUIRE(start.start_session().selected_video().height() == 1080);
   BEACON_TEST_REQUIRE(start.start_session().selected_video().frames_per_second_numerator() == 60);
+  BEACON_TEST_REQUIRE(start.start_session().selected_audio().codec() ==
+                      stream_v1::AUDIO_CODEC_OPUS);
+  BEACON_TEST_REQUIRE(start.start_session().selected_audio().sample_rate_hz() == 48'000);
+  BEACON_TEST_REQUIRE(start.start_session().selected_audio().channel_count() == 2);
+  BEACON_TEST_REQUIRE(start.start_session().selected_audio().frame_duration_us() == 20'000);
+  BEACON_TEST_REQUIRE(start.start_session().selected_audio().bitrate_bps() == 96'000);
+}
+
+void accepted_auth_starts_exact_hevc_main10_hdr10_video() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  auto connection = grant();
+  connection.video.codec = stream_v1::VIDEO_CODEC_HEVC;
+  connection.video.dynamic_range = stream_v1::DYNAMIC_RANGE_HDR10;
+  connection.video.profile = stream_v1::VIDEO_PROFILE_HEVC_MAIN10;
+  connection.video.bit_depth = 10;
+  connection.video.color_primaries = stream_v1::COLOR_PRIMARIES_BT2020;
+  connection.video.transfer_function = stream_v1::TRANSFER_FUNCTION_PQ;
+  connection.video.matrix_coefficients =
+      stream_v1::MATRIX_COEFFICIENTS_BT2020_NON_CONSTANT_LUMINANCE;
+  connection.video.color_range = stream_v1::COLOR_RANGE_LIMITED;
+  connection.video.hdr_static_info = valid_hdr_static_info();
+  connection.video.hdr_static_info_in_bitstream = true;
+  BEACON_TEST_REQUIRE(core.start(std::move(connection)));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+
+  const auto start = parse_session(transport.sends[1].bytes);
+  const auto &video = start.start_session().selected_video();
+  BEACON_TEST_REQUIRE(video.codec() == stream_v1::VIDEO_CODEC_HEVC);
+  BEACON_TEST_REQUIRE(video.dynamic_range() == stream_v1::DYNAMIC_RANGE_HDR10);
+  BEACON_TEST_REQUIRE(video.profile() == stream_v1::VIDEO_PROFILE_HEVC_MAIN10);
+  BEACON_TEST_REQUIRE(video.bit_depth() == 10);
+  BEACON_TEST_REQUIRE(video.color_primaries() == stream_v1::COLOR_PRIMARIES_BT2020);
+  BEACON_TEST_REQUIRE(video.transfer_function() == stream_v1::TRANSFER_FUNCTION_PQ);
+  BEACON_TEST_REQUIRE(
+      video.matrix_coefficients() ==
+      stream_v1::MATRIX_COEFFICIENTS_BT2020_NON_CONSTANT_LUMINANCE);
+  BEACON_TEST_REQUIRE(video.color_range() == stream_v1::COLOR_RANGE_LIMITED);
+  const auto expected_static_info = valid_hdr_static_info();
+  BEACON_TEST_REQUIRE(video.hdr_static_info() == std::string(
+      reinterpret_cast<const char *>(expected_static_info.data()),
+      expected_static_info.size()));
+  BEACON_TEST_REQUIRE(video.hdr_static_info_in_bitstream());
+}
+
+void accepted_auth_starts_benchmark_without_starting_video() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(benchmark_grant()));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+  BEACON_TEST_REQUIRE(core.state() == android_stream::State::benchmarking);
+  BEACON_TEST_REQUIRE(transport.sends.size() == 2);
+  const auto start = parse_session(transport.sends[1].bytes);
+  BEACON_TEST_REQUIRE(
+      start.body_case() == stream_v1::SessionStreamEnvelope::kStartBenchmark);
+  BEACON_TEST_REQUIRE(start.start_benchmark().run_id() ==
+                      "11111111-1111-1111-1111-111111111111");
+  BEACON_TEST_REQUIRE(start.start_benchmark().schema_version() == 3);
+  BEACON_TEST_REQUIRE(start.start_benchmark().run_token().size() == 16);
+  BEACON_TEST_REQUIRE(
+      start.start_benchmark().reliable_round().packet_count() == 4);
+  BEACON_TEST_REQUIRE(
+      start.start_benchmark().datagram_round().packet_count() == 8);
+}
+
+void benchmark_packets_produce_echoes_and_explicit_completion_evidence() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(benchmark_grant()));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply(), 500));
+  for (std::uint64_t sequence = 0; sequence < 4; ++sequence) {
+    BEACON_TEST_REQUIRE(core.receive_session(
+        reliable_benchmark_chunk(2 + sequence, sequence), 1'000 + sequence * 500));
+  }
+
+  const auto run_token = benchmark_grant().benchmark->run_token;
+  for (std::uint64_t sequence = 0; sequence < 7; ++sequence) {
+    BEACON_TEST_REQUIRE(core.receive_datagram(
+        benchmark_datagram(run_token, sequence, 100 + sequence * 10, 1000),
+        2'000 + sequence * 12));
+  }
+  BEACON_TEST_REQUIRE(transport.sends.size() == 9);
+  for (std::size_t index = 2; index < transport.sends.size(); ++index) {
+    BEACON_TEST_REQUIRE(transport.sends[index].role ==
+                        android_stream::StreamRole::feedback);
+    stream_v1::FeedbackStreamEnvelope echo;
+    const auto message_bytes = payload(transport.sends[index].bytes);
+    BEACON_TEST_REQUIRE(echo.ParseFromArray(
+        message_bytes.data(), static_cast<int>(message_bytes.size())));
+    BEACON_TEST_REQUIRE(echo.benchmark_datagram_echo().sequence() == index - 2);
+  }
+
+  BEACON_TEST_REQUIRE(core.receive_session(benchmark_completed(), 4'000));
+  auto result = core.take_benchmark_result();
+  BEACON_TEST_REQUIRE(result.has_value());
+  BEACON_TEST_REQUIRE(result->samples.size() == 8);
+  BEACON_TEST_REQUIRE(result->received_datagrams == 7);
+  BEACON_TEST_REQUIRE(!result->samples[7].received);
+  BEACON_TEST_REQUIRE(!core.take_benchmark_result().has_value());
+}
+
+void benchmark_stop_finishes_the_session() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(benchmark_grant()));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+
+  core.stop();
+  BEACON_TEST_REQUIRE(core.state() == android_stream::State::stopped);
+  BEACON_TEST_REQUIRE(transport.sends.size() == 2);
+  BEACON_TEST_REQUIRE(transport.final_sends.size() == 1);
+  const auto stop = parse_session(transport.final_sends.front().bytes);
+  BEACON_TEST_REQUIRE(stop.body_case() ==
+                      stream_v1::SessionStreamEnvelope::kStopSession);
+  BEACON_TEST_REQUIRE(stop.stop_session().reason() ==
+                      stream_v1::SESSION_STOP_REASON_CLIENT_REQUEST);
 }
 
 void accepted_auth_forwards_every_selected_video_mode_exactly() {
@@ -220,19 +534,26 @@ void accepted_auth_forwards_every_selected_video_mode_exactly() {
            ExpectedMode{stream_v1::VIDEO_CODEC_H264,
                         stream_v1::DYNAMIC_RANGE_SDR},
            ExpectedMode{stream_v1::VIDEO_CODEC_HEVC,
-                        stream_v1::DYNAMIC_RANGE_HDR10},
-           ExpectedMode{stream_v1::VIDEO_CODEC_AV1,
                         stream_v1::DYNAMIC_RANGE_HDR10}}) {
     FakeTransport transport;
     FakeSink sink;
     android_stream::StreamCore core(transport, sink);
     auto connection = grant();
-    connection.video = {.codec = expected.codec,
-                        .width = 2560,
-                        .height = 1600,
-                        .fps_numerator = 120,
-                        .fps_denominator = 1,
-                        .dynamic_range = expected.dynamic_range};
+    connection.video.width = 2560;
+    connection.video.height = 1600;
+    connection.video.fps_numerator = 120;
+    connection.video.codec = expected.codec;
+    connection.video.dynamic_range = expected.dynamic_range;
+    if (expected.codec == stream_v1::VIDEO_CODEC_HEVC) {
+      connection.video.profile = stream_v1::VIDEO_PROFILE_HEVC_MAIN10;
+      connection.video.bit_depth = 10;
+      connection.video.color_primaries = stream_v1::COLOR_PRIMARIES_BT2020;
+      connection.video.transfer_function = stream_v1::TRANSFER_FUNCTION_PQ;
+      connection.video.matrix_coefficients =
+          stream_v1::MATRIX_COEFFICIENTS_BT2020_NON_CONSTANT_LUMINANCE;
+      connection.video.hdr_static_info = valid_hdr_static_info();
+      connection.video.hdr_static_info_in_bitstream = true;
+    }
     BEACON_TEST_REQUIRE(core.start(std::move(connection)));
     BEACON_TEST_REQUIRE(core.on_connected());
     BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
@@ -268,17 +589,224 @@ void sequences_are_monotonic_per_typed_channel() {
   const auto second_input_bytes = payload(transport.sends[3].bytes);
   stream_v1::InputStreamEnvelope first_input;
   stream_v1::InputStreamEnvelope second_input;
-  BEACON_TEST_REQUIRE(first_input.ParseFromArray(first_input_bytes.data(), first_input_bytes.size()));
-  BEACON_TEST_REQUIRE(second_input.ParseFromArray(second_input_bytes.data(), second_input_bytes.size()));
+  BEACON_TEST_REQUIRE(first_input.ParseFromArray(
+      first_input_bytes.data(), static_cast<int>(first_input_bytes.size())));
+  BEACON_TEST_REQUIRE(second_input.ParseFromArray(
+      second_input_bytes.data(), static_cast<int>(second_input_bytes.size())));
   BEACON_TEST_REQUIRE(first_input.sequence() == 1 && second_input.sequence() == 2);
 
   const auto first_feedback_bytes = payload(transport.sends[4].bytes);
   const auto second_feedback_bytes = payload(transport.sends[5].bytes);
   stream_v1::FeedbackStreamEnvelope first_feedback;
   stream_v1::FeedbackStreamEnvelope second_feedback;
-  BEACON_TEST_REQUIRE(first_feedback.ParseFromArray(first_feedback_bytes.data(), first_feedback_bytes.size()));
-  BEACON_TEST_REQUIRE(second_feedback.ParseFromArray(second_feedback_bytes.data(), second_feedback_bytes.size()));
+  BEACON_TEST_REQUIRE(first_feedback.ParseFromArray(
+      first_feedback_bytes.data(),
+      static_cast<int>(first_feedback_bytes.size())));
+  BEACON_TEST_REQUIRE(second_feedback.ParseFromArray(
+      second_feedback_bytes.data(),
+      static_cast<int>(second_feedback_bytes.size())));
   BEACON_TEST_REQUIRE(first_feedback.sequence() == 1 && second_feedback.sequence() == 2);
+}
+
+void decoder_feedback_and_reset_requests_preserve_typed_payloads() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(grant()));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+
+  stream_v1::DecoderFeedback decoder;
+  decoder.set_state(stream_v1::DECODER_STATE_FAILED);
+  decoder.set_platform_error_code(321);
+  BEACON_TEST_REQUIRE(core.send_feedback(decoder));
+
+  stream_v1::RenderedFrameFeedback rendered;
+  rendered.set_frame_sequence(44);
+  rendered.set_presentation_time_us(55);
+  rendered.set_rendered_at_us(66);
+  BEACON_TEST_REQUIRE(core.send_feedback(rendered));
+  BEACON_TEST_REQUIRE(core.request_idr(
+      stream_v1::IDR_REQUEST_REASON_DECODER_RESET, 44));
+
+  const auto decoder_envelope = parse_feedback(transport.sends[2].bytes);
+  BEACON_TEST_REQUIRE(decoder_envelope.sequence() == 1);
+  BEACON_TEST_REQUIRE(decoder_envelope.decoder().state() ==
+                      stream_v1::DECODER_STATE_FAILED);
+  BEACON_TEST_REQUIRE(decoder_envelope.decoder().platform_error_code() == 321);
+
+  const auto rendered_envelope = parse_feedback(transport.sends[3].bytes);
+  BEACON_TEST_REQUIRE(rendered_envelope.sequence() == 2);
+  BEACON_TEST_REQUIRE(rendered_envelope.rendered_frame().frame_sequence() == 44);
+  BEACON_TEST_REQUIRE(
+      rendered_envelope.rendered_frame().presentation_time_us() == 55);
+  BEACON_TEST_REQUIRE(rendered_envelope.rendered_frame().rendered_at_us() == 66);
+
+  const auto request = parse_session(transport.sends[4].bytes);
+  BEACON_TEST_REQUIRE(request.request_idr().reason() ==
+                      stream_v1::IDR_REQUEST_REASON_DECODER_RESET);
+  BEACON_TEST_REQUIRE(request.request_idr().last_complete_sequence() == 44);
+}
+
+void latest_pre_stream_decoder_feedback_flushes_after_start_session() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(grant()));
+
+  stream_v1::DecoderFeedback connecting_feedback;
+  connecting_feedback.set_state(stream_v1::DECODER_STATE_READY);
+  connecting_feedback.set_platform_error_code(111);
+  BEACON_TEST_REQUIRE(core.send_feedback(connecting_feedback));
+  BEACON_TEST_REQUIRE(transport.sends.empty());
+
+  BEACON_TEST_REQUIRE(core.on_connected());
+  stream_v1::DecoderFeedback authenticating_feedback;
+  authenticating_feedback.set_state(stream_v1::DECODER_STATE_AWAITING_IDR);
+  authenticating_feedback.set_platform_error_code(222);
+  BEACON_TEST_REQUIRE(core.send_feedback(authenticating_feedback));
+  BEACON_TEST_REQUIRE(transport.sends.size() == 1);
+
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+  BEACON_TEST_REQUIRE(core.state() == android_stream::State::streaming);
+  BEACON_TEST_REQUIRE((transport.send_attempts == std::vector{
+      android_stream::StreamRole::session,
+      android_stream::StreamRole::session,
+      android_stream::StreamRole::feedback}));
+  BEACON_TEST_REQUIRE(transport.sends.size() == 3);
+
+  const auto start = parse_session(transport.sends[1].bytes);
+  BEACON_TEST_REQUIRE(
+      start.body_case() == stream_v1::SessionStreamEnvelope::kStartSession);
+  BEACON_TEST_REQUIRE(start.sequence() == 2);
+  const auto feedback = parse_feedback(transport.sends[2].bytes);
+  BEACON_TEST_REQUIRE(feedback.sequence() == 1);
+  BEACON_TEST_REQUIRE(feedback.body_case() ==
+                      stream_v1::FeedbackStreamEnvelope::kDecoder);
+  BEACON_TEST_REQUIRE(feedback.decoder().state() ==
+                      stream_v1::DECODER_STATE_AWAITING_IDR);
+  BEACON_TEST_REQUIRE(feedback.decoder().platform_error_code() == 222);
+}
+
+void pending_decoder_feedback_does_not_cross_stop_restart_boundary() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(grant()));
+
+  stream_v1::DecoderFeedback feedback;
+  feedback.set_state(stream_v1::DECODER_STATE_AWAITING_IDR);
+  BEACON_TEST_REQUIRE(core.send_feedback(feedback));
+  core.stop();
+
+  BEACON_TEST_REQUIRE(core.start(grant()));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+  BEACON_TEST_REQUIRE(core.state() == android_stream::State::streaming);
+  BEACON_TEST_REQUIRE(transport.connect_count == 2);
+  BEACON_TEST_REQUIRE((transport.send_attempts == std::vector{
+      android_stream::StreamRole::session,
+      android_stream::StreamRole::session}));
+}
+
+void pending_decoder_feedback_flush_failure_fails_authentication_path() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(grant()));
+
+  stream_v1::DecoderFeedback feedback;
+  feedback.set_state(stream_v1::DECODER_STATE_AWAITING_IDR);
+  BEACON_TEST_REQUIRE(core.send_feedback(feedback));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  transport.fail_send_role = android_stream::StreamRole::feedback;
+
+  BEACON_TEST_REQUIRE(!core.receive_session(accepted_reply()));
+  BEACON_TEST_REQUIRE(core.state() == android_stream::State::failed);
+  BEACON_TEST_REQUIRE((transport.send_attempts == std::vector{
+      android_stream::StreamRole::session,
+      android_stream::StreamRole::session,
+      android_stream::StreamRole::feedback}));
+  BEACON_TEST_REQUIRE(transport.sends.size() == 2);
+  BEACON_TEST_REQUIRE(transport.shutdown_count == 1);
+}
+
+void pending_decoder_feedback_flush_exception_fails_authentication_path() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(grant()));
+
+  stream_v1::DecoderFeedback feedback;
+  feedback.set_state(stream_v1::DECODER_STATE_AWAITING_IDR);
+  BEACON_TEST_REQUIRE(core.send_feedback(feedback));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  transport.throw_on_send = true;
+  transport.throw_send_role = android_stream::StreamRole::feedback;
+
+  bool receive_result = true;
+  bool receive_threw = false;
+  try {
+    receive_result = core.receive_session(accepted_reply());
+  } catch (...) {
+    receive_threw = true;
+  }
+
+  BEACON_TEST_REQUIRE(!receive_threw);
+  BEACON_TEST_REQUIRE(!receive_result);
+  BEACON_TEST_REQUIRE(core.state() == android_stream::State::failed);
+  BEACON_TEST_REQUIRE(transport.shutdown_count == 1);
+  BEACON_TEST_REQUIRE((transport.send_attempts == std::vector{
+      android_stream::StreamRole::session,
+      android_stream::StreamRole::session,
+      android_stream::StreamRole::feedback}));
+  BEACON_TEST_REQUIRE(transport.sends.size() == 2);
+  BEACON_TEST_REQUIRE(transport.sends[0].role ==
+                      android_stream::StreamRole::session);
+  BEACON_TEST_REQUIRE(transport.sends[1].role ==
+                      android_stream::StreamRole::session);
+  const auto start = parse_session(transport.sends[1].bytes);
+  BEACON_TEST_REQUIRE(
+      start.body_case() == stream_v1::SessionStreamEnvelope::kStartSession);
+}
+
+void invalid_decoder_feedback_is_rejected_in_every_session_phase() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  stream_v1::DecoderFeedback unspecified_feedback;
+  stream_v1::DecoderFeedback out_of_range_feedback;
+  out_of_range_feedback.set_state(static_cast<stream_v1::DecoderState>(4));
+  BEACON_TEST_REQUIRE(core.start(grant()));
+  BEACON_TEST_REQUIRE(!core.send_feedback(unspecified_feedback));
+  BEACON_TEST_REQUIRE(!core.send_feedback(out_of_range_feedback));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(!core.send_feedback(unspecified_feedback));
+  BEACON_TEST_REQUIRE(!core.send_feedback(out_of_range_feedback));
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+  BEACON_TEST_REQUIRE(!core.send_feedback(unspecified_feedback));
+  BEACON_TEST_REQUIRE(!core.send_feedback(out_of_range_feedback));
+  BEACON_TEST_REQUIRE((transport.send_attempts == std::vector{
+      android_stream::StreamRole::session,
+      android_stream::StreamRole::session}));
+}
+
+void benchmark_sessions_never_queue_or_send_decoder_feedback() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  stream_v1::DecoderFeedback feedback;
+  feedback.set_state(stream_v1::DECODER_STATE_AWAITING_IDR);
+
+  BEACON_TEST_REQUIRE(core.start(benchmark_grant()));
+  BEACON_TEST_REQUIRE(!core.send_feedback(feedback));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(!core.send_feedback(feedback));
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+  BEACON_TEST_REQUIRE(!core.send_feedback(feedback));
+  BEACON_TEST_REQUIRE((transport.send_attempts == std::vector{
+      android_stream::StreamRole::session,
+      android_stream::StreamRole::session}));
 }
 
 void frame_limit_is_derived_from_selected_resolution() {
@@ -303,6 +831,48 @@ void frame_limit_is_derived_from_selected_resolution() {
   BEACON_TEST_REQUIRE(core.receive_datagram(media_datagram(
       2, android_stream::minimum_planned_frame_bytes,
       0, 2, 0, one)));
+}
+
+void audio_datagrams_decode_to_pcm_without_entering_video_assembly() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(grant()));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+  const auto packet = opus_packet(0.0F);
+
+  BEACON_TEST_REQUIRE(core.receive_datagram(media_datagram(
+      1, static_cast<std::uint32_t>(packet.size()), 0, 1, 0, packet,
+      beacon::stream::MediaDatagramFlags::end_of_access_unit,
+      beacon::stream::MediaKind::audio)));
+
+  BEACON_TEST_REQUIRE(sink.frames.empty());
+  BEACON_TEST_REQUIRE(sink.audio_frames.size() == 1);
+  BEACON_TEST_REQUIRE(sink.audio_frames[0].sequence == 1);
+  BEACON_TEST_REQUIRE(sink.audio_frames[0].presentation_time_us == 1000);
+  BEACON_TEST_REQUIRE(
+      sink.audio_frames[0].interleaved_pcm.size() ==
+      android_stream::opus_frame_interleaved_samples);
+}
+
+void multi_chunk_audio_datagrams_are_rejected_without_video_side_effects() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  BEACON_TEST_REQUIRE(core.start(grant()));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+  const auto packet = opus_packet(0.0F);
+
+  BEACON_TEST_REQUIRE(!core.receive_datagram(media_datagram(
+      1, static_cast<std::uint32_t>(packet.size() + 1), 0, 2, 0, packet,
+      beacon::stream::MediaDatagramFlags::none,
+      beacon::stream::MediaKind::audio)));
+
+  BEACON_TEST_REQUIRE(sink.frames.empty());
+  BEACON_TEST_REQUIRE(sink.audio_frames.empty());
+  BEACON_TEST_REQUIRE(transport.sends.size() == 2);
 }
 
 void assembler_loss_requests_one_idr_until_recovery() {
@@ -353,11 +923,13 @@ void capacity_eviction_recovered_by_same_idr_sends_no_request() {
   BEACON_TEST_REQUIRE(core.receive_datagram(media_datagram(
       14, 1, 0, 1, 0, one,
       beacon::stream::MediaDatagramFlags::idr |
+          beacon::stream::MediaDatagramFlags::codec_configuration |
           beacon::stream::MediaDatagramFlags::end_of_access_unit)));
   BEACON_TEST_REQUIRE(transport.sends.size() == 2);
   BEACON_TEST_REQUIRE(sink.frames.size() == 1);
   BEACON_TEST_REQUIRE(sink.frames[0].sequence == 14);
   BEACON_TEST_REQUIRE(sink.frames[0].idr);
+  BEACON_TEST_REQUIRE(sink.frames[0].codec_configuration);
 }
 
 void close_faults_never_skip_transport_release() {
@@ -403,6 +975,7 @@ void close_faults_never_skip_transport_release() {
     BEACON_TEST_REQUIRE(core.on_connected());
     BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
     sink.throw_on_state = true;
+    transport.throw_on_send = true;
     transport.throw_on_shutdown = true;
     core.release();
     core.release();
@@ -506,9 +1079,23 @@ int main() {
   return beacon::stream::testing::run_tests([] {
     starts_one_route_and_consumes_ticket();
     accepted_auth_starts_selected_video();
+    accepted_auth_starts_exact_hevc_main10_hdr10_video();
+    accepted_auth_starts_benchmark_without_starting_video();
+    benchmark_packets_produce_echoes_and_explicit_completion_evidence();
+    benchmark_stop_finishes_the_session();
+    stop_finishes_the_reliable_session_stream_before_connection_shutdown();
     accepted_auth_forwards_every_selected_video_mode_exactly();
     sequences_are_monotonic_per_typed_channel();
+    decoder_feedback_and_reset_requests_preserve_typed_payloads();
+    latest_pre_stream_decoder_feedback_flushes_after_start_session();
+    pending_decoder_feedback_does_not_cross_stop_restart_boundary();
+    pending_decoder_feedback_flush_failure_fails_authentication_path();
+    pending_decoder_feedback_flush_exception_fails_authentication_path();
+    invalid_decoder_feedback_is_rejected_in_every_session_phase();
+    benchmark_sessions_never_queue_or_send_decoder_feedback();
     frame_limit_is_derived_from_selected_resolution();
+    audio_datagrams_decode_to_pcm_without_entering_video_assembly();
+    multi_chunk_audio_datagrams_are_rejected_without_video_side_effects();
     assembler_loss_requests_one_idr_until_recovery();
     close_faults_never_skip_transport_release();
     capacity_eviction_recovered_by_same_idr_sends_no_request();

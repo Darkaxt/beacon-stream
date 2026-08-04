@@ -1,4 +1,5 @@
 using Beacon.Core.Input;
+using Beacon.StreamWorker.Contracts.Worker.V1;
 
 namespace Beacon.Platform.Windows.Streaming;
 
@@ -33,6 +34,7 @@ public enum StreamWorkerFeedbackKind
     Decoder,
     QueueDepth,
     Benchmark,
+    BenchmarkDatagramEcho,
 }
 
 public sealed record StreamWorkerFeedbackReceived(
@@ -52,6 +54,21 @@ public sealed record StreamWorkerMediaEvidence(
     ulong Sequence,
     ulong PresentationTimeUs,
     uint DatagramBytes) : StreamWorkerEvent(ProcessGeneration, SessionId);
+
+public sealed record StreamWorkerSessionStateChanged(
+    long ProcessGeneration,
+    string SessionId,
+    WorkerSessionState State,
+    WorkerErrorCode ErrorCode) : StreamWorkerEvent(ProcessGeneration, SessionId);
+
+public sealed record StreamWorkerSessionFailure(
+    long ProcessGeneration,
+    string SessionId,
+    ulong WorkerSessionGeneration,
+    DiagnosticBoundary Boundary,
+    DiagnosticCode Code,
+    uint PlatformErrorCode,
+    string FailureStage) : StreamWorkerEvent(ProcessGeneration, SessionId);
 
 public sealed record StreamWorkerConnectionObserved(
     long ProcessGeneration,

@@ -8,8 +8,9 @@ device facts, game selection, and control requests.
 
 ## Current State
 
-Architecture Recovery Gates 0-3 and the Gate 4 evidence model define the current repository
-state:
+Architecture Recovery Gates 0-4 and the R1 integrated production transaction define the current
+repository state. Delivery now follows the outcome-driven
+[`core-hardening` execution plan](docs/superpowers/plans/2026-08-04-beacon-core-hardening-outcome-gates.md):
 
 - Core, Server, Cockpit, Client Lab, FakeEndpoint, and Android expose protocol-neutral
   Beacon session state.
@@ -18,18 +19,30 @@ state:
 - Fake host mode provides deterministic end-to-end control-plane testing.
 - A Beacon-owned C++ StreamWorker runs behind typed named-pipe IPC and carries authenticated
   control, input, feedback, and media datagrams over MsQuic.
-- The APK has one JNI StreamCore route. Gate 3 proves it against the real Server and Worker on
-  the Android emulator with a deterministic, non-decodable access-unit marker.
+- The APK has one JNI StreamCore route. The normal APK on `emulator-5554` has rendered moving video
+  from the production WGC, D3D11, NVENC H.264, MsQuic, and MediaCodec path.
 - Versioned network/hardware fingerprints, raw benchmark samples, server-side scoring,
   automatic reuse decisions, manual always-new runs, history, and persisted plan evidence are
   implemented. Planning rejects missing or stale evidence instead of reverting to telemetry
   heuristics.
-- Gate 3 does not claim real video. WGC capture, D3D11 conversion, NVENC H.264, and MediaCodec
-  presentation remain Gate 5 work behind the existing Worker/StreamCore contract.
+- R1 is complete. One retained transaction prepared the client-owned display, launched the catalog
+  probe, rendered moving H.264 SDR video, delivered authenticated F12 input, survived an active
+  disconnect and fresh-ticket reconnect, quit, released ownership, and verified physical-only
+  restoration. R1 is integration evidence, not a playable user release.
 
-The approved Gates 3-5 implementation is a source-audited Beacon StreamWorker/StreamCore
-vertical slice: fake transport proof first, benchmark traffic through the production
-transport, then real H.264 video to the Android emulator.
+The playable R2 transaction is paused while the core display and HDR path is hardened. Beacon now
+implements one production HDR10 route: Windows Advanced Color capture in FP16, P010 conversion,
+NVENC HEVC Main10 encoding, exact HDR metadata transport, and StreamCore/MediaCodec HDR10 decoding
+and presentation control. The Worker path is hardware-validated and the Android contract is covered
+by unit, native, and emulator tests. A physical HDR Android device is still required to certify that
+the standard APK presents the decoded stream as HDR on real hardware; emulator evidence cannot make
+that claim. H.264 SDR remains the proven fallback. Audio, tablet input, motion, remaining codecs,
+multi-client work, packaging, and UI work remain outside this core checkpoint.
+
+`2560x1600` is not a universal client default. Production planning uses each client's reported
+display geometry and supported modes, preferring an exact match and then the closest same-aspect
+mode. A Full HD 16:9 client should therefore normally receive `1920x1080`, while a 16:10 client
+retains 16:10.
 
 ## Architecture
 
@@ -64,23 +77,26 @@ The streaming boundary has one production route and one test implementation:
 
 ## Server
 
-Start deterministic fake host mode on the endpoint expected by the simulators:
+Start the production Windows server:
 
 ```powershell
-$env:ASPNETCORE_URLS='http://127.0.0.1:5000'
-dotnet run --project src\Beacon.Server
+dotnet run --project src\Beacon.Server -- --urls https://127.0.0.1:5001
 ```
 
-Start real Windows host composition:
+The shipped server has one composition: Windows display, launcher, activity,
+input, recovery, installed-game discovery, and Beacon StreamWorker. There is no
+host or streaming mode selector and no fake backend in production projects.
+
+Start the deterministic test-only server used by process-level simulators:
 
 ```powershell
-$env:ASPNETCORE_URLS='http://127.0.0.1:5000'
-$env:BEACON_HOST_MODE='windows'
-dotnet run --project src\Beacon.Server
+dotnet run --project tests\Beacon.Server.TestHost -- --urls http://127.0.0.1:5000 --Beacon:Security:TestHost=true
 ```
 
-Windows mode exercises the real display, launcher, activity, input, recovery, and
-StreamWorker boundaries. Real encoded video is intentionally unavailable until Gate 5.
+The test host and all deterministic doubles are compiled only from `tests/`.
+Production video availability is reported by the identity-bound Worker capability
+handshake; unsupported capture or encoder hardware fails explicitly while network
+benchmarking remains available.
 
 Optional profile and benchmark-evidence persistence:
 
@@ -154,8 +170,9 @@ adb shell am start -W -n dev.beacon.android/.BeaconActivity
 
 For the standard Android emulator, the APK server URL is `http://10.0.2.2:5000`.
 Validate catalog selection, local settings persistence, capability and telemetry reports,
-input controls, stop/disconnect/quit, and emergency restore. Gate 3 instrumentation drives
-the production JNI route; the normal APK still has no claim of moving video before Gate 5.
+input controls, stop/disconnect/quit, and emergency restore. Individual production video boundaries
+are implemented; R1 requires the normal APK to complete the full production acceptance transaction
+before Beacon claims an integrated stream.
 
 ## Validation
 
@@ -227,9 +244,11 @@ instead of maintaining an exception ledger.
 ## Authority
 
 - Authoritative requirements: `docs/superpowers/specs/2026-06-03-personal-streaming-orchestrator-design.md`
+- Authoritative execution policy: `docs/superpowers/specs/2026-08-04-beacon-core-hardening-execution-design.md`
+- Active release-outcome plan: `docs/superpowers/plans/2026-08-04-beacon-core-hardening-outcome-gates.md`
 - Recovery inventory: `docs/source-audits/2026-07-10-beacon-architecture-recovery-inventory.md`
 - Gates 0-2 plan: `docs/superpowers/plans/2026-07-10-beacon-stream-architecture-recovery-gates-0-2.md`
 - Native streaming source audit: `docs/source-audits/2026-07-10-beacon-streamworker-streamcore.md`
-- Gates 3-5 plan: `docs/superpowers/plans/2026-07-10-beacon-stream-gates-3-5.md`
+- Historical Gates 3-5 record: `docs/superpowers/plans/2026-07-10-beacon-stream-gates-3-5.md`
 - Source provenance: `docs/extraction-map.md`
 - Windows display boundary: `docs/windows-display-backend.md`

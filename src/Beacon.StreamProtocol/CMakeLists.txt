@@ -1,10 +1,17 @@
 add_library(
   BeaconStreamProtocol
   STATIC
+    src/audio_media_packetizer.cpp
+    src/benchmark_datagram.cpp
     src/frame_assembler.cpp
+    src/hdr_static_metadata.cpp
     src/media_datagram.cpp
     src/msquic_transport.cpp
+    src/secure_bytes.cpp
+    src/selected_video_mode.cpp
+    src/server_session_protocol.cpp
     src/session.cpp
+    src/video_media_packetizer.cpp
 )
 
 target_include_directories(
@@ -14,6 +21,8 @@ target_include_directories(
 )
 
 add_library(Beacon::StreamProtocol ALIAS BeaconStreamProtocol)
+
+target_link_libraries(BeaconStreamProtocol PUBLIC Beacon::StreamContracts)
 
 if(MSVC)
   target_compile_options(BeaconStreamProtocol PUBLIC /W4 /WX /permissive-)

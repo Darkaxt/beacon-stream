@@ -20,9 +20,19 @@ public interface IWindowsDisplayApi
     Task<DisplayApiResult> RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken);
 
     Task<DisplayHdrCapability> QueryHdrCapabilityAsync(string displayId, CancellationToken cancellationToken);
+
+    Task<DisplayApiResult> SetHdrStateAsync(
+        string displayId,
+        bool enabled,
+        CancellationToken cancellationToken);
 }
 
-public sealed record DisplayDriverStatus(bool Ready, string Diagnostic);
+public sealed record DisplayDriverStatus(
+    bool Ready,
+    string Diagnostic,
+    byte? ProtocolMajor = null,
+    byte? ProtocolMinor = null,
+    byte? ProtocolIncremental = null);
 
 public sealed record DisplayApiResult(bool Success, string? Error)
 {

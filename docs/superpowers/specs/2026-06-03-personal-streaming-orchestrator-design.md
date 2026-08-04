@@ -1,6 +1,6 @@
 # Personal Streaming Orchestrator Design
 
-Status: authoritative architecture-recovery revision, 2026-07-10
+Status: authoritative architecture-recovery revision, 2026-08-04
 
 ## Purpose
 
@@ -9,6 +9,31 @@ Beacon Stream is a personal Windows game-streaming system with one server-owned 
 The Windows server knows registered clients before launch, measures their current network and hardware behavior, computes one complete session plan, prepares the correct virtual desktop, launches the selected Windows application, and owns the stream until verified cleanup. The Android APK identifies itself, benchmarks the current endpoint, selects an application from the server catalog, presents the stream, forwards input, and exposes only local interaction settings.
 
 This document replaces compatibility-first assumptions introduced during the first 120 pull requests. Where an older plan, README statement, test, or implementation contradicts this document, this document wins.
+
+## Execution Authority
+
+The architecture in this document remains authoritative. Delivery priority, progress reporting,
+and release claims are governed by
+`2026-08-04-beacon-core-hardening-execution-design.md` and
+`../plans/2026-08-04-beacon-core-hardening-outcome-gates.md`.
+
+The release sequence is:
+
+1. The completed R1 H.264 SDR transaction remains useful integration evidence, but it is not core
+   completion.
+2. Core Stage 1 selects and hardens one virtual-display driver boundary, beginning with a decisive
+   HDR-capability feasibility probe and ending with durable recovery validation.
+3. Core Stage 2 implements and validates the complete HDR chain from the selected virtual display
+   through physical Android presentation.
+4. Only after Core Stages 1 and 2 pass may delivery resume on the playable-client, remaining input,
+   remaining codec, packaging, and prerelease outcomes.
+5. If no viable HDR path can be proven, execution stops with a concrete boundary report and requires
+   a product decision. SDR fallback is valid session behavior but is not an HDR acceptance result.
+
+Older unchecked milestone items are historical evidence, not parallel requirements. This execution
+reset does not weaken Beacon's architecture, security, server-owned policy, virtual-display
+lifecycle, HDR truthfulness, physical-display integrity, or inactive **AND** no-owned-work
+invariants.
 
 ## Core Thesis
 
@@ -53,13 +78,14 @@ These invariants are non-negotiable.
 7. Fake implementations exist only for deterministic tests and use the same Beacon-owned contracts.
 8. Display, application, session, and recovery ownership remain in Beacon Service, never in StreamWorker or the APK.
 9. Benchmark measurements are facts. Only Beacon Service selects streaming settings.
-10. New feature work remains frozen until architecture recovery and one Beacon-owned emulator vertical slice pass their acceptance gates.
+10. Secondary feature work remains frozen until the selected virtual-display driver and the complete HDR path pass their core acceptance gates.
+11. Privileged Windows execution is isolated in one Beacon Host Agent that implements typed mechanics without owning session policy.
 
 ## Product Components
 
 ### Beacon Service
 
-Beacon Service is the authoritative Windows service and control plane.
+Beacon Service is the authoritative Windows host and control plane. It runs non-elevated as the owning user in the interactive Windows session; privileged mechanics are delegated to Beacon Host Agent without transferring policy ownership.
 
 Responsibilities:
 
@@ -75,6 +101,12 @@ Responsibilities:
 - Operational journal, health, diagnostics, and recovery.
 
 Beacon Service does not capture or encode frames in its managed service process. Native streaming failures must not crash or corrupt the policy owner.
+
+### Beacon Host Agent
+
+Beacon Host Agent is the sole elevated Beacon process. It runs in the owning user's interactive Windows session, exposes no network endpoint, and executes a fixed versioned set of display and driver operations over a SID-restricted named pipe. Beacon Service remains the policy and lifecycle owner; Host Agent cannot plan sessions, infer cleanup, launch applications, or start StreamWorker.
+
+The normative process, IPC, package-verification, transaction, and validation requirements are defined in `2026-07-21-beacon-host-agent-design.md`.
 
 ### Beacon StreamWorker
 
@@ -126,7 +158,7 @@ User-visible responsibilities:
 - Show the server-owned Windows application/game catalog.
 - Select and launch one entry.
 - Present the active stream.
-- Forward touch, keyboard, mouse, and controller input supported by the device.
+- Forward touch, keyboard, mouse, controller, and Android-device motion input supported by the device.
 - Stop the session.
 - Request owning-session emergency recovery.
 - Edit local-only interaction and presentation settings.
@@ -137,6 +169,7 @@ Allowed local settings include:
 
 - Touch layout and gesture mapping.
 - Controller overlay and button mapping.
+- Device-motion enablement, calibration, sensitivity, and axis inversion.
 - Haptics.
 - Local UI density and theme.
 - Wake lock behavior.
@@ -183,7 +216,7 @@ This register is the implementation contract.
 
 ### Product Boundary
 
-- `REQ-BOUND-001`: Beacon must stream with Apollo and Sunshine absent and stopped.
+- `REQ-BOUND-001`: Beacon must stream without Apollo or Sunshine installed, running, configured, queried, or controlled.
 - `REQ-BOUND-002`: Beacon must not implement Apollo, Sunshine, GameStream, Moonlight, or Artemis compatibility as a product feature.
 - `REQ-BOUND-003`: Beacon must not expose upstream pairing, app-list, launch, cancel, RTSP, NVHTTP, runtime-descriptor, or wrapper-manifest contracts.
 - `REQ-BOUND-004`: Beacon must ship one production StreamWorker and one APK StreamCore path.
@@ -214,7 +247,34 @@ This register is the implementation contract.
 - `REQ-SEC-005`: Ticket expiry is a security validity rule, not a session cancellation timeout.
 - `REQ-SEC-006`: Private keys, credentials, session tickets, and media keys never appear in public API snapshots, logs, exception text, or `ToString()` output.
 - `REQ-SEC-007`: Owning-client actions are scoped to that client's active session.
-- `REQ-SEC-008`: The local cockpit may perform broader administrative recovery with UAC elevation when required.
+- `REQ-SEC-008`: The local cockpit requests broader administrative recovery through Beacon Service and Host Agent; it does not directly elevate or bypass server policy.
+
+### Privileged Host Boundary
+
+- `REQ-HOST-001`: One installer-time elevation registers `Beacon.HostAgent` for the owning user's interactive logon at highest run level.
+- `REQ-HOST-002`: Routine Beacon startup, display control, recovery, and approved SudoVDA updates do not prompt for UAC.
+- `REQ-HOST-003`: Host Agent is the only elevated Beacon process and exposes no network listener.
+- `REQ-HOST-004`: Beacon Service owns all desired state, ordering, session policy, cleanup gates, and compensation; Host Agent executes typed Windows mechanics only.
+- `REQ-HOST-005`: Host Agent IPC is versioned, local-only, bound to the owning user SID, protected by an explicit pipe ACL, and authenticated from the kernel-provided client identity.
+- `REQ-HOST-006`: Host Agent accepts no arbitrary command, executable path, command line, script, environment block, registry path, device instance id, or unrestricted filesystem path.
+- `REQ-HOST-007`: Pipe disconnect never implies stream stop, display removal, primary restoration, application termination, or any other lifecycle transition.
+- `REQ-HOST-008`: Display mutations re-resolve and verify target identity and preserve a physical path immediately before execution.
+- `REQ-HOST-009`: Driver updates use complete manifest-bound INF/CAT/binary packages staged below an ACL-controlled Beacon directory; a loose DLL is never installable.
+- `REQ-HOST-010`: Host Agent rejects package traversal, reparse points, unexpected files, hash mismatch, signer mismatch, INF mismatch, architecture mismatch, and incompatible driver protocol.
+- `REQ-HOST-011`: Driver update success requires verification of the active published INF, device state, protocol, signer, version, and binary hash after device restart.
+- `REQ-HOST-012`: Failed driver verification triggers one deterministic rollback to the previously recorded package; unverified rollback is reported as a durable degraded state.
+- `REQ-HOST-013`: No timeout cancels a host operation or owns cleanup. Heartbeats report liveness only.
+- `REQ-HOST-014`: Core, StreamWorker, StreamCore, and the public APK protocol contain no Host Agent implementation contract.
+- `REQ-HOST-015`: One stable elevated bootstrap is the scheduled-task executable and launches the selected versioned Host Agent as its child.
+- `REQ-HOST-016`: Unattended Host Agent updates require an exact manifest signed by the CI update key whose public key is pinned in the installed bootstrap; unsigned local builds are rejected.
+- `REQ-HOST-017`: Host Agent update packages cannot replace the bootstrap, task definition, signing key, ACL policy, or files outside a fresh version directory.
+- `REQ-HOST-018`: Candidate activation occurs only after independent bootstrap validation of signature, package shape, and every payload hash.
+- `REQ-HOST-019`: Host Agent returns and flushes the accepted update response before exiting with the dedicated bootstrap update code.
+- `REQ-HOST-020`: Bootstrap accepts readiness only from the exact launched child process and waits on readiness or process exit without a startup timeout.
+- `REQ-HOST-021`: Candidate exit before readiness causes one deterministic rollback to the previous verified version; failed previous-version readiness is durably degraded.
+- `REQ-HOST-022`: Update transaction state, selected version, pending candidate, source commit, manifests, and activation evidence are durable and queryable after restart.
+- `REQ-HOST-023`: Codex can dispatch, download, stage, request, and verify a CI-signed Host Agent update without interactive UAC after the final bootstrap installation.
+- `REQ-HOST-024`: Updating the stable bootstrap or rotating its pinned update key remains an explicit UAC recovery operation.
 
 ### Network Fingerprint And Benchmark Triggers
 
@@ -229,6 +289,9 @@ This register is the implementation contract.
 - `REQ-BENCH-009`: A manual Benchmark action always permits a new full run.
 - `REQ-BENCH-010`: Benchmark state and results are stored server-side by client, network fingerprint, hardware revision, benchmark schema, and execution timestamp.
 - `REQ-BENCH-011`: Automatic benchmark triggers are event-driven and must not use a periodic watchdog.
+- `REQ-BENCH-012`: The full benchmark tests every codec mutually supported by the server encoder and client decoder, then the server ranks the sustainable H.264, HEVC, and AV1 candidates using measured decode, encode, network, latency, thermal, and power evidence.
+- `REQ-BENCH-013`: The persisted benchmark result contains the selected codec, ranked qualified fallbacks, rejected candidates, and a concrete reason for every selection or rejection. The APK reports measurements but does not make this decision.
+- `REQ-BENCH-014`: The lightweight session preflight confirms that the selected benchmark result remains viable under current network congestion and server load. It may move only to another benchmark-qualified candidate and records the reason; it does not guess an untested codec.
 
 ### Network Benchmark
 
@@ -252,17 +315,22 @@ This register is the implementation contract.
 - `REQ-HW-007`: Full calibration includes sustained workloads long enough to expose thermal throttling and unstable advertised modes.
 - `REQ-HW-008`: The planner must reject a mode that the active benchmark cannot sustain even if Android advertises it.
 - `REQ-HW-009`: Hardware benchmark failures are facts and must not crash the APK or alter server policy directly.
-- `REQ-HW-010`: Emulator benchmarks are valid for protocol and lifecycle testing but cannot certify physical-device HDR, thermal, touch, controller, or radio behavior.
+- `REQ-HW-010`: Emulator benchmarks are valid for protocol and lifecycle testing but cannot certify physical-device HDR, thermal, touch, controller, gyroscope, or radio behavior.
 
 ### Session Planning
 
 - `REQ-PLAN-001`: The plan includes client id, app id, display identity, display mode, resolution, refresh rate, stream FPS, codec/profile/bit depth, bitrate, HDR state, audio mode, transport parameters, input capabilities, benchmark evidence revision, and recovery policy.
-- `REQ-PLAN-002`: The Z Fold 7 policy may target `2560x1600` and `120 Hz`; the planner must never silently replace 16:10 intent with `2560x1440`.
-- `REQ-PLAN-003`: Stream resolution and game render resolution are separate concepts; Beacon does not force a game's internal rendering setting.
-- `REQ-PLAN-004`: The planner chooses settings from server capabilities, client policy, current benchmark evidence, application constraints, and server load.
-- `REQ-PLAN-005`: The plan records a human-readable reason for every downgrade or fallback.
-- `REQ-PLAN-006`: If an explicitly required capability cannot be provided, launch fails before display or application side effects.
-- `REQ-PLAN-007`: The APK receives the executable plan for display and diagnostics but cannot modify it.
+- `REQ-PLAN-002`: Virtual-display resolution is selected per client from reported display geometry and supported modes; Beacon has no universal `2560x1600` default for every client.
+- `REQ-PLAN-003`: The server selects the exact client mode when the complete path supports it, otherwise the closest supported mode with the same aspect ratio before considering a different aspect ratio. It must never clamp width and height independently or silently convert 16:10 intent to 16:9.
+- `REQ-PLAN-004`: The Z Fold 7 policy may target `2560x1600` and `120 Hz`; an AYN Thor or another Full HD 16:9 client should normally target `1920x1080`, subject to the modes that client actually reports.
+- `REQ-PLAN-005`: Client display geometry and supported modes are hardware facts. The server owns the selected virtual-display mode and persists the resulting per-client policy.
+- `REQ-PLAN-006`: Stream resolution and game render resolution are separate concepts; Beacon does not force a game's internal rendering setting.
+- `REQ-PLAN-007`: The planner chooses settings from server capabilities, client policy, current benchmark evidence, application constraints, and server load.
+- `REQ-PLAN-008`: The plan records a human-readable reason for every downgrade or fallback.
+- `REQ-PLAN-009`: If an explicitly required capability cannot be provided, launch fails before display or application side effects.
+- `REQ-PLAN-010`: The APK receives the executable plan for display and diagnostics but cannot modify it.
+- `REQ-PLAN-011`: The executable plan consumes the latest valid server-interpreted benchmark codec selection for that client and network/hardware fingerprint; it never assumes one codec is universally best or independently guesses a codec at launch.
+- `REQ-PLAN-012`: A manual codec preference is server-owned per-client policy. It may constrain the candidates, but launch still fails or falls back according to that policy when the measured path cannot sustain the requested codec.
 
 ### Virtual Display Lifecycle
 
@@ -281,6 +349,27 @@ This register is the implementation contract.
 - `REQ-DISP-013`: The laptop panel cannot remain inactive when no session owns that state.
 - `REQ-DISP-014`: An owned application may keep the virtual display alive without keeping it primary or stealing the physical desktop.
 - `REQ-DISP-015`: Before/after topology, display id, resolution, refresh, primary state, HDR state, and reason are journaled for every topology operation.
+- `REQ-DISP-016`: Beacon owns a SudoVDA control session while at least one Beacon display lease exists and sends the driver heartbeat required to preserve those leases.
+- `REQ-DISP-017`: The driver heartbeat is a liveness mechanism only. Its schedule or failure cannot remove a lease, trigger cleanup, or replace the inactive-client **AND** no-owned-work cleanup gate.
+- `REQ-DISP-018`: Beacon derives heartbeat cadence from the driver-reported watchdog contract, shares one control session across its own concurrent leases, and closes it after the final Beacon lease is released.
+- `REQ-DISP-019`: Beacon does not read or write Apollo settings, control the Apollo service or process, reuse Apollo lifecycle state, or require Apollo to keep SudoVDA displays alive.
+- `REQ-DISP-020`: Beacon does not rewrite machine-wide SudoVDA watchdog or monitor-capacity configuration. Driver capacity exhaustion and heartbeat failures are reported as explicit readiness or session faults.
+- `REQ-DISP-021`: The privileged HostAgent is the single writer of an ACL-protected atomic recovery journal for each owned lease. The journal contains client identity, display GUID, intended mode and topology supplied by Beacon Service, last completed privileged lifecycle phase, and the verified physical baseline needed for compensation; Beacon Service may query but not independently rewrite it.
+- `REQ-DISP-022`: HostAgent startup reconciles exact SudoVDA display identities against its recovery journal before accepting a display command, and Beacon Service startup adopts that reconciled inventory before accepting a launch. Beacon may repair, restore, or remove only displays proven to be Beacon-owned; unrelated virtual or physical displays remain untouched.
+- `REQ-DISP-023`: A verified physical-only baseline is captured before the first topology mutation and replaced only while no Beacon lease exists and Windows exposes a stable physical-only topology. A missing or corrupt current snapshot falls back to that verified baseline rather than an inferred generic layout.
+- `REQ-DISP-024`: Recovery chooses restore-before-remove or remove-before-restore from observed topology and retained baseline evidence, then independently verifies the final physical-primary state. Neither ordering is assumed universally safe.
+- `REQ-DISP-025`: A HostAgent-owned production recovery supervisor, not only an acceptance-test guard, observes Windows power resume, session unlock, sign-out, shutdown, Beacon Service loss/restart, and HostAgent restart events. Beacon Service remains the policy owner while available; the supervisor owns privileged compensation and any user-session helper dispatch recorded in the journal.
+- `REQ-DISP-026`: Driver disablement, disappearance, protocol mismatch, failed heartbeat, or device restart is diagnosed against the exact expected PnP instance. Safe re-enable or restart is performed only through the privileged HostAgent, is serialized against display and driver-update transactions, and is verified before streaming resumes.
+- `REQ-DISP-027`: Recovery does not use a timeout or fixed retry count as lifecycle authority. It advances on driver acknowledgements, PnP state changes, Windows topology generations, process exits, power/session events, and explicit administrative cancellation; heartbeat intervals report liveness only.
+- `REQ-DISP-028`: GPU-driver reset, hybrid-GPU adapter migration, dock or external-monitor hotplug, and display-identity renumbering force a fresh all-path inventory and name mapping before Beacon reapplies an owned topology. Cached `DISPLAYx` names are never treated as durable identity.
+- `REQ-DISP-029`: Topology or driver repair preserves the owned application and session whenever the inactive-client **AND** no-owned-work cleanup gate is false. Repair cannot silently convert a retained session into teardown.
+- `REQ-DISP-030`: Unexpected Beacon Service, StreamWorker, HostAgent, or recovery-supervisor termination leaves enough durable evidence for the surviving or restarted owner to restore or resume deterministically without deleting unrelated displays. If client or owned-work state cannot be proven after a crash, recovery restores physical control but preserves the journaled lease and application until the inactive-client **AND** no-owned-work condition can be recomputed.
+- `REQ-DISP-031`: Recovery diagnostics expose the triggering Windows or driver event, journal revision, exact owned identities, baseline source, selected compensation order, every observed topology generation, and final verification result.
+- `REQ-DISP-032`: Beacon cannot claim its virtual-display pipeline more robust than an upstream implementation until the production recovery matrix passes on the target laptop and at least one clean Windows installation.
+- `REQ-DISP-033`: Every implementation stage that can mutate Windows display or driver state captures a verified physical baseline and arms an independent recovery owner before its first mutation.
+- `REQ-DISP-034`: Every such stage ends by proving the internal physical panel is active and primary at its captured baseline resolution, refresh, orientation, and aspect ratio; mirror mode is disabled; no inactive-session Beacon lease or virtual output remains; the driver control session is closed; and the input desktop is locally usable.
+- `REQ-DISP-035`: A failed physical-display integrity closeout fails the entire stage, blocks all later work, retains diagnostics, and invokes compensating recovery. A successful feature assertion cannot override a failed laptop-integrity assertion.
+- `REQ-DISP-036`: Driver selection is evidence-driven. Beacon first probes the current SudoVDA path, then evaluates an adapted Nonary `libvirtualdisplay`/Vibeshine driver primitive when SudoVDA cannot prove the required HDR and lifecycle contracts. Beacon does not silently replace its product architecture with Vibeshine.
 
 ### Session Ownership And Cleanup
 
@@ -316,7 +405,7 @@ This register is the implementation contract.
 - `REQ-STREAM-004`: Video, audio, control, input, metrics, and shutdown belong to one coherent session lifecycle.
 - `REQ-STREAM-005`: Media transport supports ordered frame reconstruction, bounded reordering, explicit loss evidence, and recovery suitable for low-latency gaming.
 - `REQ-STREAM-006`: Reliable control must not cause video head-of-line blocking.
-- `REQ-STREAM-007`: The protocol supports H.264 first, then HEVC and AV1 through the same contract rather than alternate routes.
+- `REQ-STREAM-007`: The version-one protocol and production Worker support H.264, HEVC, and AV1 through the same contract rather than alternate routes. H.264 is the bootstrap and prerelease path, not the final codec ceiling.
 - `REQ-STREAM-008`: The protocol supports SDR first and extends the same path to 10-bit HDR.
 - `REQ-STREAM-009`: Audio and input use the same authenticated session identity as video.
 - `REQ-STREAM-010`: Stream state changes are event-driven; no descriptor polling, startup sleep, cancellation timeout, or watchdog owns lifecycle.
@@ -324,6 +413,25 @@ This register is the implementation contract.
 - `REQ-STREAM-012`: StreamCore stop releases transport, decoder, audio, input, Surface, and native resources exactly once.
 - `REQ-STREAM-013`: No launch URI, Android intent, endpoint-role map, RTSP session URL, wrapper manifest, or runtime descriptor file appears in the production client contract.
 - `REQ-STREAM-014`: Low-level transport libraries may be reused internally, but users and higher-level Beacon modules see only the Beacon protocol.
+
+### Input Capabilities
+
+- `REQ-INPUT-001`: Each client reports touch, keyboard, mouse, controller, and Android-device motion capabilities independently; Beacon has no global or mutually exclusive input mode.
+- `REQ-INPUT-002`: A session may carry every input category supported by that client without one category disabling another.
+- `REQ-INPUT-003`: Version-one motion input originates from the Android device IMU, independently of any attached controller adapter; controller-provided motion is not required.
+- `REQ-INPUT-004`: Motion samples carry a monotonic source timestamp, three-axis angular velocity, three-axis acceleration, and an explicit normalized coordinate system. Beacon never fabricates motion capability when either required sensor is absent.
+- `REQ-INPUT-005`: Motion enablement, calibration, sensitivity, and axis inversion are client-local interaction settings and do not alter server stream policy.
+- `REQ-INPUT-006`: The Windows host publishes the active client's motion as a DSU/Cemuhook-compatible UDP server on loopback, using `127.0.0.1:26760` by default, so Cemu-class emulators can consume it independently from the normal virtual-controller route.
+- `REQ-INPUT-007`: DSU is an application-level interoperability adapter, not a Windows kernel driver or a replacement gamepad backend. Beacon never silently converts device motion to mouse, right-stick, or virtual-controller input.
+- `REQ-INPUT-008`: The DSU adapter is owned by the authenticated Beacon session. Sensor capture and publication start only when that client advertises motion, survive a transient media reconnect with the owning session, and stop deterministically on session quit or administrative termination.
+- `REQ-INPUT-009`: Failure to bind the configured DSU endpoint or loss of device-motion input reports motion as unavailable with a concrete diagnostic; it does not fail controller input, streaming, or display restoration.
+- `REQ-INPUT-010`: Static tests verify sensor normalization, timestamps, DSU framing, protocol version, CRC, and axis conversion. Dynamic tests use a loopback DSU client that performs the same version, port-list, subscription, and motion-data exchange expected by Cemu; physical-device acceptance verifies orientation, latency, and drift.
+
+The interoperability boundary follows the documented
+[Cemuhook Android motion-source model](https://cemuhook.sshnuke.net/padudpserver.html). Current Cemu is
+a DSU client whose default provider is `127.0.0.1:26760` and whose motion integration consumes both
+acceleration and gyroscope fields from DSU data responses. Beacon therefore transports Android sensor
+samples inside its authenticated session and publishes DSU only on the Windows loopback boundary.
 
 ### HDR
 
@@ -335,6 +443,11 @@ This register is the implementation contract.
 - `REQ-HDR-006`: The complete chain is driver/virtual display, Windows Advanced Color, capture, 10-bit conversion, encoder, Beacon protocol metadata, decoder, and client display presentation.
 - `REQ-HDR-007`: Beacon never fabricates HDR capability when Windows or Android reports SDR.
 - `REQ-HDR-008`: HDR activation and fallback reasons appear in the plan and operational journal.
+- `REQ-HDR-009`: Production capability is reported only from production-path evidence. Mock endpoint capabilities, planner tests, API success, or an accepted Advanced Color request cannot establish HDR support.
+- `REQ-HDR-010`: HDR acceptance runs with server policy `require` and proves all boundaries in `REQ-HDR-006`, including Windows reporting HDR supported and active with at least 10 bits per channel, a 10-bit encoded bitstream with correct color metadata, and Android reporting HDR presentation on the physical display.
+- `REQ-HDR-011`: The production Worker must advertise `hdr10=true` only when its selected capture, conversion, encoder, and protocol path can execute that contract. The Android client must advertise HDR10 only when decoder, 10-bit vector, display, and presentation evidence all pass.
+- `REQ-HDR-012`: HDR requires at least one production 10-bit codec path. HEVC Main10 is the default implementation candidate; AV1 10-bit may be selected first when measured server and client evidence makes it the viable path. H.264 SDR cannot satisfy HDR acceptance.
+- `REQ-HDR-013`: If the driver, Windows, GPU encoder, protocol, decoder, or client display blocks HDR after candidate evaluation, Beacon records the exact failing boundary, preserves working SDR behavior, and stops for a product decision. It does not declare HDR complete through fallback.
 
 ### Recovery And Diagnostics
 
@@ -356,9 +469,17 @@ This register is the implementation contract.
 - `REQ-TEST-005`: StreamWorker and StreamCore have deterministic in-memory transport boundaries for packet loss, reordering, cancellation, and lifecycle tests.
 - `REQ-TEST-006`: Android emulator runs the real APK, StreamCore, Surface decoder, benchmark workflow, catalog selection, launch, stop, and reconnect.
 - `REQ-TEST-007`: Real Windows display integration tests remain explicit and manually runnable because they change topology.
-- `REQ-TEST-008`: A production vertical-slice test runs with Apollo and Sunshine stopped and proves Beacon-owned capture to emulator presentation.
-- `REQ-TEST-009`: Physical phone testing is reserved for final decoder quality, 120 Hz, HDR, thermals, Wi-Fi behavior, touch, controllers, audio, and human experience.
+- `REQ-TEST-008`: A production vertical-slice test runs in an isolated environment containing only Beacon and its declared platform prerequisites, and proves Beacon-owned capture to emulator presentation. Workstation validation is confined to Beacon's dependency graph, packaged artifacts, process tree, and owned endpoints; it must not enumerate, query, trace, or control another installed streaming product.
+- `REQ-TEST-009`: Physical phone testing is reserved for final decoder quality, 120 Hz, HDR, thermals, Wi-Fi behavior, touch, controllers, gyroscope, audio, and human experience.
 - `REQ-TEST-010`: Static checks prevent upstream compatibility types, wrapper configuration, and duplicate Android routes from re-entering protected boundaries.
+- `REQ-TEST-011`: Deterministic recovery tests inject service, Worker, HostAgent, and recovery-supervisor termination at every display lifecycle phase and verify journal-driven compensation without deleting an unowned display.
+- `REQ-TEST-012`: Deterministic Windows-boundary tests inject power/session events, PnP disable/re-enable, driver reconnect, GPU reset, hotplug, topology renumbering, and missing-current-snapshot conditions through production interfaces.
+- `REQ-TEST-013`: Guarded real-topology tests prove normal quit, rapid reconnect, lock/unlock, sleep/resume, hibernate/resume, sign-out/sign-in, service restart, HostAgent restart, GPU-driver restart, and dock/external-monitor changes from a recorded physical baseline back to independently verified physical control.
+- `REQ-TEST-014`: Every destructive real-topology test arms an independent production-equivalent recovery owner before mutation and records restore-before-remove plus remove-before-restore behavior where both orders are applicable.
+- `REQ-TEST-015`: Recovery acceptance verifies that owned applications survive topology repair while active and that inactive **AND** no-owned-work remains the only automatic lease-removal condition.
+- `REQ-TEST-016`: Clean-machine validation installs the driver and HostAgent, creates and recovers a lease, exercises a verified driver update and rollback, uninstalls Beacon, and leaves the pre-install physical topology intact.
+- `REQ-TEST-017`: Capability status uses the ordered states `absent`, `modeled`, `static-tested`, `emulator-validated`, `target-laptop-validated`, and `physical-client-validated`. Reporting cannot collapse these states into a single `implemented` or `validated` label.
+- `REQ-TEST-018`: Every core-stage artifact set contains the pre-mutation physical baseline, driver and binary identities, production-path capability evidence, failure injections, final topology snapshot, and independent laptop-integrity closeout.
 
 ## Beacon Session Contract
 
@@ -419,6 +540,11 @@ Candidate upstream primitives include:
 - Android codec and rendering adapters.
 - Windows input injection and controller support.
 - SudoVDA integration and topology lessons.
+- Vibeshine/Vibepollo recovery-registry ownership, driver re-enable/restart, exact-device reclaim,
+  display-database restoration, and hybrid-GPU recovery behavior. Candidate references include
+  [`virtual_display_recovery_registry.h`](https://github.com/Nonary/vibeshine/blob/vibe/src/platform/windows/virtual_display_recovery_registry.h),
+  [`virtual_display_cleanup.cpp`](https://github.com/Nonary/vibeshine/blob/vibe/src/platform/windows/virtual_display_cleanup.cpp),
+  and [`virtual_display_sunshine.cpp`](https://github.com/Nonary/vibeshine/blob/vibe/src/platform/windows/virtual_display_sunshine.cpp).
 
 Each candidate is classified before retention:
 
@@ -475,9 +601,13 @@ No source is retained merely because tests already exist or implementation effor
 - Stream through the single Beacon protocol.
 - Decode and present through StreamCore on `emulator-5554`.
 - Select and launch one server-catalog application.
-- Stop, reconnect, and restore without Apollo or Sunshine running.
+- Stop, reconnect, and restore through Beacon-owned components with no Apollo or Sunshine dependency.
 
-Only after Gate 5 passes may work resume on audio, richer input, HEVC/AV1, HDR, physical-device validation, and UI refinement.
+Gate 5 proved the first H.264 SDR integration transaction. It does not authorize secondary feature
+expansion. Execution next follows Core Stage 1 driver hardening and Core Stage 2 HDR closure in the
+authoritative core-hardening plan. Audio, controller, and benchmark work already present remains
+preserved, but new work on richer input, remaining codecs, packaging, multi-client behavior, or UI
+refinement stays frozen until both core stages close.
 
 ## Deletion Targets
 
@@ -506,7 +636,8 @@ The following are explicit removal targets unless the recovery inventory proves 
 - Browser streaming.
 - Mirror mode.
 - Full live adaptation before the initial benchmark-driven planner is stable.
-- HDR as a blocker for stable SDR streaming.
+- Forcing HDR on a client or server boundary that reports no HDR support. Working SDR remains the
+  fallback, but proving or decisively rejecting the product's HDR path is a core-hardening gate.
 
 ## Acceptance Gates
 
@@ -531,7 +662,7 @@ The following are explicit removal targets unless the recovery inventory proves 
 
 ### Minimal Beacon-Owned Stream
 
-- Apollo and Sunshine processes are stopped.
+- Beacon-local dependency inspection and runtime evidence prove no external streaming control plane or runtime is integrated. Evidence is limited to Beacon's source dependencies, packaged artifacts, process tree, and owned endpoints; installed third-party streaming products are not probed.
 - APK selects an application from the Beacon catalog.
 - Beacon computes a complete plan before side effects.
 - Beacon prepares the correct per-client display without mirror or physical fallback.
@@ -541,15 +672,41 @@ The following are explicit removal targets unless the recovery inventory proves 
 - Session cleanup restores verified physical-primary state under the server-owned **inactive AND no-owned-work** rule.
 - Logs and snapshots expose Beacon state without secrets or compatibility artifacts.
 
+### Core Stage 1: Driver Capability And Recovery
+
+- The selected driver proves HDR-capable IddCx/Advanced Color behavior before Beacon invests in its
+  long-term lifecycle integration.
+- Driver install, update, rollback, lease creation, heartbeat, exact-identity reconciliation, and
+  removal are serialized through the HostAgent boundary.
+- A durable HostAgent-owned journal and production recovery supervisor compensate component crashes,
+  power/session transitions, PnP faults, driver restart, GPU reset, and topology identity changes.
+- The target-laptop recovery matrix and one clean-machine driver lifecycle complete without deleting
+  an unowned display or terminating owned work.
+- The stage ends with the mandatory physical-display integrity closeout in `REQ-DISP-034`.
+
+### Core Stage 2: End-To-End HDR
+
+- A virtual display is created for the physical client at its planned aspect-correct mode and Windows
+  reports HDR supported and active with at least 10 bits per channel.
+- Production capture, conversion, one 10-bit codec, Beacon transport metadata, Android decoding, and
+  physical-display presentation pass under `HdrPreference.Require`.
+- The retained evidence distinguishes every HDR boundary and proves that no SDR fallback satisfied
+  the HDR assertion.
+- `off` and `prefer` still prove stable SDR behavior, and an unsupported client receives a recorded
+  fallback reason without topology churn.
+- The stage ends with the mandatory physical-display integrity closeout in `REQ-DISP-034`.
+- If any boundary is not technically viable after the planned candidate evaluation, the stage exits
+  as `decision-required`, not passed, and further feature work remains frozen.
+
 ### Physical Device Final Confirmation
 
 - Z Fold 7 benchmark selects a sustainable network/hardware profile.
 - `2560x1600` intent is preserved.
 - 120 FPS is selected only when the complete measured path sustains it.
-- Touch, controller, keyboard, audio, thermals, Wi-Fi behavior, HDR, and human experience are validated on hardware.
+- Touch, controller, keyboard, mouse, gyroscope, audio, thermals, Wi-Fi behavior, HDR, and human experience are validated on hardware.
 
 ## Definition Of Completion
 
-Beacon version one is complete when it can be installed without Apollo or Sunshine, register the APK, automatically benchmark the current network and hardware, show the normalized Windows app/game catalog, compute a server-owned plan, create and activate the correct per-client virtual display, launch the selected application, stream through one Beacon-owned data plane, accept client input, stop or recover safely, and restore the laptop to a verified physical-primary state.
+Beacon version one is complete when it can be installed without Apollo or Sunshine, register the APK, automatically benchmark the current network and hardware, show the normalized Windows app/game catalog, compute a server-owned plan, create and activate the correct per-client virtual display, launch the selected application, stream H.264, HEVC, or AV1 through one Beacon-owned data plane according to per-client evidence, present HDR when the complete measured chain supports it, accept client input, stop or recover safely, and restore the laptop to a verified physical-primary state after normal termination, component failure, power/session transitions, driver restart, and material display-topology change.
 
 No compatibility layer, wrapper mode, alternate Android route, or client-side streaming policy is required to achieve that result.

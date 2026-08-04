@@ -62,6 +62,8 @@ public sealed class DisplayTopologySnapshotTests
     {
         Assert.Equal(0x00222000u, WindowsDisplayApi.BuildSudoVdaControlCode(0x800));
         Assert.Equal(0x00222004u, WindowsDisplayApi.BuildSudoVdaControlCode(0x801));
+        Assert.Equal(0x0022200Cu, WindowsDisplayApi.BuildSudoVdaControlCode(0x803));
+        Assert.Equal(0x00222220u, WindowsDisplayApi.BuildSudoVdaControlCode(0x888));
         Assert.Equal(0x002223FCu, WindowsDisplayApi.BuildSudoVdaControlCode(0x8FF));
     }
 

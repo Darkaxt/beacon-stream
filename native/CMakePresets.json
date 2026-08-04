@@ -18,6 +18,18 @@
       }
     },
     {
+      "name": "linux-x64",
+      "displayName": "Linux x64 hosted validation",
+      "generator": "Ninja",
+      "binaryDir": "$env{HOME}/.cache/beacon/build/linux-x64-debug",
+      "cacheVariables": {
+        "BEACON_NATIVE_DEPENDENCIES_DIR": "$env{HOME}/.cache/beacon/native/_deps",
+        "BEACON_PROTOC_EXECUTABLE": "$env{BEACON_PROTOC_EXECUTABLE}",
+        "BEACON_WITH_MSQUIC": "ON",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
       "name": "android-base",
       "hidden": true,
       "generator": "Unix Makefiles",
@@ -28,6 +40,7 @@
         "BEACON_NATIVE_DEPENDENCIES_DIR": "$env{HOME}/.cache/beacon/native/_deps",
         "BEACON_PROTOC_EXECUTABLE": "$env{BEACON_PROTOC_EXECUTABLE}",
         "BEACON_WITH_MSQUIC": "ON",
+        "BUILD_TESTING": "OFF",
         "CMAKE_BUILD_TYPE": "Debug"
       }
     },
@@ -55,6 +68,10 @@
       "configuration": "Debug"
     },
     {
+      "name": "linux-x64-debug",
+      "configurePreset": "linux-x64"
+    },
+    {
       "name": "android-x86_64-debug",
       "configurePreset": "android-x86_64"
     },
@@ -68,6 +85,13 @@
       "name": "windows-x64-debug",
       "configurePreset": "windows-x64",
       "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-x64-debug",
+      "configurePreset": "linux-x64",
       "output": {
         "outputOnFailure": true
       }

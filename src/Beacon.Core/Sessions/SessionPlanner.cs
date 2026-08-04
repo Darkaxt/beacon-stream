@@ -27,6 +27,15 @@ public static class SessionPlanner
             throw new ArgumentException("Benchmark evidence revision is required.", nameof(benchmark));
         }
 
+        ClientDisplayMode? selectedDisplayMode = profile.Display.SelectedMode;
+        if (selectedDisplayMode is null || !selectedDisplayMode.IsValid)
+        {
+            return new SessionPlanResult(
+                false,
+                null,
+                $"Client '{profile.ClientId.Value}' has no valid server-selected display mode.");
+        }
+
         SelectedBenchmarkResult measured = benchmark.SelectedResult;
         try
         {
@@ -35,6 +44,12 @@ public static class SessionPlanner
         catch (ArgumentException error)
         {
             return new SessionPlanResult(false, null, $"Benchmark evidence is invalid: {error.Message}");
+        }
+
+        string? productionTupleError = GetProductionTupleError(measured);
+        if (productionTupleError is not null)
+        {
+            return new SessionPlanResult(false, null, productionTupleError);
         }
 
         if (!SupportsCodec(measured.Codec, capabilities))
@@ -56,7 +71,7 @@ public static class SessionPlanner
         }
 
         int fps = Math.Min(
-            profile.Display.PreferredRefreshHz,
+            selectedDisplayMode.RefreshHz,
             Math.Min(Math.Max(1, capabilities.MaxFps), Math.Max(1, measured.MaxSustainableFps)));
         int bitrate = measured.InitialBitrateMbps;
         bool bitrateCapApplied = false;
@@ -101,36 +116,63 @@ public static class SessionPlanner
             TenBitPresentationVerified: measured.TenBitPresentationVerified,
             HdrPresentationVerified: measured.HdrPresentationVerified);
 
-        return CreatePlan(profile, capabilities, game, selection);
+        return CreatePlan(profile, selectedDisplayMode, capabilities, game, selection);
     }
 
     private static SessionPlanResult CreatePlan(
         ClientProfile profile,
+        ClientDisplayMode selectedDisplayMode,
         EndpointCapabilities capabilities,
         GameDescriptor game,
         StreamPlanningSelection selection)
     {
-        string? hdrBlocker = GetHdrBlocker(capabilities, selection);
-
-        if (profile.Display.HdrPreference == HdrPreference.Require && hdrBlocker is not null)
+        string audioMode = profile.Audio.Mode.Trim().ToLowerInvariant();
+        if (audioMode != "stereo")
         {
-            return new SessionPlanResult(false, null, $"HDR required but {hdrBlocker}.");
+            return new SessionPlanResult(
+                false,
+                null,
+                $"R2 audio supports only the server-owned stereo mode; requested mode was '{profile.Audio.Mode}'.");
         }
 
-        bool hdrEnabled = profile.Display.HdrPreference != HdrPreference.Off && hdrBlocker is null;
+        bool hevcHdr10 = selection.Codec.Equals("hevc", StringComparison.OrdinalIgnoreCase);
+        if (!hevcHdr10 && profile.Display.HdrPreference == HdrPreference.Require)
+        {
+            return new SessionPlanResult(
+                false,
+                null,
+                "HDR10 requires the exact HEVC Main10 10-bit production tuple.");
+        }
+
+        if (hevcHdr10 && profile.Display.HdrPreference == HdrPreference.Off)
+        {
+            return new SessionPlanResult(
+                false,
+                null,
+                "HEVC Main10 production requires HDR10, but HDR is disabled by the client profile.");
+        }
+
+        string? hdrBlocker = hevcHdr10 ? GetHdrBlocker(capabilities, selection) : null;
+        if (hevcHdr10 && hdrBlocker is not null)
+        {
+            return new SessionPlanResult(
+                false,
+                null,
+                $"HEVC Main10 production requires HDR10, but {hdrBlocker}.");
+        }
+
+        bool hdrEnabled = hevcHdr10;
         string hdrReason = CreateHdrReason(profile.Display.HdrPreference, hdrEnabled, hdrBlocker);
-        int width = Math.Min(profile.Display.PreferredWidth, selection.CertifiedWidth);
-        int height = Math.Min(profile.Display.PreferredHeight, selection.CertifiedHeight);
-        string dimensionReason = width != profile.Display.PreferredWidth || height != profile.Display.PreferredHeight
-            ? $"Display dimensions were limited to the certified benchmark mode {width}x{height}."
-            : "Display dimensions are within the certified benchmark mode.";
-        string displayReason = $"{CreateDisplayModeReason(profile.Display.Mode)} {dimensionReason} {hdrReason}";
+        string displayReason =
+            $"{CreateDisplayModeReason(profile.Display.Mode)} " +
+            $"Display mode {selectedDisplayMode} is the persisted server selection from reported client modes. " +
+            $"{hdrReason}";
 
         var display = new PlannedDisplay(
             DisplayId: DisplayLease.CreateDisplayId(profile.ClientId),
-            Width: width,
-            Height: height,
-            RefreshHz: profile.Display.PreferredRefreshHz,
+            Width: selectedDisplayMode.Width,
+            Height: selectedDisplayMode.Height,
+            RefreshHz: selectedDisplayMode.RefreshHz,
             Mode: profile.Display.Mode,
             HdrPreference: profile.Display.HdrPreference,
             HdrEnabled: hdrEnabled,
@@ -139,19 +181,37 @@ public static class SessionPlanner
 
         var stream = new PlannedStream(
             Codec: selection.Codec,
+            Width: selection.CertifiedWidth,
+            Height: selection.CertifiedHeight,
             Fps: selection.Fps,
             InitialBitrateMbps: selection.InitialBitrateMbps,
             Transport: selection.Transport,
             CongestionPolicy: selection.CongestionPolicy,
-            Reason: selection.Reason,
+            Reason:
+                $"{selection.Reason} Stream output uses certified benchmark mode " +
+                $"{selection.CertifiedWidth}x{selection.CertifiedHeight}.",
             BenchmarkRunId: selection.BenchmarkRunId,
             BenchmarkEvidenceRevision: selection.BenchmarkEvidenceRevision)
         {
             CodecProfile = selection.CodecProfile,
             BitDepth = selection.BitDepth,
+            ColorPrimaries = hevcHdr10 ? "bt2020" : "bt709",
+            TransferFunction = hevcHdr10 ? "pq" : "bt709",
+            MatrixCoefficients = hevcHdr10 ? "bt2020-ncl" : "bt709",
+            ColorRange = "limited",
+            HdrStaticInfo = hevcHdr10 ? Hdr10StaticMetadata.CreateCta8613Descriptor() : [],
+            HdrStaticInfoInBitstream = hevcHdr10,
             TenBitPresentationVerified = selection.TenBitPresentationVerified,
             HdrPresentationVerified = selection.HdrPresentationVerified
         };
+
+        var audio = new PlannedAudio(
+            Codec: "opus",
+            SampleRateHz: 48_000,
+            ChannelCount: 2,
+            FrameDurationUs: 20_000,
+            BitrateBps: 96_000,
+            Reason: "Server selected the fixed R2 Opus stereo production path.");
 
         var plan = new SessionPlan(
             SessionId: $"{profile.ClientId.Value}-{game.Id}",
@@ -159,7 +219,8 @@ public static class SessionPlanner
             AppId: game.Id,
             Display: display,
             Stream: stream,
-            Revision: CreateRevision(profile.ClientId, game.Id, display, stream));
+            Audio: audio,
+            Revision: CreateRevision(profile.ClientId, game.Id, display, stream, audio));
 
         return new SessionPlanResult(true, plan, null);
     }
@@ -188,11 +249,27 @@ public static class SessionPlanner
         return null;
     }
 
+    private static string? GetProductionTupleError(SelectedBenchmarkResult measured)
+    {
+        string codec = measured.Codec.Trim().ToLowerInvariant();
+        string profile = measured.Profile.Trim().ToLowerInvariant();
+        return codec switch
+        {
+            "h264" when profile == "high" && measured.BitDepth == 8 => null,
+            "h264" => "Production H.264 requires the exact High 8-bit BT709 SDR tuple.",
+            "hevc" when profile == "main10" && measured.BitDepth == 10 => null,
+            "hevc" => "Production HEVC requires the exact Main10 10-bit BT2020/PQ limited HDR10 tuple.",
+            "av1" => "AV1 is not supported by the production streaming path.",
+            _ => $"{DisplayCodec(measured.Codec)} is not supported by the production streaming path."
+        };
+    }
+
     private static string CreateHdrReason(HdrPreference preference, bool hdrEnabled, string? hdrBlocker) =>
         preference switch
         {
             HdrPreference.Off => "HDR disabled by client profile.",
             HdrPreference.Prefer when hdrEnabled => "HDR enabled because the full advertised chain reports support.",
+            HdrPreference.Prefer when hdrBlocker is null => "HDR disabled because the H.264 production path is SDR.",
             HdrPreference.Prefer => $"HDR disabled because {hdrBlocker}.",
             HdrPreference.Require => "HDR required and available.",
             _ => "HDR mode resolved."
@@ -233,7 +310,8 @@ public static class SessionPlanner
         ClientId clientId,
         string appId,
         PlannedDisplay display,
-        PlannedStream stream)
+        PlannedStream stream,
+        PlannedAudio audio)
     {
         using var material = new MemoryStream();
         using (var writer = new BinaryWriter(material, Encoding.UTF8, leaveOpen: true))
@@ -249,6 +327,8 @@ public static class SessionPlanner
             writer.Write(display.HdrEnabled);
             writer.Write(display.HdrMode);
             writer.Write(stream.Codec);
+            writer.Write(stream.Width);
+            writer.Write(stream.Height);
             writer.Write(stream.Fps);
             writer.Write(stream.InitialBitrateMbps);
             writer.Write(stream.Transport);
@@ -257,8 +337,20 @@ public static class SessionPlanner
             writer.Write(stream.BenchmarkEvidenceRevision);
             writer.Write(stream.CodecProfile);
             writer.Write(stream.BitDepth);
+            writer.Write(stream.ColorPrimaries);
+            writer.Write(stream.TransferFunction);
+            writer.Write(stream.MatrixCoefficients);
+            writer.Write(stream.ColorRange);
+            writer.Write(stream.HdrStaticInfo.Length);
+            writer.Write(stream.HdrStaticInfo);
+            writer.Write(stream.HdrStaticInfoInBitstream);
             writer.Write(stream.TenBitPresentationVerified);
             writer.Write(stream.HdrPresentationVerified);
+            writer.Write(audio.Codec);
+            writer.Write(audio.SampleRateHz);
+            writer.Write(audio.ChannelCount);
+            writer.Write(audio.FrameDurationUs);
+            writer.Write(audio.BitrateBps);
         }
 
         byte[] digest = SHA256.HashData(material.GetBuffer().AsSpan(0, checked((int)material.Length)));

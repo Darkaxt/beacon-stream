@@ -227,6 +227,29 @@ bool MsQuicClient::send(StreamRole role, std::vector<std::byte> bytes) {
   return true;
 }
 
+bool MsQuicClient::send_final(StreamRole role, std::vector<std::byte> bytes) {
+  std::lock_guard lock(mutex_);
+  HQUIC stream = stream_for(role);
+  if (role != StreamRole::session || stream == nullptr || shutdown_started_ ||
+      bytes.empty()) {
+    return false;
+  }
+  auto *context = new SendContext{};
+  context->bytes = std::move(bytes);
+  context->buffer.Length = static_cast<std::uint32_t>(context->bytes.size());
+  context->buffer.Buffer =
+      reinterpret_cast<std::uint8_t *>(context->bytes.data());
+  shutdown_started_ = true;
+  if (QUIC_FAILED(api_->StreamSend(stream, &context->buffer, 1,
+                                   QUIC_SEND_FLAG_FIN, context))) {
+    shutdown_started_ = false;
+    context->clear();
+    delete context;
+    return false;
+  }
+  return true;
+}
+
 void MsQuicClient::shutdown() {
   std::lock_guard lock(mutex_);
   if (!shutdown_started_) {
@@ -369,7 +392,11 @@ QUIC_STATUS QUIC_API MsQuicClient::connection_callback(
                 ? static_cast<std::uint64_t>(static_cast<std::uint32_t>(
                       event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status))
                 : event->SHUTDOWN_INITIATED_BY_PEER.ErrorCode;
-        log_transport_stage("shutdown", generation, status);
+        log_transport_stage(
+            event->Type == QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT
+                ? "shutdown_transport"
+                : "shutdown_peer",
+            generation, status);
         if (report_loss) self.callbacks_.connection_lost(generation);
         break;
       }

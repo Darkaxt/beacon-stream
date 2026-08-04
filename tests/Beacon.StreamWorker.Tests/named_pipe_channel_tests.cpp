@@ -335,12 +335,13 @@ void concurrent_writers_deliver_only_complete_non_interleaved_frames() {
 }  // namespace
 
 int main() {
-  frame_round_trip_uses_network_order_length();
-  malformed_and_oversized_frames_are_rejected_before_message_allocation();
-  blocked_read_is_released_by_terminal_cancellation();
-  one_reader_and_one_writer_are_full_duplex_and_keep_frames_intact();
-  blocked_write_is_released_by_terminal_cancellation();
-  owner_release_cancels_operation_without_closing_its_live_handle();
-  concurrent_writers_deliver_only_complete_non_interleaved_frames();
-  return 0;
+  return beacon::stream::testing::run_tests([] {
+    frame_round_trip_uses_network_order_length();
+    malformed_and_oversized_frames_are_rejected_before_message_allocation();
+    blocked_read_is_released_by_terminal_cancellation();
+    one_reader_and_one_writer_are_full_duplex_and_keep_frames_intact();
+    blocked_write_is_released_by_terminal_cancellation();
+    owner_release_cancels_operation_without_closing_its_live_handle();
+    concurrent_writers_deliver_only_complete_non_interleaved_frames();
+  });
 }

@@ -153,10 +153,8 @@ public sealed class WindowsClientInputSinkTests
         Assert.Empty(inputApi.Commands);
     }
 
-    [Theory]
-    [InlineData(true, "Unsupported input category: controller.")]
-    [InlineData(false, "Unsupported input category: touch.")]
-    public async Task UnsupportedStreamCategoriesReturnFixedSanitizedErrors(bool controller, string expected)
+    [Fact]
+    public async Task UnsupportedTouchCategoryReturnsFixedSanitizedError()
     {
         var displayApi = new FakeWindowsDisplayApi
         {
@@ -165,19 +163,85 @@ public sealed class WindowsClientInputSinkTests
         };
         var inputApi = new FakeWindowsInputApi();
         var sink = new WindowsClientInputSink(displayApi, inputApi);
-        ClientInputEvent input = controller
-            ? ClientInputEvent.StreamController(938475, 123456, -654321)
-            : ClientInputEvent.StreamTouch(938475, ClientTouchAction.Down, 123456, 2, 3, 4, 5);
+        ClientInputEvent input =
+            ClientInputEvent.StreamTouch(938475, ClientTouchAction.Down, 123456, 2, 3, 4, 5);
 
         ClientInputResult result = await sink.ForwardAsync(
             new ClientInputBatch("client", "session", "client-z", 1, [input]),
             CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Equal(expected, result.Error);
+        Assert.Equal("Unsupported input category: touch.", result.Error);
         Assert.DoesNotContain("938475", result.Error, StringComparison.Ordinal);
         Assert.DoesNotContain("123456", result.Error, StringComparison.Ordinal);
         Assert.Empty(inputApi.Commands);
+    }
+
+    [Fact]
+    public async Task ControllerBatchActivatesSessionAndUsesVirtualControllerOnly()
+    {
+        var displayApi = new FakeWindowsDisplayApi
+        {
+            CurrentTopology = DisplayTopologySnapshot.Extended(
+                "physical", "client-z", 100, 80, 60, virtualPrimary: true)
+        };
+        var operations = new List<string>();
+        var inputApi = new FakeWindowsInputApi(operations);
+        var target = new FakeWindowsSessionInputTargetActivator(operations);
+        var controller = new FakeWindowsVirtualControllerApi(operations);
+        var sink = new WindowsClientInputSink(displayApi, inputApi, target, controller);
+
+        ClientInputResult result = await sink.ForwardAsync(
+            new ClientInputBatch(
+                "client",
+                "session",
+                "client-z",
+                1,
+                [
+                    ClientInputEvent.StreamController(0, 12, 1),
+                    ClientInputEvent.StreamController(0, 18, -32768),
+                ]),
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(2, result.EventCount);
+        Assert.Equal(["activate:session:client-z", "controller:session:2"], operations);
+        Assert.Empty(inputApi.Commands);
+        Assert.Equal(2, Assert.Single(controller.Batches).Count);
+    }
+
+    [Fact]
+    public async Task VirtualControllerFailurePreservesActionableResultCode()
+    {
+        var displayApi = new FakeWindowsDisplayApi
+        {
+            CurrentTopology = DisplayTopologySnapshot.Extended(
+                "physical", "client-z", 100, 80, 60, virtualPrimary: true)
+        };
+        var controller = new FakeWindowsVirtualControllerApi([])
+        {
+            Result = WindowsVirtualControllerResult.Fail(
+                "ViGEmBus is unavailable.",
+                "vigem-unavailable"),
+        };
+        var sink = new WindowsClientInputSink(
+            displayApi,
+            new FakeWindowsInputApi(),
+            new FakeWindowsSessionInputTargetActivator([]),
+            controller);
+
+        ClientInputResult result = await sink.ForwardAsync(
+            new ClientInputBatch(
+                "client",
+                "session",
+                "client-z",
+                1,
+                [ClientInputEvent.StreamController(0, 12, 1)]),
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("vigem-unavailable", result.ResultCode);
+        Assert.Contains("ViGEmBus", result.Error, StringComparison.Ordinal);
     }
     [Fact]
     public async Task PointerTapTargetsTheLeasedDisplay()
@@ -300,6 +364,73 @@ public sealed class WindowsClientInputSinkTests
     }
 
     [Fact]
+    public async Task SessionTargetActivatesBeforeWindowsInputIsSent()
+    {
+        var displayApi = new FakeWindowsDisplayApi
+        {
+            CurrentTopology = DisplayTopologySnapshot.Extended(
+                "physical-laptop-panel",
+                "client-z-fold-7",
+                2560,
+                1600,
+                120,
+                virtualPrimary: true)
+        };
+        var operations = new List<string>();
+        var inputApi = new FakeWindowsInputApi(operations);
+        var target = new FakeWindowsSessionInputTargetActivator(operations);
+        var sink = new WindowsClientInputSink(displayApi, inputApi, target);
+        var batch = new ClientInputBatch(
+            "z-fold-7",
+            "session-1",
+            "client-z-fold-7",
+            15,
+            [ClientInputEvent.StreamKeyboard(0x58, pressed: true)]);
+
+        ClientInputResult result = await sink.ForwardAsync(batch, CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(["activate:session-1:client-z-fold-7", "send"], operations);
+        Assert.Same(batch, Assert.Single(target.Batches));
+    }
+
+    [Fact]
+    public async Task FailedSessionTargetActivationRejectsInputWithoutInjection()
+    {
+        var displayApi = new FakeWindowsDisplayApi
+        {
+            CurrentTopology = DisplayTopologySnapshot.Extended(
+                "physical-laptop-panel",
+                "client-z-fold-7",
+                2560,
+                1600,
+                120,
+                virtualPrimary: true)
+        };
+        var inputApi = new FakeWindowsInputApi();
+        var target = new FakeWindowsSessionInputTargetActivator([])
+        {
+            Result = WindowsSessionInputTargetResult.Fail(
+                "No verified session-owned window is active on the target display.")
+        };
+        var sink = new WindowsClientInputSink(displayApi, inputApi, target);
+
+        ClientInputResult result = await sink.ForwardAsync(
+            new ClientInputBatch(
+                "z-fold-7",
+                "session-1",
+                "client-z-fold-7",
+                16,
+                [ClientInputEvent.StreamKeyboard(0x58, pressed: true)]),
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("session-owned window", result.Error, StringComparison.Ordinal);
+        Assert.Equal("session-target-activation-failed", result.ResultCode);
+        Assert.Empty(inputApi.Commands);
+    }
+
+    [Fact]
     public async Task MissingDisplayFailsWithoutSendingInput()
     {
         var displayApi = new FakeWindowsDisplayApi
@@ -413,7 +544,7 @@ public sealed class WindowsClientInputSinkTests
         Assert.Empty(inputApi.Commands);
     }
 
-    private sealed class FakeWindowsInputApi : IWindowsInputApi
+    private sealed class FakeWindowsInputApi(List<string>? operations = null) : IWindowsInputApi
     {
         public List<WindowsInputCommand> Commands { get; } = [];
 
@@ -421,8 +552,56 @@ public sealed class WindowsClientInputSinkTests
             IReadOnlyList<WindowsInputCommand> commands,
             CancellationToken cancellationToken)
         {
+            operations?.Add("send");
             Commands.AddRange(commands);
             return Task.FromResult(WindowsInputResult.Ok(commands.Count));
         }
+    }
+
+    private sealed class FakeWindowsSessionInputTargetActivator(List<string> operations)
+        : IWindowsSessionInputTargetActivator
+    {
+        public WindowsSessionInputTargetResult Result { get; set; } =
+            WindowsSessionInputTargetResult.Activated(processId: 100, windowHandle: 200);
+
+        public List<ClientInputBatch> Batches { get; } = [];
+
+        public Task<WindowsSessionInputTargetResult> ActivateAsync(
+            ClientInputBatch batch,
+            CancellationToken cancellationToken)
+        {
+            Batches.Add(batch);
+            operations.Add($"activate:{batch.SessionId}:{batch.DisplayId}");
+            return Task.FromResult(Result);
+        }
+    }
+
+    private sealed class FakeWindowsVirtualControllerApi(List<string> operations)
+        : IWindowsVirtualControllerApi
+    {
+        public int ActiveSessionCount => Batches.Count == 0 ? 0 : 1;
+
+        public Task PrepareSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public WindowsVirtualControllerResult Result { get; init; } =
+            WindowsVirtualControllerResult.Ok();
+
+        public List<IReadOnlyList<ClientControllerInput>> Batches { get; } = [];
+
+        public Task<WindowsVirtualControllerResult> ApplyAsync(
+            string sessionId,
+            IReadOnlyList<ClientControllerInput> events,
+            CancellationToken cancellationToken)
+        {
+            Batches.Add(events);
+            operations.Add($"controller:{sessionId}:{events.Count}");
+            return Task.FromResult(Result);
+        }
+
+        public Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

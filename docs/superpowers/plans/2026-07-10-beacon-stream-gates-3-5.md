@@ -1,5 +1,11 @@
 # Beacon Stream Gates 3–5 Implementation Plan
 
+> **Historical implementation record (superseded 2026-08-01):** Completed items remain valid
+> implementation and regression evidence. Unchecked items are not an active backlog and must not be
+> executed independently. Current work is governed by
+> `2026-08-01-beacon-release-outcome-gates.md` and
+> `../specs/2026-08-01-beacon-80-20-release-execution-design.md`.
+
 > **Execution rule:** implement each task test-first, run its focused validation, commit and
 > push the slice, then continue. At every gate: implement, validate static/dynamic, sync,
 > refactor from evidence, validate static/dynamic again, and sync again.
@@ -304,22 +310,22 @@ ctest --preset windows-x64-debug --output-on-failure
 - Modify: Android telemetry/network observers
 - Modify: Client Lab benchmark simulation
 
-- [ ] Test reliable throughput rounds, datagram loss/reorder/RTT/jitter rounds, decode-vector
+- [x] Test reliable throughput rounds, datagram loss/reorder/RTT/jitter rounds, decode-vector
   rounds, presentation evidence, thermal sampling, explicit cancellation, and network-change
   restart from a new run id.
-- [ ] Trigger full calibration automatically from material fingerprint changes and manually
+- [x] Trigger full calibration automatically from material fingerprint changes and manually
   from the APK. Session preflight uses a short explicitly specified measurement round; it is
   not a lifecycle timeout.
-- [ ] Do not apply live bitrate adaptation yet. Feed measured evidence into the planner.
-- [ ] Commit: `feat: benchmark Beacon network and hardware path`
+- [x] Do not apply live bitrate adaptation yet. Feed measured evidence into the planner.
+- [x] Commit: `feat: benchmark Beacon network and hardware path`
 
 ### Task 13: Gate 4 Validate, Sync, Refactor, Validate, Sync
 
 - [ ] Run deterministic fake benchmarks, real loopback, emulator network/hardware benchmark,
   Client Lab, and the complete regression matrix.
-- [ ] Confirm the fake Z Fold 7 profile still preserves `2560x1600` and `120 Hz` intent while
+- [x] Confirm the fake Z Fold 7 profile still preserves `2560x1600` and `120 Hz` intent while
   the server remains free to reject 120 FPS when measured evidence is insufficient.
-- [ ] Verify automatic Wi-Fi/network fingerprint changes create a new run and unchanged
+- [x] Verify automatic Wi-Fi/network fingerprint changes create a new run and unchanged
   fingerprints reuse valid evidence.
 - [ ] Merge the implementation PR, audit scoring/ownership/duplicate telemetry, add
   regressions, repeat all validation, and merge the refactor PR.
@@ -335,14 +341,54 @@ ctest --preset windows-x64-debug --output-on-failure
 - Create: capture unit/integration tests
 - Modify: Worker IPC internal display-target record
 
-- [ ] Test stable monitor resolution, wrong/missing/inactive display failure, selected NVIDIA
+- [x] Test stable monitor resolution, wrong/missing/inactive display failure, selected NVIDIA
   adapter, frame callback, QPC timestamp, content-size change, pool recreation, stop during
   callback, and resource release.
-- [ ] Resolve only the Service-provided internal display target; never capture physical as a
+- [x] Resolve only the Service-provided internal display target; never capture physical as a
   fallback.
-- [ ] Add an explicit manual integration test that paints changing content on the leased
+- [x] Add an explicit manual integration test that paints changing content on the leased
   virtual display and confirms frame hashes change.
-- [ ] Commit: `feat: capture planned display in StreamWorker`
+- [x] Commit: `feat: capture planned display in StreamWorker`
+
+Validation evidence (2026-07-14): the fresh native build passed all 16 tests, the full .NET
+solution passed all 466 tests, and the manual WGC probe captured changing frame hashes with
+monotonic QPC timestamps from both the 2560x1600 physical display and a temporary
+2560x1600@60 SudoVDA lease while selecting the NVIDIA RTX 4090 adapter.
+
+### Task 14B: Own The SudoVDA Driver Session
+
+Beacon currently opens and closes a SudoVDA handle inside each display operation. Under the
+driver's default watchdog contract, a prepared display can therefore disappear after the
+operation returns. Add one Beacon-owned control session below `WindowsDisplayBackend` that
+queries the watchdog and sends `IOCTL_DRIVER_PING` while one or more Beacon display leases
+exist. Multiple Beacon leases share the session; the final successful removal releases it.
+
+The heartbeat is monitoring/liveness only. It cannot authorize cleanup, remove a display, or
+replace the inactive-client **AND** no-owned-work rule. Do not change machine-wide driver
+registry values, driver-device state, Apollo configuration, or the Apollo service/process.
+Capacity and heartbeat failures fail honestly with diagnostics.
+
+Deterministic tests drive heartbeat ticks without wall-clock sleeps and prove zero-lease,
+first-lease, multiple-lease, final-release, failure-diagnostic, and no-cleanup behavior. Live
+validation may query and use SudoVDA through Beacon but must not control Apollo or restart the
+shared driver on this workstation.
+
+Validation evidence (2026-07-14): deterministic session tests prove idle, first-lease,
+duplicate/multiple-lease, scheduled ping, final-release, disabled-watchdog, heartbeat-fault,
+recovery, native-open failure, backend rollback, and health-reporting behavior. The complete
+.NET solution passes all 482 tests and the compatibility guard passes. The real
+`driver-session` probe opened Beacon's SudoVDA control handle, read protocol `0.2.1` and the
+currently loaded `0s` watchdog, sent an immediate heartbeat, released the hold, and left the
+machine physical-only, non-mirrored, and primary at 2560x1600@240. No Apollo process, service,
+configuration, or driver-device lifecycle action was used.
+
+Refactor validation (2026-07-14): composition now fails closed without a real driver lease
+session; native heartbeat exceptions become health faults without escaping or changing lease
+ownership; successful display removal completes hold release despite caller cancellation; the
+heartbeat cadence reserves one driver timer tick; and an unsafe one-second watchdog fails
+readiness. The full solution passes all 486 tests, formatting is clean, the prohibited-route
+and Apollo/global-driver configuration scans are empty, and the real driver-session/topology
+probe repeated the same physical-only 2560x1600@240 result.
 
 ### Task 15: Convert And Scale On D3D11
 
@@ -351,14 +397,28 @@ ctest --preset windows-x64-debug --output-on-failure
 - Create: `src/Beacon.StreamWorker/src/video/d3d11_video_processor.*`
 - Create: conversion tests and a GPU integration probe
 
-- [ ] Test exact capability query, planned crop/aspect behavior, BGRA-to-NV12 conversion,
+- [x] Test exact capability query, planned crop/aspect behavior, BGRA-to-NV12 conversion,
   output dimensions, BT.709 limited metadata, texture reuse, device loss, and unsupported
   capability failure.
-- [ ] Use `ID3D11VideoProcessor`/`VideoProcessorBlt` on the capture device. Do not add a CPU or
+- [x] Use `ID3D11VideoProcessor`/`VideoProcessorBlt` on the capture device. Do not add a CPU or
   shader fallback.
-- [ ] Validate generated NV12 planes against deterministic color bars within declared
+- [x] Validate generated NV12 planes against deterministic color bars within declared
   tolerances.
-- [ ] Commit: `feat: convert Beacon frames on D3D11`
+- [x] Commit: `feat: convert Beacon frames on D3D11`
+
+Validation (2026-07-14): the clean Windows native build completed all 382 steps and all 17
+CTests pass. The NVIDIA integration probe converted deterministic 1280x720 BGRA bars to a
+640x400 NV12 canvas; sampled YUV values and the limited-black letterbox exactly matched
+BT.709 limited-range expectations within
+the declared tolerance of five. The moving-window WGC probe converted two real 2560x1600
+frames on `NVIDIA GeForce RTX 4090 Laptop GPU` to distinct NV12 hashes with increasing QPC
+timestamps. All 486 managed tests and the 25 focused architecture/documentation tests pass;
+formatting and prohibited-route/fallback scans are clean. Neither probe creates, configures,
+queries, or controls an Apollo runtime or display lifecycle.
+
+The repeatable command and captured output are tracked in
+`docs/validation/2026-07-14-d3d11-video-processor.md`; the entry point is
+`scripts/test-d3d11-video-processor.ps1`.
 
 ### Task 16: Encode H.264 With Native NVENC
 
@@ -368,12 +428,24 @@ ctest --preset windows-x64-debug --output-on-failure
 - Vendor: pinned `nvEncodeAPI.h` plus license notice
 - Create: encoder unit/integration tests
 
-- [ ] Test DLL/API/capability preflight, D3D11 texture registration, low-latency no-B-frame
+- [x] Test DLL/API/capability preflight, D3D11 texture registration, low-latency no-B-frame
   configuration, SPS/PPS + IDR first frame, monotonic timestamps, forced IDR, bitrate
   reconfiguration, encode failure, and exact cleanup ordering.
-- [ ] Validate encoded Annex-B access units with a test decoder/probe only; that probe is a
+- [x] Validate encoded Annex-B access units with a test decoder/probe only; that probe is a
   test tool, not a production alternate route.
-- [ ] Commit: `feat: encode Beacon H264 with NVENC`
+- [x] Commit: `feat: encode Beacon H264 with NVENC`
+
+Refactor validation (2026-07-14): the encoder now preserves NVIDIA's register/map/encode/lock/
+unlock/unmap/unregister ordering under every modeled failure. Ambiguous native ownership poisons
+the Worker encoder, retains the native module/device/input references for process teardown, and
+rejects encode or reconfigure reuse instead of destroying or unloading live resources. Partial
+open and normal cleanup failures propagate typed poison/destruction failures. Accepted but
+undelivered output forces the next access unit to IDR with SPS/PPS, and output allocation failures
+remain typed inside the `noexcept` path. The decoder oracle consumes the complete stream and
+reports exactly four frames. All 18 native CTests, all 487 managed tests, formatting, static route
+scans, and the RTX hardware probe pass; independent review reports no remaining P1/P2 findings.
+Evidence and the repeatable command are tracked in
+`docs/validation/2026-07-14-nvenc-h264.md`.
 
 ### Task 17: Packetize Real Access Units And Apply Recovery
 
@@ -383,12 +455,14 @@ ctest --preset windows-x64-debug --output-on-failure
 - Modify: Worker media session and rate controller
 - Extend: StreamProtocol tests
 
-- [ ] Test packetization at negotiated `MaxSendLength`, complete reconstruction, SPS/PPS/IDR
+- [x] Test packetization at negotiated `MaxSendLength`, complete reconstruction, SPS/PPS/IDR
   flags, datagram loss notification, reliable IDR request, bitrate bounds, queue-pressure
   reduction, and recovery without media retransmission.
-- [ ] Drive NVENC bitrate reconfiguration only from server-plan bounds plus typed QUIC/client
+- [x] Drive NVENC bitrate reconfiguration only from server-plan bounds plus typed QUIC/client
   evidence. Record every decision and input fact.
-- [ ] Commit: `feat: stream Beacon H264 access units`
+- [x] Commit: `feat: stream Beacon H264 access units` (`7054ce4`)
+
+Evidence: `docs/validation/2026-07-14-media-packetization-recovery.md`.
 
 ### Task 18: Decode And Present Through Android MediaCodec
 
@@ -400,14 +474,19 @@ ctest --preset windows-x64-debug --output-on-failure
 - Delete after replacement: Android and server `AnnexBAccessUnitSplitter` plus envelope code
 - Create: decoder unit/instrumentation tests
 
-- [ ] Test asynchronous MediaCodec configuration, low-latency capability gating, direct
+- [x] Test asynchronous MediaCodec configuration, low-latency capability gating, direct
   access-unit queue, codec-config/IDR start, PTS propagation, Surface lifecycle, bounded queue
   drop, awaiting-IDR recovery, decoder failure feedback, stop/reconnect, and release once.
-- [ ] Delete both old splitters only after tests prove StreamCore receives complete access
+- [x] Delete both old splitters only after tests prove StreamCore receives complete access
   units.
-- [ ] On emulator, require structured first-frame and moving-frame evidence; do not infer
+- [x] On emulator, require structured first-frame and moving-frame evidence; do not infer
   success only from an HTTP response or nonblank Surface.
-- [ ] Commit: `feat: render Beacon H264 in StreamCore`
+- [x] Commit: `feat: render Beacon H264 in StreamCore` (`1f64dd5`)
+
+Static evidence: `docs/validation/2026-07-14-android-mediacodec-streamcore.md`.
+Hosted emulator evidence is recorded in
+`docs/validation/2026-07-14-hosted-emulator-stream.md`. Local ADB remained untouched because
+another task owns that shared runtime.
 
 ### Task 19: Integrate Launch, Reconnect, Stop, And Restore Transaction
 
@@ -418,20 +497,29 @@ ctest --preset windows-x64-debug --output-on-failure
 - Modify: Android ViewModel/session tests
 - Modify: Client Lab and FakeEndpoint flows
 
-- [ ] Test the ordered startup transaction from the specification and reverse compensation
+- [x] Test the ordered startup transaction from the specification and reverse compensation
   for every failure point.
-- [ ] Prove unexpected transport loss stops media resources but does not terminate the app or
+- [x] Prove unexpected transport loss stops media resources but does not terminate the app or
   display lease. A still-beaconing client obtains a fresh ticket and reconnects to the same
   server-owned session.
-- [ ] Prove explicit stop and session closure obey inactive **AND** no-owned-work before lease
+- [x] Prove explicit stop and session closure obey inactive **AND** no-owned-work before lease
   removal and physical-primary restore.
-- [ ] Prove Worker crash reports failure without stranding display ownership and allows an
+- [x] Prove Worker crash reports failure without stranding display ownership and allows an
   explicit/reconnect-driven Worker restart.
-- [ ] Commit: `feat: complete Beacon stream session transaction`
+- [x] Commit: `feat: complete Beacon stream session transaction`
 
 ### Task 20: Gate 5 Full Dynamic Acceptance
 
-- [ ] Stop Apollo and Sunshine and prove neither process, port, file, nor API is used.
+The production composition prerequisite is implemented and validated in
+`docs/validation/2026-07-14-production-video-pipeline.md`: StreamWorker now composes capture,
+conversion, encoder, packetizer, and transport, and its process probe requires a real H.264
+access unit instead of a synthetic marker. This clears the prerequisite only. Task 20 remains
+open until the APK emulator renders moving video from the planned virtual display and the full
+session/reconnect/restore transaction passes without Apollo or another compatibility route.
+
+- [ ] Prove no external streaming control plane or runtime is integrated by inspecting only
+  Beacon's dependency graph, packaged artifacts, process tree, and owned endpoints. Do not
+  enumerate, query, trace, start, stop, or configure another installed streaming product.
 - [ ] Use Client Lab and the APK emulator to select a real catalog application.
 - [ ] Create/activate the correct per-client virtual display at the planned mode.
 - [ ] Show moving H.264 SDR video from that display on `emulator-5554` through StreamCore.
@@ -454,6 +542,46 @@ ctest --preset windows-x64-debug --output-on-failure
 - [ ] Merge the refactor PR, synchronize clean `main`, and update the authoritative spec,
   extraction map, source audit, and README with observed evidence.
 
+Partial ownership evidence (2026-07-14): the Android MediaCodec callback no longer reports
+codec-configuration or empty end-of-stream output as missing-frame failures, and the unused
+`EncodedVideoDecoder` interface was removed so `SurfaceEncodedVideoDecoder` is the single Java
+decoder lifecycle owner. The clean Android matrix, 512 managed tests, 23 native tests, real Worker
+process proof, Client Lab, Playwright, and architecture guards pass. Emulator acceptance and the
+remaining Task 21 ownership areas stay open. Evidence:
+`docs/validation/2026-07-14-android-decoder-ownership-audit.md`.
+
+Compensation evidence (2026-07-14): explicit inactive disconnect now revokes unused session
+tickets before display cleanup, while active disconnect retains the reconnect path. Revocation
+failure returns `503` before physical restore/removal. The full managed solution passes 514 tests,
+and Client Lab plus its Playwright lifecycle remain green. Evidence:
+`docs/validation/2026-07-14-inactive-disconnect-compensation.md`.
+
+Worker-host ownership evidence (2026-07-14): the backend, relay, and service composition now use
+one generation-aware `IStreamWorkerHost` contract. The synthetic legacy-generation adapter and
+its compatibility-only tests were removed, and an architecture regression prevents the split
+contract from returning. Core, Windows platform, and Server suites pass. Evidence:
+`docs/validation/2026-07-14-stream-worker-host-contract.md`.
+
+Runtime-authorization evidence (2026-07-14): Core and Server ticket ownership are protocol
+neutral, ticket authorization and revocation are pinned to the issuing runtime generation, and
+the unpinned Worker command overload is gone. Worker process diagnostics now distinguish an
+unsupported hosted-runner GPU from production-video regressions without adding a synthetic or
+alternate media route. Worker startup now includes an identity-bound typed capability envelope;
+production health maps only Worker-reported H.264/NVENC/WGC support, video-unavailable Workers
+remain available for network benchmarking, and fake capability claims are confined to fake-host
+tests. The complete local matrix passes 527 managed tests, 23 native tests, Client Lab,
+Playwright, Android static builds, and the real H.264 Worker process proof. Evidence:
+`docs/validation/2026-07-14-runtime-authorization-and-worker-capability.md`.
+
+Production-composition evidence (2026-07-14): the shipped Server now has exactly one
+Windows plus StreamWorker composition. Runtime host/streaming selectors, fake appsettings,
+production-compiled test doubles, no-op input, seeded benchmark evidence, and the hard-coded
+Dispatch catalog were removed. Deterministic API/process simulation now belongs to dedicated
+projects under `tests/`, while Server and GameProbe share real Steam/Heroic/Hydra/manual
+discovery. The complete managed, Client Lab, Playwright, native Worker, process integration,
+Android static, and architecture-gate matrix passes. Evidence:
+`docs/validation/2026-07-14-single-production-composition.md`.
+
 ## Deferred Until Gate 5 Passes
 
 Create separate audited plans, in this order, for:
@@ -471,8 +599,9 @@ Create separate audited plans, in this order, for:
 - Service-to-Worker readiness and state are typed, private, and event-driven.
 - Worker-to-StreamCore traffic is authenticated, encrypted, congestion controlled, and
   Beacon-owned.
-- Emulator displays moving H.264 SDR from the planned virtual display with Apollo and
-  Sunshine stopped.
+- Emulator displays moving H.264 SDR from the planned virtual display while Beacon-local
+  dependency and runtime evidence prove no external streaming product is integrated. No
+  installed third-party streaming product is probed during validation.
 - Reconnect uses a fresh ticket without destroying application/display ownership.
 - Explicit stop and ownership cleanup restore verified physical-primary state.
 - No alternate transport, backend, capture fallback, media route, or compatibility artifact

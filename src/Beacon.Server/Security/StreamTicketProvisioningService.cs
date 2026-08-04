@@ -1,6 +1,4 @@
 using Beacon.Core.Streaming;
-using Google.Protobuf;
-using WorkerAuthorizeTicket = Beacon.StreamWorker.Contracts.Worker.V1.AuthorizeTicket;
 
 namespace Beacon.Server.Security;
 
@@ -28,12 +26,13 @@ public sealed class StreamTicketProvisioningService(
         IssuedStreamTicket? issued = null;
         try
         {
-            StreamWorkerAuthorizationContext context = await authorizer.GetContextAsync(cancellationToken);
+            StreamRuntimeAuthorizationContext context = await authorizer.GetContextAsync(cancellationToken);
             issued = tickets.ReplaceForReconnect(
                 clientId,
                 sessionId,
                 planRevision,
-                context.WorkerInstanceId,
+                context.RuntimeInstanceId,
+                context.RuntimeGeneration,
                 DateTimeOffset.UtcNow,
                 TimeSpan.FromMinutes(2));
 
@@ -47,21 +46,22 @@ public sealed class StreamTicketProvisioningService(
                 return StreamTicketProvisioningResult.Fail(revocationError);
             }
 
-            WorkerAuthorizeTicket workerTicket = tickets.CreateWorkerAuthorization(issued.TicketId);
-            StreamWorkerAuthorizationResult authorized = await authorizer.AuthorizeAsync(
-                new StreamWorkerAuthorization(
+            StreamTicketAuthorization runtimeTicket = tickets.CreateRuntimeAuthorization(issued.TicketId);
+            StreamRuntimeAuthorizationResult authorized = await authorizer.AuthorizeAsync(
+                new StreamRuntimeAuthorization(
                     sessionId,
-                    workerTicket.ClientId,
-                    workerTicket.PlanRevision,
-                    workerTicket.TicketHash.ToByteArray(),
-                    workerTicket.WorkerInstanceId.ToByteArray(),
-                    DateTimeOffset.FromUnixTimeMilliseconds(checked((long)workerTicket.ExpiresAtUnixMs))),
+                    runtimeTicket.ClientId,
+                    runtimeTicket.PlanRevision,
+                    runtimeTicket.TicketHash,
+                    runtimeTicket.RuntimeInstanceId,
+                    context.RuntimeGeneration,
+                    runtimeTicket.ExpiresAt),
                 cancellationToken);
             if (!authorized.Success)
             {
                 tickets.Revoke(issued.TicketId);
                 return StreamTicketProvisioningResult.Fail(
-                    authorized.Error ?? "StreamWorker ticket authorization failed.");
+                    authorized.Error ?? "Stream runtime ticket authorization failed.");
             }
             return StreamTicketProvisioningResult.Provisioned(issued);
         }
@@ -102,16 +102,19 @@ public sealed class StreamTicketProvisioningService(
         CancellationToken cancellationToken)
     {
         foreach (PendingStreamTicketRevocation pending in
-            tickets.GetPendingWorkerRevocations(clientId, sessionId))
+            tickets.GetPendingRuntimeRevocations(clientId, sessionId))
         {
-            StreamWorkerAuthorizationResult revoked = await authorizer.RevokeAsync(
-                new StreamWorkerRevocation(pending.SessionId, pending.TicketHash),
+            StreamRuntimeAuthorizationResult revoked = await authorizer.RevokeAsync(
+                new StreamRuntimeRevocation(
+                    pending.SessionId,
+                    pending.TicketHash,
+                    pending.RuntimeGeneration),
                 cancellationToken);
             if (!revoked.Success)
             {
-                return revoked.Error ?? "StreamWorker ticket revocation failed.";
+                return revoked.Error ?? "Stream runtime ticket revocation failed.";
             }
-            tickets.MarkWorkerRevocationSent(pending.TicketId);
+            tickets.MarkRuntimeRevocationSent(pending.TicketId);
         }
         return null;
     }

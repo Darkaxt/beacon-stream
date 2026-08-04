@@ -22,6 +22,15 @@ internal sealed class FailingStopStreamingBackend(string stopError) : IStreaming
         return Task.FromResult(StreamingStopResult.Fail(stopError));
     }
 
+    public Task<StreamingStopResult> StopRuntimeAsync(
+        string sessionId,
+        Guid expectedGeneration,
+        CancellationToken cancellationToken)
+    {
+        inner.StopCalls.Add(sessionId);
+        return Task.FromResult(StreamingStopResult.Fail(stopError));
+    }
+
     public Task<StreamingSessionState?> GetSessionAsync(string sessionId, CancellationToken cancellationToken) =>
         inner.GetSessionAsync(sessionId, cancellationToken);
 

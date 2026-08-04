@@ -2,6 +2,10 @@ package dev.beacon.android;
 
 import org.junit.Test;
 
+import java.util.ArrayDeque;
+import java.util.Arrays;
+import java.util.Queue;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertSame;
@@ -57,6 +61,46 @@ public final class SurfaceEncodedVideoDecoderTest {
     }
 
     @Test
+    public void configuresCodecWithAsynchronousObserverBeforeStart() {
+        RecordingCodec codec = new RecordingCodec();
+        RecordingCodecObserver observer = new RecordingCodecObserver();
+        SurfaceEncodedVideoDecoder decoder = new SurfaceEncodedVideoDecoder(
+            new RecordingCodecFactory(codec),
+            new RecordingSurfaceProvider(new Object()),
+            observer);
+
+        EncodedVideoDecodeResult result = decoder.start(validRequest());
+
+        assertTrue(result.success());
+        assertTrue(observer != codec.configuredObserver);
+        codec.configuredObserver.onEndOfStream();
+        assertEquals(1, observer.endOfStreamCount);
+        assertEquals(Arrays.asList("configure", "start"), codec.events);
+        decoder.stop();
+    }
+
+    @Test
+    public void reconnectStopsAndReleasesPreviousCodecBeforeReplacement() {
+        RecordingCodec first = new RecordingCodec();
+        RecordingCodec second = new RecordingCodec();
+        SurfaceEncodedVideoDecoder decoder = new SurfaceEncodedVideoDecoder(
+            new SequenceCodecFactory(first, second),
+            new RecordingSurfaceProvider(new Object()),
+            EncodedVideoCodecObserver.noOp());
+
+        assertTrue(decoder.start(validRequest()).success());
+        assertTrue(decoder.start(validRequest()).success());
+
+        assertEquals(1, first.stopCount);
+        assertEquals(1, first.releaseCount);
+        assertEquals(1, second.startCount);
+        decoder.stop();
+        decoder.stop();
+        assertEquals(1, second.stopCount);
+        assertEquals(1, second.releaseCount);
+    }
+
+    @Test
     public void stopStopsAndReleasesActiveCodecOnce() {
         RecordingCodec codec = new RecordingCodec();
         SurfaceEncodedVideoDecoder decoder = new SurfaceEncodedVideoDecoder(
@@ -69,6 +113,25 @@ public final class SurfaceEncodedVideoDecoderTest {
 
         assertEquals(1, codec.stopCount);
         assertEquals(1, codec.releaseCount);
+    }
+
+    @Test
+    public void callbacksFromAReplacedCodecCannotReachTheActiveSession() {
+        RecordingCodec first = new RecordingCodec();
+        RecordingCodec second = new RecordingCodec();
+        RecordingCodecObserver observer = new RecordingCodecObserver();
+        SurfaceEncodedVideoDecoder decoder = new SurfaceEncodedVideoDecoder(
+            new SequenceCodecFactory(first, second),
+            new RecordingSurfaceProvider(new Object()),
+            observer);
+        decoder.start(validRequest());
+        EncodedVideoCodecObserver staleObserver = first.configuredObserver;
+
+        decoder.start(validRequest());
+        staleObserver.onError(new IllegalStateException("stale"));
+
+        assertEquals(0, observer.errorCount);
+        decoder.stop();
     }
 
     @Test
@@ -145,12 +208,27 @@ public final class SurfaceEncodedVideoDecoderTest {
         }
     }
 
+    private static final class SequenceCodecFactory implements EncodedVideoCodecFactory {
+        private final Queue<RecordingCodec> codecs = new ArrayDeque<>();
+
+        SequenceCodecFactory(RecordingCodec... codecs) {
+            this.codecs.addAll(Arrays.asList(codecs));
+        }
+
+        @Override
+        public EncodedVideoCodec create(String codec) {
+            return codecs.remove();
+        }
+    }
+
     private static final class RecordingCodec implements EncodedVideoCodec {
         private EncodedVideoDecodeRequest configuredRequest;
         private Object configuredSurface;
         private EncodedVideoSampleProvider configuredSampleProvider;
+        private EncodedVideoCodecObserver configuredObserver;
         private RuntimeException configureFailure;
         private RuntimeException startFailure;
+        private final java.util.List<String> events = new java.util.ArrayList<>();
         private int configureCount;
         private int startCount;
         private int stopCount;
@@ -158,7 +236,17 @@ public final class SurfaceEncodedVideoDecoderTest {
 
         @Override
         public void configure(EncodedVideoDecodeRequest request, Object surface, EncodedVideoSampleProvider sampleProvider) {
+            configure(request, surface, sampleProvider, EncodedVideoCodecObserver.noOp());
+        }
+
+        @Override
+        public void configure(
+            EncodedVideoDecodeRequest request,
+            Object surface,
+            EncodedVideoSampleProvider sampleProvider,
+            EncodedVideoCodecObserver observer) {
             configureCount++;
+            events.add("configure");
             if (configureFailure != null) {
                 throw configureFailure;
             }
@@ -166,11 +254,13 @@ public final class SurfaceEncodedVideoDecoderTest {
             configuredRequest = request;
             configuredSurface = surface;
             configuredSampleProvider = sampleProvider;
+            configuredObserver = observer;
         }
 
         @Override
         public void start() {
             startCount++;
+            events.add("start");
             if (startFailure != null) {
                 throw startFailure;
             }
@@ -192,5 +282,25 @@ public final class SurfaceEncodedVideoDecoderTest {
         public EncodedVideoSample nextSample() {
             return EncodedVideoSample.eos();
         }
+    }
+
+    private static final class RecordingCodecObserver implements EncodedVideoCodecObserver {
+        private int errorCount;
+        private int endOfStreamCount;
+        @Override public void onInputQueued(
+            long frameSequence,
+            long presentationTimeUs,
+            long queuedAtNs) { }
+        @Override public void onOutputReleased(
+            long frameSequence,
+            long presentationTimeUs,
+            long releasedAtNs,
+            boolean rendered) { }
+        @Override public void onFrameRendered(
+            long frameSequence,
+            long presentationTimeUs,
+            long renderedAtNs) { }
+        @Override public void onEndOfStream() { endOfStreamCount++; }
+        @Override public void onError(Throwable failure) { errorCount++; }
     }
 }

@@ -1,18 +1,110 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Beacon.HostAgent.Contracts;
 using Beacon.Core.Displays;
+using Beacon.Core.Input;
 using Beacon.Core.Recovery;
 using Beacon.Core.Sessions;
 using Beacon.Core.Streaming;
+using Beacon.Platform.Windows.HostAgent;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Beacon.Server.Tests;
 
-public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
+public sealed class AdminApiTests(BeaconServerTestFactory factory) : IClassFixture<BeaconServerTestFactory>
 {
+    [Fact]
+    public async Task AdminCanStartAndQueryDurableSudoVdaUpdate()
+    {
+        var updates = new FakeDriverUpdateClient();
+        using WebApplicationFactory<Program> app = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IHostAgentDriverUpdateClient>();
+                services.AddSingleton<IHostAgentDriverUpdateClient>(updates);
+            }));
+        HttpClient client = app.CreateClient();
+        Guid transactionId = Guid.NewGuid();
+
+        HttpResponseMessage start = await client.PostAsJsonAsync(
+            "/admin/driver/sudovda/updates",
+            new { packageId = "sudovda-22.48.58.193", transactionId });
+        HttpResponseMessage query = await client.GetAsync(
+            $"/admin/driver/sudovda/updates/{transactionId:D}");
+
+        Assert.Equal(HttpStatusCode.Accepted, start.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, query.StatusCode);
+        using JsonDocument accepted = await JsonDocument.ParseAsync(
+            await start.Content.ReadAsStreamAsync());
+        using JsonDocument current = await JsonDocument.ParseAsync(
+            await query.Content.ReadAsStreamAsync());
+        Assert.Equal("Accepted", accepted.RootElement.GetProperty("state").GetString());
+        Assert.Equal(
+            transactionId,
+            current.RootElement.GetProperty("transactionId").GetGuid());
+        Assert.Equal(
+            new[]
+            {
+                $"start:sudovda-22.48.58.193:{transactionId:D}",
+                $"query:{transactionId:D}"
+            },
+            updates.Calls);
+    }
+
+    [Theory]
+    [InlineData("driver-update-busy", HttpStatusCode.Conflict)]
+    [InlineData("service-active-leases", HttpStatusCode.Conflict)]
+    [InlineData("driver-update-not-found", HttpStatusCode.NotFound)]
+    [InlineData("invalid-package-id", HttpStatusCode.BadRequest)]
+    public async Task DriverUpdateDomainFailuresMapToStableHttpStatus(
+        string resultCode,
+        HttpStatusCode expected)
+    {
+        var updates = new FakeDriverUpdateClient
+        {
+            Error = new HostAgentDriverUpdateException(resultCode, "driver update rejected")
+        };
+        using WebApplicationFactory<Program> app = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IHostAgentDriverUpdateClient>();
+                services.AddSingleton<IHostAgentDriverUpdateClient>(updates);
+            }));
+        HttpClient client = app.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/admin/driver/sudovda/updates",
+            new { packageId = "sudovda-next" });
+
+        Assert.Equal(expected, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task HostAgentUnavailableMapsToServiceUnavailable()
+    {
+        var updates = new FakeDriverUpdateClient
+        {
+            Error = new HostAgentUnavailableException("Host Agent unavailable.")
+        };
+        using WebApplicationFactory<Program> app = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<IHostAgentDriverUpdateClient>();
+                services.AddSingleton<IHostAgentDriverUpdateClient>(updates);
+            }));
+        HttpClient client = app.CreateClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/admin/driver/sudovda/updates",
+            new { packageId = "sudovda-next" });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+    }
+
     [Fact]
     public async Task SnapshotReturnsClientsGamesAndSessions()
     {
@@ -30,7 +122,7 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         Assert.Equal("z-fold-7", root.GetProperty("clients")[0].GetProperty("clientId").GetString());
         JsonElement benchmark = Assert.Single(root.GetProperty("clients")[0].GetProperty("benchmarks").EnumerateArray());
         Assert.Equal("av1", benchmark.GetProperty("selectedResult").GetProperty("codec").GetString());
-        Assert.Equal(1, benchmark.GetProperty("networkSamples").GetArrayLength());
+        Assert.Equal(256, benchmark.GetProperty("networkSamples").GetArrayLength());
         Assert.Equal("steam-shortcut:3767414131", root.GetProperty("sessions")[0].GetProperty("appId").GetString());
         Assert.Equal("running", root.GetProperty("streams")[0].GetProperty("state").GetString());
         Assert.Equal("client-z-fold-7", root.GetProperty("streams")[0].GetProperty("displayId").GetString());
@@ -75,6 +167,48 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
                 .EnumerateArray()
                 .Select(value => value.GetString()));
         Assert.False(root.GetProperty("streamingHealth").TryGetProperty("endpoints", out _));
+    }
+
+    private sealed class FakeDriverUpdateClient : IHostAgentDriverUpdateClient
+    {
+        private readonly Dictionary<Guid, SudoVdaUpdatePayload> values = [];
+
+        public List<string> Calls { get; } = [];
+
+        public Exception? Error { get; init; }
+
+        public Task<SudoVdaUpdatePayload> StartAsync(
+            string packageId,
+            Guid transactionId,
+            CancellationToken cancellationToken)
+        {
+            Calls.Add($"start:{packageId}:{transactionId:D}");
+            if (Error is not null)
+            {
+                return Task.FromException<SudoVdaUpdatePayload>(Error);
+            }
+            var value = new SudoVdaUpdatePayload(
+                transactionId,
+                packageId,
+                SudoVdaUpdateState.Accepted,
+                "driver-update-accepted",
+                PreviousEvidence: null,
+                ActiveEvidence: null);
+            values[transactionId] = value;
+            return Task.FromResult(value);
+        }
+
+        public Task<SudoVdaUpdatePayload> QueryAsync(
+            Guid transactionId,
+            CancellationToken cancellationToken)
+        {
+            Calls.Add($"query:{transactionId:D}");
+            if (Error is not null)
+            {
+                return Task.FromException<SudoVdaUpdatePayload>(Error);
+            }
+            return Task.FromResult(values[transactionId]);
+        }
     }
 
     [Fact]
@@ -326,6 +460,30 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
     }
 
     [Fact]
+    public async Task AdminStopReleasesExactSessionController()
+    {
+        var lifecycle = new RecordingClientInputSessionLifecycle();
+        using WebApplicationFactory<Program> app = factory.WithWebHostBuilder(builder =>
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IClientInputSessionLifecycle>();
+                services.AddSingleton<IClientInputSessionLifecycle>(lifecycle);
+            }));
+        HttpClient client = app.CreateClient();
+        const string sessionId = "z-fold-7-steam-shortcut:3767414131";
+        await client.PostAsJsonAsync(
+            "/clients/z-fold-7/launch",
+            new { gameId = "steam-shortcut:3767414131" });
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/admin/clients/z-fold-7/stream/stop",
+            new { });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal([sessionId], lifecycle.SessionIds);
+    }
+
+    [Fact]
     public async Task AdminStopSelectedClientStreamReturnsServiceUnavailableWhenBackendStopFails()
     {
         WebApplicationFactory<Program> failingFactory = factory.WithWebHostBuilder(builder =>
@@ -400,9 +558,10 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
         using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
         JsonElement root = document.RootElement;
 
-        Assert.Equal(2560, root.GetProperty("display").GetProperty("preferredWidth").GetInt32());
-        Assert.Equal(1600, root.GetProperty("display").GetProperty("preferredHeight").GetInt32());
-        Assert.Equal(90, root.GetProperty("display").GetProperty("preferredRefreshHz").GetInt32());
+        JsonElement preferredMode = root.GetProperty("display").GetProperty("preferredMode");
+        Assert.Equal(2560, preferredMode.GetProperty("width").GetInt32());
+        Assert.Equal(1600, preferredMode.GetProperty("height").GetInt32());
+        Assert.Equal(90, preferredMode.GetProperty("refreshHz").GetInt32());
         Assert.Equal("physical-blackout", root.GetProperty("display").GetProperty("mode").GetString());
         Assert.False(root.GetProperty("display").GetProperty("restorePhysicalDisplayOnEnd").GetBoolean());
         Assert.False(root.GetProperty("display").GetProperty("forbidMirrorMode").GetBoolean());
@@ -495,5 +654,19 @@ public sealed class AdminApiTests(WebApplicationFactory<Program> factory) : ICla
             Task.FromResult<StreamingSessionState?>(null);
 
         public IReadOnlyList<StreamingSessionState> GetSessions() => [];
+    }
+
+    private sealed class RecordingClientInputSessionLifecycle : IClientInputSessionLifecycle
+    {
+        public Task PrepareSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public List<string> SessionIds { get; } = [];
+
+        public Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken)
+        {
+            SessionIds.Add(sessionId);
+            return Task.CompletedTask;
+        }
     }
 }

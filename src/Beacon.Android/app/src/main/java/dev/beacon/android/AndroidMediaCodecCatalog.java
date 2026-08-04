@@ -66,17 +66,15 @@ public final class AndroidMediaCodecCatalog implements AndroidCodecCatalog {
         return false;
     }
 
-    private static boolean isHevcHdr10Profile(String type, int profile) {
+    static boolean isHevcHdr10Profile(String type, int profile) {
         return "video/hevc".equals(type) &&
-            (profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10 ||
-                profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10 ||
+            (profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10 ||
                 profile == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus);
     }
 
     private static boolean isAv1Hdr10Profile(String type, int profile) {
         return "video/av01".equals(type) &&
-            (profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10 ||
-                profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10HDR10 ||
+            (profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10HDR10 ||
                 profile == MediaCodecInfo.CodecProfileLevel.AV1ProfileMain10HDR10Plus);
     }
 }

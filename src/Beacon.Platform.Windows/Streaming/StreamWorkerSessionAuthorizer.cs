@@ -6,22 +6,26 @@ namespace Beacon.Platform.Windows.Streaming;
 
 public sealed class StreamWorkerSessionAuthorizer(IStreamWorkerHost host) : IStreamSessionAuthorizer
 {
-    public async Task<StreamWorkerAuthorizationContext> GetContextAsync(CancellationToken cancellationToken)
+    public async Task<StreamRuntimeAuthorizationContext> GetContextAsync(CancellationToken cancellationToken)
     {
         await host.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
+        long generation = host.CurrentProcessGeneration;
         byte[] instanceId = host.WorkerInstanceId.ToArray();
-        if (instanceId.Length == 0)
+        if (generation <= 0
+            || instanceId.Length == 0
+            || !host.IsCurrentProcessGeneration(generation))
         {
-            throw new StreamWorkerProtocolException("StreamWorker did not provide an instance id.");
+            throw new StreamWorkerProtocolException("StreamWorker runtime identity is unavailable.");
         }
-        return new StreamWorkerAuthorizationContext(instanceId);
+        return new StreamRuntimeAuthorizationContext(instanceId, generation);
     }
 
-    public async Task<StreamWorkerAuthorizationResult> AuthorizeAsync(
-        StreamWorkerAuthorization authorization,
+    public async Task<StreamRuntimeAuthorizationResult> AuthorizeAsync(
+        StreamRuntimeAuthorization authorization,
         CancellationToken cancellationToken)
     {
         StreamWorkerCommandResponse response = await host.SendAsync(
+            authorization.RuntimeGeneration,
             new WorkerIpcEnvelope
             {
                 SessionId = authorization.SessionId,
@@ -30,36 +34,45 @@ public sealed class StreamWorkerSessionAuthorizer(IStreamWorkerHost host) : IStr
                     ClientId = authorization.ClientId,
                     PlanRevision = authorization.PlanRevision,
                     TicketHash = ByteString.CopyFrom(authorization.TicketHash),
-                    WorkerInstanceId = ByteString.CopyFrom(authorization.WorkerInstanceId),
+                    WorkerInstanceId = ByteString.CopyFrom(authorization.RuntimeInstanceId),
                     ExpiresAtUnixMs = checked((ulong)authorization.ExpiresAt.ToUnixTimeMilliseconds()),
                 },
             },
             cancellationToken).ConfigureAwait(false);
         WorkerCompletion completion = response.Completion.WorkerCompletion;
         return completion.Succeeded
-            ? StreamWorkerAuthorizationResult.Accepted
-            : StreamWorkerAuthorizationResult.Reject(
+            ? StreamRuntimeAuthorizationResult.Accepted
+            : StreamRuntimeAuthorizationResult.Reject(
                 $"StreamWorker rejected ticket authorization ({completion.ErrorCode}).");
     }
 
-    public async Task<StreamWorkerAuthorizationResult> RevokeAsync(
-        StreamWorkerRevocation revocation,
+    public async Task<StreamRuntimeAuthorizationResult> RevokeAsync(
+        StreamRuntimeRevocation revocation,
         CancellationToken cancellationToken)
     {
-        StreamWorkerCommandResponse response = await host.SendAsync(
-            new WorkerIpcEnvelope
-            {
-                SessionId = revocation.SessionId,
-                RevokeTicket = new RevokeTicket
+        StreamWorkerCommandResponse response;
+        try
+        {
+            response = await host.SendAsync(
+                revocation.RuntimeGeneration,
+                new WorkerIpcEnvelope
                 {
-                    TicketHash = ByteString.CopyFrom(revocation.TicketHash),
+                    SessionId = revocation.SessionId,
+                    RevokeTicket = new RevokeTicket
+                    {
+                        TicketHash = ByteString.CopyFrom(revocation.TicketHash),
+                    },
                 },
-            },
-            cancellationToken).ConfigureAwait(false);
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (StreamWorkerGenerationChangedException)
+        {
+            return StreamRuntimeAuthorizationResult.Accepted;
+        }
         WorkerCompletion completion = response.Completion.WorkerCompletion;
         return completion.Succeeded
-            ? StreamWorkerAuthorizationResult.Accepted
-            : StreamWorkerAuthorizationResult.Reject(
+            ? StreamRuntimeAuthorizationResult.Accepted
+            : StreamRuntimeAuthorizationResult.Reject(
                 $"StreamWorker rejected ticket revocation ({completion.ErrorCode}).");
     }
 }

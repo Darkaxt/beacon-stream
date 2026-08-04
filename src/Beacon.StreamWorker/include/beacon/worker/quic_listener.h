@@ -1,70 +1,62 @@
 #pragma once
 
 #include "beacon/stream/msquic_transport.h"
+#include "beacon/stream/server_session_protocol.h"
 #include "beacon/stream/transport.h"
+#include "beacon/worker/media_datagram_transport.h"
+#include "beacon/worker/quic_ticket_store.h"
 #include "worker_ipc.pb.h"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace beacon::worker {
 
-class IWorkerMediaTransport : public stream::IStreamTransport {
+class IWorkerMediaTransport : public IMediaDatagramTransport {
 public:
+  virtual ~IWorkerMediaTransport() = default;
+
   [[nodiscard]] virtual bool configure_listener(std::string_view listen_address,
                                                 std::uint16_t listen_port) = 0;
   [[nodiscard]] virtual std::uint16_t local_port() const noexcept = 0;
+  [[nodiscard]] virtual bool open_connection() = 0;
+  virtual void close_connection() noexcept = 0;
+  virtual void request_active_disconnect() noexcept = 0;
+  virtual void shutdown() noexcept = 0;
 };
 
-using TicketHash = std::array<std::byte, 32>;
-
-struct AuthorizedQuicTicket {
-  TicketHash hash{};
-  std::string client_id;
-  std::string session_id;
-  std::uint64_t plan_revision{};
-  std::uint64_t expires_at_unix_ms{};
+enum class QuicDatagramOutcomeKind {
+  acknowledged,
+  lost,
+  canceled,
 };
 
-enum class QuicTicketConsumeResult {
-  accepted,
-  unknown,
-  replayed,
-  client_mismatch,
-  session_mismatch,
-  plan_mismatch,
-  expired,
+struct QuicDatagramOutcome {
+  QuicDatagramOutcomeKind kind{QuicDatagramOutcomeKind::acknowledged};
+  std::uint64_t session_generation{};
+  std::uint64_t access_unit_sequence{};
+  std::uint64_t smoothed_rtt_us{};
+  std::uint64_t congestion_window_bytes{};
 };
 
-[[nodiscard]] TicketHash hash_stream_ticket(std::span<const std::byte> ticket);
-
-class AuthorizedQuicTicketStore {
-public:
-  [[nodiscard]] bool authorize(AuthorizedQuicTicket ticket);
-  void revoke(std::span<const std::byte> hash);
-  [[nodiscard]] QuicTicketConsumeResult
-  consume(std::span<const std::byte> raw_ticket, std::string_view client_id,
-          std::string_view session_id, std::uint64_t plan_revision,
-          std::uint64_t now_unix_ms);
-  [[nodiscard]] std::size_t size() const;
-
-private:
-  struct Record {
-    AuthorizedQuicTicket ticket;
-    bool consumed{};
-  };
-
-  mutable std::mutex mutex_;
-  std::vector<Record> records_;
+struct QuicTransportDisconnected {
+  std::uint64_t session_generation{};
 };
+
+using QuicMediaEvent =
+    std::variant<stream::ServerSessionProtocolOutput::AcceptedStartSession,
+                 stream::ServerSessionProtocolOutput::AcceptedStopSession,
+                 stream::ServerSessionProtocolOutput::AcceptedIdrRequest,
+                 stream::ServerSessionProtocolOutput::ParsedFeedback,
+                 QuicDatagramOutcome, QuicTransportDisconnected>;
 
 enum class QuicListenerFailure {
   none,
@@ -102,6 +94,7 @@ struct QuicListenerMetrics {
   std::uint64_t feedback_messages{};
   std::uint32_t smoothed_rtt_us{};
   std::uint32_t path_mtu{};
+  std::uint32_t congestion_window_bytes{};
   std::uint64_t closed_connection_handles{};
   std::uint64_t live_datagram_send_contexts{};
 };
@@ -109,8 +102,9 @@ struct QuicListenerMetrics {
 class QuicListener final : public IWorkerMediaTransport {
 public:
   using EventSink = std::function<void(v1::WorkerIpcEnvelope)>;
+  using MediaEventSink = std::function<void(QuicMediaEvent)>;
 
-  QuicListener(std::wstring identity_path,
+  QuicListener(std::filesystem::path identity_path,
                AuthorizedQuicTicketStore &authorized_tickets,
                QuicListenerFaultInjector fault_injector = {});
   ~QuicListener() override;
@@ -133,10 +127,13 @@ public:
   [[nodiscard]] std::vector<stream::MsQuicTransportEvent>
   take_transport_events();
   void set_event_sink(EventSink sink);
+  void set_media_event_sink(MediaEventSink sink);
   [[nodiscard]] bool open_connection() override;
   void close_connection() noexcept override;
+  void request_active_disconnect() noexcept override;
   [[nodiscard]] stream::TransportSendResult
-  send(stream::TransportPacket packet) override;
+  send_for_generation(stream::TransportPacket packet,
+                      std::uint64_t session_generation) noexcept override;
   void shutdown() noexcept override;
 
 private:

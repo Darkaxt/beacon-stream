@@ -89,6 +89,33 @@ public sealed class WindowsSessionActivityInspectorTests
         Assert.True(snapshot.OwnedWindowRemaining);
     }
 
+    [Fact]
+    public async Task InspectAsync_ReportsOnlyTheThreeOwnedProcessIdentities()
+    {
+        var activityApi = new FakeWindowsSessionActivityApi();
+        activityApi.RunningProcesses.UnionWith([100, 200]);
+        activityApi.ParentByProcessId[200] = 100;
+        activityApi.StartTimeByProcessId[300] = SessionStart.AddMinutes(1);
+        activityApi.StartTimeByProcessId[400] = SessionStart.AddMinutes(-1);
+        activityApi.Windows.Add(new WindowsTopLevelWindow(
+            300,
+            "New Game Window",
+            new WindowsRectangle(100, 100, 800, 600),
+            IsVisible: true));
+        activityApi.Windows.Add(new WindowsTopLevelWindow(
+            400,
+            "Unrelated Updater",
+            new WindowsRectangle(100, 100, 800, 600),
+            IsVisible: true));
+        var inspector = CreateInspector(activityApi);
+
+        SessionActivitySnapshot snapshot = await inspector.InspectAsync(
+            CreateRecord(),
+            CancellationToken.None);
+
+        Assert.Equal([100, 200, 300], snapshot.OwnedProcessIds);
+    }
+
     private static WindowsSessionActivityInspector CreateInspector(FakeWindowsSessionActivityApi activityApi)
     {
         var displayApi = new FakeWindowsDisplayApi
@@ -114,13 +141,16 @@ public sealed class WindowsSessionActivityInspectorTests
             new PlannedDisplay("client-z-fold-7", 2560, 1600, 120, "virtual-primary", HdrPreference.Prefer, false, "sdr", "HDR unavailable."),
             new PlannedStream(
                 "av1",
+                2560,
+                1600,
                 120,
                 65,
                 "lan-direct",
                 "adaptive",
                 "Test benchmark evidence.",
                 Guid.Parse("33acde60-b29f-4f03-b2b2-f51337bdb9a5"),
-                "test-benchmark-revision"));
+                "test-benchmark-revision"),
+            new PlannedAudio("opus", 48_000, 2, 20_000, 96_000, "R2 test audio."));
 
         var launchState = new GameLaunchState(
             plan.SessionId,

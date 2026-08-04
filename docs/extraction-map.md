@@ -9,7 +9,7 @@ audit and the later gates.
 
 | Source | Beacon boundary | Status |
 | --- | --- | --- |
-| Apollo `third-party/sudovda/sudovda-ioctl.h` | `src/Beacon.Platform.Windows/Displays/WindowsDisplayApi.cs` | Protocol facts adapted for the SudoVDA interface GUID, protocol version, and IOCTL constants. |
+| SudoVDA `Common/Include/sudovda-ioctl.h` and `Driver.cpp` | `src/Beacon.Platform.Windows/Displays` | Driver interface, protocol, watchdog-query, same-handle add/remove/heartbeat ownership, and heartbeat IOCTL facts adapted into a Beacon-owned control session; no Apollo runtime or configuration dependency. |
 | Apollo, Vibeshine, and Sunshine behavior | `docs/source-audits/2026-07-08-windows-input-sink-upstream-audit.md` | Reference-only audit for display targeting and client-local input ownership; no streaming code copied. |
 | Local Steam files | `src/Beacon.Core/Games/Steam`, `src/Beacon.GameProbe` | Read-only parsing of installed applications, libraries, and non-Steam shortcuts. |
 | Local Heroic files | `src/Beacon.Core/Games/Heroic` | Read-only parsing of installed GOG and sideloaded applications. |
@@ -53,12 +53,12 @@ change the prohibition against upstream runtime compatibility.
 | --- | --- | --- | --- |
 | Sunshine `40ae6c8`, `src/platform/windows/display_wgc.cpp` and `display.h` | Future `src/Beacon.StreamWorker/src/capture` | GPL-3.0 | Adapt only monitor selection, free-threaded frame-pool, D3D11 Surface access, and recreation lifecycle into a smaller Beacon-owned WGC boundary. |
 | Sunshine `40ae6c8`, `src/platform/windows/display_vram.cpp` | Future `src/Beacon.StreamWorker/src/video` | GPL-3.0 | Reference D3D11-resident texture ownership; implement an original narrow `ID3D11VideoProcessor` BGRA-to-NV12 converter without Sunshine/FFmpeg policy. |
-| Sunshine `40ae6c8`, `src/nvenc/nvenc_base.cpp` and `nvenc_d3d11_native.cpp` | Future `src/Beacon.StreamWorker/src/video` | GPL-3.0 | Adapt NVENC resource and cleanup lifecycle; remove Boost, FFmpeg, upstream protocol, codec selection, and policy. |
+| Sunshine `40ae6c8`, `src/nvenc/nvenc_base.cpp` and `nvenc_d3d11_native.cpp` | `src/Beacon.StreamWorker/src/video/nvenc_h264_encoder.cpp` | GPL-3.0 | Retain only the direct D3D11 register/map/submit/lock/unlock/unmap and output/session cleanup sequence. Beacon owns the API, typed failures, per-frame pooled-texture registration lifetime, H.264 policy, and recovery; Boost, FFmpeg, upstream protocol, configuration, and runtime compatibility are absent. |
 | microsoft/msquic `v2.5.9` (`87b5308`) | `src/Beacon.StreamProtocol`, `src/Beacon.StreamWorker`, and Android StreamCore native builds | MIT | Linked as the single internal Beacon QUIC implementation; no MsQuic type is exposed above the native transport boundary. |
 | MsQuic `src/tools/sample/sample.c` at `87b5308` | `tests/Beacon.StreamProtocol.Tests/msquic_interop_proof.cpp` | MIT | Adapt only callback, configuration, and resource-lifecycle patterns into a Beacon-owned TLS reliable-stream/datagram proof; no sample protocol or product policy is retained. |
 | quictls/openssl (`ff36838`, the MsQuic `v2.5.9` gitlink) | Android MsQuic build only | Apache-2.0 | Builds the exact non-Windows TLS source required by pinned MsQuic without initializing or floating an upstream Git submodule. |
 | microsoft/xdp-for-windows (`f23b1fb`, the MsQuic `v2.5.9` gitlink) | Windows MsQuic build headers only | MIT | Materialize the exact headers required by pinned MsQuic; XDP remains disabled and absent from Beacon contracts. |
-| FFmpeg/nv-codec-headers `15ee327` | Future vendored native include directory | Header-specific permissive notice | Vendor only required NVENC headers and preserve their notice; load the installed NVIDIA runtime library. |
+| FFmpeg/nv-codec-headers `15ee327` | `native/vendor/nv-codec-headers/include/ffnvcodec/nvEncodeAPI.h` | Header-specific permissive notice | Vendor the audited NVENC API header and preserve its notice in `native/vendor/nv-codec-headers/LICENSE.nvEncodeAPI.txt`; production loads only the installed NVIDIA runtime library. |
 | protocolbuffers/protobuf `v32.1` (`7fcfd66`) | `contracts/worker_ipc.proto`, `contracts/stream_control.proto`, and generated C#/C++ builds | BSD-3-Clause | Generates typed messages from Beacon-owned schemas; no upstream application contract is imported. |
 | Sunshine `40ae6c8`, `src/platform/windows/audio.cpp` and `src/audio.cpp`; xiph/opus `v1.6.1` (`22244de`) | Deferred Worker/StreamCore audio boundaries | GPL-3.0 / BSD-3-Clause | Reference/adapt event-driven WASAPI and Opus primitives only after the H.264 gate; no audio code lands in Gate 3. |
 | Android `MediaCodec` platform API and retained Beacon codec classes | Future `BeaconStreamCore` Java decoder boundary | Android platform / Beacon GPL-3.0 | Keep and adapt the existing Beacon asynchronous Surface decoder; native transport delivers complete Beacon access units through direct JNI buffers. |
@@ -68,6 +68,10 @@ change the prohibition against upstream runtime compatibility.
 - `Beacon.StreamWorker` is a Beacon-owned native process behind versioned, typed named-pipe
   IPC. It emits deterministic access-unit markers for Gate 3 and owns the single MsQuic
   server transport; it does not own display, launch, or session policy.
+- StreamWorker now owns an original narrow D3D11 video-processor boundary. It queries the
+  exact BGRA full-range BT.709 to NV12 limited-range BT.709 conversion, preserves aspect ratio,
+  uses a bounded reusable texture pool on the capture device, and fails without a CPU or
+  shader fallback. Sunshine `display_vram.cpp` remains reference-only evidence.
 - Android packages one Beacon-owned JNI StreamCore route with pinned MsQuic and Protobuf
   dependencies. Lifecycle, certificate pinning, ticket handoff, packet assembly, reconnect,
   stop, and exact native-resource release are exercised through that route.

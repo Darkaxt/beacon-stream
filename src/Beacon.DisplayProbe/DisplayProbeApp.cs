@@ -23,6 +23,79 @@ public static class DisplayProbeApp
                     output.Write(DisplayProbeFormatter.FormatStatus(driverStatus, topology));
                     return 0;
 
+                case DriverSessionDisplayProbeCommand:
+                    if (api is not IWindowsDisplayLeaseSession driverSession)
+                    {
+                        error.WriteLine("The active display API does not expose a SudoVDA driver session.");
+                        return 2;
+                    }
+
+                    const string probeDisplayId = "probe-driver-session";
+                    SudoVdaDriverLeaseHoldResult holdResult = await driverSession.HoldAsync(
+                        probeDisplayId,
+                        CancellationToken.None);
+                    if (!holdResult.Success)
+                    {
+                        output.WriteLine($"driver-session: failed - {holdResult.Error}");
+                        return 2;
+                    }
+
+                    try
+                    {
+                        SudoVdaDriverLeaseSessionSnapshot snapshot = driverSession.Snapshot;
+                        string watchdog = snapshot.WatchdogTimeoutSeconds is uint timeoutSeconds
+                            ? $"{timeoutSeconds}s"
+                            : "unknown";
+                        output.WriteLine(
+                            $"driver-session: success leases={snapshot.LeaseCount} watchdog={watchdog} " +
+                            $"heartbeat={(snapshot.HeartbeatActive ? "active" : "not-required")} " +
+                            $"healthy={snapshot.Healthy.ToString().ToLowerInvariant()} - {snapshot.Diagnostic}");
+                        return snapshot.Healthy ? 0 : 2;
+                    }
+                    finally
+                    {
+                        await driverSession.ReleaseAsync(probeDisplayId, CancellationToken.None);
+                    }
+
+                case DiagnoseCreateHeldDisplayProbeCommand diagnose:
+                    if (api is not IWindowsDisplayLeaseSession diagnoseSession)
+                    {
+                        error.WriteLine("The active display API does not expose a SudoVDA driver session.");
+                        return 2;
+                    }
+
+                    string diagnoseDisplayId = ToDisplayId(diagnose.ClientId);
+                    SudoVdaDriverLeaseHoldResult diagnoseHold = await diagnoseSession.HoldAsync(
+                        diagnoseDisplayId,
+                        CancellationToken.None);
+                    output.WriteLine(
+                        $"hold: {(diagnoseHold.Success ? "success" : "failed")} " +
+                        $"acquired={diagnoseHold.Acquired.ToString().ToLowerInvariant()} " +
+                        $"error={diagnoseHold.Error ?? "none"}");
+                    if (!diagnoseHold.Success)
+                    {
+                        return 2;
+                    }
+
+                    DisplayApiResult diagnoseCreate = await api.CreateVirtualDisplayAsync(
+                        diagnoseDisplayId,
+                        diagnose.Width,
+                        diagnose.Height,
+                        diagnose.RefreshHz,
+                        CancellationToken.None);
+                    output.WriteLine(DisplayProbeFormatter.FormatApiResult("create", diagnoseCreate));
+                    DisplayTopologySnapshot diagnoseTopology = await api.QueryTopologyAsync(
+                        CancellationToken.None);
+                    output.Write(DisplayProbeFormatter.FormatStatus(api.GetDriverStatus(), diagnoseTopology));
+                    return diagnoseCreate.Success
+                        && diagnoseTopology.HasDisplayMode(
+                            diagnoseDisplayId,
+                            diagnose.Width,
+                            diagnose.Height,
+                            diagnose.RefreshHz)
+                        ? 0
+                        : 2;
+
                 case PrepareDisplayProbeCommand prepare:
                     var prepareBackend = new WindowsDisplayBackend(api);
                     DisplayEnsureResult prepareResult = await prepareBackend.PrepareVirtualDisplayAsync(
@@ -70,10 +143,13 @@ public static class DisplayProbeApp
                     return recoveryResult.Success ? 0 : 2;
 
                 case RemoveDisplayProbeCommand remove:
-                    DisplayApiResult removeResult = await api.RemoveVirtualDisplayAsync(
+                    var removeBackend = new WindowsDisplayBackend(api);
+                    DisplayRemoveResult removeResult = await removeBackend.RemoveVirtualDisplayAsync(
                         ToDisplayId(remove.ClientId),
                         CancellationToken.None);
-                    output.WriteLine(DisplayProbeFormatter.FormatApiResult("remove", removeResult));
+                    output.WriteLine(removeResult.Success
+                        ? "remove: success"
+                        : $"remove: failed: {removeResult.Error}");
                     return removeResult.Success ? 0 : 2;
 
                 default:

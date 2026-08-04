@@ -2,10 +2,12 @@ add_library(
   BeaconAndroidStreamCore
   STATIC
     streamcore/callback_gate.cpp
+    streamcore/benchmark_collector.cpp
     streamcore/certificate_pin.cpp
     streamcore/deferred_action_queue.cpp
     streamcore/grant_mapping.cpp
     streamcore/msquic_client.cpp
+    streamcore/opus_audio_decoder.cpp
     streamcore/stream_core.cpp
     streamcore/surface_owner.cpp
 )
@@ -20,6 +22,7 @@ target_link_libraries(
     Beacon::StreamContracts
     Beacon::StreamProtocol
     OpenSSL
+    opus
 )
 if(MSVC)
   target_compile_options(BeaconAndroidStreamCore PRIVATE /W4 /WX /permissive-)

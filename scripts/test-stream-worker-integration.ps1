@@ -1,9 +1,12 @@
 [CmdletBinding()]
 param(
-    [string]$WorkerPath = ''
+    [string]$WorkerPath = '',
+    [switch]$AllowUnsupportedVideoHardware,
+    [switch]$AllowUnsupportedAudioHardware
 )
 
 $ErrorActionPreference = 'Stop'
+Remove-Item Env:BEACON_TEST_ALLOW_UNSUPPORTED_VIDEO_HARDWARE -ErrorAction SilentlyContinue
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($WorkerPath)) {
     $WorkerPath = Join-Path $repositoryRoot `
@@ -22,6 +25,17 @@ $nativeProbe = Join-Path $repositoryRoot `
     'native\out\build\windows-x64\Beacon.StreamWorker.Tests\Debug\BeaconStreamWorkerQuicListenerProbe.exe'
 if (-not (Test-Path -LiteralPath $nativeProbe -PathType Leaf)) {
     throw "Beacon native Worker process probe was not found at '$nativeProbe'."
+}
+Add-Type -AssemblyName System.Windows.Forms
+$primaryScreen = [System.Windows.Forms.Screen]::PrimaryScreen
+if ($null -eq $primaryScreen) {
+    throw 'No primary Windows display is available for the production capture probe.'
+}
+$displayDevice = $primaryScreen.DeviceName
+$displayWidth = $primaryScreen.Bounds.Width
+$displayHeight = $primaryScreen.Bounds.Height
+if ($AllowUnsupportedVideoHardware) {
+    $env:BEACON_TEST_ALLOW_UNSUPPORTED_VIDEO_HARDWARE = '1'
 }
 try {
     $key = [Security.Cryptography.RSA]::Create(3072)
@@ -63,21 +77,81 @@ try {
         --filter 'FullyQualifiedName~RealWorkerCompletesExplicitLifecycleWhenBinaryIsAvailable'
     if ($LASTEXITCODE -ne 0) { throw 'StreamWorker process integration failed.' }
 
+    $primaryHardwareUnavailable = $false
     $nativeOutput = & $nativeProbe `
         --worker $WorkerPath `
         --identity $identityPath `
-        --fingerprint $fingerprint
+        --fingerprint $fingerprint `
+        --display $displayDevice `
+        --width $displayWidth `
+        --height $displayHeight
     $nativeExitCode = $LASTEXITCODE
-    if ($nativeExitCode -ne 0 -or
-        $nativeOutput -notmatch '^BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK ACCESS_UNIT_MARKER DISCONNECT SHUTDOWN$') {
+    if ($nativeExitCode -eq 0 -and
+        $nativeOutput -match '^BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK REAL_H264_ACCESS_UNIT DISCONNECT SHUTDOWN$') {
+        Write-Host $nativeOutput
+    }
+    elseif ($AllowUnsupportedVideoHardware -and
+        $nativeExitCode -eq 99 -and
+        $nativeOutput -in @(
+            'BEACON_WORKER_VIDEO_FAILURE PREPARE CAPABILITY_UNAVAILABLE',
+            'BEACON_WORKER_VIDEO_FAILURE CAPTURE 5')) {
+        Write-Host $nativeOutput
+        $primaryHardwareUnavailable = $true
+    }
+    elseif ($AllowUnsupportedAudioHardware -and
+        $nativeExitCode -eq 78 -and
+        $nativeOutput -eq 'BEACON_WORKER_AUDIO_FAILURE PREPARE CAPABILITY_UNAVAILABLE') {
+        Write-Host $nativeOutput
+        $primaryHardwareUnavailable = $true
+    }
+    elseif ($AllowUnsupportedVideoHardware -and
+        $AllowUnsupportedAudioHardware -and
+        $nativeExitCode -eq 79 -and
+        $nativeOutput -eq 'BEACON_WORKER_MEDIA_FAILURE PREPARE CAPABILITY_UNAVAILABLE') {
+        Write-Host $nativeOutput
+        $primaryHardwareUnavailable = $true
+    }
+    else {
         throw "Native Worker IPC/QUIC integration failed with exit code ${nativeExitCode}: $nativeOutput"
     }
-    Write-Host $nativeOutput
+
+    if ($primaryHardwareUnavailable) {
+        Write-Host 'BEACON_WORKER_CAPTURE_DIAGNOSTIC_UNAVAILABLE CAPABILITY_UNAVAILABLE'
+    }
+    else {
+        $failureOutput = & $nativeProbe `
+            --worker $WorkerPath `
+            --identity $identityPath `
+            --fingerprint $fingerprint `
+            --display '\\.\BEACON-NOT-A-DISPLAY' `
+            --width 2560 `
+            --height 1600
+        $failureExitCode = $LASTEXITCODE
+        if ($failureExitCode -ne 99 -or
+            $failureOutput -ne 'BEACON_WORKER_VIDEO_FAILURE CAPTURE 2') {
+            throw "Native Worker failure diagnostic integration failed with exit code ${failureExitCode}: $failureOutput"
+        }
+        Write-Host $failureOutput
+    }
+
+    $benchmarkOutput = & $nativeProbe `
+        --benchmark-worker $WorkerPath `
+        --identity $identityPath `
+        --fingerprint $fingerprint
+    $benchmarkExitCode = $LASTEXITCODE
+    if ($benchmarkExitCode -ne 0 -or
+        $benchmarkOutput -notmatch '^BEACON_WORKER_BENCHMARK_OK AUTH RELIABLE DATAGRAM RTT DISCONNECT SHUTDOWN$') {
+        throw "Native Worker benchmark integration failed with exit code ${benchmarkExitCode}: $benchmarkOutput"
+    }
+    Write-Host $benchmarkOutput
 
     $startupExitOutput = & $nativeProbe `
         --worker $nativeProbe `
         --identity $identityPath `
-        --fingerprint $fingerprint
+        --fingerprint $fingerprint `
+        --display $displayDevice `
+        --width $displayWidth `
+        --height $displayHeight
     $startupExitCode = $LASTEXITCODE
     if ($startupExitCode -ne 97 -or
         $startupExitOutput -notmatch '^BEACON_WORKER_STARTUP_EXIT 64$') {
@@ -86,6 +160,7 @@ try {
     Write-Host $startupExitOutput
 }
 finally {
+    Remove-Item Env:BEACON_TEST_ALLOW_UNSUPPORTED_VIDEO_HARDWARE -ErrorAction SilentlyContinue
     Remove-Item Env:BEACON_SERVER_IDENTITY_PATH -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $identityPath -Force -ErrorAction SilentlyContinue
 }

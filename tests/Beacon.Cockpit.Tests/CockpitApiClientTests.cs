@@ -15,7 +15,7 @@ public sealed class CockpitApiClientTests
                 "clientId": "z-fold-7",
                 "profile": {
                   "name": "Z Fold 7",
-                  "display": { "preferredWidth": 2560, "preferredHeight": 1600, "preferredRefreshHz": 120, "hdrPreference": "Prefer", "mode": "virtual-primary", "restorePhysicalDisplayOnEnd": true, "forbidMirrorMode": true },
+                  "display": { "preferredMode": { "width": 2560, "height": 1600, "refreshHz": 120 }, "selectedMode": { "width": 2560, "height": 1600, "refreshHz": 120 }, "hdrPreference": "Prefer", "mode": "virtual-primary", "restorePhysicalDisplayOnEnd": true, "forbidMirrorMode": true },
                   "stream": { "qualityMode": "auto", "codecPreference": "auto", "bitrateCapMbps": null },
                   "audio": { "mode": "stereo" },
                   "session": { "keepAppRunningOnDisconnect": false, "allowEmergencyRestoreFromClient": true }
@@ -91,8 +91,8 @@ public sealed class CockpitApiClientTests
         Assert.Single(snapshot.Clients);
         Assert.Equal("z-fold-7", snapshot.Clients[0].ClientId);
         Assert.Equal("Z Fold 7", snapshot.Clients[0].Profile.Name);
-        Assert.Equal(2560, snapshot.Clients[0].Profile.Display.PreferredWidth);
-        Assert.Equal(1600, snapshot.Clients[0].Profile.Display.PreferredHeight);
+        Assert.Equal(2560, snapshot.Clients[0].Profile.Display.PreferredMode?.Width);
+        Assert.Equal(1600, snapshot.Clients[0].Profile.Display.PreferredMode?.Height);
         Assert.Equal("virtual-primary", snapshot.Clients[0].Profile.Display.Mode);
         Assert.Single(snapshot.Streams);
         Assert.Equal("running", snapshot.Streams[0].State);

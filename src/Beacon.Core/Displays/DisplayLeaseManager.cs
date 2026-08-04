@@ -22,8 +22,18 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend, IDiagnos
         string displayId = DisplayLease.CreateDisplayId(profile.ClientId);
         string operation = prepareOnly ? "lease.prepare" : "lease.ensure";
         string repairOperation = $"{operation}.repair";
+        ClientDisplayMode? selectedMode = profile.Display.SelectedMode;
+        if (selectedMode is null || !selectedMode.IsValid)
+        {
+            return new DisplayLeaseResult(
+                false,
+                null,
+                $"Client '{profile.ClientId.Value}' has no valid server-selected display mode.");
+        }
+
         DisplayEnsureResult ensureResult = await ApplyDisplayLeaseAsync(
             profile,
+            selectedMode,
             displayId,
             prepareOnly,
             cancellationToken);
@@ -70,6 +80,7 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend, IDiagnos
 
             ensureResult = await ApplyDisplayLeaseAsync(
                 profile,
+                selectedMode,
                 displayId,
                 prepareOnly,
                 cancellationToken);
@@ -97,9 +108,9 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend, IDiagnos
         var lease = new DisplayLease(
             displayId,
             profile.ClientId,
-            profile.Display.PreferredWidth,
-            profile.Display.PreferredHeight,
-            profile.Display.PreferredRefreshHz);
+            selectedMode.Width,
+            selectedMode.Height,
+            selectedMode.RefreshHz);
 
         Publish(
             DiagnosticSeverity.Information,
@@ -114,22 +125,23 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend, IDiagnos
 
     private Task<DisplayEnsureResult> ApplyDisplayLeaseAsync(
         ClientProfile profile,
+        ClientDisplayMode selectedMode,
         string displayId,
         bool prepareOnly,
         CancellationToken cancellationToken) =>
         prepareOnly
             ? displayBackend.PrepareVirtualDisplayAsync(
                 displayId,
-                profile.Display.PreferredWidth,
-                profile.Display.PreferredHeight,
-                profile.Display.PreferredRefreshHz,
+                selectedMode.Width,
+                selectedMode.Height,
+                selectedMode.RefreshHz,
                 profile.Display.HdrPreference,
                 cancellationToken)
             : displayBackend.EnsureVirtualDisplayAsync(
                 displayId,
-                profile.Display.PreferredWidth,
-                profile.Display.PreferredHeight,
-                profile.Display.PreferredRefreshHz,
+                selectedMode.Width,
+                selectedMode.Height,
+                selectedMode.RefreshHz,
                 profile.Display.HdrPreference,
                 cancellationToken);
 
@@ -154,6 +166,18 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend, IDiagnos
             return false;
         }
 
+        if (ownedProcessRunning || ownedWindowRemaining)
+        {
+            Publish(
+                DiagnosticSeverity.Information,
+                "lease.cleanup.retained",
+                "Display lease retained because owned session work is still present.",
+                clientId: null,
+                displayId,
+                CleanupMetadata(clientActive, ownedProcessRunning, ownedWindowRemaining));
+            return false;
+        }
+
         DisplayRestoreResult restoreResult = await displayBackend.RestorePhysicalPrimaryAsync(cancellationToken);
         if (!restoreResult.Success)
         {
@@ -161,18 +185,6 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend, IDiagnos
                 DiagnosticSeverity.Error,
                 "lease.cleanup.restore-failed",
                 $"Physical primary restore failed during cleanup: {restoreResult.Error}",
-                clientId: null,
-                displayId,
-                CleanupMetadata(clientActive, ownedProcessRunning, ownedWindowRemaining));
-            return false;
-        }
-
-        if (ownedProcessRunning || ownedWindowRemaining)
-        {
-            Publish(
-                DiagnosticSeverity.Information,
-                "lease.cleanup.retained",
-                "Display lease retained because owned session work is still present.",
                 clientId: null,
                 displayId,
                 CleanupMetadata(clientActive, ownedProcessRunning, ownedWindowRemaining));
@@ -283,14 +295,17 @@ public sealed class DisplayLeaseManager(IDisplayBackend displayBackend, IDiagnos
             metadata));
     }
 
-    private static Dictionary<string, string> DisplayMetadata(ClientProfile profile) =>
-        new(StringComparer.OrdinalIgnoreCase)
+    private static Dictionary<string, string> DisplayMetadata(ClientProfile profile)
+    {
+        ClientDisplayMode? selectedMode = profile.Display.SelectedMode;
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["width"] = profile.Display.PreferredWidth.ToString(CultureInfo.InvariantCulture),
-            ["height"] = profile.Display.PreferredHeight.ToString(CultureInfo.InvariantCulture),
-            ["refreshHz"] = profile.Display.PreferredRefreshHz.ToString(CultureInfo.InvariantCulture),
+            ["width"] = selectedMode?.Width.ToString(CultureInfo.InvariantCulture) ?? "unselected",
+            ["height"] = selectedMode?.Height.ToString(CultureInfo.InvariantCulture) ?? "unselected",
+            ["refreshHz"] = selectedMode?.RefreshHz.ToString(CultureInfo.InvariantCulture) ?? "unselected",
             ["hdrPreference"] = profile.Display.HdrPreference.ToString()
         };
+    }
 
     private static Dictionary<string, string> CleanupMetadata(
         bool clientActive,

@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Beacon.Core\Beacon.Core.csproj" />
+    <ProjectReference Include="..\Beacon.Testing\Beacon.Testing.csproj" />
   </ItemGroup>
 
 </Project>

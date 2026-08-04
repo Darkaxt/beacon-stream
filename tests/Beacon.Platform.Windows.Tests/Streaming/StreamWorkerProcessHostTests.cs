@@ -14,13 +14,14 @@ namespace Beacon.Platform.Windows.Tests.Streaming;
 public sealed class StreamWorkerProcessHostTests
 {
     [Fact]
-    public async Task LegacyHostWithoutEventSubscriptionFailsClosedBeforeBoundedBackpressure()
+    public async Task HostWithoutEventSubscriptionFailsClosedBeforeBoundedBackpressure()
     {
         await using ConnectedStreams streams = await ConnectedStreams.CreateAsync();
         TestLaunch launch = TestLaunch.Waiting(streams.Service);
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(streams.Worker, Hello(checked((uint)launch.Process.Id), 1));
+            await WriteAsync(streams.Worker, Capabilities(1));
             await WriteAsync(streams.Worker, Ready(1));
             WorkerIpcEnvelope command = await ReadAsync(streams.Worker);
             for (int sequence = 1; sequence <= 3; sequence++)
@@ -42,15 +43,16 @@ public sealed class StreamWorkerProcessHostTests
             new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
             new QueueLaunchFactory(launch),
             eventCapacity: 1);
-        IStreamWorkerHost legacyHost = host;
+        IStreamWorkerHost workerHost = host;
         try
         {
-            await legacyHost.EnsureReadyAsync(CancellationToken.None);
+            await workerHost.EnsureReadyAsync(CancellationToken.None);
+            long generation = workerHost.CurrentProcessGeneration;
 
             StreamWorkerProtocolException error = await Assert.ThrowsAsync<StreamWorkerProtocolException>(() =>
-                legacyHost.SendAsync(Prepare("session"), CancellationToken.None));
+                workerHost.SendAsync(generation, Prepare("session"), CancellationToken.None));
             Exception? shutdownError = await Record.ExceptionAsync(() =>
-                legacyHost.ShutdownAsync(CancellationToken.None));
+                workerHost.ShutdownAsync(CancellationToken.None));
             try
             {
                 await worker;
@@ -61,7 +63,7 @@ public sealed class StreamWorkerProcessHostTests
 
             Assert.Equal("StreamWorker emitted an event without an active event subscription.", error.Message);
             Assert.Null(shutdownError);
-            Assert.False(legacyHost.IsReady);
+            Assert.False(workerHost.IsReady);
         }
         finally
         {
@@ -76,7 +78,7 @@ public sealed class StreamWorkerProcessHostTests
         await using var host = new StreamWorkerProcessHost(
             new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
             new QueueLaunchFactory(launch));
-        var events = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost events = host;
         _ = events.Events;
 
         StreamWorkerProcessExitedException error = await Assert.ThrowsAsync<StreamWorkerProcessExitedException>(
@@ -109,6 +111,7 @@ public sealed class StreamWorkerProcessHostTests
             await WriteAsync(streams.Worker, Hello(processId, failure == "version" ? 2u : 1u));
             if (failure == "ready")
             {
+                await WriteAsync(streams.Worker, Capabilities(version: 1));
                 WorkerIpcEnvelope ready = Ready(version: 1);
                 ready.WorkerReady.WorkerInstanceId = ByteString.CopyFrom(new byte[] { 9, 9, 9 });
                 await WriteAsync(streams.Worker, ready);
@@ -117,7 +120,7 @@ public sealed class StreamWorkerProcessHostTests
         await using var host = new StreamWorkerProcessHost(
             new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
             new QueueLaunchFactory(launch));
-        var events = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost events = host;
         _ = events.Events;
 
         await Assert.ThrowsAnyAsync<Exception>(() => host.EnsureReadyAsync(CancellationToken.None));
@@ -138,12 +141,13 @@ public sealed class StreamWorkerProcessHostTests
         Task replacementWorker = Task.Run(async () =>
         {
             await WriteAsync(streams.Worker, Hello(checked((uint)replacement.Process.Id), 1));
+            await WriteAsync(streams.Worker, Capabilities(1));
             await WriteAsync(streams.Worker, Ready(1));
         });
         var host = new StreamWorkerProcessHost(
             new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
             new QueueLaunchFactory(first, replacement));
-        var events = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost events = host;
         _ = events.Events;
         try
         {
@@ -158,6 +162,8 @@ public sealed class StreamWorkerProcessHostTests
             Assert.Equal(2, events.CurrentProcessGeneration);
             Assert.True(events.IsCurrentProcessGeneration(2));
             Assert.True(host.IsReady);
+            Assert.True(events.Capabilities.VideoAvailable);
+            Assert.Equal(WorkerVideoEncoder.Nvenc, Assert.Single(events.Capabilities.VideoEncoders));
             await replacementWorker;
         }
         finally
@@ -176,13 +182,14 @@ public sealed class StreamWorkerProcessHostTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(streams.Worker, Hello(checked((uint)launch.Process.Id), 1));
+            await WriteAsync(streams.Worker, Capabilities(1));
             await WriteAsync(streams.Worker, Ready(1));
         });
         var factory = new QueueLaunchFactory(launch);
         var host = new StreamWorkerProcessHost(
             new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
             factory);
-        var generationHost = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost generationHost = host;
         try
         {
             await host.EnsureReadyAsync(CancellationToken.None);
@@ -216,6 +223,7 @@ public sealed class StreamWorkerProcessHostTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(streams.Worker, Hello(checked((uint)launch.Process.Id), 1));
+            await WriteAsync(streams.Worker, Capabilities(1));
             await WriteAsync(streams.Worker, Ready(1));
             WorkerIpcEnvelope shutdown = await ReadAsync(streams.Worker);
             Assert.Equal(WorkerIpcEnvelope.BodyOneofCase.ShutdownWorker, shutdown.BodyCase);
@@ -234,7 +242,7 @@ public sealed class StreamWorkerProcessHostTests
         var host = new StreamWorkerProcessHost(
             new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
             new QueueLaunchFactory(launch));
-        var eventSource = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost eventSource = host;
         _ = eventSource.Events;
         await host.EnsureReadyAsync(CancellationToken.None);
 
@@ -255,6 +263,7 @@ public sealed class StreamWorkerProcessHostTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(streams.Worker, Hello(checked((uint)launch.Process.Id), 1));
+            await WriteAsync(streams.Worker, Capabilities(1));
             await WriteAsync(streams.Worker, Ready(1));
             WorkerIpcEnvelope shutdown = await ReadAsync(streams.Worker);
             await WriteAsync(streams.Worker, new WorkerIpcEnvelope
@@ -271,7 +280,7 @@ public sealed class StreamWorkerProcessHostTests
         var host = new StreamWorkerProcessHost(
             new StreamWorkerProcessHostOptions("unused.exe", "unused.pfx"),
             new QueueLaunchFactory(launch));
-        var eventSource = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost eventSource = host;
         _ = eventSource.Events;
         await host.EnsureReadyAsync(CancellationToken.None);
 
@@ -301,7 +310,7 @@ public sealed class StreamWorkerProcessHostTests
                 publicationEntered.SetResult();
                 await allowPublication.Task;
             });
-        var eventSource = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost eventSource = host;
         _ = eventSource.Events;
         await host.EnsureReadyAsync(CancellationToken.None);
 
@@ -329,6 +338,7 @@ public sealed class StreamWorkerProcessHostTests
         Task worker = Task.Run(async () =>
         {
             await WriteAsync(streams.Worker, Hello(checked((uint)launch.Process.Id), 1));
+            await WriteAsync(streams.Worker, Capabilities(1));
             await WriteAsync(streams.Worker, Ready(1));
             WorkerIpcEnvelope prepare = await ReadAsync(streams.Worker);
             await WriteAsync(streams.Worker, new WorkerIpcEnvelope
@@ -356,7 +366,7 @@ public sealed class StreamWorkerProcessHostTests
                 await allowPublication.Task;
             },
             processExitPublicationStarted: _ => exitWriteStarted.SetResult());
-        var eventSource = (IGenerationBoundStreamWorkerHost)host;
+        IStreamWorkerHost eventSource = host;
         _ = eventSource.Events;
         await host.EnsureReadyAsync(CancellationToken.None);
         _ = await eventSource.SendAsync(
@@ -514,6 +524,31 @@ public sealed class StreamWorkerProcessHostTests
     }
 
     [Fact]
+    public void UnsupportedVideoHardwareOptInAcceptsOnlyExactCapabilityFailure()
+    {
+        Assert.True(IsAllowedUnsupportedVideoHardwareResult(
+            "1",
+            succeeded: false,
+            WorkerErrorCode.CapabilityUnavailable));
+        Assert.False(IsAllowedUnsupportedVideoHardwareResult(
+            null,
+            succeeded: false,
+            WorkerErrorCode.CapabilityUnavailable));
+        Assert.False(IsAllowedUnsupportedVideoHardwareResult(
+            "0",
+            succeeded: false,
+            WorkerErrorCode.CapabilityUnavailable));
+        Assert.False(IsAllowedUnsupportedVideoHardwareResult(
+            "1",
+            succeeded: false,
+            WorkerErrorCode.OperationFailed));
+        Assert.False(IsAllowedUnsupportedVideoHardwareResult(
+            "1",
+            succeeded: true,
+            WorkerErrorCode.CapabilityUnavailable));
+    }
+
+    [Fact]
     public async Task RealWorkerCompletesExplicitLifecycleWhenBinaryIsAvailable()
     {
         string? executable = Environment.GetEnvironmentVariable("BEACON_STREAM_WORKER_PATH");
@@ -530,46 +565,69 @@ public sealed class StreamWorkerProcessHostTests
         await host.EnsureReadyAsync(CancellationToken.None);
         int processId = host.ProcessId;
         var authorizer = new StreamWorkerSessionAuthorizer(host);
-        StreamWorkerAuthorizationContext authorizationContext =
+        StreamRuntimeAuthorizationContext authorizationContext =
             await authorizer.GetContextAsync(CancellationToken.None);
-        StreamWorkerAuthorizationResult authorization = await authorizer.AuthorizeAsync(
-            new StreamWorkerAuthorization(
+        StreamWorkerCommandResponse prepare = await host.SendAsync(
+            authorizationContext.RuntimeGeneration,
+            Prepare("integration-session"),
+            CancellationToken.None);
+        if (IsAllowedUnsupportedVideoHardwareResult(
+            Environment.GetEnvironmentVariable("BEACON_TEST_ALLOW_UNSUPPORTED_VIDEO_HARDWARE"),
+            prepare.Completion.WorkerCompletion.Succeeded,
+            prepare.Completion.WorkerCompletion.ErrorCode))
+        {
+            Assert.False(prepare.Completion.WorkerCompletion.Succeeded);
+            Assert.Equal(
+                WorkerErrorCode.CapabilityUnavailable,
+                prepare.Completion.WorkerCompletion.ErrorCode);
+            return;
+        }
+
+        Assert.True(
+            prepare.Completion.WorkerCompletion.Succeeded,
+            $"StreamWorker prepare failed ({prepare.Completion.WorkerCompletion.ErrorCode}).");
+        StreamRuntimeAuthorizationResult authorization = await authorizer.AuthorizeAsync(
+            new StreamRuntimeAuthorization(
                 "integration-session",
                 "z-fold-7",
                 1,
                 Enumerable.Repeat((byte)0x5a, 32).ToArray(),
-                authorizationContext.WorkerInstanceId,
+                authorizationContext.RuntimeInstanceId,
+                authorizationContext.RuntimeGeneration,
                 DateTimeOffset.UtcNow.AddMinutes(2)),
             CancellationToken.None);
-        StreamWorkerAuthorizationResult revocation = await authorizer.RevokeAsync(
-            new StreamWorkerRevocation(
+        Assert.True(authorization.Success, authorization.Error);
+        StreamRuntimeAuthorizationResult revocation = await authorizer.RevokeAsync(
+            new StreamRuntimeRevocation(
                 "integration-session",
-                Enumerable.Repeat((byte)0x5a, 32).ToArray()),
+                Enumerable.Repeat((byte)0x5a, 32).ToArray(),
+                authorizationContext.RuntimeGeneration),
             CancellationToken.None);
-        StreamWorkerCommandResponse prepare = await host.SendAsync(
-            Prepare("integration-session"),
-            CancellationToken.None);
+        Assert.True(revocation.Success, revocation.Error);
         StreamWorkerCommandResponse start = await host.SendAsync(
+            authorizationContext.RuntimeGeneration,
             new WorkerIpcEnvelope
             {
                 SessionId = "integration-session",
                 StartMedia = new StartMedia(),
             },
             CancellationToken.None);
+        Assert.True(
+            start.Completion.WorkerCompletion.Succeeded,
+            $"StreamWorker start failed ({start.Completion.WorkerCompletion.ErrorCode}).");
         StreamWorkerCommandResponse stop = await host.SendAsync(
+            authorizationContext.RuntimeGeneration,
             new WorkerIpcEnvelope
             {
                 SessionId = "integration-session",
                 StopMedia = new StopMedia { Reason = StopMediaReason.Explicit },
             },
             CancellationToken.None);
+        Assert.True(
+            stop.Completion.WorkerCompletion.Succeeded,
+            $"StreamWorker stop failed ({stop.Completion.WorkerCompletion.ErrorCode}).");
 
         Assert.True(host.IsReady);
-        Assert.True(authorization.Success);
-        Assert.True(revocation.Success);
-        Assert.True(prepare.Completion.WorkerCompletion.Succeeded);
-        Assert.True(start.Completion.WorkerCompletion.Succeeded);
-        Assert.True(stop.Completion.WorkerCompletion.Succeeded);
         Assert.Equal(0ul, start.Events.Single(e => e.BodyCase == WorkerIpcEnvelope.BodyOneofCase.MediaMetrics)
             .MediaMetrics.EncodedFrames);
 
@@ -597,6 +655,7 @@ public sealed class StreamWorkerProcessHostTests
         PrepareSession = new PrepareSession
         {
             DisplayTarget = "virtual-test",
+            DisplayDeviceName = @"\\.\DISPLAY7",
             VideoCodec = WorkerVideoCodec.H264,
             Width = 2560,
             Height = 1600,
@@ -606,8 +665,21 @@ public sealed class StreamWorkerProcessHostTests
             MinimumBitrateKbps = 1000,
             InitialBitrateKbps = 45000,
             MaximumBitrateKbps = 90000,
+            AudioCodec = WorkerAudioCodec.Opus,
+            AudioSampleRateHz = 48_000,
+            AudioChannelCount = 2,
+            AudioFrameDurationUs = 20_000,
+            AudioBitrateBps = 96_000,
         },
     };
+
+    private static bool IsAllowedUnsupportedVideoHardwareResult(
+        string? optIn,
+        bool succeeded,
+        WorkerErrorCode errorCode) =>
+        string.Equals(optIn, "1", StringComparison.Ordinal)
+        && !succeeded
+        && errorCode == WorkerErrorCode.CapabilityUnavailable;
 
     private static WorkerIpcEnvelope Hello(uint processId, uint version) => new()
     {
@@ -627,6 +699,27 @@ public sealed class StreamWorkerProcessHostTests
             WorkerInstanceId = ByteString.CopyFrom(new byte[] { 1, 2, 3 })
         }
     };
+
+    private static WorkerIpcEnvelope Capabilities(uint version)
+    {
+        var envelope = new WorkerIpcEnvelope
+        {
+            ProtocolVersion = version,
+            WorkerCapabilities = new WorkerCapabilities
+            {
+                WorkerInstanceId = ByteString.CopyFrom(new byte[] { 1, 2, 3 }),
+                QuicDatagrams = true,
+                MaximumSessions = 1,
+                MaximumFramesPerSecond = 120,
+                VideoAvailable = true
+            }
+        };
+        envelope.WorkerCapabilities.VideoCodecs.Add(WorkerVideoCodec.H264);
+        envelope.WorkerCapabilities.VideoEncoders.Add(WorkerVideoEncoder.Nvenc);
+        envelope.WorkerCapabilities.CaptureMethods.Add(
+            WorkerCaptureMethod.WindowsGraphicsCapture);
+        return envelope;
+    }
 
     private static async Task WriteAsync(Stream stream, WorkerIpcEnvelope envelope)
     {
@@ -660,6 +753,7 @@ public sealed class StreamWorkerProcessHostTests
     private static Task RunGracefulShutdownWorkerAsync(Stream stream, TestLaunch launch) => Task.Run(async () =>
     {
         await WriteAsync(stream, Hello(checked((uint)launch.Process.Id), 1));
+        await WriteAsync(stream, Capabilities(1));
         await WriteAsync(stream, Ready(1));
         WorkerIpcEnvelope shutdown = await ReadAsync(stream);
         await WriteAsync(stream, Completion(shutdown));

@@ -18,6 +18,41 @@ enum DynamicRange {
   DYNAMIC_RANGE_HDR10 = 2;
 }
 
+enum VideoProfile {
+  VIDEO_PROFILE_UNSPECIFIED = 0;
+  VIDEO_PROFILE_H264_HIGH = 1;
+  VIDEO_PROFILE_HEVC_MAIN10 = 2;
+}
+
+enum ColorPrimaries {
+  COLOR_PRIMARIES_UNSPECIFIED = 0;
+  COLOR_PRIMARIES_BT709 = 1;
+  COLOR_PRIMARIES_BT2020 = 2;
+}
+
+enum TransferFunction {
+  TRANSFER_FUNCTION_UNSPECIFIED = 0;
+  TRANSFER_FUNCTION_BT709 = 1;
+  TRANSFER_FUNCTION_PQ = 2;
+}
+
+enum MatrixCoefficients {
+  MATRIX_COEFFICIENTS_UNSPECIFIED = 0;
+  MATRIX_COEFFICIENTS_BT709 = 1;
+  MATRIX_COEFFICIENTS_BT2020_NON_CONSTANT_LUMINANCE = 2;
+}
+
+enum ColorRange {
+  COLOR_RANGE_UNSPECIFIED = 0;
+  COLOR_RANGE_LIMITED = 1;
+  COLOR_RANGE_FULL = 2;
+}
+
+enum AudioCodec {
+  AUDIO_CODEC_UNSPECIFIED = 0;
+  AUDIO_CODEC_OPUS = 1;
+}
+
 enum SessionState {
   SESSION_STATE_UNSPECIFIED = 0;
   SESSION_STATE_AUTHENTICATING = 1;
@@ -94,6 +129,23 @@ message SelectedVideoMode {
   uint32 frames_per_second_numerator = 4;
   uint32 frames_per_second_denominator = 5;
   DynamicRange dynamic_range = 6;
+  VideoProfile profile = 7;
+  uint32 bit_depth = 8;
+  ColorPrimaries color_primaries = 9;
+  TransferFunction transfer_function = 10;
+  MatrixCoefficients matrix_coefficients = 11;
+  ColorRange color_range = 12;
+  // CTA-861.3 HDR Static Metadata Type 1, including the descriptor ID byte.
+  bytes hdr_static_info = 13;
+  bool hdr_static_info_in_bitstream = 14;
+}
+
+message SelectedAudioMode {
+  AudioCodec codec = 1;
+  uint32 sample_rate_hz = 2;
+  uint32 channel_count = 3;
+  uint32 frame_duration_us = 4;
+  uint32 bitrate_bps = 5;
 }
 
 message PublicSessionEnvelope {
@@ -105,6 +157,7 @@ message PublicSessionEnvelope {
   SelectedVideoMode selected_video = 6;
   uint64 plan_revision = 7;
   string plan_explanation = 8;
+  SelectedAudioMode selected_audio = 9;
 }
 
 message SessionStreamEnvelope {
@@ -119,6 +172,10 @@ message SessionStreamEnvelope {
     StopSession stop_session = 13;
     SessionStateChanged session_state_changed = 14;
     RequestIdr request_idr = 15;
+    StartBenchmark start_benchmark = 16;
+    CancelBenchmark cancel_benchmark = 17;
+    BenchmarkReliableChunk benchmark_reliable_chunk = 18;
+    BenchmarkRoundCompleted benchmark_round_completed = 19;
   }
 }
 
@@ -136,6 +193,46 @@ message SessionAuthenticated {
 
 message StartSession {
   SelectedVideoMode selected_video = 1;
+  SelectedAudioMode selected_audio = 2;
+}
+
+message BenchmarkRoundPlan {
+  uint32 packet_count = 1;
+  uint32 payload_bytes = 2;
+  uint64 measurement_interval_us = 3;
+}
+
+message StartBenchmark {
+  string run_id = 1;
+  uint32 schema_version = 2;
+  BenchmarkRoundPlan reliable_round = 3;
+  BenchmarkRoundPlan datagram_round = 4;
+  bytes run_token = 5;
+}
+
+message CancelBenchmark {
+  string run_id = 1;
+}
+
+message BenchmarkReliableChunk {
+  string run_id = 1;
+  uint32 round_id = 2;
+  uint64 sequence = 3;
+  uint64 sent_at_us = 4;
+  bytes payload = 5;
+}
+
+message BenchmarkRttObservation {
+  uint64 sequence = 1;
+  uint64 rtt_us = 2;
+}
+
+message BenchmarkRoundCompleted {
+  string run_id = 1;
+  uint32 round_id = 2;
+  uint32 expected_packet_count = 3;
+  uint32 payload_bytes = 4;
+  repeated BenchmarkRttObservation rtt_observations = 5;
 }
 
 message StopSession {
@@ -212,6 +309,7 @@ message FeedbackStreamEnvelope {
     DecoderFeedback decoder = 12;
     QueueDepthFeedback queue_depth = 13;
     BenchmarkEvidence benchmark_evidence = 14;
+    BenchmarkDatagramEcho benchmark_datagram_echo = 15;
   }
 }
 
@@ -240,6 +338,12 @@ message BenchmarkEvidence {
   string run_id = 1;
   uint32 schema_version = 2;
   repeated BenchmarkFact facts = 3;
+}
+
+message BenchmarkDatagramEcho {
+  string run_id = 1;
+  uint32 round_id = 2;
+  uint64 sequence = 3;
 }
 
 message BenchmarkFact {

@@ -1,5 +1,7 @@
 #include "beacon/worker/worker_events.h"
 
+#include <utility>
+
 namespace beacon::worker {
 namespace {
 
@@ -46,8 +48,9 @@ make_transport_connected_event(std::uint64_t connection_generation) {
   return event;
 }
 
-v1::WorkerIpcEnvelope make_transport_failed_event(
-    std::uint64_t connection_generation, std::uint32_t platform_status_code) {
+v1::WorkerIpcEnvelope
+make_transport_failed_event(std::uint64_t connection_generation,
+                            std::uint32_t platform_status_code) {
   auto event = event_envelope({});
   auto *body = event.mutable_worker_diagnostic();
   body->set_severity(v1::DIAGNOSTIC_SEVERITY_INFORMATION);
@@ -58,9 +61,10 @@ v1::WorkerIpcEnvelope make_transport_failed_event(
   return event;
 }
 
-v1::WorkerIpcEnvelope make_transport_authenticated_event(
-    std::string_view session_id, std::uint64_t session_generation,
-    std::uint16_t maximum_datagram_bytes) {
+v1::WorkerIpcEnvelope
+make_transport_authenticated_event(std::string_view session_id,
+                                   std::uint64_t session_generation,
+                                   std::uint16_t maximum_datagram_bytes) {
   auto event = event_envelope(session_id);
   auto *body = event.mutable_transport_authenticated();
   body->set_session_generation(session_generation);
@@ -68,17 +72,18 @@ v1::WorkerIpcEnvelope make_transport_authenticated_event(
   return event;
 }
 
-v1::WorkerIpcEnvelope make_transport_disconnected_event(
-    std::string_view session_id, std::uint64_t session_generation) {
+v1::WorkerIpcEnvelope
+make_transport_disconnected_event(std::string_view session_id,
+                                  std::uint64_t session_generation) {
   auto event = event_envelope(session_id);
   event.mutable_transport_disconnected()->set_session_generation(
       session_generation);
   return event;
 }
 
-v1::WorkerIpcEnvelope make_input_received_event(
-    std::uint64_t session_generation,
-    const stream::v1::InputStreamEnvelope &input) {
+v1::WorkerIpcEnvelope
+make_input_received_event(std::uint64_t session_generation,
+                          const stream::v1::InputStreamEnvelope &input) {
   auto event = event_envelope(input.session_id());
   auto *body = event.mutable_input_received();
   body->set_session_generation(session_generation);
@@ -107,6 +112,67 @@ v1::WorkerIpcEnvelope make_media_evidence_event(
   body->set_presentation_time_us(presentation_time_us);
   body->set_datagram_bytes(datagram_bytes);
   return event;
+}
+
+std::vector<v1::WorkerIpcEnvelope> make_video_pipeline_failure_events(
+    const video::VideoPipelineFailureEvent &failure) {
+  auto state = event_envelope(failure.session_id);
+  state.mutable_session_state_changed()->set_state(
+      v1::WORKER_SESSION_STATE_FAILED);
+  state.mutable_session_state_changed()->set_error_code(
+      v1::WORKER_ERROR_CODE_OPERATION_FAILED);
+
+  auto diagnostic = event_envelope(failure.session_id);
+  auto *body = diagnostic.mutable_worker_diagnostic();
+  body->set_severity(v1::DIAGNOSTIC_SEVERITY_ERROR);
+  switch (failure.boundary) {
+  case video::VideoPipelineFailureBoundary::capture:
+    body->set_boundary(v1::DIAGNOSTIC_BOUNDARY_CAPTURE);
+    break;
+  case video::VideoPipelineFailureBoundary::transport:
+    body->set_boundary(v1::DIAGNOSTIC_BOUNDARY_TRANSPORT);
+    break;
+  case video::VideoPipelineFailureBoundary::video_processor:
+  case video::VideoPipelineFailureBoundary::encoder:
+  case video::VideoPipelineFailureBoundary::media_session:
+    body->set_boundary(v1::DIAGNOSTIC_BOUNDARY_ENCODER);
+    break;
+  }
+  body->set_code(v1::DIAGNOSTIC_CODE_OPERATION_FAILED);
+  body->set_platform_error_code(failure.native_code);
+  body->set_numeric_value(failure.session_generation);
+  body->set_failure_stage(failure.failure_stage);
+  return {std::move(state), std::move(diagnostic)};
+}
+
+std::vector<v1::WorkerIpcEnvelope> make_audio_pipeline_failure_events(
+    const audio::AudioPipelineFailureEvent &failure) {
+  auto state = event_envelope(failure.session_id);
+  state.mutable_session_state_changed()->set_state(
+      v1::WORKER_SESSION_STATE_FAILED);
+  state.mutable_session_state_changed()->set_error_code(
+      v1::WORKER_ERROR_CODE_OPERATION_FAILED);
+
+  auto diagnostic = event_envelope(failure.session_id);
+  auto *body = diagnostic.mutable_worker_diagnostic();
+  body->set_severity(v1::DIAGNOSTIC_SEVERITY_ERROR);
+  switch (failure.boundary) {
+  case audio::AudioPipelineFailureBoundary::capture:
+    body->set_boundary(v1::DIAGNOSTIC_BOUNDARY_AUDIO_CAPTURE);
+    break;
+  case audio::AudioPipelineFailureBoundary::encoder:
+  case audio::AudioPipelineFailureBoundary::media_session:
+    body->set_boundary(v1::DIAGNOSTIC_BOUNDARY_AUDIO_ENCODER);
+    break;
+  case audio::AudioPipelineFailureBoundary::transport:
+    body->set_boundary(v1::DIAGNOSTIC_BOUNDARY_TRANSPORT);
+    break;
+  }
+  body->set_code(v1::DIAGNOSTIC_CODE_OPERATION_FAILED);
+  body->set_platform_error_code(failure.native_code);
+  body->set_numeric_value(failure.session_generation);
+  body->set_failure_stage(failure.failure_stage);
+  return {std::move(state), std::move(diagnostic)};
 }
 
 } // namespace beacon::worker

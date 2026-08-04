@@ -34,6 +34,27 @@ public sealed class WindowsDisplayNameMapTests
         Assert.Empty(second.CreateDisplayIdByDisplayNameSnapshot());
     }
 
+    [Fact]
+    public void RememberReassignsRecycledWindowsDisplayNameToLatestLease()
+    {
+        using var tempFile = TempDisplayMapFile.Create();
+        var first = new WindowsDisplayNameMap(new WindowsDisplayNameMapStore(tempFile.Path));
+        first.Remember("client-old", @"\\.\DISPLAY9");
+
+        first.Remember("client-current", @"\\.\DISPLAY9");
+
+        Assert.False(first.TryResolveDisplayName("client-old", out _));
+        Assert.True(first.TryResolveDisplayName("client-current", out string? displayName));
+        Assert.Equal(@"\\.\DISPLAY9", displayName);
+        Assert.Equal(
+            "client-current",
+            first.CreateDisplayIdByDisplayNameSnapshot()[@"\\.\DISPLAY9"]);
+
+        var second = new WindowsDisplayNameMap(new WindowsDisplayNameMapStore(tempFile.Path));
+        Assert.False(second.TryResolveDisplayName("client-old", out _));
+        Assert.True(second.TryResolveDisplayName("client-current", out _));
+    }
+
     private sealed class TempDisplayMapFile : IDisposable
     {
         private TempDisplayMapFile(string directory)

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Beacon.Core.Benchmarks;
 using Beacon.Core.Clients;
+using Beacon.Core.Streaming;
 using Beacon.Server.State;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,8 +12,175 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Beacon.Server.Tests;
 
-public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
+public sealed class BenchmarkApiTests(BeaconServerTestFactory factory) : IClassFixture<BeaconServerTestFactory>
 {
+    [Fact]
+    public async Task NewRunReturnsBenchmarkConnectionGrantWithoutVideoMode()
+    {
+        HttpClient client = factory.CreateClient();
+        string clientId = $"benchmark-grant-{Guid.NewGuid():N}";
+        await RegisterAsync(client, clientId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/prepare",
+            new { trigger = "manual", fingerprints = CreateFingerprints() });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement root = document.RootElement;
+        Guid runId = root.GetProperty("runId").GetGuid();
+        JsonElement plan = root.GetProperty("transportPlan");
+        JsonElement hardwarePlan = root.GetProperty("hardwarePlan");
+        JsonElement connection = root.GetProperty("connection");
+        JsonElement benchmark = connection.GetProperty("benchmark");
+
+        Assert.Equal("start-new", root.GetProperty("disposition").GetString());
+        Assert.Equal($"benchmark:{runId:D}", connection.GetProperty("sessionId").GetString());
+        Assert.InRange(connection.GetProperty("port").GetInt32(), 1, 65_535);
+        Assert.NotEqual(0UL, connection.GetProperty("planRevision").GetUInt64());
+        Assert.Equal(runId, benchmark.GetProperty("runId").GetGuid());
+        Assert.Equal(1, benchmark.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(
+            plan.GetProperty("reliablePacketCount").GetInt32(),
+            benchmark.GetProperty("reliableRound").GetProperty("packetCount").GetInt32());
+        Assert.Equal(
+            plan.GetProperty("datagramPacketCount").GetInt32(),
+            benchmark.GetProperty("datagramRound").GetProperty("packetCount").GetInt32());
+        Assert.Equal(16, Convert.FromBase64String(benchmark.GetProperty("runToken").GetString()!).Length);
+        Assert.Equal(1, hardwarePlan.GetProperty("schemaVersion").GetInt32());
+        Assert.NotEmpty(hardwarePlan.GetProperty("decoderRounds").EnumerateArray());
+        Assert.False(connection.TryGetProperty("selectedVideo", out _));
+    }
+
+    [Fact]
+    public async Task CompletionStopsBenchmarkRuntimeAndRevokesItsTicket()
+    {
+        HttpClient client = factory.CreateClient();
+        string clientId = $"benchmark-complete-{Guid.NewGuid():N}";
+        await RegisterAsync(client, clientId);
+        HttpResponseMessage prepareResponse = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/prepare",
+            new { trigger = "manual", fingerprints = CreateFingerprints() });
+        using JsonDocument prepare = await JsonDocument.ParseAsync(
+            await prepareResponse.Content.ReadAsStreamAsync());
+        Guid runId = prepare.RootElement.GetProperty("runId").GetGuid();
+        string sessionId = prepare.RootElement
+            .GetProperty("connection")
+            .GetProperty("sessionId")
+            .GetString()!;
+        int packetCount = prepare.RootElement
+            .GetProperty("transportPlan")
+            .GetProperty("datagramPacketCount")
+            .GetInt32();
+        int payloadBytes = prepare.RootElement
+            .GetProperty("transportPlan")
+            .GetProperty("datagramPayloadBytes")
+            .GetInt32();
+
+        HttpResponseMessage complete = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/{runId:D}/complete",
+            new
+            {
+                networkSamples = Enumerable.Range(0, packetCount)
+                    .Select(sequence => new { sequence, payloadBytes, rttMs = 8, jitterMs = 1.0, received = true, throughputMbps = 100, reorderDistance = 0 }),
+                decoderSamples = new[]
+                {
+                    new { codec = "h264", profile = "high", bitDepth = 8, width = 2560, height = 1600, targetFps = 120, configured = true, sustainedFps = 120, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0 }
+                },
+                powerSamples = new[]
+                {
+                    new { batteryPercent = 80, isCharging = false, thermalState = "nominal" }
+                }
+            });
+
+        Assert.Equal(HttpStatusCode.OK, complete.StatusCode);
+        FakeBenchmarkRuntime runtime = factory.Services.GetRequiredService<FakeBenchmarkRuntime>();
+        BenchmarkRuntimeState stopped = Assert.IsType<BenchmarkRuntimeState>(
+            await runtime.GetAsync(sessionId, CancellationToken.None));
+        Assert.Equal("stopped", stopped.State);
+        Assert.Null(stopped.ActiveListenerPort);
+        Assert.Empty(stopped.RunToken);
+        FakeStreamSessionAuthorizer authorizer = Assert.IsType<FakeStreamSessionAuthorizer>(
+            factory.Services.GetRequiredService<IStreamSessionAuthorizer>());
+        Assert.Contains(authorizer.Revocations, value => value.SessionId == sessionId);
+    }
+
+    [Fact]
+    public async Task CancelStopsPendingBenchmarkRuntimeAndRevokesItsTicket()
+    {
+        HttpClient client = factory.CreateClient();
+        string clientId = $"benchmark-cancel-{Guid.NewGuid():N}";
+        await RegisterAsync(client, clientId);
+        HttpResponseMessage prepareResponse = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/prepare",
+            new { trigger = "manual", fingerprints = CreateFingerprints() });
+        using JsonDocument prepare = await JsonDocument.ParseAsync(
+            await prepareResponse.Content.ReadAsStreamAsync());
+        Guid runId = prepare.RootElement.GetProperty("runId").GetGuid();
+        string sessionId = prepare.RootElement
+            .GetProperty("connection")
+            .GetProperty("sessionId")
+            .GetString()!;
+
+        HttpResponseMessage cancel = await client.PostAsync(
+            $"/clients/{clientId}/benchmarks/{runId:D}/cancel",
+            content: null);
+
+        Assert.Equal(HttpStatusCode.OK, cancel.StatusCode);
+        using JsonDocument cancelled = await JsonDocument.ParseAsync(
+            await cancel.Content.ReadAsStreamAsync());
+        Assert.Equal("cancelled", cancelled.RootElement.GetProperty("state").GetString());
+        FakeBenchmarkRuntime runtime = factory.Services.GetRequiredService<FakeBenchmarkRuntime>();
+        Assert.Equal(
+            "stopped",
+            (await runtime.GetAsync(sessionId, CancellationToken.None))?.State);
+        FakeStreamSessionAuthorizer authorizer = Assert.IsType<FakeStreamSessionAuthorizer>(
+            factory.Services.GetRequiredService<IStreamSessionAuthorizer>());
+        Assert.Contains(authorizer.Revocations, value => value.SessionId == sessionId);
+        InMemoryClientStore store = factory.Services.GetRequiredService<InMemoryClientStore>();
+        Assert.Null(store.GetBenchmarkEvidence(runId));
+    }
+
+    [Fact]
+    public async Task FingerprintChangeStopsThePreviousPendingRuntimeBeforeStartingTheReplacement()
+    {
+        HttpClient client = factory.CreateClient();
+        string clientId = $"benchmark-restart-{Guid.NewGuid():N}";
+        await RegisterAsync(client, clientId);
+        HttpResponseMessage firstResponse = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/prepare",
+            new { trigger = "automatic", fingerprints = CreateFingerprints(wifiChannel: 37) });
+        using JsonDocument first = await JsonDocument.ParseAsync(
+            await firstResponse.Content.ReadAsStreamAsync());
+        string firstSessionId = first.RootElement
+            .GetProperty("connection")
+            .GetProperty("sessionId")
+            .GetString()!;
+
+        HttpResponseMessage replacementResponse = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/prepare",
+            new { trigger = "automatic", fingerprints = CreateFingerprints(wifiChannel: 44) });
+
+        Assert.Equal(HttpStatusCode.OK, replacementResponse.StatusCode);
+        using JsonDocument replacement = await JsonDocument.ParseAsync(
+            await replacementResponse.Content.ReadAsStreamAsync());
+        string replacementSessionId = replacement.RootElement
+            .GetProperty("connection")
+            .GetProperty("sessionId")
+            .GetString()!;
+        Assert.NotEqual(firstSessionId, replacementSessionId);
+        FakeBenchmarkRuntime runtime = factory.Services.GetRequiredService<FakeBenchmarkRuntime>();
+        Assert.Equal(
+            "stopped",
+            (await runtime.GetAsync(firstSessionId, CancellationToken.None))?.State);
+        Assert.Equal(
+            "running",
+            (await runtime.GetAsync(replacementSessionId, CancellationToken.None))?.State);
+        Assert.True(
+            runtime.Operations.IndexOf($"stop:{firstSessionId}")
+            < runtime.Operations.IndexOf($"start:{replacementSessionId}"));
+    }
+
     [Fact]
     public async Task AutomaticAndManualRunsStoreServerSelectionAndDrivePlanning()
     {
@@ -29,17 +197,17 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
         using JsonDocument prepareDocument = await JsonDocument.ParseAsync(await prepare.Content.ReadAsStreamAsync());
         Assert.Equal("start-new", prepareDocument.RootElement.GetProperty("disposition").GetString());
         Guid runId = prepareDocument.RootElement.GetProperty("runId").GetGuid();
-        Assert.Equal(1, prepareDocument.RootElement.GetProperty("networkCoverage").GetProperty("firstSequence").GetInt64());
-        Assert.Equal(1, prepareDocument.RootElement.GetProperty("networkCoverage").GetProperty("expectedPacketCount").GetInt32());
+        Assert.Equal(0, prepareDocument.RootElement.GetProperty("networkCoverage").GetProperty("firstSequence").GetInt64());
+        int expectedPackets = prepareDocument.RootElement.GetProperty("networkCoverage").GetProperty("expectedPacketCount").GetInt32();
+        int payloadBytes = prepareDocument.RootElement.GetProperty("transportPlan").GetProperty("datagramPayloadBytes").GetInt32();
+        Assert.Equal(256, expectedPackets);
 
         HttpResponseMessage complete = await client.PostAsJsonAsync(
             $"/clients/{clientId}/benchmarks/{runId:D}/complete",
             new
             {
-                networkSamples = new[]
-                {
-                    new { sequence = 1, payloadBytes = 1200, rttMs = 8, jitterMs = 1.0, received = true, throughputMbps = 100, reorderDistance = 0 }
-                },
+                networkSamples = Enumerable.Range(0, expectedPackets)
+                    .Select(sequence => new { sequence, payloadBytes, rttMs = 8, jitterMs = 1.0, received = true, throughputMbps = 100, reorderDistance = 0 }),
                 decoderSamples = new[]
                 {
                     new { codec = "h264", profile = "high", bitDepth = 8, width = 2560, height = 1600, targetFps = 120, configured = true, sustainedFps = 120, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0 }
@@ -60,7 +228,7 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
         using JsonDocument historyDocument = await JsonDocument.ParseAsync(await history.Content.ReadAsStreamAsync());
         JsonElement stored = Assert.Single(historyDocument.RootElement.GetProperty("runs").EnumerateArray());
         Assert.Equal(runId, stored.GetProperty("runId").GetGuid());
-        Assert.Equal(1, stored.GetProperty("networkSamples").GetArrayLength());
+        Assert.Equal(expectedPackets, stored.GetProperty("networkSamples").GetArrayLength());
         Assert.Equal(1, stored.GetProperty("decoderSamples").GetArrayLength());
         Assert.Equal("h264", stored.GetProperty("selectedResult").GetProperty("codec").GetString());
 
@@ -87,6 +255,60 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
         using JsonDocument manualDocument = await JsonDocument.ParseAsync(await manual.Content.ReadAsStreamAsync());
         Assert.Equal("start-new", manualDocument.RootElement.GetProperty("disposition").GetString());
         Assert.NotEqual(runId, manualDocument.RootElement.GetProperty("runId").GetGuid());
+    }
+
+    [Fact]
+    public async Task SessionPreflightMergesFreshNetworkWithStoredHardwareEvidence()
+    {
+        HttpClient client = factory.CreateClient();
+        string clientId = $"benchmark-preflight-{Guid.NewGuid():N}";
+        await RegisterAsync(client, clientId);
+        object fingerprints = CreateFingerprints();
+        (_, Guid fullRunId) = await PrepareAsync(client, clientId, fingerprints);
+        await CompleteRunAsync(client, clientId, fullRunId);
+
+        HttpResponseMessage prepare = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/prepare",
+            new { trigger = "sessionPreflight", fingerprints });
+        Assert.Equal(HttpStatusCode.OK, prepare.StatusCode);
+        using JsonDocument prepared = await JsonDocument.ParseAsync(
+            await prepare.Content.ReadAsStreamAsync());
+        Guid preflightRunId = prepared.RootElement.GetProperty("runId").GetGuid();
+        Assert.Empty(prepared.RootElement
+            .GetProperty("hardwarePlan")
+            .GetProperty("decoderRounds")
+            .EnumerateArray());
+
+        HttpResponseMessage complete = await client.PostAsJsonAsync(
+            $"/clients/{clientId}/benchmarks/{preflightRunId:D}/complete",
+            new
+            {
+                networkSamples = new[]
+                {
+                    new { sequence = 0, payloadBytes = 1000, rttMs = 18, jitterMs = 2.0, received = true, throughputMbps = 80, reorderDistance = 0 }
+                },
+                decoderSamples = Array.Empty<object>(),
+                powerSamples = new[]
+                {
+                    new { batteryPercent = 70, isCharging = false, thermalState = "nominal" }
+                }
+            });
+
+        Assert.Equal(HttpStatusCode.OK, complete.StatusCode);
+        using JsonDocument completed = await JsonDocument.ParseAsync(
+            await complete.Content.ReadAsStreamAsync());
+        Assert.Equal(
+            "h264",
+            completed.RootElement.GetProperty("selectedResult").GetProperty("codec").GetString());
+
+        HttpResponseMessage history = await client.GetAsync($"/clients/{clientId}/benchmarks");
+        using JsonDocument stored = await JsonDocument.ParseAsync(
+            await history.Content.ReadAsStreamAsync());
+        JsonElement preflight = stored.RootElement.GetProperty("runs").EnumerateArray()
+            .Single(run => run.GetProperty("runId").GetGuid() == preflightRunId);
+        Assert.Equal("SessionPreflight", preflight.GetProperty("trigger").GetString());
+        Assert.Single(preflight.GetProperty("decoderSamples").EnumerateArray());
+        Assert.Equal(70, preflight.GetProperty("powerSamples")[0].GetProperty("batteryPercent").GetInt32());
     }
 
     [Theory]
@@ -263,6 +485,20 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
         HttpClient client = factory.CreateClient();
         string clientId = $"policy-rescore-{Guid.NewGuid():N}";
         await RegisterAsync(client, clientId);
+        await client.PostAsJsonAsync($"/clients/{clientId}/capabilities", new
+        {
+            av1 = true,
+            hevc = true,
+            h264 = true,
+            hdr10 = true,
+            virtualDisplayHdrSupported = true,
+            maxFps = 120,
+            currentDisplayMode = new { width = 2560, height = 1600, refreshHz = 120 },
+            supportedDisplayModes = new[]
+            {
+                new { width = 2560, height = 1600, refreshHz = 120 }
+            }
+        });
         (_, Guid runId) = await PrepareAsync(client, clientId, CreateFingerprints());
         HttpResponseMessage complete = await client.PostAsJsonAsync(
             $"/clients/{clientId}/benchmarks/{runId:D}/complete",
@@ -274,8 +510,9 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
                 },
                 decoderSamples = new[]
                 {
-                    new { codec = "av1", profile = "main", bitDepth = 10, width = 2560, height = 1600, targetFps = 120, configured = true, sustainedFps = 120, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0 },
-                    new { codec = "hevc", profile = "main10", bitDepth = 10, width = 2560, height = 1600, targetFps = 120, configured = true, sustainedFps = 120, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0 }
+                    new { codec = "av1", profile = "main", bitDepth = 10, width = 2560, height = 1600, targetFps = 120, configured = true, sustainedFps = 120, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0, tenBitPresentationVerified = false, hdrPresentationVerified = false },
+                    new { codec = "hevc", profile = "main10", bitDepth = 10, width = 2560, height = 1600, targetFps = 120, configured = true, sustainedFps = 120, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0, tenBitPresentationVerified = true, hdrPresentationVerified = true },
+                    new { codec = "h264", profile = "high", bitDepth = 8, width = 2560, height = 1600, targetFps = 120, configured = true, sustainedFps = 120, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0, tenBitPresentationVerified = false, hdrPresentationVerified = false }
                 },
                 powerSamples = new[]
                 {
@@ -288,7 +525,7 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
             $"/clients/{clientId}/plan",
             new { gameId = "steam-shortcut:3767414131" });
         HttpResponseMessage patch = await client.PatchAsJsonAsync(
-            $"/clients/{clientId}/profile",
+            $"/admin/clients/{clientId}/profile",
             new { codecPreference = "hevc" });
         HttpResponseMessage rescoredPlan = await client.PostAsJsonAsync(
             $"/clients/{clientId}/plan",
@@ -299,7 +536,7 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
         Assert.Equal(HttpStatusCode.OK, rescoredPlan.StatusCode);
         using JsonDocument initialDocument = await JsonDocument.ParseAsync(await initialPlan.Content.ReadAsStreamAsync());
         using JsonDocument rescoredDocument = await JsonDocument.ParseAsync(await rescoredPlan.Content.ReadAsStreamAsync());
-        Assert.Equal("av1", initialDocument.RootElement.GetProperty("stream").GetProperty("codec").GetString());
+        Assert.Equal("h264", initialDocument.RootElement.GetProperty("stream").GetProperty("codec").GetString());
         Assert.Equal("hevc", rescoredDocument.RootElement.GetProperty("stream").GetProperty("codec").GetString());
         Assert.Equal(runId, rescoredDocument.RootElement.GetProperty("stream").GetProperty("benchmarkRunId").GetGuid());
         Assert.NotEqual(initialDocument.RootElement.GetProperty("stream").GetProperty("benchmarkEvidenceRevision").GetString(),
@@ -332,7 +569,7 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
             });
         Assert.Equal(HttpStatusCode.OK, complete.StatusCode);
         HttpResponseMessage patch = await client.PatchAsJsonAsync(
-            $"/clients/{clientId}/profile",
+            $"/admin/clients/{clientId}/profile",
             new { codecPreference = "hevc" });
         Assert.Equal(HttpStatusCode.OK, patch.StatusCode);
 
@@ -357,6 +594,23 @@ public sealed class BenchmarkApiTests(WebApplicationFactory<Program> factory) : 
     {
         HttpResponseMessage hello = await client.PostAsJsonAsync("/clients/hello", new { clientId, name = clientId });
         Assert.Equal(HttpStatusCode.OK, hello.StatusCode);
+
+        HttpResponseMessage capabilities = await client.PostAsJsonAsync($"/clients/{clientId}/capabilities", new
+        {
+            av1 = true,
+            hevc = true,
+            h264 = true,
+            hdr10 = true,
+            virtualDisplayHdrSupported = false,
+            maxFps = 120,
+            lowLatencyDecode = true,
+            currentDisplayMode = new { width = 2560, height = 1600, refreshHz = 120 },
+            supportedDisplayModes = new[]
+            {
+                new { width = 2560, height = 1600, refreshHz = 120 }
+            }
+        });
+        Assert.Equal(HttpStatusCode.OK, capabilities.StatusCode);
     }
 
     private static object CreateFingerprints(int wifiChannel = 37) => new

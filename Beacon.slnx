@@ -5,6 +5,12 @@
     <Project Path="src/Beacon.DisplayProbe/Beacon.DisplayProbe.csproj" />
     <Project Path="src/Beacon.FakeEndpoint/Beacon.FakeEndpoint.csproj" />
     <Project Path="src/Beacon.GameProbe/Beacon.GameProbe.csproj" />
+    <Project Path="src/Beacon.HostAgent.Bootstrap/Beacon.HostAgent.Bootstrap.csproj" />
+    <Project Path="src/Beacon.HostAgent.Control/Beacon.HostAgent.Control.csproj" />
+    <Project Path="src/Beacon.HostAgent.Contracts/Beacon.HostAgent.Contracts.csproj" />
+    <Project Path="src/Beacon.HostAgent.Package/Beacon.HostAgent.Package.csproj" />
+    <Project Path="src/Beacon.HostAgent.Update/Beacon.HostAgent.Update.csproj" />
+    <Project Path="src/Beacon.HostAgent/Beacon.HostAgent.csproj" />
     <Project Path="src/Beacon.Platform.Windows/Beacon.Platform.Windows.csproj" />
     <Project Path="src/Beacon.Server/Beacon.Server.csproj" />
     <Project Path="src/Beacon.StreamWorker.Contracts/Beacon.StreamWorker.Contracts.csproj" />
@@ -15,8 +21,17 @@
     <Project Path="tests/Beacon.DisplayProbe.Tests/Beacon.DisplayProbe.Tests.csproj" />
     <Project Path="tests/Beacon.FakeEndpoint.Tests/Beacon.FakeEndpoint.Tests.csproj" />
     <Project Path="tests/Beacon.GameProbe.Tests/Beacon.GameProbe.Tests.csproj" />
+    <Project Path="tests/Beacon.HostAgent.Bootstrap.Tests/Beacon.HostAgent.Bootstrap.Tests.csproj" />
+    <Project Path="tests/Beacon.HostAgent.Control.Tests/Beacon.HostAgent.Control.Tests.csproj" />
+    <Project Path="tests/Beacon.HostAgent.Contracts.Tests/Beacon.HostAgent.Contracts.Tests.csproj" />
+    <Project Path="tests/Beacon.HostAgent.Update.Tests/Beacon.HostAgent.Update.Tests.csproj" />
+    <Project Path="tests/Beacon.HostAgent.Tests/Beacon.HostAgent.Tests.csproj" />
     <Project Path="tests/Beacon.Platform.Windows.Tests/Beacon.Platform.Windows.Tests.csproj" />
+    <Project Path="tests/Beacon.ProductionAcceptance/Beacon.ProductionAcceptance.csproj" />
     <Project Path="tests/Beacon.Server.Tests/Beacon.Server.Tests.csproj" />
+    <Project Path="tests/Beacon.Server.TestHost/Beacon.Server.TestHost.csproj" />
+    <Project Path="tests/Beacon.SessionProbe/Beacon.SessionProbe.csproj" />
     <Project Path="tests/Beacon.StreamWorker.Contracts.Tests/Beacon.StreamWorker.Contracts.Tests.csproj" />
+    <Project Path="tests/Beacon.Testing/Beacon.Testing.csproj" />
   </Folder>
 </Solution>

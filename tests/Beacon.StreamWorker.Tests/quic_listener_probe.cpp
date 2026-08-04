@@ -1,8 +1,10 @@
 #include "beacon/worker/named_pipe_channel.h"
 #include "beacon/worker/quic_listener.h"
-#include "beacon/worker/synthetic_media_source.h"
 
+#include "beacon/stream/frame_assembler.h"
 #include "beacon/stream/media_datagram.h"
+#include "benchmark_collector.h"
+#include "probe_process_runtime.h"
 
 #include "stream_control.pb.h"
 #include "worker_ipc.pb.h"
@@ -15,25 +17,116 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cwchar>
 #include <filesystem>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
 
+void report_probe_stage(std::string_view stage) {
+  std::fprintf(stderr, "BEACON_QUIC_PROBE_STAGE %.*s\n",
+               static_cast<int>(stage.size()), stage.data());
+  std::fflush(stderr);
+}
+
 constexpr std::string_view kAlpn{"beacon-stream/1"};
 constexpr std::string_view kRawTicket{"loopback-ticket"};
+constexpr std::uint64_t kAdditionalMediaSequence{77};
+constexpr std::uint64_t kAdditionalMediaPresentationTimeUs{2'345'678};
+constexpr std::string_view kBenchmarkRunId{
+    "11111111-1111-1111-1111-111111111111"};
+constexpr std::array<std::byte, 16> kBenchmarkRunToken{
+    std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a},
+    std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a},
+    std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a},
+    std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a}, std::byte{0x2a}};
+constexpr std::uint32_t kBenchmarkReliablePacketCount{8};
+constexpr std::uint32_t kBenchmarkReliablePayloadBytes{4'096};
+constexpr std::uint32_t kBenchmarkDatagramPacketCount{256};
+constexpr std::uint32_t kBenchmarkDatagramPayloadBytes{1'000};
+constexpr std::uint64_t kBenchmarkMeasurementIntervalUs{500'000};
 namespace stream_v1 = beacon::stream::v1;
 namespace worker_v1 = beacon::worker::v1;
+
+std::uint64_t monotonic_us() noexcept {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
+
+void populate_benchmark_plan(stream_v1::StartBenchmark &plan) {
+  plan.set_run_id(kBenchmarkRunId);
+  plan.set_schema_version(3);
+  plan.set_run_token(kBenchmarkRunToken.data(), kBenchmarkRunToken.size());
+  plan.mutable_reliable_round()->set_packet_count(
+      kBenchmarkReliablePacketCount);
+  plan.mutable_reliable_round()->set_payload_bytes(
+      kBenchmarkReliablePayloadBytes);
+  plan.mutable_reliable_round()->set_measurement_interval_us(
+      kBenchmarkMeasurementIntervalUs);
+  plan.mutable_datagram_round()->set_packet_count(
+      kBenchmarkDatagramPacketCount);
+  plan.mutable_datagram_round()->set_payload_bytes(
+      kBenchmarkDatagramPayloadBytes);
+  plan.mutable_datagram_round()->set_measurement_interval_us(
+      kBenchmarkMeasurementIntervalUs);
+}
+
+bool contains_annex_b_parameter_sets_and_idr(
+    std::span<const std::byte> bytes) noexcept {
+  bool sequence_parameter_set = false;
+  bool picture_parameter_set = false;
+  bool idr = false;
+  for (std::size_t index = 0; index + 3 < bytes.size();) {
+    std::size_t start_code_bytes = 0;
+    if (bytes[index] == std::byte{0} && bytes[index + 1] == std::byte{0}) {
+      if (bytes[index + 2] == std::byte{1}) {
+        start_code_bytes = 3;
+      } else if (index + 4 < bytes.size() &&
+                 bytes[index + 2] == std::byte{0} &&
+                 bytes[index + 3] == std::byte{1}) {
+        start_code_bytes = 4;
+      }
+    }
+    if (start_code_bytes == 0) {
+      ++index;
+      continue;
+    }
+    const auto nal_index = index + start_code_bytes;
+    if (nal_index >= bytes.size()) {
+      break;
+    }
+    switch (std::to_integer<std::uint8_t>(bytes[nal_index]) & 0x1fU) {
+    case 5:
+      idr = true;
+      break;
+    case 7:
+      sequence_parameter_set = true;
+      break;
+    case 8:
+      picture_parameter_set = true;
+      break;
+    default:
+      break;
+    }
+    index = nal_index + 1;
+  }
+  return sequence_parameter_set && picture_parameter_set && idr;
+}
 
 class UniqueHandle {
 public:
@@ -159,6 +252,19 @@ bool decode_fingerprint(std::string_view text,
   return true;
 }
 
+bool decode_wide_fingerprint(std::wstring_view text,
+                             beacon::worker::TicketHash &output) {
+  std::string narrow;
+  narrow.reserve(text.size());
+  for (const wchar_t value : text) {
+    if (value < 0 || value > 0x7f) {
+      return false;
+    }
+    narrow.push_back(static_cast<char>(value));
+  }
+  return decode_fingerprint(narrow, output);
+}
+
 bool certificate_matches(QUIC_CERTIFICATE *certificate,
                          const beacon::worker::TicketHash &expected) {
   const auto *context = reinterpret_cast<PCCERT_CONTEXT>(certificate);
@@ -191,6 +297,35 @@ std::vector<std::byte> frame(const Message &message) {
   return result;
 }
 
+beacon::stream::TransportPacket additional_media_packet() {
+  std::vector<std::byte> payload(beacon::stream::media_datagram_header_bytes +
+                                 1U);
+  const beacon::stream::MediaDatagramHeader header{
+      .version = beacon::stream::media_datagram_version,
+      .media_kind = beacon::stream::MediaKind::video,
+      .flags = beacon::stream::MediaDatagramFlags::end_of_access_unit,
+      .sequence = kAdditionalMediaSequence,
+      .presentation_time_us = kAdditionalMediaPresentationTimeUs,
+      .frame_bytes = 1,
+      .chunk_index = 0,
+      .chunk_count = 1,
+      .payload_offset = 0,
+      .payload_bytes = 1,
+  };
+  if (!beacon::stream::serialize_media_datagram_header(
+          header,
+          std::span<std::byte, beacon::stream::media_datagram_header_bytes>{
+              payload.data(), beacon::stream::media_datagram_header_bytes})) {
+    return {};
+  }
+  payload.back() = std::byte{0x42};
+  return {
+      .channel = beacon::stream::StreamChannel::media,
+      .sequence = kAdditionalMediaSequence,
+      .payload = std::move(payload),
+  };
+}
+
 struct ClientState;
 
 struct StreamContext {
@@ -221,18 +356,30 @@ struct ClientState {
   std::mutex mutex;
   std::condition_variable changed;
   std::vector<std::byte> session_bytes;
+  beacon::stream::FrameAssembler video_frames{
+      beacon::stream::maximum_media_frame_bytes};
   bool authenticated{};
   bool datagram_received{};
+  bool additional_datagram_received{};
   bool connection_closed{};
   bool failed{};
+  std::optional<std::uint64_t> peer_shutdown_error;
   bool certificate_seen{};
   bool send_data_after_auth{true};
-  std::uint64_t expected_marker_sequence{1};
+  bool exercise_ordered_actions{true};
+  bool benchmark_mode{};
+  bool post_auth_sent{};
+  std::uint64_t feedback_sequence{};
+  std::uint32_t video_width{2560};
+  std::uint32_t video_height{1600};
   stream_v1::SessionErrorCode authentication_error{
       stream_v1::SESSION_ERROR_CODE_UNSPECIFIED};
   std::string raw_ticket{kRawTicket};
   std::uint32_t protocol_version{1};
   beacon::worker::TicketHash expected_fingerprint{};
+  beacon::android::streamcore::BenchmarkCollector benchmark_collector;
+  std::optional<beacon::android::streamcore::BenchmarkCollectionResult>
+      benchmark_result;
 
   bool send(HQUIC stream, std::vector<std::byte> bytes, QUIC_SEND_FLAGS flags) {
     auto *context = new SendContext(std::move(bytes));
@@ -245,18 +392,127 @@ struct ClientState {
     return true;
   }
 
+  bool accept_benchmark_reply(
+      const stream_v1::SessionStreamEnvelope &reply) {
+    if (reply.has_benchmark_reliable_chunk()) {
+      const auto &chunk = reply.benchmark_reliable_chunk();
+      return chunk.run_id() == kBenchmarkRunId && chunk.round_id() == 1 &&
+             benchmark_collector.observe_reliable(
+                 chunk.sequence(),
+                 static_cast<std::uint32_t>(chunk.payload().size()),
+                 monotonic_us());
+    }
+    if (!reply.has_benchmark_round_completed()) {
+      return false;
+    }
+
+    const auto &completed = reply.benchmark_round_completed();
+    if (completed.run_id() != kBenchmarkRunId || completed.round_id() != 2 ||
+        completed.expected_packet_count() != kBenchmarkDatagramPacketCount ||
+        completed.payload_bytes() != kBenchmarkDatagramPayloadBytes) {
+      return false;
+    }
+    std::vector<beacon::android::streamcore::BenchmarkRttObservation>
+        observations;
+    observations.reserve(completed.rtt_observations_size());
+    for (const auto &observation : completed.rtt_observations()) {
+      observations.push_back({.sequence = observation.sequence(),
+                              .rtt_us = observation.rtt_us()});
+    }
+    auto result = benchmark_collector.complete(monotonic_us(), observations);
+    if (!result.has_value()) {
+      return false;
+    }
+    benchmark_result = std::move(result);
+    return true;
+  }
+
+  bool accept_session_reply(const stream_v1::SessionStreamEnvelope &reply,
+                            bool &send_post_auth) {
+    if (reply.has_session_authenticated()) {
+      if (authenticated || post_auth_sent) {
+        return false;
+      }
+      authentication_error = reply.session_authenticated().error_code();
+      authenticated = reply.session_authenticated().accepted() &&
+                      reply.session_authenticated().maximum_datagram_bytes() >
+                          0;
+      send_post_auth = authenticated && send_data_after_auth;
+      post_auth_sent = send_post_auth;
+      return authenticated;
+    }
+    return authenticated && benchmark_mode && accept_benchmark_reply(reply);
+  }
+
+  bool consume_session_frames(bool &send_post_auth) {
+    while (session_bytes.size() >= 4) {
+      const auto size =
+          (std::to_integer<std::uint32_t>(session_bytes[0]) << 24U) |
+          (std::to_integer<std::uint32_t>(session_bytes[1]) << 16U) |
+          (std::to_integer<std::uint32_t>(session_bytes[2]) << 8U) |
+          std::to_integer<std::uint32_t>(session_bytes[3]);
+      if (size == 0 ||
+          size > beacon::stream::maximum_stream_message_bytes) {
+        return false;
+      }
+      if (session_bytes.size() < 4U + size) {
+        return true;
+      }
+
+      stream_v1::SessionStreamEnvelope reply;
+      const bool parsed = reply.ParseFromArray(session_bytes.data() + 4,
+                                               static_cast<int>(size));
+      session_bytes.erase(session_bytes.begin(),
+                          session_bytes.begin() + 4U + size);
+      if (!parsed || reply.protocol_version() != 1 ||
+          reply.session_id() != "session-a" ||
+          !accept_session_reply(reply, send_post_auth)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool benchmark_succeeded() const {
+    if (!benchmark_result.has_value()) {
+      return false;
+    }
+    const auto &result = *benchmark_result;
+    return result.sustainable_throughput_mbps > 0.0 &&
+           result.received_datagrams == kBenchmarkDatagramPacketCount &&
+           result.samples.size() == kBenchmarkDatagramPacketCount &&
+           std::ranges::all_of(result.samples, [](const auto &sample) {
+             return sample.received && sample.rtt_us > 0;
+           });
+  }
+
   bool send_post_auth_messages() {
+    if (benchmark_mode) {
+      stream_v1::SessionStreamEnvelope benchmark;
+      benchmark.set_protocol_version(1);
+      benchmark.set_session_id("session-a");
+      benchmark.set_sequence(2);
+      populate_benchmark_plan(*benchmark.mutable_start_benchmark());
+      return send(session_stream, frame(benchmark), QUIC_SEND_FLAG_NONE);
+    }
+
     stream_v1::SessionStreamEnvelope control;
     control.set_protocol_version(1);
     control.set_session_id("session-a");
     control.set_sequence(2);
     auto *video = control.mutable_start_session()->mutable_selected_video();
     video->set_codec(stream_v1::VIDEO_CODEC_H264);
-    video->set_width(2560);
-    video->set_height(1600);
+    video->set_width(video_width);
+    video->set_height(video_height);
     video->set_frames_per_second_numerator(120);
     video->set_frames_per_second_denominator(1);
     video->set_dynamic_range(stream_v1::DYNAMIC_RANGE_SDR);
+    auto *audio = control.mutable_start_session()->mutable_selected_audio();
+    audio->set_codec(stream_v1::AUDIO_CODEC_OPUS);
+    audio->set_sample_rate_hz(48'000);
+    audio->set_channel_count(2);
+    audio->set_frame_duration_us(20'000);
+    audio->set_bitrate_bps(96'000);
 
     stream_v1::InputStreamEnvelope input;
     input.set_protocol_version(1);
@@ -272,11 +528,64 @@ struct ClientState {
     feedback.set_sequence(1);
     feedback.mutable_queue_depth()->set_queued_access_units(2);
 
-    return send(session_stream, frame(control), QUIC_SEND_FLAG_NONE) &&
+    stream_v1::SessionStreamEnvelope request_idr;
+    request_idr.set_protocol_version(1);
+    request_idr.set_session_id("session-a");
+    request_idr.set_sequence(3);
+    request_idr.mutable_request_idr()->set_reason(
+        stream_v1::IDR_REQUEST_REASON_DATAGRAM_LOSS);
+
+    auto session_actions = frame(control);
+    const auto append_action = [&session_actions](const auto &message) {
+      const auto action = frame(message);
+      session_actions.insert(session_actions.end(), action.begin(),
+                             action.end());
+    };
+    if (exercise_ordered_actions) {
+      append_action(request_idr);
+    }
+
+    return send(session_stream, std::move(session_actions),
+                QUIC_SEND_FLAG_NONE) &&
            send(input_stream, frame(input), QUIC_SEND_FLAG_FIN) &&
            send(feedback_stream, frame(feedback), QUIC_SEND_FLAG_FIN);
   }
+
+  bool send_benchmark_echo(
+      const beacon::stream::BenchmarkDatagramHeader &header) {
+    stream_v1::FeedbackStreamEnvelope feedback;
+    feedback.set_protocol_version(1);
+    feedback.set_session_id("session-a");
+    feedback.set_sequence(++feedback_sequence);
+    auto *echo = feedback.mutable_benchmark_datagram_echo();
+    echo->set_run_id(kBenchmarkRunId);
+    echo->set_round_id(header.round_id);
+    echo->set_sequence(header.sequence);
+    return send(feedback_stream, frame(feedback), QUIC_SEND_FLAG_NONE);
+  }
+
+  bool send_stop_session() {
+    stream_v1::SessionStreamEnvelope stop;
+    stop.set_protocol_version(1);
+    stop.set_session_id("session-a");
+    stop.set_sequence(4);
+    stop.mutable_stop_session()->set_reason(
+        stream_v1::SESSION_STOP_REASON_CLIENT_REQUEST);
+    return send(session_stream, frame(stop), QUIC_SEND_FLAG_FIN);
+  }
 };
+
+stream_v1::SelectedVideoMode selected_video(std::uint32_t width = 2560,
+                                            std::uint32_t height = 1600) {
+  stream_v1::SelectedVideoMode video;
+  video.set_codec(stream_v1::VIDEO_CODEC_H264);
+  video.set_width(width);
+  video.set_height(height);
+  video.set_frames_per_second_numerator(120);
+  video.set_frames_per_second_denominator(1);
+  video.set_dynamic_range(stream_v1::DYNAMIC_RANGE_SDR);
+  return video;
+}
 
 QUIC_STATUS QUIC_API stream_callback(HQUIC stream, void *context,
                                      QUIC_STREAM_EVENT *event) {
@@ -285,7 +594,7 @@ QUIC_STATUS QUIC_API stream_callback(HQUIC stream, void *context,
   switch (event->Type) {
   case QUIC_STREAM_EVENT_RECEIVE:
     if (stream_context.session) {
-      bool accepted = false;
+      bool send_post_auth = false;
       {
         std::lock_guard lock{state.mutex};
         for (std::uint32_t index = 0; index < event->RECEIVE.BufferCount;
@@ -296,31 +605,10 @@ QUIC_STATUS QUIC_API stream_callback(HQUIC stream, void *context,
           state.session_bytes.insert(state.session_bytes.end(), begin,
                                      begin + buffer.Length);
         }
-        if (state.session_bytes.size() >= 4) {
-          const auto size =
-              (std::to_integer<std::uint32_t>(state.session_bytes[0]) << 24U) |
-              (std::to_integer<std::uint32_t>(state.session_bytes[1]) << 16U) |
-              (std::to_integer<std::uint32_t>(state.session_bytes[2]) << 8U) |
-              std::to_integer<std::uint32_t>(state.session_bytes[3]);
-          if (size > 0 && state.session_bytes.size() >= 4U + size) {
-            stream_v1::SessionStreamEnvelope reply;
-            const bool parsed = reply.ParseFromArray(
-                state.session_bytes.data() + 4, static_cast<int>(size));
-            state.authenticated =
-                parsed && reply.has_session_authenticated() &&
-                reply.session_authenticated().accepted() &&
-                reply.session_authenticated().maximum_datagram_bytes() > 0;
-            if (parsed && reply.has_session_authenticated()) {
-              state.authentication_error =
-                  reply.session_authenticated().error_code();
-            }
-            state.failed = !state.authenticated;
-            accepted = state.authenticated;
-          }
-        }
+        state.failed = state.failed ||
+                       !state.consume_session_frames(send_post_auth);
       }
-      if (accepted && state.send_data_after_auth &&
-          !state.send_post_auth_messages()) {
+      if (send_post_auth && !state.send_post_auth_messages()) {
         std::lock_guard lock{state.mutex};
         state.failed = true;
       }
@@ -380,21 +668,59 @@ QUIC_STATUS QUIC_API connection_callback(HQUIC connection, void *context,
     break;
   case QUIC_CONNECTION_EVENT_DATAGRAM_RECEIVED: {
     const auto &buffer = *event->DATAGRAM_RECEIVED.Buffer;
-    const auto parsed = beacon::stream::parse_media_datagram(
-        {reinterpret_cast<const std::byte *>(buffer.Buffer), buffer.Length});
-    constexpr auto expected_payload =
-        beacon::worker::synthetic_access_unit_marker_bytes;
+    const auto datagram = std::span<const std::byte>{
+        reinterpret_cast<const std::byte *>(buffer.Buffer), buffer.Length};
     std::lock_guard lock{state.mutex};
-    state.datagram_received =
+    if (state.benchmark_mode) {
+      const auto parsed = beacon::stream::parse_benchmark_datagram(datagram);
+      state.failed = state.failed || !parsed.has_value() ||
+                     !state.benchmark_collector.observe_datagram(
+                         datagram, monotonic_us()) ||
+                     !state.send_benchmark_echo(parsed->header);
+      state.changed.notify_all();
+      break;
+    }
+    const auto parsed = beacon::stream::parse_media_datagram(datagram);
+    const bool additional_media =
         parsed.error == beacon::stream::MediaDatagramError::none &&
-        parsed.header.sequence == state.expected_marker_sequence &&
-        parsed.header.presentation_time_us == 1'000'000 &&
+        parsed.header.sequence == kAdditionalMediaSequence &&
+        parsed.header.presentation_time_us ==
+            kAdditionalMediaPresentationTimeUs &&
         parsed.header.chunk_count == 1 &&
         parsed.header.flags ==
-            (beacon::stream::MediaDatagramFlags::idr |
-             beacon::stream::MediaDatagramFlags::end_of_access_unit) &&
-        std::ranges::equal(parsed.payload, expected_payload);
-    state.failed = !state.datagram_received;
+            beacon::stream::MediaDatagramFlags::end_of_access_unit &&
+        parsed.payload.size() == 1 && parsed.payload[0] == std::byte{0x42};
+    bool accepted_video_chunk = false;
+    bool startup_h264 = false;
+    if (!additional_media) {
+      auto assembled = state.video_frames.push(datagram);
+      accepted_video_chunk =
+          assembled.status ==
+              beacon::stream::FramePushStatus::accepted_incomplete ||
+          assembled.status == beacon::stream::FramePushStatus::completed;
+      if (assembled.status == beacon::stream::FramePushStatus::completed &&
+          assembled.frame) {
+        const auto flags = static_cast<std::uint16_t>(assembled.frame->flags);
+        startup_h264 = assembled.frame->sequence != 0 &&
+                       assembled.frame->presentation_time_us != 0 &&
+                       (flags & static_cast<std::uint16_t>(
+                                    beacon::stream::MediaDatagramFlags::idr)) !=
+                           0 &&
+                       (flags & static_cast<std::uint16_t>(
+                                    beacon::stream::MediaDatagramFlags::
+                                        codec_configuration)) != 0 &&
+                       contains_annex_b_parameter_sets_and_idr(
+                           assembled.frame->bytes);
+      }
+    }
+    state.datagram_received = state.datagram_received || startup_h264;
+    state.additional_datagram_received =
+        state.additional_datagram_received || additional_media;
+    state.failed = state.failed ||
+                   (!additional_media &&
+                    (!accepted_video_chunk ||
+                     (state.video_frames.metrics().completed_frames != 0 &&
+                      !state.datagram_received)));
     state.changed.notify_all();
     break;
   }
@@ -416,15 +742,21 @@ QUIC_STATUS QUIC_API connection_callback(HQUIC connection, void *context,
   }
     state.changed.notify_all();
     break;
-  case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
-    {
-      std::lock_guard lock{state.mutex};
-      if (state.connection == connection) {
-        state.connection = nullptr;
-      }
-      state.connection_closed = true;
-      state.api->ConnectionClose(connection);
+  case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER: {
+    std::lock_guard lock{state.mutex};
+    state.peer_shutdown_error =
+        event->SHUTDOWN_INITIATED_BY_PEER.ErrorCode;
+  }
+    state.changed.notify_all();
+    break;
+  case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE: {
+    std::lock_guard lock{state.mutex};
+    if (state.connection == connection) {
+      state.connection = nullptr;
     }
+    state.connection_closed = true;
+    state.api->ConnectionClose(connection);
+  }
     state.changed.notify_all();
     break;
   default:
@@ -476,8 +808,7 @@ void stop_client(ClientState &state, std::uint64_t error_code = 0) {
     if (state.connection != nullptr) {
       state.api->ConnectionShutdown(
           state.connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, error_code);
-      state.changed.wait(lock,
-                         [&state] { return state.connection_closed; });
+      state.changed.wait(lock, [&state] { return state.connection_closed; });
     }
   }
   if (state.configuration != nullptr)
@@ -518,9 +849,10 @@ bool exchange_worker_command(
         envelope.session_id() != command.session_id()) {
       return false;
     }
-    const bool completion = envelope.body_case() ==
-                            worker_v1::WorkerIpcEnvelope::kWorkerCompletion;
-    const bool succeeded = completion && envelope.worker_completion().succeeded();
+    const bool completion =
+        envelope.body_case() == worker_v1::WorkerIpcEnvelope::kWorkerCompletion;
+    const bool succeeded =
+        completion && envelope.worker_completion().succeeded();
     responses.push_back(std::move(envelope));
     if (completion) {
       return succeeded;
@@ -528,45 +860,65 @@ bool exchange_worker_command(
   }
 }
 
-bool collect_stream_events(
+enum class WorkerProcessProbeMode { video, benchmark };
+
+struct TransportDiagnosticProgress {
+  bool connection_observed{};
+  bool connection_configured{};
+  bool transport_connected{};
+
+  bool complete() const noexcept {
+    return connection_observed && connection_configured && transport_connected;
+  }
+
+  bool observe(const worker_v1::WorkerIpcEnvelope &event) {
+    if (!event.session_id().empty() ||
+        event.worker_diagnostic().severity() !=
+            worker_v1::DIAGNOSTIC_SEVERITY_INFORMATION ||
+        event.worker_diagnostic().boundary() !=
+            worker_v1::DIAGNOSTIC_BOUNDARY_TRANSPORT ||
+        event.worker_diagnostic().platform_error_code() != 0 ||
+        event.worker_diagnostic().numeric_value() != 1) {
+      return false;
+    }
+    switch (event.worker_diagnostic().code()) {
+    case worker_v1::DIAGNOSTIC_CODE_CONNECTION_OBSERVED:
+      connection_observed = true;
+      return true;
+    case worker_v1::DIAGNOSTIC_CODE_CONNECTION_CONFIGURED:
+      connection_configured = true;
+      return true;
+    case worker_v1::DIAGNOSTIC_CODE_TRANSPORT_CONNECTED:
+      transport_connected = true;
+      return true;
+    default:
+      return false;
+    }
+  }
+};
+
+bool collect_worker_process_events(
     beacon::worker::NamedPipeChannel &channel,
-    std::vector<worker_v1::WorkerIpcEnvelope> &events) {
+    std::vector<worker_v1::WorkerIpcEnvelope> &events,
+    WorkerProcessProbeMode mode) {
   bool authenticated = false;
   bool input = false;
   bool feedback = false;
   bool media = false;
-  bool connection_observed = false;
-  bool connection_configured = false;
-  bool transport_connected = false;
-  while (!connection_observed || !connection_configured ||
-         !transport_connected || !authenticated || !input || !feedback ||
-         !media) {
+  TransportDiagnosticProgress transport;
+  const auto complete = [&] {
+    const bool stream_events = mode == WorkerProcessProbeMode::benchmark ||
+                               (input && feedback && media);
+    return transport.complete() && authenticated && stream_events;
+  };
+  while (!complete()) {
     worker_v1::WorkerIpcEnvelope event;
     if (channel.read(event) != beacon::worker::FrameDecodeStatus::success ||
         event.protocol_version() != 1 || event.request_id() != 0) {
       return false;
     }
     if (event.body_case() == worker_v1::WorkerIpcEnvelope::kWorkerDiagnostic) {
-      if (!event.session_id().empty() ||
-          event.worker_diagnostic().severity() !=
-              worker_v1::DIAGNOSTIC_SEVERITY_INFORMATION ||
-          event.worker_diagnostic().boundary() !=
-              worker_v1::DIAGNOSTIC_BOUNDARY_TRANSPORT ||
-          event.worker_diagnostic().platform_error_code() != 0 ||
-          event.worker_diagnostic().numeric_value() != 1) {
-        return false;
-      }
-      switch (event.worker_diagnostic().code()) {
-      case worker_v1::DIAGNOSTIC_CODE_CONNECTION_OBSERVED:
-        connection_observed = true;
-        break;
-      case worker_v1::DIAGNOSTIC_CODE_CONNECTION_CONFIGURED:
-        connection_configured = true;
-        break;
-      case worker_v1::DIAGNOSTIC_CODE_TRANSPORT_CONNECTED:
-        transport_connected = true;
-        break;
-      default:
+      if (!transport.observe(event)) {
         return false;
       }
       events.push_back(std::move(event));
@@ -576,42 +928,68 @@ bool collect_stream_events(
       return false;
     }
     switch (event.body_case()) {
-    case worker_v1::WorkerIpcEnvelope::kTransportAuthenticated:
-      authenticated = event.transport_authenticated().session_generation() == 1 &&
-                      event.transport_authenticated().maximum_datagram_bytes() > 0;
+    case worker_v1::WorkerIpcEnvelope::kTransportAuthenticated: {
+      const bool valid =
+          event.transport_authenticated().session_generation() == 1 &&
+          event.transport_authenticated().maximum_datagram_bytes() > 0;
+      if (!valid) {
+        return false;
+      }
+      authenticated = true;
       break;
-    case worker_v1::WorkerIpcEnvelope::kInputReceived:
-      input = event.input_received().session_generation() == 1 &&
-              event.input_received().input().sequence() == 1 &&
-              event.input_received().input().input_batch().events_size() == 1 &&
-              event.input_received()
-                      .input()
-                      .input_batch()
-                      .events(0)
-                      .keyboard()
-                      .scan_code() == 30 &&
-              event.input_received()
+    }
+    case worker_v1::WorkerIpcEnvelope::kInputReceived: {
+      const bool valid =
+          mode == WorkerProcessProbeMode::video &&
+          event.input_received().session_generation() == 1 &&
+          event.input_received().input().sequence() == 1 &&
+          event.input_received().input().input_batch().events_size() == 1 &&
+          event.input_received()
                   .input()
                   .input_batch()
                   .events(0)
                   .keyboard()
-                  .pressed();
+                  .scan_code() == 30 &&
+          event.input_received()
+              .input()
+              .input_batch()
+              .events(0)
+              .keyboard()
+              .pressed();
+      if (!valid) {
+        return false;
+      }
+      input = true;
       break;
-    case worker_v1::WorkerIpcEnvelope::kFeedbackReceived:
-      feedback = event.feedback_received().session_generation() == 1 &&
-                 event.feedback_received().feedback().sequence() == 1 &&
-                 event.feedback_received().feedback().has_queue_depth() &&
-                 event.feedback_received()
-                         .feedback()
-                         .queue_depth()
-                         .queued_access_units() == 2;
+    }
+    case worker_v1::WorkerIpcEnvelope::kFeedbackReceived: {
+      const bool valid =
+          mode == WorkerProcessProbeMode::video &&
+          event.feedback_received().session_generation() == 1 &&
+          event.feedback_received().feedback().sequence() == 1 &&
+          event.feedback_received().feedback().has_queue_depth() &&
+          event.feedback_received()
+                  .feedback()
+                  .queue_depth()
+                  .queued_access_units() == 2;
+      if (!valid) {
+        return false;
+      }
+      feedback = true;
       break;
-    case worker_v1::WorkerIpcEnvelope::kMediaEvidence:
-      media = event.media_evidence().session_generation() == 1 &&
-              event.media_evidence().sequence() == 1 &&
-              event.media_evidence().presentation_time_us() == 1'000'000 &&
-              event.media_evidence().datagram_bytes() > 0;
+    }
+    case worker_v1::WorkerIpcEnvelope::kMediaEvidence: {
+      const bool valid = mode == WorkerProcessProbeMode::video &&
+                         event.media_evidence().session_generation() == 1 &&
+                         event.media_evidence().sequence() == 1 &&
+                         event.media_evidence().presentation_time_us() > 0 &&
+                         event.media_evidence().datagram_bytes() > 0;
+      if (!valid) {
+        return false;
+      }
+      media = true;
       break;
+    }
     default:
       return false;
     }
@@ -641,9 +1019,136 @@ bool collect_disconnect_event(
   }
 }
 
-int run_worker_process_probe(const std::wstring &worker_path,
-                             const std::wstring &identity_path,
-                             const beacon::worker::TicketHash &fingerprint) {
+struct WorkerVideoFailure {
+  worker_v1::DiagnosticBoundary boundary{
+      worker_v1::DIAGNOSTIC_BOUNDARY_UNSPECIFIED};
+  std::uint32_t native_code{};
+};
+
+std::optional<WorkerVideoFailure> collect_worker_video_failure(
+    beacon::worker::NamedPipeChannel &channel,
+    std::vector<worker_v1::WorkerIpcEnvelope> &events) {
+  bool failed_state = false;
+  bool disconnected = false;
+  std::optional<WorkerVideoFailure> failure;
+  while (!disconnected) {
+    worker_v1::WorkerIpcEnvelope event;
+    if (channel.read(event) != beacon::worker::FrameDecodeStatus::success ||
+        event.protocol_version() != 1 || event.request_id() != 0) {
+      return std::nullopt;
+    }
+
+    if (event.body_case() ==
+        worker_v1::WorkerIpcEnvelope::kWorkerDiagnostic) {
+      const auto &diagnostic = event.worker_diagnostic();
+      const bool video_failure =
+          event.session_id() == "session-a" &&
+          diagnostic.severity() == worker_v1::DIAGNOSTIC_SEVERITY_ERROR &&
+          diagnostic.code() == worker_v1::DIAGNOSTIC_CODE_OPERATION_FAILED &&
+          (diagnostic.boundary() == worker_v1::DIAGNOSTIC_BOUNDARY_CAPTURE ||
+           diagnostic.boundary() == worker_v1::DIAGNOSTIC_BOUNDARY_ENCODER ||
+           diagnostic.boundary() == worker_v1::DIAGNOSTIC_BOUNDARY_TRANSPORT);
+      const bool transport_progress =
+          event.session_id().empty() &&
+          diagnostic.severity() ==
+              worker_v1::DIAGNOSTIC_SEVERITY_INFORMATION &&
+          diagnostic.boundary() == worker_v1::DIAGNOSTIC_BOUNDARY_TRANSPORT;
+      if (video_failure) {
+        failure = WorkerVideoFailure{
+            .boundary = diagnostic.boundary(),
+            .native_code = diagnostic.platform_error_code(),
+        };
+      } else if (!transport_progress) {
+        return std::nullopt;
+      }
+      events.push_back(std::move(event));
+      continue;
+    }
+
+    if (event.session_id() != "session-a") {
+      return std::nullopt;
+    }
+    switch (event.body_case()) {
+    case worker_v1::WorkerIpcEnvelope::kTransportAuthenticated:
+      if (event.transport_authenticated().session_generation() != 1) {
+        return std::nullopt;
+      }
+      break;
+    case worker_v1::WorkerIpcEnvelope::kInputReceived:
+      if (event.input_received().session_generation() != 1) {
+        return std::nullopt;
+      }
+      break;
+    case worker_v1::WorkerIpcEnvelope::kFeedbackReceived:
+      if (event.feedback_received().session_generation() != 1) {
+        return std::nullopt;
+      }
+      break;
+    case worker_v1::WorkerIpcEnvelope::kMediaEvidence:
+      if (event.media_evidence().session_generation() != 1) {
+        return std::nullopt;
+      }
+      break;
+    case worker_v1::WorkerIpcEnvelope::kSessionStateChanged:
+      failed_state =
+          event.session_state_changed().state() ==
+              worker_v1::WORKER_SESSION_STATE_FAILED &&
+          event.session_state_changed().error_code() ==
+              worker_v1::WORKER_ERROR_CODE_OPERATION_FAILED;
+      if (!failed_state) {
+        return std::nullopt;
+      }
+      break;
+    case worker_v1::WorkerIpcEnvelope::kTransportDisconnected:
+      disconnected =
+          event.transport_disconnected().session_generation() == 1;
+      if (!disconnected) {
+        return std::nullopt;
+      }
+      break;
+    default:
+      return std::nullopt;
+    }
+    events.push_back(std::move(event));
+  }
+  if (!failed_state) {
+    return std::nullopt;
+  }
+  return failure;
+}
+
+const char *diagnostic_boundary_name(
+    worker_v1::DiagnosticBoundary boundary) noexcept {
+  switch (boundary) {
+  case worker_v1::DIAGNOSTIC_BOUNDARY_CAPTURE:
+    return "CAPTURE";
+  case worker_v1::DIAGNOSTIC_BOUNDARY_ENCODER:
+    return "ENCODER";
+  case worker_v1::DIAGNOSTIC_BOUNDARY_TRANSPORT:
+    return "TRANSPORT";
+  default:
+    return "UNSPECIFIED";
+  }
+}
+
+int run_worker_process_probe(
+    const std::wstring &worker_path, const std::wstring &identity_path,
+    const beacon::worker::TicketHash &fingerprint, WorkerProcessProbeMode mode,
+    const std::wstring &display_device_name = {}, std::uint32_t width = 0,
+    std::uint32_t height = 0) {
+  std::string display_device;
+  if (mode == WorkerProcessProbeMode::video) {
+    display_device.reserve(display_device_name.size());
+    for (const wchar_t value : display_device_name) {
+      if (value < 0 || value > 0x7f) {
+        return 79;
+      }
+      display_device.push_back(static_cast<char>(value));
+    }
+    if (display_device.empty() || width == 0 || height == 0) {
+      return 79;
+    }
+  }
   const auto pipe_name = L"\\\\.\\pipe\\beacon-worker-process-probe-" +
                          std::to_wstring(GetCurrentProcessId()) + L"-" +
                          std::to_wstring(GetTickCount64());
@@ -675,9 +1180,9 @@ int run_worker_process_probe(const std::wstring &worker_path,
   }
   if (connected_immediately == FALSE) {
     const std::array wait_handles{connected_event.get(), process.handle()};
-    const auto wait = WaitForMultipleObjects(
-        static_cast<DWORD>(wait_handles.size()), wait_handles.data(), FALSE,
-        INFINITE);
+    const auto wait =
+        WaitForMultipleObjects(static_cast<DWORD>(wait_handles.size()),
+                               wait_handles.data(), FALSE, INFINITE);
     if (wait == WAIT_OBJECT_0 + 1) {
       CancelIoEx(pipe.get(), &connected);
       DWORD transferred = 0;
@@ -685,8 +1190,8 @@ int run_worker_process_probe(const std::wstring &worker_path,
           GetOverlappedResult(pipe.get(), &connected, &transferred, TRUE));
       const auto worker_exit = process.exit_code();
       std::printf("BEACON_WORKER_STARTUP_EXIT %lu\n",
-                  static_cast<unsigned long>(worker_exit.value_or(
-                      std::numeric_limits<DWORD>::max())));
+                  static_cast<unsigned long>(
+                      worker_exit.value_or(std::numeric_limits<DWORD>::max())));
       return 97;
     }
     if (wait != WAIT_OBJECT_0) {
@@ -701,12 +1206,18 @@ int run_worker_process_probe(const std::wstring &worker_path,
 
   beacon::worker::NamedPipeChannel channel(pipe.release());
   worker_v1::WorkerIpcEnvelope hello;
+  worker_v1::WorkerIpcEnvelope capabilities;
   worker_v1::WorkerIpcEnvelope ready;
   if (channel.read(hello) != beacon::worker::FrameDecodeStatus::success ||
+      channel.read(capabilities) != beacon::worker::FrameDecodeStatus::success ||
       channel.read(ready) != beacon::worker::FrameDecodeStatus::success ||
       hello.body_case() != worker_v1::WorkerIpcEnvelope::kWorkerHello ||
+      capabilities.body_case() !=
+          worker_v1::WorkerIpcEnvelope::kWorkerCapabilities ||
       ready.body_case() != worker_v1::WorkerIpcEnvelope::kWorkerReady ||
       hello.worker_hello().worker_instance_id().empty() ||
+      hello.worker_hello().worker_instance_id() !=
+          capabilities.worker_capabilities().worker_instance_id() ||
       hello.worker_hello().worker_instance_id() !=
           ready.worker_ready().worker_instance_id()) {
     return 86;
@@ -714,7 +1225,82 @@ int run_worker_process_probe(const std::wstring &worker_path,
 
   std::vector<worker_v1::WorkerIpcEnvelope> events;
   std::vector<worker_v1::WorkerIpcEnvelope> responses;
-  auto authorize = worker_command(1, "session-a");
+  auto prepare = worker_command(1, "session-a");
+  if (mode == WorkerProcessProbeMode::video) {
+    auto *plan = prepare.mutable_prepare_session();
+    plan->set_display_target("display-a");
+    plan->set_display_device_name(display_device);
+    plan->set_video_codec(worker_v1::WORKER_VIDEO_CODEC_H264);
+    plan->set_width(width);
+    plan->set_height(height);
+    plan->set_frames_per_second_numerator(120);
+    plan->set_frames_per_second_denominator(1);
+    plan->set_dynamic_range(worker_v1::WORKER_DYNAMIC_RANGE_SDR);
+    plan->set_audio_codec(worker_v1::WORKER_AUDIO_CODEC_OPUS);
+    plan->set_audio_sample_rate_hz(48'000);
+    plan->set_audio_channel_count(2);
+    plan->set_audio_frame_duration_us(20'000);
+    plan->set_audio_bitrate_bps(96'000);
+    plan->set_minimum_bitrate_kbps(8'000);
+    plan->set_initial_bitrate_kbps(24'000);
+    plan->set_maximum_bitrate_kbps(40'000);
+  } else {
+    populate_benchmark_plan(
+        *prepare.mutable_prepare_benchmark()->mutable_plan());
+  }
+  const bool prepare_exchanged =
+      exchange_worker_command(channel, prepare, responses, events);
+  if (!prepare_exchanged) {
+    const worker_v1::WorkerCompletion *completion =
+        !responses.empty() &&
+                responses.back().body_case() ==
+                    worker_v1::WorkerIpcEnvelope::kWorkerCompletion
+            ? &responses.back().worker_completion()
+            : nullptr;
+    const auto disposition = beacon::worker::tests::classify_probe_prepare(
+        {.video_mode = mode == WorkerProcessProbeMode::video,
+         .advertised_video_available =
+             capabilities.worker_capabilities().video_available(),
+         .advertised_audio_available =
+             capabilities.worker_capabilities().audio_available(),
+         .exchange_succeeded = prepare_exchanged,
+         .has_completion = completion != nullptr,
+         .completion_succeeded =
+             completion != nullptr && completion->succeeded(),
+         .capability_unavailable =
+             completion != nullptr &&
+             completion->error_code() ==
+                 worker_v1::WORKER_ERROR_CODE_CAPABILITY_UNAVAILABLE});
+    if (disposition == beacon::worker::tests::ProbePrepareDisposition::
+                           unsupported_video_hardware) {
+      std::printf(
+          "BEACON_WORKER_VIDEO_FAILURE PREPARE CAPABILITY_UNAVAILABLE\n");
+      return 99;
+    }
+    if (disposition == beacon::worker::tests::ProbePrepareDisposition::
+                           unsupported_audio_hardware) {
+      std::printf(
+          "BEACON_WORKER_AUDIO_FAILURE PREPARE CAPABILITY_UNAVAILABLE\n");
+      return 78;
+    }
+    if (disposition == beacon::worker::tests::ProbePrepareDisposition::
+                           unsupported_media_hardware) {
+      std::printf(
+          "BEACON_WORKER_MEDIA_FAILURE PREPARE CAPABILITY_UNAVAILABLE\n");
+      return 79;
+    }
+    if (disposition ==
+        beacon::worker::tests::ProbePrepareDisposition::worker_rejected) {
+      std::printf("BEACON_WORKER_PREPARE_FAILURE %d\n",
+                  static_cast<int>(completion->error_code()));
+      return 88;
+    }
+    std::printf("BEACON_WORKER_PREPARE_EXCHANGE_FAILURE\n");
+    return 88;
+  }
+
+  responses.clear();
+  auto authorize = worker_command(2, "session-a");
   const auto ticket_hash = beacon::worker::hash_stream_ticket(
       {reinterpret_cast<const std::byte *>(kRawTicket.data()),
        kRawTicket.size()});
@@ -727,20 +1313,6 @@ int run_worker_process_probe(const std::wstring &worker_path,
   ticket->set_worker_instance_id(hello.worker_hello().worker_instance_id());
   if (!exchange_worker_command(channel, authorize, responses, events)) {
     return 87;
-  }
-
-  responses.clear();
-  auto prepare = worker_command(2, "session-a");
-  auto *plan = prepare.mutable_prepare_session();
-  plan->set_display_target("display-a");
-  plan->set_video_codec(worker_v1::WORKER_VIDEO_CODEC_H264);
-  plan->set_width(2560);
-  plan->set_height(1600);
-  plan->set_frames_per_second_numerator(120);
-  plan->set_frames_per_second_denominator(1);
-  plan->set_dynamic_range(worker_v1::WORKER_DYNAMIC_RANGE_SDR);
-  if (!exchange_worker_command(channel, prepare, responses, events)) {
-    return 88;
   }
 
   responses.clear();
@@ -766,6 +1338,21 @@ int run_worker_process_probe(const std::wstring &worker_path,
 
   ClientState client;
   client.expected_fingerprint = fingerprint;
+  client.exercise_ordered_actions = false;
+  if (mode == WorkerProcessProbeMode::video) {
+    client.video_width = width;
+    client.video_height = height;
+  } else {
+    client.benchmark_mode = true;
+    if (!client.benchmark_collector.start(
+            {.run_token = kBenchmarkRunToken,
+             .reliable_packet_count = kBenchmarkReliablePacketCount,
+             .reliable_payload_bytes = kBenchmarkReliablePayloadBytes,
+             .datagram_packet_count = kBenchmarkDatagramPacketCount,
+             .datagram_payload_bytes = kBenchmarkDatagramPayloadBytes})) {
+      return 98;
+    }
+  }
   if (!start_client(
           client,
           static_cast<std::uint16_t>(
@@ -775,18 +1362,45 @@ int run_worker_process_probe(const std::wstring &worker_path,
   }
   {
     std::unique_lock lock{client.mutex};
-    client.changed.wait(lock, [&client] {
-      return client.datagram_received || client.failed ||
-             client.connection_closed;
+    client.changed.wait(lock, [&client, mode] {
+      const bool completed = mode == WorkerProcessProbeMode::video
+                                 ? client.datagram_received
+                                 : client.benchmark_result.has_value();
+      return completed || client.failed || client.connection_closed;
     });
-    if (!client.datagram_received || client.failed ||
-        !client.authenticated || !client.certificate_seen) {
+    bool valid_result = client.authenticated && client.certificate_seen;
+    if (mode == WorkerProcessProbeMode::video) {
+      valid_result = valid_result && client.datagram_received;
+    } else {
+      valid_result = valid_result && client.benchmark_succeeded();
+    }
+    if (!valid_result || client.failed) {
       lock.unlock();
       stop_client(client);
+      if (mode == WorkerProcessProbeMode::video && client.authenticated &&
+          client.certificate_seen) {
+        const auto failure = collect_worker_video_failure(channel, events);
+        if (failure) {
+          responses.clear();
+          auto shutdown = worker_command(4, "");
+          shutdown.mutable_shutdown_worker();
+          if (!exchange_worker_command(channel, shutdown, responses, events)) {
+            return 95;
+          }
+          const auto exit_code = process.wait();
+          if (!exit_code || *exit_code != 0) {
+            return 96;
+          }
+          std::printf("BEACON_WORKER_VIDEO_FAILURE %s %u\n",
+                      diagnostic_boundary_name(failure->boundary),
+                      failure->native_code);
+          return 99;
+        }
+      }
       return 92;
     }
   }
-  if (!collect_stream_events(channel, events)) {
+  if (!collect_worker_process_events(channel, events, mode)) {
     stop_client(client);
     return 93;
   }
@@ -806,17 +1420,22 @@ int run_worker_process_probe(const std::wstring &worker_path,
   if (!exit_code || *exit_code != 0) {
     return 96;
   }
-  std::printf("BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK "
-              "ACCESS_UNIT_MARKER "
-              "DISCONNECT SHUTDOWN\n");
+  if (mode == WorkerProcessProbeMode::benchmark) {
+    std::printf("BEACON_WORKER_BENCHMARK_OK AUTH RELIABLE DATAGRAM RTT "
+                "DISCONNECT SHUTDOWN\n");
+  } else {
+    std::printf("BEACON_WORKER_IPC_QUIC_OK AUTH INPUT FEEDBACK "
+                "REAL_H264_ACCESS_UNIT "
+                "DISCONNECT SHUTDOWN\n");
+  }
   return 0;
 }
 
-bool callback_fault_is_contained(
-    const std::wstring &identity_path,
-    const beacon::worker::TicketHash &fingerprint,
-    beacon::worker::QuicListenerFaultPoint target,
-    std::string_view raw_ticket, bool send_post_auth_messages) {
+bool callback_fault_is_contained(const std::wstring &identity_path,
+                                 const beacon::worker::TicketHash &fingerprint,
+                                 beacon::worker::QuicListenerFaultPoint target,
+                                 std::string_view raw_ticket,
+                                 bool send_post_auth_messages) {
   beacon::worker::AuthorizedQuicTicketStore tickets;
   if (target !=
       beacon::worker::QuicListenerFaultPoint::connection_context_allocation) {
@@ -829,6 +1448,7 @@ bool callback_fault_is_contained(
         .plan_revision = 8,
         .expires_at_unix_ms = std::numeric_limits<std::uint64_t>::max(),
     };
+    ticket.selected_video = selected_video();
     if (!tickets.authorize(std::move(ticket))) {
       return false;
     }
@@ -839,7 +1459,8 @@ bool callback_fault_is_contained(
       identity_path, tickets,
       [target, injected](beacon::worker::QuicListenerFaultPoint point) {
         bool expected = false;
-        if (point == target && injected->compare_exchange_strong(expected, true)) {
+        if (point == target &&
+            injected->compare_exchange_strong(expected, true)) {
           throw std::bad_alloc{};
         }
       });
@@ -856,11 +1477,39 @@ bool callback_fault_is_contained(
     stop_client(client);
     return false;
   }
+  const bool requires_datagram =
+      target ==
+          beacon::worker::QuicListenerFaultPoint::datagram_context_allocation ||
+      target == beacon::worker::QuicListenerFaultPoint::
+                    datagram_final_state_telemetry;
+  if (requires_datagram) {
+    {
+      std::unique_lock lock{client.mutex};
+      client.changed.wait(lock, [&client] {
+        return client.authenticated || client.failed ||
+               client.connection_closed;
+      });
+      if (!client.authenticated || client.failed) {
+        lock.unlock();
+        stop_client(client);
+        listener.close_connection();
+        listener.shutdown();
+        return false;
+      }
+    }
+    if (!listener.wait_until_media_ready()) {
+      stop_client(client);
+      listener.close_connection();
+      listener.shutdown();
+      return false;
+    }
+    static_cast<void>(
+        listener.send_for_generation(additional_media_packet(), 1));
+  }
   {
     std::unique_lock lock{client.mutex};
-    client.changed.wait(lock, [&client] {
-      return client.failed || client.connection_closed;
-    });
+    client.changed.wait(
+        lock, [&client] { return client.failed || client.connection_closed; });
   }
   stop_client(client);
   listener.close_connection();
@@ -886,6 +1535,7 @@ bool disconnect_callback_fault_is_contained(
       .plan_revision = 8,
       .expires_at_unix_ms = std::numeric_limits<std::uint64_t>::max(),
   };
+  ticket.selected_video = selected_video();
   if (!tickets.authorize(std::move(ticket))) {
     return false;
   }
@@ -937,69 +1587,82 @@ bool disconnect_callback_fault_is_contained(
 } // namespace
 
 int wmain(int argument_count, wchar_t **arguments) {
-  if (argument_count == 7 && std::wstring_view(arguments[1]) == L"--worker" &&
+  beacon::worker::tests::configure_noninteractive_probe_process();
+
+  if (argument_count == 7 &&
+      std::wstring_view(arguments[1]) == L"--benchmark-worker" &&
       std::wstring_view(arguments[3]) == L"--identity" &&
       std::wstring_view(arguments[5]) == L"--fingerprint") {
     beacon::worker::TicketHash fingerprint{};
-    const std::wstring_view wide_fingerprint{arguments[6]};
-    std::string fingerprint_text;
-    fingerprint_text.reserve(wide_fingerprint.size());
-    for (const wchar_t value : wide_fingerprint) {
-      if (value < 0 || value > 0x7f) {
-        return 65;
-      }
-      fingerprint_text.push_back(static_cast<char>(value));
-    }
-    if (!decode_fingerprint(fingerprint_text, fingerprint)) {
+    if (!decode_wide_fingerprint(arguments[6], fingerprint)) {
       return 66;
     }
-    return run_worker_process_probe(arguments[2], arguments[4], fingerprint);
+    return run_worker_process_probe(arguments[2], arguments[4], fingerprint,
+                                    WorkerProcessProbeMode::benchmark);
+  }
+  if (argument_count == 13 && std::wstring_view(arguments[1]) == L"--worker" &&
+      std::wstring_view(arguments[3]) == L"--identity" &&
+      std::wstring_view(arguments[5]) == L"--fingerprint" &&
+      std::wstring_view(arguments[7]) == L"--display" &&
+      std::wstring_view(arguments[9]) == L"--width" &&
+      std::wstring_view(arguments[11]) == L"--height") {
+    beacon::worker::TicketHash fingerprint{};
+    if (!decode_wide_fingerprint(arguments[6], fingerprint)) {
+      return 66;
+    }
+    const auto width =
+        static_cast<std::uint32_t>(std::wcstoul(arguments[10], nullptr, 10));
+    const auto height =
+        static_cast<std::uint32_t>(std::wcstoul(arguments[12], nullptr, 10));
+    return run_worker_process_probe(
+        arguments[2], arguments[4], fingerprint, WorkerProcessProbeMode::video,
+        arguments[8], width, height);
   }
   if (argument_count != 4)
     return 64;
   beacon::worker::TicketHash expected_fingerprint{};
-  const std::wstring fingerprint_wide{arguments[2]};
-  std::string fingerprint;
-  fingerprint.reserve(fingerprint_wide.size());
-  for (const wchar_t value : fingerprint_wide) {
-    if (value < 0 || value > 0x7f)
-      return 65;
-    fingerprint.push_back(static_cast<char>(value));
-  }
-  if (!decode_fingerprint(fingerprint, expected_fingerprint))
+  if (!decode_wide_fingerprint(arguments[2], expected_fingerprint))
     return 66;
 
+  report_probe_stage("connection-context-allocation-fault");
   if (!callback_fault_is_contained(
           arguments[1], expected_fingerprint,
           beacon::worker::QuicListenerFaultPoint::connection_context_allocation,
           "unused-connection-fault-ticket", false))
     return 24;
+  report_probe_stage("event-serialization-fault");
   if (!callback_fault_is_contained(
           arguments[1], expected_fingerprint,
           beacon::worker::QuicListenerFaultPoint::event_serialization,
           "loopback-ticket-event-fault", false))
     return 25;
+  report_probe_stage("datagram-context-allocation-fault");
   if (!callback_fault_is_contained(
           arguments[1], expected_fingerprint,
           beacon::worker::QuicListenerFaultPoint::datagram_context_allocation,
           "loopback-ticket-datagram-fault", true))
     return 26;
-  if (!callback_fault_is_contained(
-          arguments[1], expected_fingerprint,
-          beacon::worker::QuicListenerFaultPoint::datagram_final_state_telemetry,
-          "loopback-ticket-datagram-final-fault", true))
+  report_probe_stage("datagram-final-state-telemetry-fault");
+  if (!callback_fault_is_contained(arguments[1], expected_fingerprint,
+                                   beacon::worker::QuicListenerFaultPoint::
+                                       datagram_final_state_telemetry,
+                                   "loopback-ticket-datagram-final-fault",
+                                   true))
     return 29;
+  report_probe_stage("disconnect-event-construction-fault");
   if (!disconnect_callback_fault_is_contained(
           arguments[1], expected_fingerprint,
           beacon::worker::QuicListenerFaultPoint::disconnect_event_construction,
           "loopback-ticket-disconnect-construction-fault"))
     return 27;
+  report_probe_stage("disconnect-event-publication-fault");
   if (!disconnect_callback_fault_is_contained(
           arguments[1], expected_fingerprint,
           beacon::worker::QuicListenerFaultPoint::disconnect_event_publication,
           "loopback-ticket-disconnect-publication-fault"))
     return 28;
 
+  report_probe_stage("identity-import-retry");
   beacon::worker::AuthorizedQuicTicketStore retry_tickets;
   beacon::worker::AuthorizedQuicTicket retry_ticket{
       .hash = beacon::worker::hash_stream_ticket(
@@ -1010,6 +1673,7 @@ int wmain(int argument_count, wchar_t **arguments) {
       .plan_revision = 8,
       .expires_at_unix_ms = std::numeric_limits<std::uint64_t>::max(),
   };
+  retry_ticket.selected_video = selected_video();
   if (!retry_tickets.authorize(std::move(retry_ticket)))
     return 67;
   beacon::worker::QuicListener retry_listener(arguments[3], retry_tickets);
@@ -1045,6 +1709,7 @@ int wmain(int argument_count, wchar_t **arguments) {
   retry_listener.close_connection();
   retry_listener.shutdown();
 
+  report_probe_stage("ordinary-loopback");
   beacon::worker::AuthorizedQuicTicketStore tickets;
   beacon::worker::AuthorizedQuicTicket ticket{
       .hash = beacon::worker::hash_stream_ticket(
@@ -1055,17 +1720,23 @@ int wmain(int argument_count, wchar_t **arguments) {
       .plan_revision = 8,
       .expires_at_unix_ms = std::numeric_limits<std::uint64_t>::max(),
   };
+  ticket.selected_video = selected_video();
   if (!tickets.authorize(std::move(ticket)))
     return 1;
 
   beacon::worker::QuicListener listener(arguments[1], tickets);
   std::mutex event_mutex;
   std::vector<beacon::worker::v1::WorkerIpcEnvelope> worker_events;
-  listener.set_event_sink(
-      [&event_mutex, &worker_events](
-          beacon::worker::v1::WorkerIpcEnvelope event) {
+  std::vector<beacon::worker::QuicMediaEvent> media_events;
+  listener.set_event_sink([&event_mutex, &worker_events](
+                              beacon::worker::v1::WorkerIpcEnvelope event) {
+    std::lock_guard lock{event_mutex};
+    worker_events.push_back(std::move(event));
+  });
+  listener.set_media_event_sink(
+      [&event_mutex, &media_events](beacon::worker::QuicMediaEvent event) {
         std::lock_guard lock{event_mutex};
-        worker_events.push_back(std::move(event));
+        media_events.push_back(std::move(event));
       });
   if (listener.configure_listener("not-an-address", 0))
     return 2;
@@ -1090,15 +1761,43 @@ int wmain(int argument_count, wchar_t **arguments) {
   }
   if (!listener.wait_until_media_ready())
     return 6;
+  auto additional_packet = additional_media_packet();
+  if (additional_packet.payload.empty() ||
+      listener.send_for_generation(std::move(additional_packet), 1) !=
+          beacon::stream::TransportSendResult::accepted)
+    return 75;
   {
     std::unique_lock lock{client.mutex};
-    client.changed.wait(
-        lock, [&client] { return client.datagram_received || client.failed; });
-    if (client.failed)
-      return 9;
+    client.changed.wait(lock, [&client] {
+      return client.additional_datagram_received || client.failed;
+    });
+    if (client.failed || !client.additional_datagram_received)
+      return 76;
   }
-  if (!listener.wait_for_received_packets(3))
+  if (!listener.wait_for_received_packets(4)) {
+    const auto failed_metrics = listener.metrics();
+    const auto failed_packets = listener.take_received_packets();
+    std::fprintf(stderr,
+                 "BEACON_QUIC_PROBE_FAILURE received=%zu session=%llu "
+                 "input=%llu feedback=%llu failure=%u platform_error=%llu\n",
+                 failed_packets.size(),
+                 static_cast<unsigned long long>(failed_metrics.session_messages),
+                 static_cast<unsigned long long>(failed_metrics.input_messages),
+                 static_cast<unsigned long long>(failed_metrics.feedback_messages),
+                 static_cast<unsigned int>(listener.failure()),
+                 static_cast<unsigned long long>(listener.platform_error()));
     return 10;
+  }
+  if (!client.send_stop_session() || !listener.wait_for_received_packets(5))
+    return 78;
+  {
+    std::unique_lock lock{client.mutex};
+    client.changed.wait(lock, [&client] {
+      return client.peer_shutdown_error.has_value() || client.failed;
+    });
+    if (client.failed || client.peer_shutdown_error != 4)
+      return 99;
+  }
   const auto packets = listener.take_received_packets();
   const bool session = std::ranges::any_of(packets, [](const auto &packet) {
     return packet.channel == beacon::stream::StreamChannel::session;
@@ -1120,16 +1819,15 @@ int wmain(int argument_count, wchar_t **arguments) {
                event.body_case() == body_case;
       });
     };
-    if (!has_event(beacon::worker::v1::WorkerIpcEnvelope::
-                       kTransportAuthenticated) ||
+    if (!has_event(
+            beacon::worker::v1::WorkerIpcEnvelope::kTransportAuthenticated) ||
         !has_event(beacon::worker::v1::WorkerIpcEnvelope::kInputReceived) ||
         !has_event(beacon::worker::v1::WorkerIpcEnvelope::kFeedbackReceived) ||
         !has_event(beacon::worker::v1::WorkerIpcEnvelope::kMediaEvidence))
       return 13;
     if (std::ranges::any_of(worker_events, [](const auto &event) {
           switch (event.body_case()) {
-          case beacon::worker::v1::WorkerIpcEnvelope::
-              kTransportAuthenticated:
+          case beacon::worker::v1::WorkerIpcEnvelope::kTransportAuthenticated:
             return event.transport_authenticated().session_generation() != 1;
           case beacon::worker::v1::WorkerIpcEnvelope::kInputReceived:
             return event.input_received().session_generation() != 1 ||
@@ -1139,15 +1837,55 @@ int wmain(int argument_count, wchar_t **arguments) {
                    event.feedback_received().feedback().sequence() != 1;
           case beacon::worker::v1::WorkerIpcEnvelope::kMediaEvidence:
             return event.media_evidence().session_generation() != 1 ||
-                   event.media_evidence().sequence() != 1;
+                   event.media_evidence().sequence() !=
+                       kAdditionalMediaSequence;
           default:
             return false;
           }
         }))
       return 14;
+    const bool additional_media_evidence =
+        std::ranges::any_of(worker_events, [](const auto &event) {
+          return event.body_case() ==
+                     beacon::worker::v1::WorkerIpcEnvelope::kMediaEvidence &&
+                 event.media_evidence().session_generation() == 1 &&
+                 event.media_evidence().sequence() ==
+                     kAdditionalMediaSequence &&
+                 event.media_evidence().presentation_time_us() ==
+                     kAdditionalMediaPresentationTimeUs;
+        });
+    if (!additional_media_evidence)
+      return 77;
+    enum class MediaAction { start, stop, idr };
+    std::vector<MediaAction> media_actions;
+    for (const auto &event : media_events) {
+      if (std::holds_alternative<
+              beacon::stream::ServerSessionProtocolOutput::AcceptedStartSession>(
+              event)) {
+        media_actions.push_back(MediaAction::start);
+      } else if (std::holds_alternative<
+                     beacon::stream::ServerSessionProtocolOutput::
+                         AcceptedStopSession>(event)) {
+        media_actions.push_back(MediaAction::stop);
+      } else if (std::holds_alternative<
+                     beacon::stream::ServerSessionProtocolOutput::
+                         AcceptedIdrRequest>(event)) {
+        media_actions.push_back(MediaAction::idr);
+      }
+    }
+    const bool media_feedback =
+        std::ranges::any_of(media_events, [](const auto &event) {
+          return std::holds_alternative<
+              beacon::stream::ServerSessionProtocolOutput::ParsedFeedback>(
+                  event);
+        });
+    const std::vector expected_actions{MediaAction::start, MediaAction::idr,
+                                       MediaAction::stop};
+    if (media_actions != expected_actions || !media_feedback)
+      return 72;
   }
   const auto metrics = listener.metrics();
-  if (metrics.sent_datagrams == 0 || metrics.session_messages != 1 ||
+  if (metrics.sent_datagrams == 0 || metrics.session_messages != 3 ||
       metrics.input_messages != 1 || metrics.feedback_messages != 1 ||
       metrics.path_mtu == 0)
     return 12;
@@ -1159,11 +1897,31 @@ int wmain(int argument_count, wchar_t **arguments) {
     if (worker_events.empty() ||
         worker_events.back().body_case() !=
             beacon::worker::v1::WorkerIpcEnvelope::kTransportDisconnected ||
-        worker_events.back()
-                .transport_disconnected()
-                .session_generation() != 1)
+        worker_events.back().transport_disconnected().session_generation() != 1)
       return 15;
+    const bool datagram_outcome =
+        std::ranges::any_of(media_events, [](const auto &event) {
+          const auto *outcome =
+              std::get_if<beacon::worker::QuicDatagramOutcome>(&event);
+          return outcome != nullptr && outcome->session_generation == 1 &&
+                 outcome->access_unit_sequence == kAdditionalMediaSequence &&
+                 outcome->kind ==
+                     beacon::worker::QuicDatagramOutcomeKind::acknowledged &&
+                 outcome->smoothed_rtt_us > 0 &&
+                 outcome->congestion_window_bytes > 0;
+        });
+    const bool disconnected =
+        std::ranges::any_of(media_events, [](const auto &event) {
+          const auto *disconnected =
+              std::get_if<beacon::worker::QuicTransportDisconnected>(&event);
+          return disconnected != nullptr &&
+                 disconnected->session_generation == 1;
+        });
+    if (!datagram_outcome || !disconnected)
+      return 73;
   }
+  if (listener.metrics().congestion_window_bytes == 0)
+    return 74;
 
   ClientState replay_client;
   replay_client.expected_fingerprint = expected_fingerprint;
@@ -1247,12 +2005,12 @@ int wmain(int argument_count, wchar_t **arguments) {
       .plan_revision = 8,
       .expires_at_unix_ms = std::numeric_limits<std::uint64_t>::max(),
   };
+  fresh_ticket.selected_video = selected_video();
   if (!tickets.authorize(std::move(fresh_ticket)))
     return 19;
   ClientState fresh_client;
   fresh_client.expected_fingerprint = expected_fingerprint;
   fresh_client.raw_ticket = fresh_raw_ticket;
-  fresh_client.expected_marker_sequence = 2;
   if (!start_client(fresh_client, listener.local_port()))
     return 20;
   {
@@ -1261,12 +2019,20 @@ int wmain(int argument_count, wchar_t **arguments) {
       return fresh_client.failed || fresh_client.authenticated ||
              fresh_client.connection_closed;
     });
-    fresh_client.changed.wait(lock, [&fresh_client] {
-      return fresh_client.datagram_received || fresh_client.failed;
-    });
     if (fresh_client.failed || !fresh_client.authenticated ||
-        !fresh_client.datagram_received ||
         !fresh_client.certificate_seen)
+      return 21;
+  }
+  if (!listener.wait_until_media_ready() ||
+      listener.send_for_generation(additional_media_packet(), 2) !=
+          beacon::stream::TransportSendResult::accepted)
+    return 21;
+  {
+    std::unique_lock lock{fresh_client.mutex};
+    fresh_client.changed.wait(lock, [&fresh_client] {
+      return fresh_client.additional_datagram_received || fresh_client.failed;
+    });
+    if (fresh_client.failed || !fresh_client.additional_datagram_received)
       return 21;
   }
   stop_client(fresh_client, 77);
@@ -1285,8 +2051,8 @@ int wmain(int argument_count, wchar_t **arguments) {
         [&worker_events](beacon::worker::v1::DiagnosticCode code,
                          std::uint64_t connection_generation) {
           return std::ranges::any_of(worker_events, [&](const auto &event) {
-            return event.body_case() ==
-                       beacon::worker::v1::WorkerIpcEnvelope::kWorkerDiagnostic &&
+            return event.body_case() == beacon::worker::v1::WorkerIpcEnvelope::
+                                            kWorkerDiagnostic &&
                    event.worker_diagnostic().boundary() ==
                        beacon::worker::v1::DIAGNOSTIC_BOUNDARY_TRANSPORT &&
                    event.worker_diagnostic().code() == code &&
@@ -1307,8 +2073,8 @@ int wmain(int argument_count, wchar_t **arguments) {
         !has_connection_diagnostic(
             beacon::worker::v1::DIAGNOSTIC_CODE_TRANSPORT_CONNECTED, 1) ||
         media_evidence !=
-            std::vector<std::pair<std::uint64_t, std::uint64_t>>{{1, 1},
-                                                                 {2, 2}} ||
+            std::vector<std::pair<std::uint64_t, std::uint64_t>>{
+                {1, 77}, {2, 77}} ||
         worker_events.empty() ||
         worker_events.back().body_case() !=
             beacon::worker::v1::WorkerIpcEnvelope::kTransportDisconnected ||
@@ -1326,7 +2092,8 @@ int wmain(int argument_count, wchar_t **arguments) {
   listener.close_connection();
   listener.shutdown();
   std::printf("BEACON_QUIC_LOOPBACK_OK %u CERT_PIN_OK ALPN_VERSION_OK "
-              "REPLAY_RECONNECT_OK CALLBACK_FAULTS_OK "
+              "REPLAY_RECONNECT_OK MEDIA_RECOVERY_EVENTS_OK "
+              "ORDERED_SESSION_ACTIONS_OK CALLBACK_FAULTS_OK "
               "DISCONNECT_FAULTS_OK\n",
               static_cast<unsigned int>(packets.size()));
   return 0;

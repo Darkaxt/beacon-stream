@@ -3,15 +3,30 @@ package dev.beacon.android;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.locks.ReentrantLock;
 
 public final class BeaconViewModel implements AutoCloseable {
     private final BeaconService service;
     private final String clientId;
     private final String serverUrl;
     private final StreamCoreFactory streamCoreFactory;
+    private final VideoSessionFactory videoSessionFactory;
+    private final AudioSessionFactory audioSessionFactory;
+    private final BeaconBenchmarkCoordinator benchmarkCoordinator;
+    private final Object presenceState = new Object();
+    private final ReentrantLock presenceReconciliation = new ReentrantLock();
+    private final ReentrantLock serverSessionOwnership = new ReentrantLock();
     private BeaconStreamCore streamCore;
+    private VideoSession videoSession;
+    private AudioSession audioSession;
     private boolean creatingStreamCore;
     private boolean closed;
+    private boolean foregroundDesired;
+    private boolean presenceActive;
+    private boolean activationAttempted;
+    private boolean serverQuitComplete;
 
     private String status = "Idle";
     private String latestGames = "";
@@ -21,11 +36,23 @@ public final class BeaconViewModel implements AutoCloseable {
     private List<BeaconGameCatalog.GameEntry> latestGameEntries = Collections.emptyList();
 
     public BeaconViewModel(String clientId, String serverUrl, BeaconService service) {
-        this(clientId, serverUrl, service, null, BeaconStreamCore::new);
+        this(
+            clientId,
+            serverUrl,
+            service,
+            null,
+            (videoSink, audioSink, failureObserver, benchmarkObserver) -> new BeaconStreamCore(
+                videoSink,
+                audioSink,
+                () -> { },
+                failureObserver,
+                benchmarkObserver),
+            null,
+            null);
     }
 
     BeaconViewModel(String clientId, String serverUrl, BeaconService service, BeaconStreamCore streamCore) {
-        this(clientId, serverUrl, service, streamCore, null);
+        this(clientId, serverUrl, service, streamCore, null, null, null);
     }
 
     BeaconViewModel(
@@ -33,7 +60,82 @@ public final class BeaconViewModel implements AutoCloseable {
         String serverUrl,
         BeaconService service,
         StreamCoreFactory streamCoreFactory) {
-        this(clientId, serverUrl, service, null, streamCoreFactory);
+        this(clientId, serverUrl, service, null, streamCoreFactory, null, null);
+    }
+
+    BeaconViewModel(
+        String clientId,
+        String serverUrl,
+        BeaconService service,
+        VideoSessionFactory videoSessionFactory) {
+        this(
+            clientId,
+            serverUrl,
+            service,
+            null,
+            (videoSink, audioSink, failureObserver, benchmarkObserver) -> new BeaconStreamCore(
+                videoSink,
+                audioSink,
+                () -> { },
+                failureObserver,
+                benchmarkObserver),
+            videoSessionFactory,
+            null);
+    }
+
+    BeaconViewModel(
+        String clientId,
+        String serverUrl,
+        BeaconService service,
+        StreamCoreFactory streamCoreFactory,
+        VideoSessionFactory videoSessionFactory) {
+        this(
+            clientId,
+            serverUrl,
+            service,
+            null,
+            streamCoreFactory,
+            videoSessionFactory,
+            null);
+    }
+
+    BeaconViewModel(
+        String clientId,
+        String serverUrl,
+        BeaconService service,
+        StreamCoreFactory streamCoreFactory,
+        VideoSessionFactory videoSessionFactory,
+        AudioSessionFactory audioSessionFactory) {
+        this(
+            clientId,
+            serverUrl,
+            service,
+            null,
+            streamCoreFactory,
+            videoSessionFactory,
+            audioSessionFactory);
+    }
+
+    BeaconViewModel(
+        String clientId,
+        String serverUrl,
+        BeaconService service,
+        VideoSessionFactory videoSessionFactory,
+        AudioSessionFactory audioSessionFactory) {
+        this(
+            clientId,
+            serverUrl,
+            service,
+            null,
+            (videoSink, audioSink, failureObserver, benchmarkObserver) ->
+                new BeaconStreamCore(
+                    videoSink,
+                    audioSink,
+                    () -> { },
+                    failureObserver,
+                    benchmarkObserver),
+            videoSessionFactory,
+            audioSessionFactory);
     }
 
     private BeaconViewModel(
@@ -41,12 +143,29 @@ public final class BeaconViewModel implements AutoCloseable {
         String serverUrl,
         BeaconService service,
         BeaconStreamCore streamCore,
-        StreamCoreFactory streamCoreFactory) {
+        StreamCoreFactory streamCoreFactory,
+        VideoSessionFactory videoSessionFactory,
+        AudioSessionFactory audioSessionFactory) {
         this.clientId = clientId;
         this.serverUrl = serverUrl;
         this.service = service;
         this.streamCore = streamCore;
         this.streamCoreFactory = streamCoreFactory;
+        this.videoSessionFactory = videoSessionFactory;
+        this.audioSessionFactory = audioSessionFactory;
+        this.benchmarkCoordinator = new BeaconBenchmarkCoordinator(
+            service,
+            new BeaconBenchmarkCoordinator.ResultObserver() {
+                @Override
+                public void onResult(String action, BeaconApiClient.BeaconResult result) {
+                    record(action, result);
+                }
+
+                @Override
+                public void onFailure(String action, Throwable failure) {
+                    recordFailure(action, failure);
+                }
+            });
     }
 
     public String clientId() {
@@ -85,10 +204,6 @@ public final class BeaconViewModel implements AutoCloseable {
         record("hello", service.hello());
     }
 
-    public void patchProfile(BeaconApiClient.ProfilePatch patch) throws IOException {
-        record("profile patch", service.patchProfile(patch));
-    }
-
     public void reportCapabilities(BeaconApiClient.ClientCapabilities capabilities) throws IOException {
         record("capabilities", service.reportCapabilities(capabilities));
     }
@@ -97,8 +212,68 @@ public final class BeaconViewModel implements AutoCloseable {
         record("telemetry", service.reportTelemetry(telemetry));
     }
 
-    public void beacon(boolean active) throws IOException {
-        record("beacon", service.beacon(active));
+    public void setForegroundDesired(boolean desired) {
+        synchronized (presenceState) {
+            foregroundDesired = desired;
+        }
+    }
+
+    public boolean onForeground(
+        BeaconApiClient.ClientCapabilities capabilities) throws IOException {
+        presenceReconciliation.lock();
+        try {
+            synchronized (presenceState) {
+                if (!foregroundDesired) return false;
+                if (presenceActive) return true;
+            }
+
+            BeaconApiClient.BeaconResult hello = service.hello();
+            record("hello", hello);
+            if (!hello.isSuccess()) return false;
+
+            BeaconApiClient.BeaconResult facts = service.reportCapabilities(capabilities);
+            record("capabilities", facts);
+            if (!facts.isSuccess()) return false;
+
+            synchronized (presenceState) {
+                if (!foregroundDesired) return false;
+                activationAttempted = true;
+            }
+            BeaconApiClient.BeaconResult active = service.beacon(true);
+            record("beacon active", active);
+            synchronized (presenceState) {
+                presenceActive = active.isSuccess();
+                if (!presenceActive) activationAttempted = false;
+                return presenceActive && foregroundDesired;
+            }
+        } finally {
+            presenceReconciliation.unlock();
+        }
+    }
+
+    public void onBackground() throws IOException {
+        setForegroundDesired(false);
+        reconcileBackground();
+    }
+
+    public void reconcileBackground() throws IOException {
+        presenceReconciliation.lock();
+        try {
+            synchronized (presenceState) {
+                if (foregroundDesired || (!presenceActive && !activationAttempted)) return;
+            }
+
+            BeaconApiClient.BeaconResult inactive = service.beacon(false);
+            record("beacon inactive", inactive);
+            if (inactive.isSuccess()) {
+                synchronized (presenceState) {
+                    presenceActive = false;
+                    activationAttempted = false;
+                }
+            }
+        } finally {
+            presenceReconciliation.unlock();
+        }
     }
 
     public void loadGames() throws IOException {
@@ -114,10 +289,8 @@ public final class BeaconViewModel implements AutoCloseable {
     }
 
     public void preflight(
-        BeaconApiClient.ProfilePatch patch,
         BeaconApiClient.ClientCapabilities capabilities,
         BeaconApiClient.ClientTelemetry telemetry) throws IOException {
-        patchProfile(patch);
         reportCapabilities(capabilities);
         reportTelemetry(telemetry);
     }
@@ -129,11 +302,10 @@ public final class BeaconViewModel implements AutoCloseable {
     }
 
     public void preflightAndPlan(
-        BeaconApiClient.ProfilePatch patch,
         BeaconApiClient.ClientCapabilities capabilities,
         BeaconApiClient.ClientTelemetry telemetry,
         BeaconApiClient.GameSelection game) throws IOException {
-        preflight(patch, capabilities, telemetry);
+        preflight(capabilities, telemetry);
         requestPlan(game);
     }
 
@@ -143,8 +315,30 @@ public final class BeaconViewModel implements AutoCloseable {
         record("launch", result);
         latestStream = result.body();
         if (result.isSuccess()) {
+            markServerSessionOwned();
             startGrant(result.body());
         }
+    }
+
+    public CompletableFuture<BeaconApiClient.BeaconResult> runBenchmark(
+        BeaconBenchmarkPrepareRequest request,
+        BeaconDeviceBenchmarkRunner deviceRunner) throws IOException {
+        requireOpen();
+        return benchmarkCoordinator.run(
+            request,
+            deviceRunner,
+            benchmarkStreamController());
+    }
+
+    public BeaconApiClient.BeaconResult runBenchmarkAndWait(
+        BeaconBenchmarkPrepareRequest request,
+        BeaconDeviceBenchmarkRunner deviceRunner) throws IOException {
+        return awaitBenchmark(runBenchmark(request, deviceRunner));
+    }
+
+    public void cancelBenchmark() throws IOException {
+        requireOpen();
+        benchmarkCoordinator.cancel(benchmarkStreamController());
     }
 
     public void sendInput(BeaconApiClient.InputBatch input) {
@@ -154,31 +348,54 @@ public final class BeaconViewModel implements AutoCloseable {
         latestError = "";
     }
 
-    public void preflightAndLaunch(
-        BeaconApiClient.ProfilePatch patch,
+    public boolean hasActiveStream() {
+        BeaconStreamCore current;
+        synchronized (this) {
+            if (closed) return false;
+            current = streamCore;
+        }
+        return current != null && current.isStreaming();
+    }
+
+    public void preflightBenchmarkAndLaunch(
         BeaconApiClient.ClientCapabilities capabilities,
         BeaconApiClient.ClientTelemetry telemetry,
+        BeaconBenchmarkPrepareRequest benchmarkRequest,
+        BeaconDeviceBenchmarkRunner deviceRunner,
         BeaconApiClient.GameSelection game) throws IOException {
-        preflight(patch, capabilities, telemetry);
+        preflight(capabilities, telemetry);
+        BeaconApiClient.BeaconResult benchmark =
+            runBenchmarkAndWait(benchmarkRequest, deviceRunner);
+        if (!benchmark.isSuccess()) {
+            throw new IOException("Session preflight rejected: " + benchmark.body());
+        }
         launch(game);
     }
 
     public void stopStream() throws IOException {
         requireOpen();
-        if (streamCore != null) {
-            streamCore.stop();
-        }
+        stopOwnedStreamCore();
         BeaconApiClient.BeaconResult result = service.stopStream();
         record("stop stream", result);
         latestStream = result.body();
     }
 
     public void disconnect() throws IOException {
+        stopOwnedStreamCore();
         record("disconnect", service.disconnect());
     }
 
     public void quit(BeaconApiClient.QuitState state) throws IOException {
-        record("quit", service.quit(state));
+        serverSessionOwnership.lock();
+        try {
+            if (serverQuitComplete) return;
+            stopOwnedStreamCore();
+            BeaconApiClient.BeaconResult result = service.quit(state);
+            record("quit", result);
+            serverQuitComplete = result.isSuccess();
+        } finally {
+            serverSessionOwnership.unlock();
+        }
     }
 
     public void emergencyRestore() throws IOException {
@@ -191,6 +408,7 @@ public final class BeaconViewModel implements AutoCloseable {
         record("reconnect", result);
         latestStream = result.body();
         if (result.isSuccess()) {
+            markServerSessionOwned();
             startGrant(result.body());
         }
     }
@@ -198,18 +416,96 @@ public final class BeaconViewModel implements AutoCloseable {
     @Override
     public void close() {
         BeaconStreamCore owned;
+        VideoSession ownedVideo;
+        AudioSession ownedAudio;
         synchronized (this) {
             if (closed) return;
             closed = true;
             awaitCoreCreationLocked();
             owned = streamCore;
             streamCore = null;
+            ownedVideo = videoSession;
+            videoSession = null;
+            ownedAudio = audioSession;
+            audioSession = null;
         }
-        if (owned != null) owned.close();
+        Throwable failure = null;
+        if (ownedAudio != null) {
+            failure = captureCleanupFailure(failure, ownedAudio::close);
+        }
+        if (ownedVideo != null) {
+            failure = captureCleanupFailure(failure, ownedVideo::close);
+        }
+        if (owned != null) {
+            failure = captureCleanupFailure(failure, owned::close);
+        }
+        rethrowCleanupFailure(failure);
     }
 
     private void startGrant(String responseBody) {
-        requireStreamCore().start(BeaconStreamSession.parse(serverUrl, clientId, responseBody));
+        BeaconStreamSession session = BeaconStreamSession.parse(
+            serverUrl, clientId, responseBody);
+        BeaconStreamCore core = requireStreamCore();
+        long generation = core.start(session);
+        VideoSession video = videoSession;
+        AudioSession audio = audioSession;
+        try {
+            if (session.selectedAudio() == null) {
+                if (audio != null) audio.stop();
+            } else if (audio != null) {
+                audio.start(generation, session.selectedAudio());
+            }
+            if (session.selectedVideo() == null) {
+                if (video != null) video.stop();
+            } else if (video != null) {
+                video.start(core, generation, session.selectedVideo());
+            }
+        } catch (RuntimeException | Error failure) {
+            stopFailedMediaStart(video, audio, core, failure);
+            throw failure;
+        }
+    }
+
+    private static void stopFailedMediaStart(
+        VideoSession video,
+        AudioSession audio,
+        BeaconStreamCore core,
+        Throwable failure) {
+        if (audio != null) {
+            try {
+                audio.stop();
+            } catch (RuntimeException | Error cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+        }
+        if (video != null) {
+            try {
+                video.stop();
+            } catch (RuntimeException | Error cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+        }
+        try {
+            core.stop();
+        } catch (RuntimeException | Error cleanupFailure) {
+            failure.addSuppressed(cleanupFailure);
+        }
+    }
+
+    private static BeaconApiClient.BeaconResult awaitBenchmark(
+        CompletableFuture<BeaconApiClient.BeaconResult> completion) throws IOException {
+        try {
+            return completion.get();
+        } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Benchmark wait was interrupted.", failure);
+        } catch (ExecutionException failure) {
+            Throwable cause = failure.getCause();
+            if (cause instanceof IOException ioFailure) throw ioFailure;
+            if (cause instanceof RuntimeException runtimeFailure) throw runtimeFailure;
+            if (cause instanceof Error error) throw error;
+            throw new IOException("Benchmark execution failed.", cause);
+        }
     }
 
     private BeaconStreamCore requireStreamCore() {
@@ -226,18 +522,40 @@ public final class BeaconViewModel implements AutoCloseable {
             factory = streamCoreFactory;
         }
         BeaconStreamCore created = null;
+        VideoSession createdVideo = null;
+        AudioSession createdAudio = null;
         boolean accepted = false;
         try {
-            created = factory.create(frame -> { });
+            createdVideo = videoSessionFactory == null
+                ? null
+                : videoSessionFactory.create(
+                    failure -> recordFailure("decoder", failure));
+            createdAudio = audioSessionFactory == null
+                ? null
+                : audioSessionFactory.create(
+                    failure -> recordFailure("audio", failure));
+            created = factory.create(
+                createdVideo == null ? frame -> { } : createdVideo,
+                createdAudio == null ? frame -> { } : createdAudio,
+                benchmarkCoordinator::onStreamCoreFailure,
+                benchmarkCoordinator::onNetworkCompleted);
             synchronized (this) {
                 if (!closed) {
                     streamCore = created;
+                    videoSession = createdVideo;
+                    audioSession = createdAudio;
                     accepted = true;
                 }
                 creatingStreamCore = false;
                 notifyAll();
             }
         } catch (RuntimeException | Error error) {
+            if (createdVideo != null) {
+                captureCleanupFailure(error, createdVideo::close);
+            }
+            if (createdAudio != null) {
+                captureCleanupFailure(error, createdAudio::close);
+            }
             synchronized (this) {
                 creatingStreamCore = false;
                 notifyAll();
@@ -245,10 +563,32 @@ public final class BeaconViewModel implements AutoCloseable {
             throw error;
         }
         if (!accepted) {
-            created.close();
-            throw new IllegalStateException("BeaconViewModel is closed.");
+            Throwable failure = new IllegalStateException("BeaconViewModel is closed.");
+            if (createdVideo != null) {
+                failure = captureCleanupFailure(failure, createdVideo::close);
+            }
+            if (createdAudio != null) {
+                failure = captureCleanupFailure(failure, createdAudio::close);
+            }
+            failure = captureCleanupFailure(failure, created::close);
+            rethrowCleanupFailure(failure);
         }
         return created;
+    }
+
+    private static Throwable captureCleanupFailure(Throwable first, Runnable cleanup) {
+        try {
+            cleanup.run();
+        } catch (RuntimeException | Error failure) {
+            if (first == null) return failure;
+            if (first != failure) first.addSuppressed(failure);
+        }
+        return first;
+    }
+
+    private static void rethrowCleanupFailure(Throwable failure) {
+        if (failure instanceof RuntimeException runtimeFailure) throw runtimeFailure;
+        if (failure instanceof Error error) throw error;
     }
 
     BeaconStreamCore ownedStreamCore() {
@@ -282,10 +622,42 @@ public final class BeaconViewModel implements AutoCloseable {
         latestError = result.isSuccess() ? "" : result.body();
     }
 
-    public interface BeaconService {
-        BeaconApiClient.BeaconResult hello() throws IOException;
+    private void recordFailure(String action, Throwable failure) {
+        status = action + ": failed";
+        latestError = failure.getMessage() == null
+            ? failure.getClass().getSimpleName()
+            : failure.getMessage();
+    }
 
-        BeaconApiClient.BeaconResult patchProfile(BeaconApiClient.ProfilePatch patch) throws IOException;
+    private void stopOwnedStreamCore() {
+        AudioSession audio = audioSession;
+        if (audio != null) audio.stop();
+        VideoSession video = videoSession;
+        if (video != null) video.stop();
+        BeaconStreamCore owned = streamCore;
+        if (owned != null) {
+            owned.stop();
+        }
+    }
+
+    private void markServerSessionOwned() {
+        serverSessionOwnership.lock();
+        try {
+            serverQuitComplete = false;
+        } finally {
+            serverSessionOwnership.unlock();
+        }
+    }
+
+    private BeaconBenchmarkCoordinator.StreamController benchmarkStreamController() {
+        return new BeaconBenchmarkCoordinator.StreamController() {
+            @Override public void start(String responseBody) { startGrant(responseBody); }
+            @Override public void stop() { stopOwnedStreamCore(); }
+        };
+    }
+
+    public interface BeaconService extends BeaconBenchmarkCoordinator.Service {
+        BeaconApiClient.BeaconResult hello() throws IOException;
 
         BeaconApiClient.BeaconResult reportCapabilities(BeaconApiClient.ClientCapabilities capabilities) throws IOException;
 
@@ -298,6 +670,21 @@ public final class BeaconViewModel implements AutoCloseable {
         BeaconApiClient.BeaconResult requestPlan(BeaconApiClient.GameSelection game) throws IOException;
 
         BeaconApiClient.BeaconResult launch(BeaconApiClient.GameSelection game) throws IOException;
+
+        default BeaconApiClient.BeaconResult prepareBenchmark(
+            BeaconBenchmarkPrepareRequest request) throws IOException {
+            throw new IOException("Benchmark preparation is unavailable.");
+        }
+
+        default BeaconApiClient.BeaconResult completeBenchmark(
+            String runId,
+            BeaconBenchmarkCompletionRequest request) throws IOException {
+            throw new IOException("Benchmark completion is unavailable.");
+        }
+
+        default BeaconApiClient.BeaconResult cancelBenchmark(String runId) throws IOException {
+            throw new IOException("Benchmark cancellation is unavailable.");
+        }
 
         default BeaconApiClient.BeaconResult reconnect() throws IOException {
             throw new IOException("Reconnect is unavailable.");
@@ -313,6 +700,36 @@ public final class BeaconViewModel implements AutoCloseable {
     }
 
     interface StreamCoreFactory {
-        BeaconStreamCore create(BeaconStreamCore.EncodedFrameSink sink);
+        BeaconStreamCore create(
+            BeaconStreamCore.EncodedFrameSink videoSink,
+            BeaconStreamCore.DecodedAudioSink audioSink,
+            BeaconStreamCore.FailureObserver failureObserver,
+            BeaconStreamCore.BenchmarkObserver benchmarkObserver);
     }
+
+    interface VideoSession extends BeaconStreamCore.EncodedFrameSink, AutoCloseable {
+        void start(
+            BeaconStreamCore streamCore,
+            long generation,
+            BeaconStreamSession.SelectedVideo video);
+        void stop();
+        @Override void close();
+    }
+
+    interface VideoSessionFactory {
+        VideoSession create(BeaconVideoFeedbackBridge.FailureObserver failureObserver);
+    }
+
+    interface AudioSession extends BeaconStreamCore.DecodedAudioSink, AutoCloseable {
+        void start(
+            long generation,
+            BeaconStreamSession.SelectedAudio audio);
+        void stop();
+        @Override void close();
+    }
+
+    interface AudioSessionFactory {
+        AudioSession create(BeaconAudioSession.FailureObserver failureObserver);
+    }
+
 }

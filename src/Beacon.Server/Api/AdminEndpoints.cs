@@ -1,3 +1,4 @@
+using Beacon.HostAgent.Contracts;
 using Beacon.Core.Clients;
 using Beacon.Core.Displays;
 using Beacon.Core.Diagnostics;
@@ -9,6 +10,7 @@ using Beacon.Core.Streaming;
 using Beacon.Server.Hosting;
 using Beacon.Server.State;
 using Beacon.Server.Security;
+using Beacon.Platform.Windows.HostAgent;
 
 namespace Beacon.Server.Api;
 
@@ -17,6 +19,72 @@ public static class AdminEndpoints
     public static IEndpointRouteBuilder MapAdminEndpoints(this IEndpointRouteBuilder endpoints)
     {
         RouteGroupBuilder admin = endpoints.MapGroup("/admin");
+
+        admin.MapPost("/driver/sudovda/updates", async (
+            SudoVdaDriverUpdateRequest request,
+            IHostAgentDriverUpdateClient updates,
+            CancellationToken cancellationToken) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.PackageId))
+            {
+                return Results.BadRequest(new { error = "Driver package id is required." });
+            }
+            Guid transactionId = request.TransactionId ?? Guid.NewGuid();
+            if (transactionId == Guid.Empty)
+            {
+                return Results.BadRequest(new { error = "Driver update transaction id is required." });
+            }
+
+            try
+            {
+                SudoVdaUpdatePayload result = await updates.StartAsync(
+                    request.PackageId,
+                    transactionId,
+                    cancellationToken);
+                return Results.Accepted(
+                    $"/admin/driver/sudovda/updates/{transactionId:D}",
+                    result);
+            }
+            catch (HostAgentDriverUpdateException error)
+            {
+                return DriverUpdateFailure(error);
+            }
+            catch (HostAgentUnavailableException error)
+            {
+                return Results.Problem(
+                    error.Message,
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            catch (ArgumentException error)
+            {
+                return Results.BadRequest(new { error = error.Message });
+            }
+        });
+
+        admin.MapGet("/driver/sudovda/updates/{transactionId:guid}", async (
+            Guid transactionId,
+            IHostAgentDriverUpdateClient updates,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                return Results.Ok(await updates.QueryAsync(transactionId, cancellationToken));
+            }
+            catch (HostAgentDriverUpdateException error)
+            {
+                return DriverUpdateFailure(error);
+            }
+            catch (HostAgentUnavailableException error)
+            {
+                return Results.Problem(
+                    error.Message,
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            catch (ArgumentException error)
+            {
+                return Results.BadRequest(new { error = error.Message });
+            }
+        });
 
         admin.MapPost("/registrations/{registrationId}/approve", (
             string registrationId,
@@ -272,6 +340,7 @@ public static class AdminEndpoints
             InMemorySessionStore sessions,
             IStreamingBackend streaming,
             StreamTicketProvisioningService ticketProvisioning,
+            IClientInputSessionLifecycle inputLifecycle,
             CancellationToken cancellationToken) =>
         {
             SessionPlan? plan = sessions.Get(clientId);
@@ -289,9 +358,14 @@ public static class AdminEndpoints
                 clientId,
                 plan.SessionId,
                 cancellationToken);
-            return revoked.Success
-                ? Results.Ok(new { clientId, stream = stop.Session })
-                : Results.Problem(revoked.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+            if (!revoked.Success)
+            {
+                return Results.Problem(
+                    revoked.Error,
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+            }
+            await inputLifecycle.ReleaseSessionAsync(plan.SessionId, cancellationToken);
+            return Results.Ok(new { clientId, stream = stop.Session });
         });
 
         admin.MapPatch("/clients/{clientId}/profile", (
@@ -319,6 +393,26 @@ public static class AdminEndpoints
 
         return endpoints;
     }
+
+    private static IResult DriverUpdateFailure(HostAgentDriverUpdateException error)
+    {
+        int statusCode = error.ResultCode switch
+        {
+            "driver-update-not-found" or "package-not-found" =>
+                StatusCodes.Status404NotFound,
+            "driver-update-busy" or "service-active-leases" or
+                "agent-active-leases" or "agent-active-virtual-display" =>
+                StatusCodes.Status409Conflict,
+            "invalid-package-id" or "invalid-transaction-id" or "invalid-lease-count" or
+                "invalid-payload" => StatusCodes.Status400BadRequest,
+            _ => StatusCodes.Status503ServiceUnavailable
+        };
+        return Results.Problem(error.Message, statusCode: statusCode);
+    }
 }
 
 public sealed record MoveWindowsBackRequest(bool Minimize = true);
+
+public sealed record SudoVdaDriverUpdateRequest(
+    string PackageId,
+    Guid? TransactionId = null);

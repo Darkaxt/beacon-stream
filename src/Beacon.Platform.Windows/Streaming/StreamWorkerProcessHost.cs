@@ -26,20 +26,13 @@ public interface IStreamWorkerHost
 
     ReadOnlyMemory<byte> WorkerInstanceId { get; }
 
-    Task EnsureReadyAsync(CancellationToken cancellationToken);
+    WorkerCapabilities Capabilities { get; }
 
-    Task<StreamWorkerCommandResponse> SendAsync(
-        WorkerIpcEnvelope command,
-        CancellationToken cancellationToken);
-
-    Task ShutdownAsync(CancellationToken cancellationToken);
-}
-
-public interface IGenerationBoundStreamWorkerHost
-{
     ChannelReader<StreamWorkerEvent> Events { get; }
 
     long CurrentProcessGeneration { get; }
+
+    Task EnsureReadyAsync(CancellationToken cancellationToken);
 
     bool IsCurrentProcessGeneration(long processGeneration);
 
@@ -47,11 +40,12 @@ public interface IGenerationBoundStreamWorkerHost
         long expectedProcessGeneration,
         WorkerIpcEnvelope command,
         CancellationToken cancellationToken);
+
+    Task ShutdownAsync(CancellationToken cancellationToken);
 }
 
 public sealed class StreamWorkerProcessHost :
     IStreamWorkerHost,
-    IGenerationBoundStreamWorkerHost,
     IAsyncDisposable
 {
     private readonly StreamWorkerProcessHostOptions options;
@@ -110,6 +104,9 @@ public sealed class StreamWorkerProcessHost :
     public ReadOnlyMemory<byte> WorkerInstanceId =>
         Volatile.Read(ref activeWorker)?.Client?.WorkerInstanceId ?? ReadOnlyMemory<byte>.Empty;
 
+    public WorkerCapabilities Capabilities =>
+        Volatile.Read(ref activeWorker)?.Client?.Capabilities ?? new WorkerCapabilities();
+
     public ChannelReader<StreamWorkerEvent> Events => eventBuffer.Reader;
 
     public long CurrentProcessGeneration =>
@@ -143,15 +140,6 @@ public sealed class StreamWorkerProcessHost :
         {
             lifecycleGate.Release();
         }
-    }
-
-    public async Task<StreamWorkerCommandResponse> SendAsync(
-        WorkerIpcEnvelope command,
-        CancellationToken cancellationToken)
-    {
-        await EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
-        long processGeneration = CurrentProcessGeneration;
-        return await SendAsync(processGeneration, command, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<StreamWorkerCommandResponse> SendAsync(

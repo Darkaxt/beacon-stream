@@ -1,11 +1,13 @@
 package dev.beacon.android;
 
 import android.app.Instrumentation;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.SurfaceTexture;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.Surface;
+import android.view.SurfaceView;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
@@ -20,16 +22,23 @@ import org.junit.runner.RunWith;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertThrows;
@@ -53,12 +62,12 @@ public final class BeaconStreamCoreInstrumentationTest {
         }, executor);
         core.start(session("instrumented-frame"));
 
-        bindings.callbacks.onFrame(new byte[] { 1 }, 2, 1, 1);
+        bindings.callbacks.onFrame(directBuffer(1), 2, 1, 1, false, false);
         delivered.await();
         assertEquals("beacon-device-frame", callbackThread.get());
         assertNotEquals(Thread.currentThread().getName(), callbackThread.get());
         core.close();
-        bindings.callbacks.onFrame(new byte[] { 2 }, 3, 2, 1);
+        bindings.callbacks.onFrame(directBuffer(2), 3, 2, 1, false, false);
         assertEquals(1, frames.get());
     }
 
@@ -76,11 +85,80 @@ public final class BeaconStreamCoreInstrumentationTest {
     }
 
     @Test
+    public void gate5RunScopedCleanupPreservesUnrelatedAndroidState() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        String requestedClientId = "gate5-physical-" + runId();
+        String unrelatedClientId = "gate5-emulator-" + runId();
+        AndroidKeyStoreCredentialStore requestedStore =
+            new AndroidKeyStoreCredentialStore(context, requestedClientId);
+        AndroidKeyStoreCredentialStore unrelatedStore =
+            new AndroidKeyStoreCredentialStore(context, unrelatedClientId);
+        File requestedCredential = credentialEvidenceFile(context, requestedClientId);
+        File unrelatedCredential = credentialEvidenceFile(context, unrelatedClientId);
+        File requestedTicket = Gate3SessionEvidence.ticketEvidenceFile(context, requestedClientId);
+        File unrelatedTicket = Gate3SessionEvidence.ticketEvidenceFile(context, unrelatedClientId);
+
+        try {
+            requestedStore.saveCredential("requested-secret");
+            unrelatedStore.saveCredential("unrelated-secret");
+            assertTrue(Gate3SessionEvidence.reconnectPreferences(context, requestedClientId)
+                .edit().putString("cleanup-marker", "requested").commit());
+            assertTrue(Gate3SessionEvidence.reconnectPreferences(context, unrelatedClientId)
+                .edit().putString("cleanup-marker", "unrelated").commit());
+            assertTrue(requestedCredential.createNewFile());
+            assertTrue(unrelatedCredential.createNewFile());
+            assertTrue(requestedTicket.createNewFile());
+            assertTrue(unrelatedTicket.createNewFile());
+
+            cleanupRunScopedClientState(context, requestedClientId);
+
+            assertNull(requestedStore.loadCredential());
+            assertTrue(Gate3SessionEvidence.reconnectPreferences(context, requestedClientId)
+                .getAll().isEmpty());
+            assertTrue(!requestedCredential.exists());
+            assertTrue(!requestedTicket.exists());
+            assertEquals("unrelated-secret", unrelatedStore.loadCredential());
+            assertEquals("unrelated", Gate3SessionEvidence.reconnectPreferences(
+                context, unrelatedClientId).getString("cleanup-marker", null));
+            assertTrue(unrelatedCredential.exists());
+            assertTrue(unrelatedTicket.exists());
+        } finally {
+            cleanupRunScopedClientState(context, requestedClientId);
+            cleanupRunScopedClientState(context, unrelatedClientId);
+        }
+    }
+
+    @Test
+    public void gate5RunScopedCleanupRejectsNonRunScopedClientId() {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+
+        assertThrows(IllegalArgumentException.class,
+            () -> cleanupRunScopedClientState(context, "z-fold-7"));
+    }
+
+    @Test
+    public void gate5CleanupClientIdSkipsOnlyAbsentOrBlankArguments() {
+        Bundle absent = new Bundle();
+        Bundle blank = new Bundle();
+        blank.putString("clientId", "   ");
+        Bundle valid = new Bundle();
+        valid.putString("clientId", " gate5-physical-0123456789abcdef0123456789abcdef ");
+        Bundle invalid = new Bundle();
+        invalid.putString("clientId", " z-fold-7 ");
+
+        assertNull(optionalCleanupClientId(absent));
+        assertNull(optionalCleanupClientId(blank));
+        assertEquals(
+            "gate5-physical-0123456789abcdef0123456789abcdef",
+            optionalCleanupClientId(valid));
+        assertEquals("z-fold-7", optionalCleanupClientId(invalid));
+    }
+
+    @Test
     public void testCloseDrainsInflightSinkAndDiscardsQueuedFrame() throws InterruptedException {
         RecordingBindings bindings = new RecordingBindings();
         CountDownLatch sinkEntered = new CountDownLatch(1);
         CountDownLatch releaseSink = new CountDownLatch(1);
-        CountDownLatch closeStarted = new CountDownLatch(1);
         CountDownLatch closeFinished = new CountDownLatch(1);
         AtomicInteger frames = new AtomicInteger();
         BeaconStreamCore core = new BeaconStreamCore(
@@ -97,16 +175,15 @@ public final class BeaconStreamCoreInstrumentationTest {
             },
             Executors.newSingleThreadExecutor());
         core.start(session("instrumented-drain"));
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
+        bindings.callbacks.onFrame(directBuffer(1), 1, 1, 1, false, false);
         sinkEntered.await();
-        bindings.callbacks.onFrame(new byte[] { 2 }, 2, 2, 1);
+        bindings.callbacks.onFrame(directBuffer(2), 2, 2, 1, false, false);
         Thread closer = new Thread(() -> {
-            closeStarted.countDown();
             core.close();
             closeFinished.countDown();
         });
         closer.start();
-        closeStarted.await();
+        bindings.stopEntered.await();
         assertEquals(0, bindings.releaseCount);
         releaseSink.countDown();
         closeFinished.await();
@@ -131,6 +208,49 @@ public final class BeaconStreamCoreInstrumentationTest {
         first.release();
         second.release();
         texture.release();
+    }
+
+    @Test
+    public void testProductionJniParsesBenchmarkGrantWithoutVideoMode() {
+        BeaconStreamCore core = new BeaconStreamCore(frame -> { });
+        BeaconStreamSession session = BeaconStreamSession.parse(
+            "https://127.0.0.1",
+            "z-fold-7",
+            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":9,\"planExplanation\":\"preflight\",\"sessionId\":\"benchmark:3c13df40-26c4-40c6-8414-268734f1024d\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"benchmark\":{\"runId\":\"3c13df40-26c4-40c6-8414-268734f1024d\",\"schemaVersion\":1,\"reliableRound\":{\"packetCount\":16,\"payloadBytes\":32768,\"measurementIntervalUs\":250000},\"datagramRound\":{\"packetCount\":64,\"payloadBytes\":1000,\"measurementIntervalUs\":250000},\"runToken\":\"AAECAwQFBgcICQoLDA0ODw==\"}}}");
+        BeaconStreamSession.NativeGrant grant = session.consumeNativeGrant(1);
+        try {
+            assertTrue(BeaconStreamCore.parseNativeGrantForTest(grant));
+        } finally {
+            grant.clearSecrets();
+            core.close();
+        }
+    }
+
+    @Test
+    public void testProductionJniCarriesExactHevcMain10Hdr10Grant() {
+        BeaconStreamCore core = new BeaconStreamCore(frame -> { });
+        BeaconStreamSession session = BeaconStreamSession.parse(
+            "https://127.0.0.1",
+            "z-fold-7",
+            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":10,\"planExplanation\":\"hdr\",\"sessionId\":\"hdr-session\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"hevc\",\"width\":3840,\"height\":2160,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"hdr10\",\"profile\":\"hevcMain10\",\"bitDepth\":10,\"colorPrimaries\":\"bt2020\",\"transferFunction\":\"pq\",\"matrixCoefficients\":\"bt2020NonConstantLuminance\",\"colorRange\":\"limited\",\"hdrStaticInfo\":\"AEiKCDk0Iaqblhn8CBM9QkDoAzIA6AOQAQ==\",\"hdrStaticInfoInBitstream\":true},\"selectedAudio\":{\"codec\":\"opus\",\"sampleRateHz\":48000,\"channelCount\":2,\"frameDurationUs\":20000,\"bitrateBps\":96000}}}");
+        BeaconStreamSession.NativeGrant grant = session.consumeNativeGrant(1);
+        try {
+            assertTrue(BeaconStreamCore.parseNativeGrantForTest(grant));
+        } finally {
+            grant.clearSecrets();
+            core.close();
+        }
+    }
+
+    @Test
+    public void testProductionJniMapsControllerInput() {
+        int[] values = BeaconStreamCore.parseNativeControllerInputForTest(
+            BeaconApiClient.InputBatch.controller(9, 0, 12, 1));
+
+        assertEquals(3, values.length);
+        assertEquals(0, values[0]);
+        assertEquals(12, values[1]);
+        assertEquals(1, values[2]);
     }
 
     @Test
@@ -160,7 +280,12 @@ public final class BeaconStreamCoreInstrumentationTest {
         CountDownLatch callbackEntered = new CountDownLatch(1);
         BeaconStreamCore.NativeCallbacks callbacks = new BeaconStreamCore.NativeCallbacks() {
             @Override public void onFrame(
-                byte[] bytes, long presentationTimeUs, long sequence, long generation) {
+                ByteBuffer bytes,
+                long presentationTimeUs,
+                long sequence,
+                long generation,
+                boolean idr,
+                boolean codecConfiguration) {
                 callbackEntered.countDown();
                 throw new IllegalStateException("instrumented callback failure");
             }
@@ -179,14 +304,139 @@ public final class BeaconStreamCoreInstrumentationTest {
     }
 
     @Test
+    public void testNativeBenchmarkResultCrossesJniAndRegistryDrains()
+        throws InterruptedException {
+        BeaconStreamCore loader = new BeaconStreamCore(frame -> { });
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        BeaconStreamCore.NativeCallbacks callbacks = new BeaconStreamCore.NativeCallbacks() {
+            @Override public void onFrame(
+                ByteBuffer bytes,
+                long presentationTimeUs,
+                long sequence,
+                long generation,
+                boolean idr,
+                boolean codecConfiguration) { }
+
+            @Override public void onConnectionLost(long generation) { }
+
+            @Override public void onBenchmarkCompleted(
+                double sustainableThroughputMbps,
+                long[] sequences,
+                int[] payloadBytes,
+                long[] rttUs,
+                long[] jitterUs,
+                int[] reorderDistances,
+                boolean[] received,
+                long generation) {
+                assertEquals(96.5, sustainableThroughputMbps, 0.001);
+                assertEquals(2, sequences.length);
+                assertEquals(1, sequences[1]);
+                assertEquals(1000, payloadBytes[1]);
+                assertEquals(2500, rttUs[1]);
+                assertEquals(300, jitterUs[1]);
+                assertEquals(1, reorderDistances[1]);
+                assertTrue(!received[1]);
+                assertEquals(7, generation);
+                callbackEntered.countDown();
+            }
+        };
+        long handle = BeaconStreamCore.createNativeHandleForTest(callbacks);
+        assertTrue(handle != 0);
+
+        BeaconStreamCore.emitNativeBenchmarkResultForTest(handle, 7);
+
+        callbackEntered.await();
+        BeaconStreamCore.releaseNativeHandleForTest(handle);
+        loader.close();
+        BeaconStreamCore.awaitNativeRegistryIdleForTest();
+        assertEquals(0, BeaconStreamCore.nativeRegistrySizeForTest());
+    }
+
+    @Test
+    public void testNativeAudioPcmCrossesJniAndRegistryDrains()
+        throws InterruptedException {
+        BeaconStreamCore loader = new BeaconStreamCore(frame -> { });
+        CountDownLatch callbackEntered = new CountDownLatch(1);
+        AtomicReference<ByteBuffer> observed = new AtomicReference<>();
+        BeaconStreamCore.NativeCallbacks callbacks = new BeaconStreamCore.NativeCallbacks() {
+            @Override public void onFrame(
+                ByteBuffer bytes,
+                long presentationTimeUs,
+                long sequence,
+                long generation,
+                boolean idr,
+                boolean codecConfiguration) { }
+
+            @Override public void onAudioPcm(
+                ByteBuffer pcm,
+                long presentationTimeUs,
+                long sequence,
+                long generation,
+                boolean concealed) {
+                assertEquals(20_000, presentationTimeUs);
+                assertEquals(1, sequence);
+                assertTrue(!concealed);
+                observed.set(pcm);
+                callbackEntered.countDown();
+            }
+
+            @Override public void onConnectionLost(long generation) { }
+        };
+        long handle = BeaconStreamCore.createNativeHandleForTest(callbacks);
+        assertTrue(handle != 0);
+        float[] pcm = new float[1_920];
+        pcm[0] = 0.25F;
+
+        BeaconStreamCore.emitNativeAudioPcmForTest(handle, pcm, 20_000);
+
+        callbackEntered.await();
+        assertNotNull(observed.get());
+        assertEquals(1_920 * Float.BYTES, observed.get().remaining());
+        BeaconStreamCore.releaseNativeHandleForTest(handle);
+        loader.close();
+        BeaconStreamCore.awaitNativeRegistryIdleForTest();
+        assertEquals(0, BeaconStreamCore.nativeRegistrySizeForTest());
+    }
+
+    @Test
+    public void testProductionAudioTrackAcceptsOneBeaconPcmFrame() {
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        BeaconAudioSession session = new BeaconAudioSession(failure::set);
+        ByteBuffer pcm = ByteBuffer.allocateDirect(1_920 * Float.BYTES)
+            .order(java.nio.ByteOrder.nativeOrder());
+        pcm.putFloat(0.1F);
+        pcm.position(0);
+
+        session.start(
+            1,
+            new BeaconStreamSession.SelectedAudio(
+                "opus", 48_000, 2, 20_000, 96_000));
+        session.onAudioPcm(new BeaconStreamCore.DecodedAudioFrame(
+            pcm, 20_000, 1, false));
+        session.stop();
+        session.close();
+
+        assertNull(failure.get());
+    }
+
+    @Test
     public void testActivityDestructionClosesOwnedSession() throws InterruptedException {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
         Intent intent = new Intent(instrumentation.getTargetContext(), BeaconActivity.class)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         BeaconActivity activity = (BeaconActivity) instrumentation.startActivitySync(intent);
+        RecordingCleanupService cleanupService = new RecordingCleanupService();
         AtomicReference<BeaconViewModel> model = new AtomicReference<>();
-        instrumentation.runOnMainSync(
-            () -> model.set(activity.createOwnedModelForInstrumentation()));
+        instrumentation.runOnMainSync(() -> {
+            BeaconViewModel ownedModel = activity.createOwnedModelForInstrumentation(cleanupService);
+            ownedModel.setForegroundDesired(true);
+            try {
+                assertTrue(ownedModel.onForeground(gate3Capabilities()));
+            } catch (IOException failure) {
+                throw new AssertionError("In-memory cleanup fixture failed to activate.", failure);
+            }
+            model.set(ownedModel);
+        });
         BeaconStreamCore ownedCore = model.get().ownedStreamCore();
         assertTrue(ownedCore.isOpen());
         CountDownLatch destroyed = new CountDownLatch(1);
@@ -199,11 +449,15 @@ public final class BeaconStreamCoreInstrumentationTest {
         monitor.addLifecycleCallback(callback);
         instrumentation.runOnMainSync(activity::finish);
         destroyed.await();
+        activity.awaitWorkerCleanupForInstrumentation();
         monitor.removeLifecycleCallback(callback);
         assertTrue(activity.isDestroyed());
         assertTrue(!ownedCore.isOpen());
         assertTrue(ownedCore.callbackExecutorShutdown());
         assertTrue(activity.workerExecutorShutdown());
+        assertEquals(
+            "hello,capabilities,beacon active,beacon inactive,quit",
+            cleanupService.actions());
     }
 
     @Test
@@ -216,22 +470,31 @@ public final class BeaconStreamCoreInstrumentationTest {
         installCredential(instrumentation, clientId);
         Gate3SessionEvidence evidence = Gate3SessionEvidence.startFirstInvocation(
             instrumentation.getTargetContext(), clientId);
-        BeaconStreamCore core = new BeaconStreamCore(
-            evidence, evidence::recordFeedbackSent, evidence::recordStreamFailure);
+        AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
+        Gate3VideoRuntime videoRuntime = new Gate3VideoRuntime(evidence);
         BeaconApiClient api = new BeaconApiClient(
-            instrumentation.getTargetContext(), new BeaconClientConfig(serverUrl, clientId));
-        BeaconViewModel model = new BeaconViewModel(clientId, serverUrl, api, core);
+            instrumentation.getTargetContext(), productionClientConfig(arguments, serverUrl, clientId));
+        BeaconViewModel model = new BeaconViewModel(
+            clientId,
+            serverUrl,
+            api,
+            gate3StreamCoreFactory(evidence, coreReference),
+            videoRuntime::createSession);
         try {
             registerAndLaunch(model);
             evidence.recordGrant(model.latestStream());
-            evidence.awaitMarkerAndFeedback();
+            evidence.awaitRenderedFrameFeedback();
             model.sendInput(BeaconApiClient.InputBatch.keyboardPress(1, inputMarker, "Escape"));
             evidence.recordInputSent();
             evidence.persistForReconnect();
         } finally {
-            model.close();
-            BeaconStreamCore.awaitNativeRegistryIdleForTest();
-            evidence.recordTransportClosedAfterNativeDrain();
+            try {
+                model.close();
+                BeaconStreamCore.awaitNativeRegistryIdleForTest();
+                evidence.recordTransportClosedAfterNativeDrain();
+            } finally {
+                videoRuntime.close();
+            }
         }
 
         assertFirstInvocationEvidence(evidence);
@@ -242,7 +505,7 @@ public final class BeaconStreamCoreInstrumentationTest {
     }
 
     @Test
-    public void gate3EvidenceFailsClosedOnPreMarkerTransportLoss() {
+    public void gate3EvidenceFailsClosedOnPreFrameTransportLoss() {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
         Gate3SessionEvidence evidence = Gate3SessionEvidence.startFirstInvocation(
             instrumentation.getTargetContext(), "gate3-failure-fixture");
@@ -250,7 +513,7 @@ public final class BeaconStreamCoreInstrumentationTest {
         evidence.recordStreamFailure("transport");
 
         AssertionError error = assertThrows(
-            AssertionError.class, evidence::awaitMarkerAndFeedback);
+            AssertionError.class, evidence::awaitRenderedFrameFeedback);
         assertTrue(error.getMessage().contains("transport"));
     }
 
@@ -265,31 +528,456 @@ public final class BeaconStreamCoreInstrumentationTest {
             instrumentation.getTargetContext(), clientId);
         Gate3SessionEvidence evidence = Gate3SessionEvidence.startReconnect(
             instrumentation.getTargetContext(), clientId);
-        BeaconStreamCore core = new BeaconStreamCore(
-            evidence, evidence::recordFeedbackSent, evidence::recordStreamFailure);
+        AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
+        Gate3VideoRuntime videoRuntime = new Gate3VideoRuntime(evidence);
         BeaconApiClient api = new BeaconApiClient(
-            instrumentation.getTargetContext(), new BeaconClientConfig(serverUrl, clientId));
-        BeaconViewModel model = new BeaconViewModel(clientId, serverUrl, api, core);
+            instrumentation.getTargetContext(), productionClientConfig(arguments, serverUrl, clientId));
+        BeaconViewModel model = new BeaconViewModel(
+            clientId,
+            serverUrl,
+            api,
+            gate3StreamCoreFactory(evidence, coreReference),
+            videoRuntime::createSession);
         try {
             model.reconnect();
             assertSuccessful(model);
             evidence.recordGrant(model.latestStream());
-            evidence.awaitMarkerAndFeedback();
+            evidence.awaitRenderedFrameFeedback();
             evidence.assertFreshReconnect(previous);
             model.stopStream();
             assertSuccessful(model);
         } finally {
-            model.close();
-            BeaconStreamCore.awaitNativeRegistryIdleForTest();
-            evidence.recordTransportClosedAfterNativeDrain();
+            try {
+                model.close();
+                BeaconStreamCore.awaitNativeRegistryIdleForTest();
+                evidence.recordTransportClosedAfterNativeDrain();
+            } finally {
+                videoRuntime.close();
+            }
         }
 
         assertTrue(evidence.transportConnected());
-        assertEquals(1L, evidence.receivedFrameCount());
+        assertTrue(evidence.receivedFrameCount() >= 1L);
         assertTrue(evidence.feedbackSent());
+        assertTrue(evidence.surfacePresented());
         assertTrue(evidence.transportClosed());
         evidence.clearPersistedReconnect();
         emit("BEACON_GATE3_RECONNECT_FRESH_TICKET");
+    }
+
+    @Test
+    public void gate5ProductionConnectSendAndDisconnect() throws Exception {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        Bundle arguments = requireGate3Arguments();
+        String serverUrl = requireArgument(arguments, "serverUrl");
+        String clientId = requireArgument(arguments, "clientId");
+        String gameId = requireArgument(arguments, "gameId");
+        installCredential(instrumentation, clientId);
+        Gate3SessionEvidence evidence = Gate3SessionEvidence.startFirstInvocation(
+            instrumentation.getTargetContext(), clientId);
+        AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
+        Gate5VideoRuntime videoRuntime = new Gate5VideoRuntime(instrumentation, evidence);
+        Gate5AudioRuntime audioRuntime = new Gate5AudioRuntime();
+        BeaconApiClient api = new BeaconApiClient(
+            instrumentation.getTargetContext(), productionClientConfig(arguments, serverUrl, clientId));
+        BeaconViewModel model = new BeaconViewModel(
+            clientId,
+            serverUrl,
+            api,
+            gate5StreamCoreFactory(evidence, videoRuntime, coreReference),
+            videoRuntime::createSession,
+            audioRuntime::createSession);
+        try {
+            registerAndLaunch(model, BeaconApiClient.GameSelection.byGameId(gameId));
+            evidence.recordGrant(model.latestStream());
+            videoRuntime.awaitChangingFrames();
+            model.sendInput(BeaconApiClient.InputBatch.keyboardPress(1, "F12", "F12"));
+            model.sendInput(BeaconApiClient.InputBatch.controller(2, 0, 12, 1));
+            evidence.recordInputSent();
+            evidence.persistForReconnect();
+            model.disconnect();
+            assertSuccessful(model);
+            audioRuntime.assertPlayback();
+        } finally {
+            try {
+                model.close();
+                BeaconStreamCore.awaitNativeRegistryIdleForTest();
+                evidence.recordTransportClosedAfterNativeDrain();
+            } finally {
+                videoRuntime.close();
+            }
+        }
+
+        assertFirstInvocationEvidence(evidence);
+        emit("BEACON_GATE5_MOVING_FRAMES " + videoRuntime.frameCount());
+        emit("BEACON_GATE5_PIXEL_VARIANTS " + videoRuntime.pixelVariantCount());
+        emit("BEACON_GATE5_AUDIO_PCM_WRITTEN " + audioRuntime.writtenFrameCount());
+        emit("BEACON_GATE5_INPUT_SENT F12");
+        emit("BEACON_GATE5_CONTROLLER_SENT A_DOWN");
+        emit("BEACON_GATE5_ACTIVE_DISCONNECT");
+    }
+
+    @Test
+    public void gate5ProductionReconnectAndQuit() throws Exception {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        Bundle arguments = requireGate3Arguments();
+        String serverUrl = requireArgument(arguments, "serverUrl");
+        String clientId = requireArgument(arguments, "clientId");
+        installCredential(instrumentation, clientId);
+        Gate3SessionEvidence.PreviousInvocation previous = Gate3SessionEvidence.loadPrevious(
+            instrumentation.getTargetContext(), clientId);
+        Gate3SessionEvidence evidence = Gate3SessionEvidence.startReconnect(
+            instrumentation.getTargetContext(), clientId);
+        AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
+        Gate5VideoRuntime videoRuntime = new Gate5VideoRuntime(instrumentation, evidence);
+        Gate5AudioRuntime audioRuntime = new Gate5AudioRuntime();
+        BeaconApiClient api = new BeaconApiClient(
+            instrumentation.getTargetContext(), productionClientConfig(arguments, serverUrl, clientId));
+        BeaconViewModel model = new BeaconViewModel(
+            clientId,
+            serverUrl,
+            api,
+            gate5StreamCoreFactory(evidence, videoRuntime, coreReference),
+            videoRuntime::createSession,
+            audioRuntime::createSession);
+        try {
+            model.reconnect();
+            assertSuccessful(model);
+            evidence.recordGrant(model.latestStream());
+            videoRuntime.awaitChangingFrames();
+            evidence.assertFreshReconnect(previous);
+            model.sendInput(BeaconApiClient.InputBatch.controller(3, 0, 12, 0));
+            model.quit(new BeaconApiClient.QuitState(false));
+            assertSuccessful(model);
+            audioRuntime.assertPlayback();
+        } finally {
+            try {
+                model.close();
+                BeaconStreamCore.awaitNativeRegistryIdleForTest();
+                evidence.recordTransportClosedAfterNativeDrain();
+            } finally {
+                videoRuntime.close();
+            }
+        }
+
+        assertTrue(evidence.transportConnected());
+        assertTrue(evidence.receivedFrameCount() >= 1L);
+        assertTrue(evidence.feedbackSent());
+        assertTrue(evidence.surfacePresented());
+        assertTrue(evidence.transportClosed());
+        evidence.clearPersistedReconnect();
+        emit("BEACON_GATE5_RECONNECT_FRESH_TICKET");
+        emit("BEACON_GATE5_RECONNECT_AUDIO_PCM_WRITTEN " + audioRuntime.writtenFrameCount());
+        emit("BEACON_GATE5_CONTROLLER_SENT A_UP");
+        emit("BEACON_GATE5_QUIT_INACTIVE");
+    }
+
+    @Test
+    public void gate5CleanupRunScopedClientState() {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        String clientId = optionalCleanupClientId(InstrumentationRegistry.getArguments());
+        assumeTrue(
+            "Gate 5 run-scoped cleanup requires an explicit clientId.",
+            clientId != null);
+        cleanupRunScopedClientState(instrumentation.getTargetContext(), clientId);
+        emit("BEACON_GATE5_ANDROID_STATE_CLEANED " + clientId);
+    }
+
+    @Test
+    public void gate4NetworkAndHardwareBenchmark() throws Exception {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        Gate4BenchmarkOutcome outcome = runGate4Benchmark(
+            instrumentation,
+            AndroidDeviceBenchmarkRunner.system(instrumentation.getTargetContext()),
+            true);
+        assertNotNull(outcome.networkEvidence);
+        emit("BEACON_GATE4_NATIVE_NETWORK_COMPLETE");
+        emit("BEACON_HARDWARE_EVIDENCE " + decoderEvidence(outcome.deviceEvidence));
+        boolean expectedRejection = outcome.completion.statusCode() == 400 && (
+            outcome.completion.body().contains("No sustainable decoder candidate is available.") ||
+            outcome.completion.body().contains(
+                "Measured throughput cannot sustain the minimum 5 Mbps initial bitrate."));
+        assertTrue(
+            outcome.completion.body() + " device=" + decoderEvidence(outcome.deviceEvidence),
+            outcome.completion.isSuccess() || expectedRejection);
+        emit(expectedRejection
+            ? "BEACON_GATE4_REAL_HARDWARE_CAPABILITY_REJECTED"
+            : "BEACON_GATE4_REAL_HARDWARE_ACCEPTED");
+        emit("BEACON_GATE4_REAL_HARDWARE_OBSERVED");
+    }
+
+    @Test
+    public void gate4DefaultNetworkChangeMonitor() throws Exception {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        CountDownLatch changed = new CountDownLatch(1);
+        AtomicReference<AndroidBenchmarkNetworkState> observed = new AtomicReference<>();
+        AndroidBenchmarkChangeMonitor monitor = new AndroidBenchmarkChangeMonitor(
+            instrumentation.getTargetContext());
+        try {
+            monitor.start(network -> {
+                observed.set(network);
+                changed.countDown();
+            });
+            changed.await();
+        } finally {
+            monitor.close();
+        }
+
+        assertNotNull(observed.get());
+        assertTrue(!"none".equals(observed.get().transport()));
+        assertTrue(!observed.get().localNetworkPrefix().isEmpty());
+        emit("BEACON_GATE4_CHANGE_MONITOR");
+    }
+
+    @Test
+    public void gate4CertifiedBenchmarkEvidence() throws Exception {
+        Gate4BenchmarkOutcome outcome = runGate4Benchmark(
+            InstrumentationRegistry.getInstrumentation(),
+            certifiedDeviceRunner(),
+            false);
+        assertTrue(outcome.completion.body(), outcome.completion.isSuccess());
+        emit("BEACON_GATE4_BENCHMARK_COMPLETE");
+        emit("BEACON_GATE4_CERTIFIED_MANUAL_COMPLETE");
+    }
+
+    @Test
+    public void gate4CertifiedSessionPreflight() throws Exception {
+        Gate4BenchmarkOutcome outcome = runGate4Benchmark(
+            InstrumentationRegistry.getInstrumentation(),
+            certifiedNetworkOnlyDeviceRunner(),
+            false,
+            "sessionPreflight");
+        assertTrue(outcome.completion.body(), outcome.completion.isSuccess());
+        assertTrue(outcome.deviceEvidence.decoderSamples().isEmpty());
+        assertEquals(1, outcome.deviceEvidence.powerSamples().size());
+        emit("BEACON_GATE4_SESSION_PREFLIGHT");
+        emit("BEACON_GATE4_CERTIFIED_PREFLIGHT_COMPLETE");
+    }
+
+    private static Gate4BenchmarkOutcome runGate4Benchmark(
+        Instrumentation instrumentation,
+        BeaconDeviceBenchmarkRunner deviceRunner,
+        boolean useNativeNetwork) throws Exception {
+        return runGate4Benchmark(instrumentation, deviceRunner, useNativeNetwork, "manual");
+    }
+
+    private static Gate4BenchmarkOutcome runGate4Benchmark(
+        Instrumentation instrumentation,
+        BeaconDeviceBenchmarkRunner deviceRunner,
+        boolean useNativeNetwork,
+        String trigger) throws Exception {
+        Bundle arguments = requireGate3Arguments();
+        String serverUrl = requireArgument(arguments, "serverUrl");
+        String clientId = requireArgument(arguments, "clientId");
+        String serverPublicKeyFingerprint =
+            requireArgument(arguments, "serverPublicKeyFingerprint");
+        installCredential(instrumentation, clientId);
+        BeaconApiClient api = new BeaconApiClient(
+            instrumentation.getTargetContext(),
+            new BeaconClientConfig(serverUrl, clientId, serverPublicKeyFingerprint));
+        assertTrue(api.hello().isSuccess());
+        assertTrue(api.reportCapabilities(gate3Capabilities()).isSuccess());
+
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicReference<BeaconApiClient.BeaconResult> completion = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        AtomicReference<BeaconStreamCore.BenchmarkNetworkResult> networkEvidence =
+            new AtomicReference<>();
+        AtomicReference<BeaconBenchmarkDeviceEvidence> deviceEvidence = new AtomicReference<>();
+        AtomicReference<BeaconBenchmarkCoordinator> coordinatorReference = new AtomicReference<>();
+        AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
+        if (useNativeNetwork) {
+            coreReference.set(new BeaconStreamCore(
+                frame -> { },
+                () -> { },
+                stage -> coordinatorReference.get().onStreamCoreFailure(stage),
+                result -> reportNetworkEvidence(
+                    result,
+                    networkEvidence,
+                    coordinatorReference)));
+        }
+        BeaconBenchmarkCoordinator coordinator = new BeaconBenchmarkCoordinator(
+            api,
+            new BeaconBenchmarkCoordinator.ResultObserver() {
+                @Override
+                public void onResult(String action, BeaconApiClient.BeaconResult result) {
+                    if ("benchmark complete".equals(action)) {
+                        completion.set(result);
+                        finished.countDown();
+                    }
+                }
+
+                @Override
+                public void onFailure(String action, Throwable value) {
+                    failure.set(value);
+                    finished.countDown();
+                }
+            });
+        coordinatorReference.set(coordinator);
+        BeaconBenchmarkCoordinator.StreamController stream =
+            new BeaconBenchmarkCoordinator.StreamController() {
+                @Override
+                public void start(String responseBody) {
+                    BeaconStreamSession session =
+                        BeaconStreamSession.parse(serverUrl, clientId, responseBody);
+                    if (useNativeNetwork) {
+                        coreReference.get().start(session);
+                    } else {
+                        reportNetworkEvidence(
+                            certifiedNetworkResult(session.benchmark()),
+                            networkEvidence,
+                            coordinatorReference);
+                    }
+                }
+
+                @Override
+                public void stop() {
+                    BeaconStreamCore core = coreReference.get();
+                    if (core != null) core.stop();
+                }
+        };
+        BeaconDeviceBenchmarkRunner observedRunner = (plan, observer) ->
+            deviceRunner.start(plan, new BeaconDeviceBenchmarkRunner.Observer() {
+                @Override
+                public void onCompleted(BeaconBenchmarkDeviceEvidence evidence) {
+                    deviceEvidence.set(evidence);
+                    observer.onCompleted(evidence);
+                }
+
+                @Override
+                public void onFailure(Throwable value) {
+                    observer.onFailure(value);
+                }
+            });
+        try {
+            coordinator.run(
+                gate4BenchmarkRequest(
+                    instrumentation.getTargetContext(),
+                    serverUrl,
+                    trigger),
+                observedRunner,
+                stream);
+            finished.await();
+            if (failure.get() != null) {
+                throw new AssertionError("Gate 4 benchmark failed.", failure.get());
+            }
+            assertNotNull(completion.get());
+            return new Gate4BenchmarkOutcome(
+                completion.get(),
+                networkEvidence.get(),
+                deviceEvidence.get());
+        } finally {
+            BeaconStreamCore core = coreReference.get();
+            if (core != null) {
+                core.close();
+                BeaconStreamCore.awaitNativeRegistryIdleForTest();
+            }
+        }
+    }
+
+    private static void reportNetworkEvidence(
+        BeaconStreamCore.BenchmarkNetworkResult result,
+        AtomicReference<BeaconStreamCore.BenchmarkNetworkResult> evidence,
+        AtomicReference<BeaconBenchmarkCoordinator> coordinator) {
+        evidence.set(result);
+        emit("BEACON_NETWORK_EVIDENCE throughputMbps=" +
+            result.sustainableThroughputMbps +
+            " received=" + result.samples.stream()
+                .filter(sample -> sample.received)
+                .count() +
+            " expected=" + result.samples.size());
+        coordinator.get().onNetworkCompleted(result);
+    }
+
+    private static BeaconStreamCore.BenchmarkNetworkResult certifiedNetworkResult(
+        BeaconStreamSession.Benchmark benchmark) {
+        assertNotNull(benchmark);
+        List<BeaconStreamCore.BenchmarkNetworkSample> samples = new ArrayList<>();
+        BeaconStreamSession.BenchmarkRound datagram = benchmark.datagramRound();
+        for (int sequence = 0; sequence < datagram.packetCount(); sequence++) {
+            samples.add(new BeaconStreamCore.BenchmarkNetworkSample(
+                sequence,
+                datagram.payloadBytes(),
+                8_000,
+                1_000,
+                0,
+                true));
+        }
+        return new BeaconStreamCore.BenchmarkNetworkResult(100.0, samples);
+    }
+
+    private static BeaconDeviceBenchmarkRunner certifiedDeviceRunner() {
+        return (plan, observer) -> {
+            List<BeaconBenchmarkCompletionRequest.DecoderSample> decoders =
+                new ArrayList<>();
+            List<BeaconBenchmarkCompletionRequest.PowerSample> power =
+                new ArrayList<>();
+            for (BeaconBenchmarkHardwarePlan.DecoderRound round : plan.decoderRounds()) {
+                power.add(new BeaconBenchmarkCompletionRequest.PowerSample(
+                    100,
+                    true,
+                    "nominal"));
+                decoders.add(new BeaconBenchmarkCompletionRequest.DecoderSample(
+                    round.codec(),
+                    round.profile(),
+                    round.bitDepth(),
+                    round.width(),
+                    round.height(),
+                    round.targetFps(),
+                    true,
+                    round.targetFps(),
+                    1.0,
+                    2.0,
+                    0,
+                    0,
+                    false,
+                    false));
+                power.add(new BeaconBenchmarkCompletionRequest.PowerSample(
+                    100,
+                    true,
+                    "nominal"));
+            }
+            observer.onCompleted(new BeaconBenchmarkDeviceEvidence(decoders, power));
+            return () -> { };
+        };
+    }
+
+    private static BeaconDeviceBenchmarkRunner certifiedNetworkOnlyDeviceRunner() {
+        return (plan, observer) -> {
+            assertTrue(plan.decoderRounds().isEmpty());
+            observer.onCompleted(new BeaconBenchmarkDeviceEvidence(
+                List.of(),
+                List.of(new BeaconBenchmarkCompletionRequest.PowerSample(
+                    100,
+                    true,
+                    "nominal"))));
+            return () -> { };
+        };
+    }
+
+    private static String decoderEvidence(BeaconBenchmarkDeviceEvidence evidence) {
+        if (evidence == null) return "none";
+        StringBuilder value = new StringBuilder("[");
+        for (BeaconBenchmarkCompletionRequest.DecoderSample sample : evidence.decoderSamples()) {
+            if (value.length() > 1) value.append(',');
+            value.append(sample.toJson());
+        }
+        return value.append(']').toString();
+    }
+
+    private static final class Gate4BenchmarkOutcome {
+        private final BeaconApiClient.BeaconResult completion;
+        private final BeaconStreamCore.BenchmarkNetworkResult networkEvidence;
+        private final BeaconBenchmarkDeviceEvidence deviceEvidence;
+
+        Gate4BenchmarkOutcome(
+            BeaconApiClient.BeaconResult completion,
+            BeaconStreamCore.BenchmarkNetworkResult networkEvidence,
+            BeaconBenchmarkDeviceEvidence deviceEvidence) {
+            this.completion = completion;
+            this.networkEvidence = networkEvidence;
+            this.deviceEvidence = deviceEvidence;
+        }
     }
 
     @Test
@@ -301,28 +989,40 @@ public final class BeaconStreamCoreInstrumentationTest {
         installCredential(instrumentation, clientId);
         Gate3SessionEvidence evidence = Gate3SessionEvidence.startReconnect(
             instrumentation.getTargetContext(), clientId);
-        BeaconStreamCore core = new BeaconStreamCore(
-            evidence, evidence::recordFeedbackSent, evidence::recordStreamFailure);
+        AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
+        Gate3VideoRuntime videoRuntime = new Gate3VideoRuntime(evidence);
         BeaconApiClient api = new BeaconApiClient(
-            instrumentation.getTargetContext(), new BeaconClientConfig(serverUrl, clientId));
-        BeaconViewModel model = new BeaconViewModel(clientId, serverUrl, api, core);
+            instrumentation.getTargetContext(), productionClientConfig(arguments, serverUrl, clientId));
+        BeaconViewModel model = new BeaconViewModel(
+            clientId,
+            serverUrl,
+            api,
+            gate3StreamCoreFactory(evidence, coreReference),
+            videoRuntime::createSession);
         try {
             registerAndLaunch(model);
             evidence.recordGrant(model.latestStream());
-            evidence.awaitMarkerAndFeedback();
+            evidence.awaitRenderedFrameFeedback();
             emit("BEACON_GATE3_WORKER_CRASH_ARMED");
+            BeaconStreamCore core = coreReference.get();
+            assertNotNull(core);
             core.awaitConnectionLossForTest(1);
             assertEquals(1, core.connectionLossCountForTest());
             assertTrue(core.stoppedForTest());
         } finally {
-            model.close();
-            BeaconStreamCore.awaitNativeRegistryIdleForTest();
-            evidence.recordTransportClosedAfterNativeDrain();
+            try {
+                model.close();
+                BeaconStreamCore.awaitNativeRegistryIdleForTest();
+                evidence.recordTransportClosedAfterNativeDrain();
+            } finally {
+                videoRuntime.close();
+            }
         }
 
         assertTrue(evidence.transportConnected());
-        assertEquals(1L, evidence.receivedFrameCount());
+        assertTrue(evidence.receivedFrameCount() >= 1L);
         assertTrue(evidence.feedbackSent());
+        assertTrue(evidence.surfacePresented());
         assertTrue(evidence.transportClosed());
         emit("BEACON_GATE3_WORKER_CRASH_OBSERVED");
     }
@@ -334,6 +1034,16 @@ public final class BeaconStreamCoreInstrumentationTest {
                 "Missing required instrumentation argument: " + name);
         }
         return value.trim();
+    }
+
+    private static BeaconClientConfig productionClientConfig(
+        Bundle arguments,
+        String serverUrl,
+        String clientId) {
+        return new BeaconClientConfig(
+            serverUrl,
+            clientId,
+            requireArgument(arguments, "serverPublicKeyFingerprint"));
     }
 
     private static Bundle requireGate3Arguments() {
@@ -350,8 +1060,8 @@ public final class BeaconStreamCoreInstrumentationTest {
         String clientId) {
         AndroidKeyStoreCredentialStore store = new AndroidKeyStoreCredentialStore(
             instrumentation.getTargetContext(), clientId);
-        File evidence = new File(
-            instrumentation.getTargetContext().getFilesDir(), CredentialEvidenceFile);
+        File evidence = credentialEvidenceFile(
+            instrumentation.getTargetContext(), clientId);
         if (!evidence.exists()) {
             assertTrue("Gate 3 credential is unavailable.", store.loadCredential() != null);
             return;
@@ -382,33 +1092,334 @@ public final class BeaconStreamCoreInstrumentationTest {
         }
     }
 
+    private static void cleanupRunScopedClientState(Context context, String clientId) {
+        if (!Gate3SessionEvidence.isRunScopedClientId(clientId)) {
+            throw new IllegalArgumentException(
+                "Gate 5 cleanup requires a run-scoped client ID.");
+        }
+
+        new AndroidKeyStoreCredentialStore(context, clientId).clearCredential();
+        assertTrue("Could not clear run-scoped reconnect preferences.",
+            Gate3SessionEvidence.reconnectPreferences(context, clientId)
+                .edit().clear().commit());
+        deleteRunScopedEvidence(credentialEvidenceFile(context, clientId));
+        deleteRunScopedEvidence(Gate3SessionEvidence.ticketEvidenceFile(context, clientId));
+    }
+
+    private static String optionalCleanupClientId(Bundle arguments) {
+        String clientId = arguments.getString("clientId");
+        if (clientId == null || clientId.trim().isEmpty()) {
+            return null;
+        }
+        return clientId.trim();
+    }
+
+    private static File credentialEvidenceFile(Context context, String clientId) {
+        return new File(
+            context.getFilesDir(),
+            Gate3SessionEvidence.evidenceFileName(CredentialEvidenceFile, clientId));
+    }
+
+    private static void deleteRunScopedEvidence(File evidence) {
+        if (evidence.exists() && !evidence.delete()) {
+            throw new IllegalStateException(
+                "Could not delete run-scoped Android test evidence: " + evidence.getName());
+        }
+    }
+
+    private static String runId() {
+        return UUID.randomUUID().toString().replace("-", "");
+    }
+
     private static void registerAndLaunch(BeaconViewModel model) throws Exception {
-        model.refresh();
-        assertSuccessful(model);
-        model.beacon(true);
-        assertSuccessful(model);
-        model.reportCapabilities(gate3Capabilities());
+        registerAndLaunch(model, gate3Game());
+    }
+
+    private static void registerAndLaunch(
+        BeaconViewModel model,
+        BeaconApiClient.GameSelection game) throws Exception {
+        model.setForegroundDesired(true);
+        assertTrue(model.onForeground(gate3Capabilities()));
         assertSuccessful(model);
         model.reportTelemetry(gate3Telemetry());
         assertSuccessful(model);
-        model.requestPlan(gate3Game());
+        model.requestPlan(game);
         assertSuccessful(model);
-        model.launch(gate3Game());
+        model.launch(game);
         assertSuccessful(model);
+    }
+
+    private static BeaconViewModel.StreamCoreFactory gate3StreamCoreFactory(
+        Gate3SessionEvidence evidence,
+        AtomicReference<BeaconStreamCore> coreReference) {
+        return (sink, audioSink, failureObserver, benchmarkObserver) -> {
+            BeaconStreamCore core = new BeaconStreamCore(
+                sink,
+                audioSink,
+                () -> { },
+                stage -> {
+                    evidence.recordStreamFailure(stage);
+                    failureObserver.onFailure(stage);
+                },
+                benchmarkObserver);
+            coreReference.set(core);
+            return core;
+        };
+    }
+
+    private static BeaconViewModel.StreamCoreFactory gate5StreamCoreFactory(
+        Gate3SessionEvidence evidence,
+        Gate5VideoRuntime videoRuntime,
+        AtomicReference<BeaconStreamCore> coreReference) {
+        return (sink, audioSink, failureObserver, benchmarkObserver) -> {
+            BeaconStreamCore core = new BeaconStreamCore(
+                sink,
+                audioSink,
+                () -> { },
+                stage -> {
+                    evidence.recordStreamFailure(stage);
+                    videoRuntime.recordStreamFailure(stage);
+                    failureObserver.onFailure(stage);
+                },
+                benchmarkObserver);
+            coreReference.set(core);
+            return core;
+        };
+    }
+
+    private static final class Gate3VideoRuntime implements AutoCloseable {
+        private final Gate3SessionEvidence evidence;
+        private final BenchmarkPresentationSurface presentationSurface;
+        private final EncodedVideoSurfaceProvider surfaceProvider;
+
+        Gate3VideoRuntime(Gate3SessionEvidence evidence) {
+            this.evidence = evidence;
+            presentationSurface = new AndroidImageReaderPresentationSurfaceFactory().create(
+                1280,
+                720,
+                new BenchmarkPresentationSurfaceFactory.Observer() {
+                    @Override
+                    public void onFramePresented(
+                        long presentationTimeUs,
+                        long presentedAtNs) {
+                        evidence.recordSurfacePresentation(
+                            presentationTimeUs,
+                            presentedAtNs);
+                    }
+
+                    @Override
+                    public void onFailure(Throwable failure) {
+                        evidence.recordVideoFailure(failure);
+                    }
+                });
+            surfaceProvider = presentationSurface::surface;
+        }
+
+        BeaconViewModel.VideoSession createSession(
+            BeaconVideoFeedbackBridge.FailureObserver failureObserver) {
+            return new BeaconVideoSession(
+                surfaceProvider,
+                failure -> {
+                    evidence.recordVideoFailure(failure);
+                    failureObserver.onFailure(failure);
+                },
+                evidence);
+        }
+
+        @Override
+        public void close() {
+            presentationSurface.close();
+        }
+    }
+
+    private static final class Gate5VideoRuntime implements AutoCloseable {
+        private final Instrumentation instrumentation;
+        private final Gate3SessionEvidence sessionEvidence;
+        private final BeaconActivity activity;
+        private final AndroidSurfaceViewProvider surfaceProvider;
+        private final Gate5SurfaceEvidence surfaceEvidence;
+
+        Gate5VideoRuntime(
+            Instrumentation instrumentation,
+            Gate3SessionEvidence sessionEvidence) {
+            this.instrumentation = instrumentation;
+            this.sessionEvidence = sessionEvidence;
+            Intent intent = new Intent(
+                instrumentation.getTargetContext(), BeaconActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            activity = (BeaconActivity) instrumentation.startActivitySync(intent);
+            instrumentation.waitForIdleSync();
+            AtomicReference<SurfaceView> surface = new AtomicReference<>();
+            AtomicReference<AndroidSurfaceViewProvider> provider = new AtomicReference<>();
+            instrumentation.runOnMainSync(() -> {
+                surface.set(activity.videoSurfaceViewForInstrumentation());
+                provider.set(activity.videoSurfaceProviderForInstrumentation());
+            });
+            if (surface.get() == null || provider.get() == null) {
+                throw new IllegalStateException("Beacon Gate 5 SurfaceView is unavailable.");
+            }
+            surfaceProvider = provider.get();
+            surfaceEvidence = new Gate5SurfaceEvidence(surface.get(), sessionEvidence);
+        }
+
+        BeaconViewModel.VideoSession createSession(
+            BeaconVideoFeedbackBridge.FailureObserver failureObserver) {
+            return new BeaconVideoSession(
+                surfaceProvider,
+                failure -> {
+                    surfaceEvidence.recordFailure(failure);
+                    sessionEvidence.recordVideoFailure(failure);
+                    failureObserver.onFailure(failure);
+                },
+                surfaceEvidence);
+        }
+
+        void awaitChangingFrames() throws InterruptedException {
+            surfaceEvidence.awaitChangingFrames();
+        }
+
+        int frameCount() {
+            return surfaceEvidence.frameCount();
+        }
+
+        long pixelVariantCount() {
+            return surfaceEvidence.pixelVariantCount();
+        }
+
+        void recordStreamFailure(String stage) {
+            surfaceEvidence.recordFailure(new AssertionError(
+                "Gate 5 stream failed before Surface evidence completed: " + stage));
+        }
+
+        @Override
+        public void close() {
+            surfaceEvidence.close();
+            CountDownLatch destroyed = new CountDownLatch(1);
+            ActivityLifecycleMonitor monitor = ActivityLifecycleMonitorRegistry.getInstance();
+            ActivityLifecycleCallback callback = (candidate, stage) -> {
+                if (candidate == activity && stage == Stage.DESTROYED) {
+                    destroyed.countDown();
+                }
+            };
+            monitor.addLifecycleCallback(callback);
+            instrumentation.runOnMainSync(() -> {
+                if (activity.isDestroyed()) {
+                    destroyed.countDown();
+                } else {
+                    activity.finish();
+                }
+            });
+            try {
+                destroyed.await();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(
+                    "Interrupted while closing the Beacon Gate 5 activity.", interrupted);
+            } finally {
+                monitor.removeLifecycleCallback(callback);
+            }
+        }
+    }
+
+    private static final class Gate5AudioRuntime {
+        private final AtomicReference<Throwable> failure = new AtomicReference<>();
+        private final AtomicInteger decodedFrames = new AtomicInteger();
+        private final AtomicInteger writtenFrames = new AtomicInteger();
+        private final AtomicLong lastSequence = new AtomicLong();
+
+        BeaconViewModel.AudioSession createSession(
+            BeaconAudioSession.FailureObserver failureObserver) {
+            ExecutorService executor = Executors.newSingleThreadExecutor(
+                action -> new Thread(action, "beacon-gate5-audio"));
+            BeaconAudioSession delegate = new BeaconAudioSession(
+                executor,
+                (sampleRateHz, channelCount) -> new RecordingAudioOutput(
+                    new AndroidAudioTrackOutput(sampleRateHz, channelCount)),
+                observed -> {
+                    failure.compareAndSet(null, observed);
+                    failureObserver.onFailure(observed);
+                });
+            return new BeaconViewModel.AudioSession() {
+                @Override
+                public void start(
+                    long generation,
+                    BeaconStreamSession.SelectedAudio audio) {
+                    delegate.start(generation, audio);
+                }
+
+                @Override
+                public void onAudioPcm(BeaconStreamCore.DecodedAudioFrame frame) {
+                    long previous = lastSequence.getAndSet(frame.sequence);
+                    if (previous != 0 && frame.sequence <= previous) {
+                        failure.compareAndSet(
+                            null,
+                            new AssertionError(
+                                "Beacon audio sequence did not increase: "
+                                    + previous + " -> " + frame.sequence));
+                    }
+                    decodedFrames.incrementAndGet();
+                    delegate.onAudioPcm(frame);
+                }
+
+                @Override public void stop() { delegate.stop(); }
+
+                @Override public void close() { delegate.close(); }
+            };
+        }
+
+        void assertPlayback() {
+            Throwable observed = failure.get();
+            if (observed != null) {
+                throw new AssertionError("Beacon production audio failed.", observed);
+            }
+            assertTrue("No ordered Opus PCM reached the Android client.",
+                decodedFrames.get() > 0 && lastSequence.get() > 0);
+            assertTrue("No PCM frame was written to the Android audio device.",
+                writtenFrames.get() > 0);
+        }
+
+        int writtenFrameCount() {
+            return writtenFrames.get();
+        }
+
+        private final class RecordingAudioOutput
+            implements BeaconAudioSession.AudioOutput {
+            private final AndroidAudioTrackOutput delegate;
+
+            RecordingAudioOutput(AndroidAudioTrackOutput delegate) {
+                this.delegate = delegate;
+            }
+
+            @Override public void play() { delegate.play(); }
+
+            @Override
+            public void write(ByteBuffer pcm) {
+                delegate.write(pcm);
+                writtenFrames.incrementAndGet();
+            }
+
+            @Override public void stop() { delegate.stop(); }
+
+            @Override public void release() { delegate.release(); }
+        }
     }
 
     private static void assertFirstInvocationEvidence(Gate3SessionEvidence evidence) {
         assertTrue(evidence.transportConnected());
-        assertEquals(1L, evidence.receivedFrameCount());
-        assertEquals(1L, evidence.markerSequence());
+        assertTrue(evidence.receivedFrameCount() >= 1L);
+        assertTrue(evidence.frameSequence() > 0L);
         assertTrue(evidence.inputSent());
         assertTrue(evidence.feedbackSent());
+        assertTrue(evidence.surfacePresented());
         assertTrue(evidence.transportClosed());
     }
 
     private static void emit(String marker) {
         Log.i("BeaconGate3", marker);
         System.out.println(marker);
+        Bundle status = new Bundle();
+        status.putString(Instrumentation.REPORT_KEY_STREAMRESULT, marker + "\n");
+        InstrumentationRegistry.getInstrumentation().sendStatus(2, status);
     }
 
     private static void assertSuccessful(BeaconViewModel model) {
@@ -417,30 +1428,113 @@ public final class BeaconStreamCoreInstrumentationTest {
     }
 
     private static BeaconApiClient.ClientCapabilities gate3Capabilities() {
+        BeaconApiClient.ClientDisplayMode mode = new BeaconApiClient.ClientDisplayMode(1280, 720, 60);
         return new BeaconApiClient.ClientCapabilities(
-            false, false, true, false, false, 60, true, "1280x720@60");
+            false, false, true, false, false, 60, true, mode, Arrays.asList(mode));
     }
 
     private static BeaconApiClient.ClientTelemetry gate3Telemetry() {
         return new BeaconApiClient.ClientTelemetry(
-            1, 0, 1, 1000, "emulator", 100, "nominal");
+            1, 0.0, 1, 1000, "emulator", 100, "nominal");
     }
 
     private static BeaconApiClient.GameSelection gate3Game() {
         return BeaconApiClient.GameSelection.byGameId("steam-shortcut:3767414131");
     }
 
+    private static BeaconBenchmarkPrepareRequest gate4BenchmarkRequest(
+        Context context,
+        String serverUrl,
+        String trigger) {
+        return new BeaconBenchmarkPrepareRequest(
+            trigger,
+            new BeaconBenchmarkPrepareRequest.FingerprintSet(
+                BeaconBenchmarkPrepareRequest.NetworkFingerprint.fromLocalNetwork(
+                    3,
+                    serverUrl,
+                    "wifi",
+                    "10.0.2.0/24",
+                    "emulator",
+                    null,
+                    "emulator",
+                    null,
+                    null,
+                    BeaconNetworkIdentityHasher.system(context)),
+                new BeaconBenchmarkPrepareRequest.HardwareFingerprint(
+                    3,
+                    "emulator-h264-v1",
+                    "15",
+                    "0.1.0",
+                    "1280x720@60",
+                    "h264-high-8-v1")));
+    }
+
     private static BeaconStreamSession session(String sessionId) {
         return BeaconStreamSession.parse(
             "https://beacon.example",
             "client",
-            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"" + sessionId + "\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"}}}");
+            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"" + sessionId + "\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"},\"selectedAudio\":{\"codec\":\"opus\",\"sampleRateHz\":48000,\"channelCount\":2,\"frameDurationUs\":20000,\"bitrateBps\":96000}}}");
+    }
+
+    private static ByteBuffer directBuffer(int... values) {
+        ByteBuffer buffer = ByteBuffer.allocateDirect(values.length);
+        for (int value : values) buffer.put((byte) value);
+        buffer.flip();
+        return buffer;
+    }
+
+    private static final class RecordingCleanupService
+        implements BeaconViewModel.BeaconService {
+        private final BeaconApiClient.BeaconResult success =
+            new BeaconApiClient.BeaconResult(200, "{}");
+        private final StringBuilder actions = new StringBuilder();
+
+        private synchronized BeaconApiClient.BeaconResult record(String action) {
+            if (actions.length() > 0) actions.append(',');
+            actions.append(action);
+            return success;
+        }
+
+        synchronized String actions() {
+            return actions.toString();
+        }
+
+        @Override public BeaconApiClient.BeaconResult hello() { return record("hello"); }
+        @Override public BeaconApiClient.BeaconResult reportCapabilities(
+            BeaconApiClient.ClientCapabilities capabilities) {
+            return record("capabilities");
+        }
+        @Override public BeaconApiClient.BeaconResult reportTelemetry(
+            BeaconApiClient.ClientTelemetry telemetry) {
+            return record("telemetry");
+        }
+        @Override public BeaconApiClient.BeaconResult beacon(boolean active) {
+            return record(active ? "beacon active" : "beacon inactive");
+        }
+        @Override public BeaconApiClient.BeaconResult games() { return record("games"); }
+        @Override public BeaconApiClient.BeaconResult requestPlan(
+            BeaconApiClient.GameSelection game) {
+            return record("plan");
+        }
+        @Override public BeaconApiClient.BeaconResult launch(
+            BeaconApiClient.GameSelection game) {
+            return record("launch");
+        }
+        @Override public BeaconApiClient.BeaconResult stopStream() { return record("stop"); }
+        @Override public BeaconApiClient.BeaconResult disconnect() { return record("disconnect"); }
+        @Override public BeaconApiClient.BeaconResult quit(BeaconApiClient.QuitState state) {
+            return record("quit");
+        }
+        @Override public BeaconApiClient.BeaconResult emergencyRestore() {
+            return record("restore");
+        }
     }
 
     private static final class RecordingBindings implements BeaconStreamCore.Bindings {
         BeaconStreamCore.NativeCallbacks callbacks;
         int stopCount;
         int releaseCount;
+        final CountDownLatch stopEntered = new CountDownLatch(1);
 
         @Override public long create(BeaconStreamCore.NativeCallbacks value) { callbacks = value; return 11; }
         @Override public boolean start(long handle, BeaconStreamSession.NativeGrant grant) {
@@ -448,7 +1542,10 @@ public final class BeaconStreamCoreInstrumentationTest {
         }
         @Override public void sendInput(long handle, BeaconApiClient.InputBatch input) { }
         @Override public void replaceSurface(long handle, Object surface) { }
-        @Override public void stop(long handle) { stopCount++; }
+        @Override public void stop(long handle) {
+            stopCount++;
+            stopEntered.countDown();
+        }
         @Override public void release(long handle) { releaseCount++; }
     }
 }

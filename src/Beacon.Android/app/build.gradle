@@ -31,6 +31,15 @@ android {
             jniLibs.srcDir 'build/generated/jniLibs/release'
         }
     }
+
+    testOptions {
+        unitTests.all {
+            testLogging {
+                events 'started', 'passed', 'skipped', 'failed'
+                exceptionFormat 'full'
+            }
+        }
+    }
 }
 
 def repositoryRoot = rootProject.projectDir.toPath().resolve('../..').normalize().toFile()
@@ -68,7 +77,7 @@ def registerBeaconNative = { String configuration ->
         }
     }
     tasks.configureEach { task ->
-        if (task.name == "pre${configuration}Build") {
+        if (task.name == "merge${configuration}JniLibFolders") {
             task.dependsOn taskName
         }
     }

@@ -1,11 +1,16 @@
 #pragma once
 
 #include "beacon/stream/transport.h"
+#include "beacon/worker/audio/production_audio_capabilities.h"
+#include "beacon/worker/audio/worker_audio_pipeline.h"
 #include "beacon/worker/quic_listener.h"
+#include "beacon/worker/video/worker_video_capabilities.h"
+#include "beacon/worker/video/worker_video_pipeline.h"
 #include "worker_ipc.pb.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -14,50 +19,65 @@ namespace beacon::worker {
 inline constexpr std::uint32_t worker_protocol_version = 1;
 
 class WorkerHost {
- public:
+public:
   WorkerHost(std::vector<std::byte> worker_instance_id,
-             std::uint32_t process_id,
-             IWorkerMediaTransport& transport,
-             AuthorizedQuicTicketStore& authorized_tickets);
+             std::uint32_t process_id, IWorkerMediaTransport &transport,
+             AuthorizedQuicTicketStore &authorized_tickets,
+             video::IWorkerVideoPipeline &video_pipeline,
+             audio::IWorkerAudioPipeline &audio_pipeline,
+             video::ProductionVideoCapabilities video_capabilities,
+             audio::ProductionAudioCapabilities audio_capabilities);
 
   [[nodiscard]] v1::WorkerIpcEnvelope hello() const;
+  [[nodiscard]] v1::WorkerIpcEnvelope capabilities() const;
   [[nodiscard]] v1::WorkerIpcEnvelope ready() const;
-  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> dispatch(
-      const v1::WorkerIpcEnvelope& request);
+  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope>
+  dispatch(const v1::WorkerIpcEnvelope &request);
   [[nodiscard]] bool shutdown_requested() const noexcept;
   [[nodiscard]] std::size_t authorized_ticket_count() const;
 
- private:
-  [[nodiscard]] v1::WorkerIpcEnvelope response_envelope(
-      const v1::WorkerIpcEnvelope& request) const;
-  [[nodiscard]] v1::WorkerIpcEnvelope completion(
-      const v1::WorkerIpcEnvelope& request,
-      bool succeeded,
-      v1::WorkerErrorCode error_code) const;
-  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> reject(
-      const v1::WorkerIpcEnvelope& request,
-      v1::WorkerErrorCode error_code) const;
-  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> prepare(
-      const v1::WorkerIpcEnvelope& request);
-  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> authorize_ticket(
-      const v1::WorkerIpcEnvelope& request);
-  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> revoke_ticket(
-      const v1::WorkerIpcEnvelope& request);
-  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> start_media(
-      const v1::WorkerIpcEnvelope& request);
-  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> stop_media(
-      const v1::WorkerIpcEnvelope& request);
-  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope> shutdown(
-      const v1::WorkerIpcEnvelope& request);
+private:
+  [[nodiscard]] v1::WorkerIpcEnvelope
+  response_envelope(const v1::WorkerIpcEnvelope &request) const;
+  [[nodiscard]] v1::WorkerIpcEnvelope
+  completion(const v1::WorkerIpcEnvelope &request, bool succeeded,
+             v1::WorkerErrorCode error_code) const;
+  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope>
+  reject(const v1::WorkerIpcEnvelope &request,
+         v1::WorkerErrorCode error_code) const;
+  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope>
+  prepare(const v1::WorkerIpcEnvelope &request);
+  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope>
+  prepare_benchmark(const v1::WorkerIpcEnvelope &request);
+  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope>
+  authorize_ticket(const v1::WorkerIpcEnvelope &request);
+  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope>
+  revoke_ticket(const v1::WorkerIpcEnvelope &request);
+  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope>
+  start_media(const v1::WorkerIpcEnvelope &request);
+  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope>
+  stop_media(const v1::WorkerIpcEnvelope &request);
+  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope>
+  request_idr(const v1::WorkerIpcEnvelope &request);
+  [[nodiscard]] std::vector<v1::WorkerIpcEnvelope>
+  shutdown(const v1::WorkerIpcEnvelope &request);
 
   std::vector<std::byte> worker_instance_id_;
   std::uint32_t process_id_{};
-  IWorkerMediaTransport& transport_;
-  AuthorizedQuicTicketStore& authorized_tickets_;
+  IWorkerMediaTransport &transport_;
+  AuthorizedQuicTicketStore &authorized_tickets_;
+  video::IWorkerVideoPipeline &video_pipeline_;
+  audio::IWorkerAudioPipeline &audio_pipeline_;
+  video::ProductionVideoCapabilities video_capabilities_;
+  audio::ProductionAudioCapabilities audio_capabilities_;
   bool prepared_{};
+  bool benchmark_prepared_{};
   bool streaming_{};
   bool shutdown_requested_{};
   std::string session_id_;
+  std::optional<video::WorkerVideoPlan> prepared_video_plan_;
+  std::optional<audio::WorkerAudioPlan> prepared_audio_plan_;
+  stream::v1::StartBenchmark benchmark_plan_;
 };
 
-}  // namespace beacon::worker
+} // namespace beacon::worker

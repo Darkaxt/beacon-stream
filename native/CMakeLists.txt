@@ -17,10 +17,55 @@ set(
   CACHE FILEPATH
   "Pinned host protoc executable from Google.Protobuf.Tools 3.32.1"
 )
+set(
+  BEACON_WINDOWS_APP_SDK_DIR
+  "${BEACON_NATIVE_DEPENDENCIES_DIR}/windows-app-sdk"
+  CACHE PATH
+  "Pinned Windows App SDK packages populated by install-windows-app-sdk.ps1"
+)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+if(WIN32)
+  set(beacon_windows_app_sdk_foundation "${BEACON_WINDOWS_APP_SDK_DIR}/foundation")
+  set(beacon_windows_app_sdk_interactive "${BEACON_WINDOWS_APP_SDK_DIR}/interactive-experiences")
+  set(beacon_windows_app_sdk_runtime "${BEACON_WINDOWS_APP_SDK_DIR}/runtime")
+  set(
+    beacon_windows_app_sdk_bootstrap_dll
+    "${beacon_windows_app_sdk_foundation}/runtimes/win-x64/native/Microsoft.WindowsAppRuntime.Bootstrap.dll"
+  )
+  foreach(required_file IN ITEMS
+      "${beacon_windows_app_sdk_foundation}/include/MddBootstrap.h"
+      "${beacon_windows_app_sdk_interactive}/include/Microsoft.UI.Interop.h"
+      "${beacon_windows_app_sdk_runtime}/include/WindowsAppSDK-VersionInfo.h"
+      "${BEACON_WINDOWS_APP_SDK_DIR}/projections/winrt/Microsoft.UI.h"
+      "${beacon_windows_app_sdk_bootstrap_dll}")
+    if(NOT EXISTS "${required_file}")
+      message(FATAL_ERROR "Pinned Windows App SDK dependency is missing. Run scripts/install-windows-app-sdk.ps1.")
+    endif()
+  endforeach()
+
+  function(beacon_use_windows_app_sdk target)
+    target_include_directories(
+      ${target}
+      SYSTEM PRIVATE
+        "${beacon_windows_app_sdk_foundation}/include"
+        "${beacon_windows_app_sdk_interactive}/include"
+        "${beacon_windows_app_sdk_runtime}/include"
+        "${BEACON_WINDOWS_APP_SDK_DIR}/projections"
+    )
+    add_custom_command(
+      TARGET ${target}
+      POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${beacon_windows_app_sdk_bootstrap_dll}"
+        "$<TARGET_FILE_DIR:${target}>"
+      VERBATIM
+    )
+  endfunction()
+endif()
 
 if(BEACON_WITH_MSQUIC)
   set(msquic_source "${BEACON_NATIVE_DEPENDENCIES_DIR}/msquic")
@@ -33,10 +78,10 @@ if(BEACON_WITH_MSQUIC)
   set(QUIC_BUILD_PERF OFF CACHE BOOL "" FORCE)
   set(QUIC_BUILD_SHARED ON CACHE BOOL "" FORCE)
   set(QUIC_ENABLE_LOGGING OFF CACHE BOOL "" FORCE)
-  if(ANDROID)
-    set(QUIC_TLS_LIB "quictls" CACHE STRING "" FORCE)
-  else()
+  if(WIN32)
     set(QUIC_TLS_LIB "schannel" CACHE STRING "" FORCE)
+  else()
+    set(QUIC_TLS_LIB "quictls" CACHE STRING "" FORCE)
   endif()
   add_subdirectory("${msquic_source}" msquic EXCLUDE_FROM_ALL)
 endif()
@@ -70,6 +115,20 @@ set(protobuf_LOCAL_DEPENDENCIES_ONLY ON CACHE BOOL "" FORCE)
 set(protobuf_MSVC_STATIC_RUNTIME OFF CACHE BOOL "" FORCE)
 set(protobuf_WITH_ZLIB OFF CACHE BOOL "" FORCE)
 add_subdirectory("${protobuf_source}" protobuf EXCLUDE_FROM_ALL)
+
+set(opus_source "${BEACON_NATIVE_DEPENDENCIES_DIR}/opus")
+if(NOT EXISTS "${opus_source}/CMakeLists.txt")
+  message(FATAL_ERROR "Pinned Opus source is missing. Bootstrap the opus dependency.")
+endif()
+set(beacon_saved_build_testing "${BUILD_TESTING}")
+set(BUILD_TESTING OFF)
+set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+add_subdirectory("${opus_source}" opus EXCLUDE_FROM_ALL)
+set(BUILD_TESTING "${beacon_saved_build_testing}")
 
 set(protobuf_PROTOC_EXE "${BEACON_PROTOC_EXECUTABLE}")
 include("${protobuf_source}/cmake/protobuf-generate.cmake")
@@ -110,7 +169,7 @@ if(ANDROID)
   add_subdirectory(../src/Beacon.Android/app/src/main/cpp Beacon.Android.StreamCore)
 endif()
 
-if(WIN32)
+if(WIN32 OR (UNIX AND NOT ANDROID AND BUILD_TESTING))
   add_subdirectory(../src/Beacon.StreamWorker Beacon.StreamWorker)
 endif()
 

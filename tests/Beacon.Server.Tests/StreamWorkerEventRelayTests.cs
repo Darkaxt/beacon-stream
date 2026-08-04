@@ -11,6 +11,22 @@ namespace Beacon.Server.Tests;
 
 public sealed class StreamWorkerEventRelayTests
 {
+    private static WorkerCapabilities AvailableCapabilities()
+    {
+        var capabilities = new WorkerCapabilities
+        {
+            WorkerInstanceId = Google.Protobuf.ByteString.CopyFrom(new byte[] { 1 }),
+            QuicDatagrams = true,
+            MaximumSessions = 1,
+            MaximumFramesPerSecond = 120,
+            VideoAvailable = true
+        };
+        capabilities.VideoCodecs.Add(WorkerVideoCodec.H264);
+        capabilities.VideoEncoders.Add(WorkerVideoEncoder.Nvenc);
+        capabilities.CaptureMethods.Add(WorkerCaptureMethod.WindowsGraphicsCapture);
+        return capabilities;
+    }
+
     [Fact]
     public async Task HostedStopDrainsBackpressuredWorkerEventsBeforeStoppingRelay()
     {
@@ -97,6 +113,42 @@ public sealed class StreamWorkerEventRelayTests
     }
 
     [Fact]
+    public async Task HighRateMediaAndFeedbackDoNotEvictLifecycleDiagnostics()
+    {
+        var worker = new EventHost(capacity: 128);
+        var runtime = new RuntimeEvents();
+        var sink = new RecordingSink(expectedCalls: 1);
+        var journal = new InMemoryDiagnosticEventJournal(capacity: 12);
+        var relay = new StreamWorkerEventRelay(worker, runtime, sink, journal);
+        await relay.StartAsync(CancellationToken.None);
+        await worker.WriteAsync(new StreamWorkerConnectionObserved(1, 22));
+        await worker.WriteAsync(new StreamWorkerConnectionConfigured(1, 22));
+        await worker.WriteAsync(new StreamWorkerTransportConnected(1, 22));
+        await worker.WriteAsync(new StreamWorkerTransportAuthenticated(1, "session", 7, 1200));
+        for (ulong sequence = 1; sequence <= 50; sequence++)
+        {
+            await worker.WriteAsync(new StreamWorkerMediaEvidence(
+                1, "session", 7, sequence, checked(sequence * 1_000), 1200));
+            await worker.WriteAsync(new StreamWorkerFeedbackReceived(
+                1, "session", 7, sequence, StreamWorkerFeedbackKind.Decoder, 0, 0, 0));
+        }
+        await worker.WriteAsync(new StreamWorkerTransportDisconnected(1, "session", 7));
+        await worker.WriteAsync(Input(1, ClientInputEvent.StreamKeyboard(1, true)));
+
+        await sink.Completed;
+        await relay.StopAsync(CancellationToken.None);
+
+        IReadOnlyList<DiagnosticEvent> diagnostics = journal.GetRecent(100);
+        Assert.Contains(diagnostics, value => value.Operation == "worker.connection_observed");
+        Assert.Contains(diagnostics, value => value.Operation == "worker.connection_configured");
+        Assert.Contains(diagnostics, value => value.Operation == "worker.transport_connected");
+        Assert.Contains(diagnostics, value => value.Operation == "worker.transport_authenticated");
+        Assert.Contains(diagnostics, value => value.Operation == "worker.transport_disconnected");
+        Assert.Single(diagnostics, value => value.Operation == "worker.media");
+        Assert.Single(diagnostics, value => value.Operation == "worker.feedback");
+    }
+
+    [Fact]
     public async Task SanitizesDiagnosticsAndContinuesAfterFailuresAndWorkerExit()
     {
         const string canary = "RELAY-CANARY-4d9c";
@@ -123,6 +175,16 @@ public sealed class StreamWorkerEventRelayTests
         await host.WriteAsync(new StreamWorkerConnectionConfigured(1, 22));
         await host.WriteAsync(new StreamWorkerTransportConnected(1, 22));
         await host.WriteAsync(new StreamWorkerTransportFailed(1, 22, 0x80410006));
+        await host.WriteAsync(new StreamWorkerSessionStateChanged(
+            1, "session", WorkerSessionState.Failed, WorkerErrorCode.OperationFailed));
+        await host.WriteAsync(new StreamWorkerSessionFailure(
+            1,
+            "session",
+            7,
+            DiagnosticBoundary.Capture,
+            DiagnosticCode.OperationFailed,
+            2,
+            "capture-session-create"));
         await host.WriteAsync(new StreamWorkerProcessExited(1, 23));
         await host.WriteAsync(Input(8, ClientInputEvent.StreamKeyboard(1, true)));
         await host.WriteAsync(Input(9, ClientInputEvent.StreamKeyboard(2, false)));
@@ -140,9 +202,14 @@ public sealed class StreamWorkerEventRelayTests
         Assert.Contains("worker.connection_configured", rendered, StringComparison.Ordinal);
         Assert.Contains("worker.transport_connected", rendered, StringComparison.Ordinal);
         Assert.Contains("worker.transport_failed", rendered, StringComparison.Ordinal);
+        Assert.Contains("worker.session_failed", rendered, StringComparison.Ordinal);
+        Assert.Contains("worker.video_failed", rendered, StringComparison.Ordinal);
+        Assert.Contains("boundary=Capture", rendered, StringComparison.Ordinal);
+        Assert.Contains("failureStage=capture-session-create", rendered, StringComparison.Ordinal);
         Assert.Contains("platformStatusCode=2151743494", rendered, StringComparison.Ordinal);
         Assert.Contains("input.dispatch_failed", rendered, StringComparison.Ordinal);
         Assert.Contains("input.rejected", rendered, StringComparison.Ordinal);
+        Assert.Contains("resultCode=input-rejected", rendered, StringComparison.Ordinal);
         Assert.Equal(1, runtime.ExitCalls);
         Assert.Equal(3, sink.Batches.Count);
     }
@@ -159,7 +226,6 @@ public sealed class StreamWorkerEventRelayTests
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IStreamWorkerHost>(worker);
-                services.AddSingleton<IGenerationBoundStreamWorkerHost>(worker);
                 services.AddSingleton<IStreamWorkerRuntimeEvents>(runtime);
                 services.AddSingleton(sink);
                 services.AddSingleton(diagnostics);
@@ -167,7 +233,7 @@ public sealed class StreamWorkerEventRelayTests
             })
             .Build();
 
-    private sealed class EventHost : IStreamWorkerHost, IGenerationBoundStreamWorkerHost
+    private sealed class EventHost : IStreamWorkerHost
     {
         private readonly Channel<StreamWorkerEvent> channel;
         private readonly TaskCompletionSource shutdownEntered =
@@ -186,6 +252,8 @@ public sealed class StreamWorkerEventRelayTests
 
         public bool IsReady { get; private set; } = true;
         public ReadOnlyMemory<byte> WorkerInstanceId => new byte[] { 1 };
+
+        public WorkerCapabilities Capabilities { get; } = AvailableCapabilities();
         public ChannelReader<StreamWorkerEvent> Events => channel.Reader;
         public long CurrentProcessGeneration => 1;
         public Task ShutdownEntered => shutdownEntered.Task;
@@ -195,9 +263,6 @@ public sealed class StreamWorkerEventRelayTests
         public bool IsCurrentProcessGeneration(long processGeneration) => processGeneration == 1;
         public ValueTask WriteAsync(StreamWorkerEvent value) => channel.Writer.WriteAsync(value);
         public Task EnsureReadyAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-        public Task<StreamWorkerCommandResponse> SendAsync(
-            WorkerIpcEnvelope command,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<StreamWorkerCommandResponse> SendAsync(
             long expectedProcessGeneration,
             WorkerIpcEnvelope command,

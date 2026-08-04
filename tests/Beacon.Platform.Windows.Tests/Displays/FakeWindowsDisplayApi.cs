@@ -2,7 +2,7 @@ using Beacon.Platform.Windows.Displays;
 
 namespace Beacon.Platform.Windows.Tests.Displays;
 
-internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi
+internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi, IWindowsDisplayLeaseSession
 {
     public bool DriverReady { get; set; } = true;
 
@@ -22,7 +22,13 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi
     public DisplayHdrCapability HdrCapability { get; set; } =
         new(Supported: false, Enabled: false, Reason: "Windows Advanced Color reports SDR only.");
 
+    public DisplayHdrCapability? HdrCapabilityAfterSet { get; set; }
+
+    public DisplayApiResult HdrStateResult { get; set; } = DisplayApiResult.Ok();
+
     public DisplayApiResult PrimaryResult { get; set; } = DisplayApiResult.Ok();
+
+    public DisplayApiResult CreateResult { get; set; } = DisplayApiResult.Ok();
 
     public List<(string DisplayId, int Width, int Height, int RefreshHz)> CreatedDisplays { get; } = [];
 
@@ -31,6 +37,21 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi
     public List<string> RestoreRequests { get; } = [];
 
     public List<string> RemovedDisplays { get; } = [];
+
+    public List<(string DisplayId, bool Enabled)> HdrStateRequests { get; } = [];
+
+    public int TopologyQueryCount { get; private set; }
+
+    public List<string> HeldDisplayIds { get; } = [];
+
+    public List<string> ReleasedDisplayIds { get; } = [];
+
+    public SudoVdaDriverLeaseSessionSnapshot Snapshot => new(
+        LeaseCount: HeldDisplayIds.Count - ReleasedDisplayIds.Count,
+        WatchdogTimeoutSeconds: 3,
+        HeartbeatActive: HeldDisplayIds.Count > ReleasedDisplayIds.Count,
+        Healthy: true,
+        Diagnostic: "Fake SudoVDA driver lease session is healthy.");
 
     public static FakeWindowsDisplayApi ReadyWithGoodTopology()
     {
@@ -63,16 +84,24 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi
         CancellationToken cancellationToken)
     {
         CreatedDisplays.Add((displayId, width, height, refreshHz));
+        if (!CreateResult.Success)
+        {
+            return Task.FromResult(CreateResult);
+        }
+
         if (AfterCreateTopology is not null)
         {
             CurrentTopology = AfterCreateTopology;
         }
 
-        return Task.FromResult(DisplayApiResult.Ok());
+        return Task.FromResult(CreateResult);
     }
 
-    public Task<DisplayTopologySnapshot> QueryTopologyAsync(CancellationToken cancellationToken) =>
-        Task.FromResult(CurrentTopology);
+    public Task<DisplayTopologySnapshot> QueryTopologyAsync(CancellationToken cancellationToken)
+    {
+        TopologyQueryCount++;
+        return Task.FromResult(CurrentTopology);
+    }
 
     public Task<DisplayApiResult> SetVirtualPrimaryAsync(string displayId, CancellationToken cancellationToken)
     {
@@ -115,4 +144,42 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi
 
     public Task<DisplayHdrCapability> QueryHdrCapabilityAsync(string displayId, CancellationToken cancellationToken) =>
         Task.FromResult(HdrCapability);
+
+    public Task<DisplayApiResult> SetHdrStateAsync(
+        string displayId,
+        bool enabled,
+        CancellationToken cancellationToken)
+    {
+        HdrStateRequests.Add((displayId, enabled));
+        if (HdrStateResult.Success && HdrCapabilityAfterSet is not null)
+        {
+            HdrCapability = HdrCapabilityAfterSet;
+        }
+
+        return Task.FromResult(HdrStateResult);
+    }
+
+    public Task<SudoVdaDriverLeaseHoldResult> HoldAsync(
+        string displayId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        bool acquired = !HeldDisplayIds.Contains(displayId, StringComparer.OrdinalIgnoreCase);
+        if (acquired)
+        {
+            HeldDisplayIds.Add(displayId);
+        }
+
+        return Task.FromResult(
+            acquired
+                ? SudoVdaDriverLeaseHoldResult.Held()
+                : SudoVdaDriverLeaseHoldResult.AlreadyHeld());
+    }
+
+    public Task ReleaseAsync(string displayId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ReleasedDisplayIds.Add(displayId);
+        return Task.CompletedTask;
+    }
 }

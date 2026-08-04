@@ -27,11 +27,33 @@ enum WorkerSessionState {
 enum WorkerVideoCodec {
   WORKER_VIDEO_CODEC_UNSPECIFIED = 0;
   WORKER_VIDEO_CODEC_H264 = 1;
+  WORKER_VIDEO_CODEC_HEVC = 2;
+}
+
+enum WorkerVideoEncoder {
+  WORKER_VIDEO_ENCODER_UNSPECIFIED = 0;
+  WORKER_VIDEO_ENCODER_NVENC = 1;
+}
+
+enum WorkerAudioCodec {
+  WORKER_AUDIO_CODEC_UNSPECIFIED = 0;
+  WORKER_AUDIO_CODEC_OPUS = 1;
+}
+
+enum WorkerAudioCaptureMethod {
+  WORKER_AUDIO_CAPTURE_METHOD_UNSPECIFIED = 0;
+  WORKER_AUDIO_CAPTURE_METHOD_WASAPI_LOOPBACK = 1;
+}
+
+enum WorkerCaptureMethod {
+  WORKER_CAPTURE_METHOD_UNSPECIFIED = 0;
+  WORKER_CAPTURE_METHOD_WINDOWS_GRAPHICS_CAPTURE = 1;
 }
 
 enum WorkerDynamicRange {
   WORKER_DYNAMIC_RANGE_UNSPECIFIED = 0;
   WORKER_DYNAMIC_RANGE_SDR = 1;
+  WORKER_DYNAMIC_RANGE_HDR10 = 2;
 }
 
 enum StopMediaReason {
@@ -63,6 +85,10 @@ enum DiagnosticBoundary {
   DIAGNOSTIC_BOUNDARY_TRANSPORT = 3;
   DIAGNOSTIC_BOUNDARY_CAPTURE = 4;
   DIAGNOSTIC_BOUNDARY_ENCODER = 5;
+  DIAGNOSTIC_BOUNDARY_AUDIO_CAPTURE = 6;
+  DIAGNOSTIC_BOUNDARY_AUDIO_ENCODER = 7;
+  DIAGNOSTIC_BOUNDARY_AUDIO_DECODER = 8;
+  DIAGNOSTIC_BOUNDARY_AUDIO_PLAYBACK = 9;
 }
 
 enum DiagnosticCode {
@@ -104,6 +130,7 @@ message WorkerIpcEnvelope {
     StartMedia start_media = 23;
     StopMedia stop_media = 24;
     RequestIdr request_idr = 25;
+    PrepareBenchmark prepare_benchmark = 26;
     SessionStateChanged session_state_changed = 30;
     MediaMetrics media_metrics = 31;
     WorkerDiagnostic worker_diagnostic = 32;
@@ -131,6 +158,20 @@ message WorkerCapabilities {
   repeated WorkerVideoCodec video_codecs = 1;
   bool quic_datagrams = 2;
   uint32 maximum_sessions = 3;
+  bytes worker_instance_id = 4;
+  repeated WorkerVideoEncoder video_encoders = 5;
+  repeated WorkerCaptureMethod capture_methods = 6;
+  uint32 maximum_frames_per_second = 7;
+  uint32 maximum_bitrate_kbps = 8;
+  bool hdr10 = 9;
+  bool video_available = 10;
+  DiagnosticBoundary video_unavailable_boundary = 11;
+  uint32 video_unavailable_code = 12;
+  repeated WorkerAudioCodec audio_codecs = 13;
+  repeated WorkerAudioCaptureMethod audio_capture_methods = 14;
+  bool audio_available = 15;
+  DiagnosticBoundary audio_unavailable_boundary = 16;
+  uint32 audio_unavailable_code = 17;
 }
 
 message WorkerHealth {
@@ -161,6 +202,24 @@ message PrepareSession {
   uint32 minimum_bitrate_kbps = 8;
   uint32 initial_bitrate_kbps = 9;
   uint32 maximum_bitrate_kbps = 10;
+  string display_device_name = 11;
+  WorkerAudioCodec audio_codec = 12;
+  uint32 audio_sample_rate_hz = 13;
+  uint32 audio_channel_count = 14;
+  uint32 audio_frame_duration_us = 15;
+  uint32 audio_bitrate_bps = 16;
+  beacon.stream.v1.VideoProfile video_profile = 17;
+  uint32 video_bit_depth = 18;
+  beacon.stream.v1.ColorPrimaries color_primaries = 19;
+  beacon.stream.v1.TransferFunction transfer_function = 20;
+  beacon.stream.v1.MatrixCoefficients matrix_coefficients = 21;
+  beacon.stream.v1.ColorRange color_range = 22;
+  bytes hdr_static_info = 23;
+  bool hdr_static_info_in_bitstream = 24;
+}
+
+message PrepareBenchmark {
+  beacon.stream.v1.StartBenchmark plan = 1;
 }
 
 message StartMedia {
@@ -196,6 +255,7 @@ message WorkerDiagnostic {
   DiagnosticCode code = 3;
   uint32 platform_error_code = 4;
   uint64 numeric_value = 5;
+  string failure_stage = 6;
 }
 
 message WorkerTransportReady {

@@ -90,10 +90,12 @@ coupling, and fallback races add a second production path.
 **Choice:** `ID3D11VideoProcessor` on the same D3D11 device, BGRA input to NV12 output,
 with source/destination rectangles derived from the immutable plan.
 
-Beacon will query `ID3D11VideoProcessorEnumerator` support for the exact input/output
-formats and dimensions during preflight, then use `VideoProcessorBlt` for scaling and color
-conversion. The output texture is registered directly with NVENC. Unsupported conversion
-fails closed; a shader fallback is not added to version one.
+Beacon queries `ID3D11VideoProcessorEnumerator1` for the exact BGRA full-range BT.709 to
+NV12 limited-range BT.709 format/color conversion and uses `VideoProcessorBlt` for scaling
+on the capture device. It preserves the complete source within an even-aligned destination,
+keeps three reusable output textures so an in-flight frame is never overwritten, and clears
+GPU state on device loss. Unsupported conversion fails closed; no CPU or shader fallback
+exists. The NV12 output texture is the direct input boundary for the next NVENC task.
 
 Primary evidence:
 
@@ -107,6 +109,14 @@ Primary evidence:
 SDR uses BT.709 limited-range metadata for the first vertical slice. HDR conversion is not
 claimed from this path. A later HDR gate must prove WGC float capture, P010 conversion,
 encoder metadata, protocol metadata, decoder, and panel presentation together.
+
+Observed evidence on 2026-07-14: deterministic 1280x720 BGRA color bars scaled to a 640x400
+NV12 canvas on `NVIDIA GeForce RTX 4090 Laptop GPU` with exact expected YUV and limited-black
+letterbox samples, and real WGC
+2560x1600 frames produced changing NV12 hashes with increasing QPC timestamps on the same
+capture device. The production video directory contains no CPU mapping/copy or shader route.
+The exact command and observed samples are retained in
+`docs/validation/2026-07-14-d3d11-video-processor.md`.
 
 ## H.264 Encoder First
 

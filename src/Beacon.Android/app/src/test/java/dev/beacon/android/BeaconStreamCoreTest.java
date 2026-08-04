@@ -2,6 +2,8 @@ package dev.beacon.android;
 
 import org.junit.Test;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -11,15 +13,148 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 public final class BeaconStreamCoreTest {
     @Test
-    public void callbacksUseDedicatedExecutorAndStopAfterClose() throws Exception {
+    public void reportsStreamingOnlyBetweenAcceptedStartAndStop() {
+        RecordingBindings bindings = new RecordingBindings();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings,
+            frame -> { },
+            Executors.newSingleThreadExecutor());
+
+        assertFalse(core.isStreaming());
+        core.start(session("active-state"));
+        assertTrue(core.isStreaming());
+        core.stop();
+        assertFalse(core.isStreaming());
+        core.close();
+        assertFalse(core.isStreaming());
+    }
+
+    @Test
+    public void completeAccessUnitMetadataReachesFrameSink() throws Exception {
+        RecordingBindings bindings = new RecordingBindings();
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        CountDownLatch delivered = new CountDownLatch(1);
+        AtomicReference<BeaconStreamCore.EncodedFrame> observed = new AtomicReference<>();
+        BeaconStreamCore core = new BeaconStreamCore(bindings, frame -> {
+            observed.set(frame);
+            delivered.countDown();
+        }, executor);
+        core.start(session("complete-access-unit"));
+
+        bindings.callbacks.onFrame(
+            directBuffer(0, 0, 0, 1, 0x67),
+            2_345_678,
+            77,
+            1,
+            true,
+            true);
+
+        delivered.await();
+        BeaconStreamCore.EncodedFrame frame = observed.get();
+        assertNotNull(frame);
+        assertEquals(2_345_678, frame.presentationTimeUs);
+        assertEquals(77, frame.sequence);
+        assertTrue(frame.idr);
+        assertTrue(frame.codecConfiguration);
+        assertTrue(frame.bytes.isDirect());
+        assertTrue(frame.bytes.isReadOnly());
+        assertArrayEquals(new byte[] { 0, 0, 0, 1, 0x67 }, bytes(frame.bytes));
+        core.close();
+    }
+
+    @Test
+    public void decodedAudioPcmUsesTheGenerationScopedCallbackExecutor() throws Exception {
+        RecordingBindings bindings = new RecordingBindings();
+        ExecutorService executor = Executors.newSingleThreadExecutor(
+            action -> new Thread(action, "beacon-media-callback"));
+        CountDownLatch delivered = new CountDownLatch(1);
+        AtomicReference<String> callbackThread = new AtomicReference<>();
+        AtomicReference<BeaconStreamCore.DecodedAudioFrame> observed =
+            new AtomicReference<>();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings,
+            frame -> { },
+            frame -> {
+                callbackThread.set(Thread.currentThread().getName());
+                observed.set(frame);
+                delivered.countDown();
+            },
+            executor);
+        core.start(session("audio-pcm"));
+        ByteBuffer pcm = ByteBuffer.allocateDirect(1_920 * Float.BYTES)
+            .order(ByteOrder.nativeOrder());
+        pcm.putFloat(0.25F);
+        pcm.position(0);
+
+        bindings.callbacks.onAudioPcm(pcm, 20_000, 1, 1, false);
+
+        delivered.await();
+        BeaconStreamCore.DecodedAudioFrame frame = observed.get();
+        assertNotNull(frame);
+        assertEquals("beacon-media-callback", callbackThread.get());
+        assertEquals(20_000, frame.presentationTimeUs);
+        assertEquals(1, frame.sequence);
+        assertFalse(frame.concealed);
+        assertTrue(frame.pcm.isDirect());
+        assertTrue(frame.pcm.isReadOnly());
+        assertEquals(1_920 * Float.BYTES, frame.pcm.remaining());
+        assertEquals(0.25F, frame.pcm.order(ByteOrder.nativeOrder()).getFloat(), 0.0001F);
+        core.close();
+    }
+
+    @Test
+    public void benchmarkCompletionUsesCallbackExecutorAndPreservesPacketEvidence() throws Exception {
+        RecordingBindings bindings = new RecordingBindings();
+        ExecutorService executor = Executors.newSingleThreadExecutor(r -> new Thread(r, "beacon-benchmark"));
+        CountDownLatch delivered = new CountDownLatch(1);
+        AtomicReference<String> callbackThread = new AtomicReference<>();
+        AtomicReference<BeaconStreamCore.BenchmarkNetworkResult> observed = new AtomicReference<>();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings,
+            frame -> { },
+            executor,
+            () -> { },
+            stage -> { },
+            result -> {
+                callbackThread.set(Thread.currentThread().getName());
+                observed.set(result);
+                delivered.countDown();
+            });
+        core.start(benchmarkSession());
+
+        bindings.callbacks.onBenchmarkCompleted(
+            96.5,
+            new long[] { 0, 1 },
+            new int[] { 1000, 1000 },
+            new long[] { 2000, 2500 },
+            new long[] { 0, 300 },
+            new int[] { 0, 1 },
+            new boolean[] { true, false },
+            1);
+
+        delivered.await();
+        BeaconStreamCore.BenchmarkNetworkResult result = observed.get();
+        assertNotNull(result);
+        assertEquals("beacon-benchmark", callbackThread.get());
+        assertEquals(96.5, result.sustainableThroughputMbps, 0.001);
+        assertEquals(2, result.samples.size());
+        assertEquals(2500, result.samples.get(1).rttUs);
+        assertEquals(1, result.samples.get(1).reorderDistance);
+        assertFalse(result.samples.get(1).received);
+        core.close();
+    }
+
+    @Test
+    public void frameSinkUsesCallbackExecutorAndStopsAfterClose() throws Exception {
         RecordingBindings bindings = new RecordingBindings();
         ExecutorService executor = Executors.newSingleThreadExecutor(r -> new Thread(r, "beacon-frame"));
         CountDownLatch delivered = new CountDownLatch(1);
@@ -32,13 +167,13 @@ public final class BeaconStreamCoreTest {
         }, executor);
         core.start(session("frame-callback"));
 
-        bindings.callbacks.onFrame(new byte[] { 1, 2, 3 }, 4, 1, 1);
+        bindings.callbacks.onFrame(directBuffer(1, 2, 3), 4, 1, 1, false, false);
         delivered.await();
         assertEquals("beacon-frame", callbackThread.get());
-        assertNotEquals(Thread.currentThread().getName(), callbackThread.get());
+        assertEquals(1, frames.get());
 
         core.close();
-        bindings.callbacks.onFrame(new byte[] { 4 }, 5, 2, 1);
+        bindings.callbacks.onFrame(directBuffer(4), 5, 2, 1, false, false);
         assertEquals(1, frames.get());
         assertEquals(1, bindings.stopCount);
         assertEquals(1, bindings.releaseCount);
@@ -52,7 +187,7 @@ public final class BeaconStreamCoreTest {
         BeaconStreamSession session = BeaconStreamSession.parse(
             "https://beacon.example",
             "client",
-            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"s\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"}}}");
+            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"s\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"},\"selectedAudio\":{\"codec\":\"opus\",\"sampleRateHz\":48000,\"channelCount\":2,\"frameDurationUs\":20000,\"bitrateBps\":96000}}}");
 
         core.start(session);
         core.start(session);
@@ -158,6 +293,26 @@ public final class BeaconStreamCoreTest {
         assertEquals(Arrays.asList(1L, 2L), bindings.startGenerations);
         assertEquals(2, bindings.stopCount);
         assertEquals(0, core.connectionLossCountForTest());
+        core.close();
+    }
+
+    @Test
+    public void explicitStopIgnoresCurrentGenerationLoss() {
+        RecordingBindings bindings = new RecordingBindings();
+        AtomicReference<String> failureStage = new AtomicReference<>();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings,
+            frame -> { },
+            Executors.newSingleThreadExecutor(),
+            () -> { },
+            failureStage::set);
+
+        core.start(session("explicit-current"));
+        core.stop();
+        bindings.callbacks.onConnectionLost(1);
+
+        assertEquals(0, core.connectionLossCountForTest());
+        assertNull(failureStage.get());
         core.close();
     }
 
@@ -275,87 +430,119 @@ public final class BeaconStreamCoreTest {
     }
 
     @Test
-    public void closeDrainsInflightCallbackAndDiscardsQueuedCallback() throws Exception {
+    public void closeFromFrameSinkIsRejectedWithoutReleasingTheCore() throws Exception {
         RecordingBindings bindings = new RecordingBindings();
-        CountDownLatch sinkEntered = new CountDownLatch(1);
-        CountDownLatch releaseSink = new CountDownLatch(1);
-        CountDownLatch closeStarted = new CountDownLatch(1);
-        CountDownLatch closeFinished = new CountDownLatch(1);
-        AtomicInteger frames = new AtomicInteger();
-        bindings.stopCalled = new CountDownLatch(1);
+        AtomicReference<BeaconStreamCore> coreReference = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        CountDownLatch callbackCompleted = new CountDownLatch(1);
         BeaconStreamCore core = new BeaconStreamCore(
             bindings,
             frame -> {
-                frames.incrementAndGet();
-                sinkEntered.countDown();
                 try {
-                    releaseSink.await();
-                } catch (InterruptedException error) {
-                    Thread.currentThread().interrupt();
-                    throw new AssertionError(error);
+                    coreReference.get().close();
+                } catch (Throwable error) {
+                    failure.set(error);
+                } finally {
+                    callbackCompleted.countDown();
                 }
             },
             Executors.newSingleThreadExecutor());
+        coreReference.set(core);
         core.start(session("close-drain"));
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
-        sinkEntered.await();
-        bindings.callbacks.onFrame(new byte[] { 2 }, 2, 2, 1);
-        Thread closer = new Thread(() -> {
-            closeStarted.countDown();
-            core.close();
-            closeFinished.countDown();
-        });
-        closer.start();
-        closeStarted.await();
-        bindings.stopCalled.await();
+        bindings.callbacks.onFrame(directBuffer(1), 1, 1, 1, false, false);
+        callbackCompleted.await();
+
+        assertEquals(
+            "BeaconStreamCore cannot close from its frame sink callback.",
+            failure.get().getMessage());
         assertEquals(0, bindings.releaseCount);
-        releaseSink.countDown();
-        closeFinished.await();
-        closer.join();
-        assertEquals(1, frames.get());
+        core.close();
         assertEquals(1, bindings.releaseCount);
     }
 
     @Test
-    public void fakeSinkCompletionEmitsTypedQueueDepthFeedbackAfterFrame() throws Exception {
+    public void frameDeliveryDoesNotFabricateQueueDepthFeedback() throws Exception {
         RecordingBindings bindings = new RecordingBindings();
-        CountDownLatch feedbackSent = new CountDownLatch(1);
-        bindings.feedbackSent = feedbackSent;
         AtomicInteger order = new AtomicInteger();
+        AtomicReference<Integer> frameOrder = new AtomicReference<>();
+        CountDownLatch frameDelivered = new CountDownLatch(1);
         BeaconStreamCore core = new BeaconStreamCore(
             bindings,
-            frame -> assertEquals(1, order.incrementAndGet()),
+            frame -> {
+                frameOrder.set(order.incrementAndGet());
+                frameDelivered.countDown();
+            },
             Executors.newSingleThreadExecutor());
         core.start(session("feedback"));
         bindings.feedbackOrder = order;
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
-        feedbackSent.await();
-        assertEquals(0, bindings.lastQueuedAccessUnits);
-        assertEquals(0, bindings.lastDroppedAccessUnits);
-        assertEquals(2, order.get());
+        bindings.callbacks.onFrame(directBuffer(1), 1, 1, 1, false, false);
+        frameDelivered.await();
+        assertEquals(-1, bindings.lastQueuedAccessUnits);
+        assertEquals(-1, bindings.lastDroppedAccessUnits);
+        assertEquals(Integer.valueOf(1), frameOrder.get());
+        assertEquals(1, order.get());
         core.close();
     }
 
     @Test
     public void feedbackObserverRunsAfterSuccessfulNativeFeedbackHandoff() throws Exception {
         RecordingBindings bindings = new RecordingBindings();
+        CountDownLatch frameDelivered = new CountDownLatch(1);
         CountDownLatch observerCalled = new CountDownLatch(1);
         AtomicInteger order = new AtomicInteger();
+        AtomicReference<Integer> frameOrder = new AtomicReference<>();
+        AtomicReference<Integer> observerOrder = new AtomicReference<>();
         BeaconStreamCore core = new BeaconStreamCore(
             bindings,
-            frame -> assertEquals(1, order.incrementAndGet()),
+            frame -> {
+                frameOrder.set(order.incrementAndGet());
+                frameDelivered.countDown();
+            },
             Executors.newSingleThreadExecutor(),
             () -> {
-                assertEquals(3, order.incrementAndGet());
+                observerOrder.set(order.incrementAndGet());
                 observerCalled.countDown();
             });
         bindings.feedbackOrder = order;
         core.start(session("feedback-observer"));
 
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
+        bindings.callbacks.onFrame(directBuffer(1), 1, 1, 1, false, false);
+        frameDelivered.await();
+        core.sendQueueDepthFeedback(1, 0, 0);
         observerCalled.await();
 
+        assertEquals(Integer.valueOf(1), frameOrder.get());
+        assertEquals(Integer.valueOf(3), observerOrder.get());
         assertEquals(3, order.get());
+        core.close();
+    }
+
+    @Test
+    public void typedVideoFeedbackIsGenerationScopedAcrossReconnect() {
+        RecordingBindings bindings = new RecordingBindings();
+        BeaconStreamCore core = new BeaconStreamCore(
+            bindings,
+            frame -> { },
+            Executors.newSingleThreadExecutor());
+        core.start(session("typed-feedback", "AQID"));
+
+        core.sendQueueDepthFeedback(1, 2, 3);
+        core.sendDecoderFeedback(
+            1, BeaconStreamCore.DecoderState.FAILED, 321);
+        core.sendRenderedFrameFeedback(1, 44, 55, 66);
+        core.requestDecoderIdr(1, 44);
+
+        core.start(session("typed-feedback", "BAUG"));
+        core.sendQueueDepthFeedback(1, 9, 9);
+        core.sendDecoderFeedback(
+            1, BeaconStreamCore.DecoderState.READY, 0);
+        core.sendRenderedFrameFeedback(1, 99, 99, 99);
+        core.requestDecoderIdr(1, 99);
+
+        assertEquals(
+            Arrays.asList("queue:1:2:3", "decoder:1:FAILED:321",
+                "rendered:1:44:55:66", "idr:1:44"),
+            bindings.typedFeedback);
         core.close();
     }
 
@@ -376,130 +563,10 @@ public final class BeaconStreamCoreTest {
             });
         core.start(session("feedback-failure"));
 
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
+        core.sendQueueDepthFeedback(1, 0, 0);
         failureObserved.await();
 
         assertEquals("feedback", failureStage.get());
-        core.close();
-    }
-
-    @Test
-    public void oldFrameCompletionCannotSendFeedbackIntoReplacementGeneration()
-        throws Exception {
-        RecordingBindings bindings = new RecordingBindings();
-        CountDownLatch oldSinkEntered = new CountDownLatch(1);
-        CountDownLatch releaseOldSink = new CountDownLatch(1);
-        CountDownLatch replacementFeedback = new CountDownLatch(1);
-        bindings.feedbackSentForGeneration2 = replacementFeedback;
-        BeaconStreamCore core = new BeaconStreamCore(
-            bindings,
-            frame -> {
-                if (frame.presentationTimeUs != 1) return;
-                oldSinkEntered.countDown();
-                try {
-                    releaseOldSink.await();
-                } catch (InterruptedException error) {
-                    Thread.currentThread().interrupt();
-                    throw new AssertionError(error);
-                }
-            },
-            Executors.newSingleThreadExecutor());
-
-        core.start(session("feedback-race", "AQID"));
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
-        oldSinkEntered.await();
-        core.start(session("feedback-race", "BAUG"));
-        releaseOldSink.countDown();
-        bindings.callbacks.onFrame(new byte[] { 2 }, 2, 2, 2);
-        replacementFeedback.await();
-
-        assertEquals(Arrays.asList(2L), bindings.feedbackGenerations);
-        core.close();
-    }
-
-    @Test
-    public void explicitStopWhileSinkBlockedPreventsPostSinkFeedbackAndExecutorFailure()
-        throws Exception {
-        RecordingBindings bindings = new RecordingBindings();
-        CountDownLatch sinkEntered = new CountDownLatch(1);
-        CountDownLatch releaseSink = new CountDownLatch(1);
-        CountDownLatch stopFinished = new CountDownLatch(1);
-        CountDownLatch executorDrained = new CountDownLatch(1);
-        AtomicReference<Throwable> executorFailure = new AtomicReference<>();
-        ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
-            Thread thread = new Thread(r, "beacon-stop-blocked-sink");
-            thread.setUncaughtExceptionHandler((ignored, error) -> executorFailure.set(error));
-            return thread;
-        });
-        BeaconStreamCore core = new BeaconStreamCore(
-            bindings,
-            frame -> {
-                sinkEntered.countDown();
-                try {
-                    releaseSink.await();
-                } catch (InterruptedException error) {
-                    Thread.currentThread().interrupt();
-                    throw new AssertionError(error);
-                }
-            },
-            executor);
-        core.start(session("stop-blocked-sink"));
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
-        sinkEntered.await();
-
-        Thread stopper = new Thread(() -> {
-            core.stop();
-            stopFinished.countDown();
-        });
-        stopper.start();
-        stopFinished.await();
-        releaseSink.countDown();
-        executor.execute(executorDrained::countDown);
-        executorDrained.await();
-        stopper.join();
-
-        assertTrue(bindings.feedbackGenerations.isEmpty());
-        assertNull(executorFailure.get());
-        core.close();
-    }
-
-    @Test
-    public void currentLossWhileSinkBlockedPreventsPostSinkFeedbackAndExecutorFailure()
-        throws Exception {
-        RecordingBindings bindings = new RecordingBindings();
-        CountDownLatch sinkEntered = new CountDownLatch(1);
-        CountDownLatch releaseSink = new CountDownLatch(1);
-        CountDownLatch executorDrained = new CountDownLatch(1);
-        AtomicReference<Throwable> executorFailure = new AtomicReference<>();
-        ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
-            Thread thread = new Thread(r, "beacon-loss-blocked-sink");
-            thread.setUncaughtExceptionHandler((ignored, error) -> executorFailure.set(error));
-            return thread;
-        });
-        BeaconStreamCore core = new BeaconStreamCore(
-            bindings,
-            frame -> {
-                sinkEntered.countDown();
-                try {
-                    releaseSink.await();
-                } catch (InterruptedException error) {
-                    Thread.currentThread().interrupt();
-                    throw new AssertionError(error);
-                }
-            },
-            executor);
-        core.start(session("loss-blocked-sink"));
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
-        sinkEntered.await();
-
-        bindings.callbacks.onConnectionLost(1);
-        assertTrue(core.stoppedForTest());
-        releaseSink.countDown();
-        executor.execute(executorDrained::countDown);
-        executorDrained.await();
-
-        assertTrue(bindings.feedbackGenerations.isEmpty());
-        assertNull(executorFailure.get());
         core.close();
     }
 
@@ -515,7 +582,7 @@ public final class BeaconStreamCoreTest {
         core.start(session("monitor"));
         core.sendInput(BeaconApiClient.InputBatch.pointerTap(1, 0.5, 0.5));
         core.replaceSurface(new Object());
-        bindings.callbacks.onFrame(new byte[] { 1 }, 1, 1, 1);
+        core.sendQueueDepthFeedback(1, 0, 0);
         feedbackSent.await();
         Thread stopper = new Thread(core::stop);
         stopper.start();
@@ -531,11 +598,32 @@ public final class BeaconStreamCoreTest {
         return session(sessionId, "AQID");
     }
 
+    private static ByteBuffer directBuffer(int... values) {
+        ByteBuffer buffer = ByteBuffer.allocateDirect(values.length);
+        for (int value : values) buffer.put((byte) value);
+        buffer.flip();
+        return buffer;
+    }
+
+    private static byte[] bytes(ByteBuffer source) {
+        ByteBuffer copy = source.asReadOnlyBuffer();
+        byte[] values = new byte[copy.remaining()];
+        copy.get(values);
+        return values;
+    }
+
     private static BeaconStreamSession session(String sessionId, String ticket) {
         return BeaconStreamSession.parse(
             "https://beacon.example",
             "client",
-            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"" + ticket + "\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"" + sessionId + "\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"}}}");
+            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"" + ticket + "\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":1,\"planExplanation\":\"selected\",\"sessionId\":\"" + sessionId + "\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"h264\",\"width\":1280,\"height\":720,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"sdr\"},\"selectedAudio\":{\"codec\":\"opus\",\"sampleRateHz\":48000,\"channelCount\":2,\"frameDurationUs\":20000,\"bitrateBps\":96000}}}");
+    }
+
+    private static BeaconStreamSession benchmarkSession() {
+        return BeaconStreamSession.parse(
+            "https://beacon.example",
+            "client",
+            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":9,\"planExplanation\":\"preflight\",\"sessionId\":\"benchmark:3c13df40-26c4-40c6-8414-268734f1024d\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"benchmark\":{\"runId\":\"3c13df40-26c4-40c6-8414-268734f1024d\",\"schemaVersion\":1,\"reliableRound\":{\"packetCount\":16,\"payloadBytes\":32768,\"measurementIntervalUs\":250000},\"datagramRound\":{\"packetCount\":64,\"payloadBytes\":1000,\"measurementIntervalUs\":250000},\"runToken\":\"AAECAwQFBgcICQoLDA0ODw==\"}}}");
     }
 
     private static boolean allZero(byte[] bytes) {
@@ -559,11 +647,8 @@ public final class BeaconStreamCoreTest {
         boolean acceptStart = true;
         boolean reportLossInsideStart;
         boolean failFeedback;
-        CountDownLatch feedbackSent;
-        CountDownLatch feedbackSentForGeneration2;
-        CountDownLatch stopCalled;
         AtomicInteger feedbackOrder;
-        final List<Long> feedbackGenerations = new ArrayList<>();
+        final List<String> typedFeedback = new ArrayList<>();
         int lastQueuedAccessUnits = -1;
         long lastDroppedAccessUnits = -1;
 
@@ -586,19 +671,40 @@ public final class BeaconStreamCoreTest {
             long handle, long generation, int queuedAccessUnits,
             long droppedAccessUnits) {
             if (failFeedback) throw new IllegalStateException("native feedback failed");
-            feedbackGenerations.add(generation);
             lastQueuedAccessUnits = queuedAccessUnits;
             lastDroppedAccessUnits = droppedAccessUnits;
             if (feedbackOrder != null) feedbackOrder.incrementAndGet();
-            if (feedbackSent != null) feedbackSent.countDown();
-            if (generation == 2 && feedbackSentForGeneration2 != null) {
-                feedbackSentForGeneration2.countDown();
-            }
+            typedFeedback.add(
+                "queue:" + generation + ":" + queuedAccessUnits + ":" +
+                    droppedAccessUnits);
+        }
+        @Override public void sendDecoderFeedback(
+            long handle,
+            long generation,
+            BeaconStreamCore.DecoderState state,
+            int platformErrorCode) {
+            typedFeedback.add(
+                "decoder:" + generation + ":" + state + ":" + platformErrorCode);
+        }
+        @Override public void sendRenderedFrameFeedback(
+            long handle,
+            long generation,
+            long frameSequence,
+            long presentationTimeUs,
+            long renderedAtUs) {
+            typedFeedback.add(
+                "rendered:" + generation + ":" + frameSequence + ":" +
+                    presentationTimeUs + ":" + renderedAtUs);
+        }
+        @Override public void requestDecoderIdr(
+            long handle,
+            long generation,
+            long lastCompleteSequence) {
+            typedFeedback.add("idr:" + generation + ":" + lastCompleteSequence);
         }
         @Override public void replaceSurface(long handle, Object surface) { }
         @Override public void stop(long handle) {
             stopCount++;
-            if (stopCalled != null) stopCalled.countDown();
         }
         @Override public void release(long handle) { releaseCount++; }
     }

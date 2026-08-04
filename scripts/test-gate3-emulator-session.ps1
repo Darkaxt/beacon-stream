@@ -3,6 +3,7 @@ param(
     [string]$Serial = 'emulator-5554',
     [string]$EvidenceDirectory,
     [switch]$ArtifactsReady,
+    [switch]$SessionOnly,
     [switch]$ValidateKestrelParser
 )
 
@@ -350,7 +351,7 @@ function Get-KestrelListeningAddress([string]$Line) {
 }
 
 function Get-HostServerUrl([Uri]$ListeningUri) {
-    return "http://127.0.0.1:$($ListeningUri.Port)"
+    return "$($ListeningUri.Scheme)://127.0.0.1:$($ListeningUri.Port)"
 }
 
 function Assert-KestrelListeningFixture() {
@@ -361,6 +362,9 @@ function Assert-KestrelListeningFixture() {
     Require-Condition (
         (Get-HostServerUrl ([Uri]'http://0.0.0.0:43125')) -eq 'http://127.0.0.1:43125') `
         'Host loopback URL fixture was not mapped.'
+    Require-Condition (
+        (Get-HostServerUrl ([Uri]'https://0.0.0.0:43126')) -eq 'https://127.0.0.1:43126') `
+        'Secure host loopback URL fixture was not mapped.'
 }
 
 function Assert-AndroidInstrumentationFixture() {
@@ -393,11 +397,26 @@ INSTRUMENTATION_CODE: -1
         -not (Test-Gate3AndroidInstrumentationSucceeded 0 $zeroTests)) `
         'Android instrumentation zero-test result was accepted.'
 
+    $fixtureFingerprint = 'A' * 64
     $startInfo = New-AndroidInstrumentationStartInfo `
-        'gate3ConnectSendAndDisconnect' 'http://10.0.2.2:43125' 'fixture-client' 'fixture-input'
+        'gate3ConnectSendAndDisconnect' 'https://10.0.2.2:43125' `
+        'fixture-client' 'fixture-input' $fixtureFingerprint
     $arguments = $startInfo.ArgumentList -join ' '
     Require-Condition (-not $arguments.Contains('credential', [StringComparison]::OrdinalIgnoreCase)) `
         'Android instrumentation command line contains a credential argument.'
+    Require-Condition (
+        $arguments.Contains("serverPublicKeyFingerprint $fixtureFingerprint", [StringComparison]::Ordinal)) `
+        'Android instrumentation command line omits the pinned server fingerprint.'
+
+    $credentialStartInfo = New-Gate3CredentialTransferStartInfo 'fixture-emulator'
+    $credentialArguments = @($credentialStartInfo.ArgumentList)
+    $expectedCredentialArguments = @(
+        '-s', 'fixture-emulator',
+        'exec-in', 'run-as', 'dev.beacon.android',
+        'tee', 'files/beacon-gate3-client-credential')
+    Require-Condition (
+        @(Compare-Object $expectedCredentialArguments $credentialArguments -SyncWindow 0).Count -eq 0) `
+        'Private credential transfer does not execute the write as the Beacon app UID.'
 }
 
 function Assert-OwnedProcessJobFixture() {
@@ -511,7 +530,8 @@ function New-AndroidInstrumentationStartInfo(
     [string]$Method,
     [string]$ServerUrl,
     [string]$ClientId,
-    [string]$InputMarker) {
+    [string]$InputMarker,
+    [string]$ServerPublicKeyFingerprint) {
     $startInfo = [Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = 'adb'
     $startInfo.UseShellExecute = $false
@@ -525,6 +545,7 @@ function New-AndroidInstrumentationStartInfo(
         '-e', 'serverUrl', $ServerUrl,
         '-e', 'clientId', $ClientId,
         '-e', 'inputMarker', $InputMarker,
+        '-e', 'serverPublicKeyFingerprint', $ServerPublicKeyFingerprint,
         'dev.beacon.android.test/androidx.test.runner.AndroidJUnitRunner')) {
         $startInfo.ArgumentList.Add($argument)
     }
@@ -535,10 +556,11 @@ function Start-AndroidInstrumentation(
     [string]$Method,
     [string]$ServerUrl,
     [string]$ClientId,
-    [string]$InputMarker) {
+    [string]$InputMarker,
+    [string]$ServerPublicKeyFingerprint) {
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = New-AndroidInstrumentationStartInfo `
-        $Method $ServerUrl $ClientId $InputMarker
+        $Method $ServerUrl $ClientId $InputMarker $ServerPublicKeyFingerprint
     Require-Condition $process.Start() "Could not start instrumentation method '$Method'."
     return [PSCustomObject]@{
         Method = $Method
@@ -672,9 +694,11 @@ function Invoke-AndroidInstrumentation(
     [string]$Method,
     [string]$ServerUrl,
     [string]$ClientId,
-    [string]$InputMarker) {
+    [string]$InputMarker,
+    [string]$ServerPublicKeyFingerprint) {
     return Complete-AndroidInstrumentation (
-        Start-AndroidInstrumentation $Method $ServerUrl $ClientId $InputMarker)
+        Start-AndroidInstrumentation `
+            $Method $ServerUrl $ClientId $InputMarker $ServerPublicKeyFingerprint)
 }
 
 function Invoke-ServerJson(
@@ -739,20 +763,7 @@ function Set-Gate3ClientCredential(
         throw 'Could not prepare private Gate 3 credential storage.'
     }
 
-    $startInfo = [Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = 'adb'
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardInput = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    foreach ($argument in @(
-        '-s', $AndroidSerial,
-        'shell', 'run-as', 'dev.beacon.android',
-        'sh', '-c',
-        'cat > /data/user/0/dev.beacon.android/files/beacon-gate3-client-credential')) {
-        $startInfo.ArgumentList.Add($argument)
-    }
+    $startInfo = New-Gate3CredentialTransferStartInfo $AndroidSerial
 
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $startInfo
@@ -764,14 +775,31 @@ function Set-Gate3ClientCredential(
         $process.StandardInput.Close()
         $process.WaitForExit()
         [void]$standardOutput.GetAwaiter().GetResult()
-        [void]$standardError.GetAwaiter().GetResult()
+        $errorText = $standardError.GetAwaiter().GetResult()
         if ($process.ExitCode -ne 0) {
-            throw 'Could not transfer the private Gate 3 credential.'
+            throw "Could not transfer the private Gate 3 credential.`n$errorText"
         }
     }
     finally {
         $process.Dispose()
     }
+}
+
+function New-Gate3CredentialTransferStartInfo([string]$AndroidSerial) {
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'adb'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardInput = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in @(
+        '-s', $AndroidSerial,
+        'exec-in', 'run-as', 'dev.beacon.android',
+        'tee', 'files/beacon-gate3-client-credential')) {
+        $startInfo.ArgumentList.Add($argument)
+    }
+    return $startInfo
 }
 
 function Remove-Gate3ClientCredentialEvidence(
@@ -781,6 +809,41 @@ function Remove-Gate3ClientCredentialEvidence(
         rm -f files/beacon-gate3-client-credential 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0 -and -not $BestEffort) {
         throw 'Could not delete private Gate 3 credential evidence.'
+    }
+}
+
+function Get-Gate3CertificatePublicKeyFingerprint(
+    [Security.Cryptography.X509Certificates.X509Certificate2]$Certificate) {
+    $publicKey = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey(
+        $Certificate)
+    try {
+        Require-Condition ($null -ne $publicKey) 'Gate 3 identity has no RSA public key.'
+        $subjectPublicKeyInfo = $publicKey.ExportSubjectPublicKeyInfo()
+        try {
+            return [Convert]::ToHexString(
+                [Security.Cryptography.SHA256]::HashData($subjectPublicKeyInfo))
+        }
+        finally {
+            [Security.Cryptography.CryptographicOperations]::ZeroMemory($subjectPublicKeyInfo)
+        }
+    }
+    finally {
+        if ($null -ne $publicKey) {
+            $publicKey.Dispose()
+        }
+    }
+}
+
+function Get-Gate3PublicKeyFingerprint([string]$IdentityPath) {
+    $certificate = [Security.Cryptography.X509Certificates.X509CertificateLoader]::LoadPkcs12FromFile(
+        $IdentityPath,
+        $null,
+        [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+    try {
+        return Get-Gate3CertificatePublicKeyFingerprint $certificate
+    }
+    finally {
+        $certificate.Dispose()
     }
 }
 
@@ -900,10 +963,12 @@ if ($ValidateKestrelParser) {
 }
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
-$serverProject = Join-Path $repositoryRoot 'src\Beacon.Server\Beacon.Server.csproj'
+$serverProject = Join-Path $repositoryRoot `
+    'tests\Beacon.Server.TestHost\Beacon.Server.TestHost.csproj'
 $workerPath = Join-Path $repositoryRoot `
     'native\out\build\windows-x64\Beacon.StreamWorker\Debug\Beacon.StreamWorker.exe'
-$serverDll = Join-Path $repositoryRoot 'src\Beacon.Server\bin\Debug\net10.0-windows\Beacon.Server.dll'
+$serverDll = Join-Path $repositoryRoot `
+    'tests\Beacon.Server.TestHost\bin\Debug\net10.0-windows\Beacon.Server.TestHost.dll'
 $appApk = Join-Path $repositoryRoot 'src\Beacon.Android\app\build\outputs\apk\debug\app-debug.apk'
 $testApk = Join-Path $repositoryRoot `
     'src\Beacon.Android\app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk'
@@ -923,6 +988,7 @@ $clientId = "gate3-emulator-$runCanaryId"
 $credentialPath = Join-Path $ownedRoot 'credentials.json'
 $credentialCanary = $null
 $privateKeyPathMarker = "BEACON-G3-PRIVATE-KEY-PATH-$runCanaryId"
+$identityPath = Join-Path $ownedRoot "$privateKeyPathMarker.pfx"
 $privateKeyCanary = @()
 $inputPayloadCanary = "BEACON-G3-INPUT-$runCanaryId"
 $streamTicketCanary = @()
@@ -943,7 +1009,7 @@ try {
     if (-not $ArtifactsReady) {
         Write-Gate3Stage 'managed-build'
         & dotnet build $serverProject --configuration Debug --warnaserror
-        if ($LASTEXITCODE -ne 0) { throw 'Beacon.Server build failed.' }
+        if ($LASTEXITCODE -ne 0) { throw 'Beacon.Server.TestHost build failed.' }
         Write-Gate3Stage 'native-build'
         & (Join-Path $repositoryRoot 'scripts\build-native-windows.ps1')
         if ($LASTEXITCODE -ne 0) { throw 'Beacon.StreamWorker build failed.' }
@@ -979,13 +1045,11 @@ try {
     $startInfo.RedirectStandardError = $true
     $startInfo.ArgumentList.Add($serverDll)
     $startInfo.ArgumentList.Add('--urls')
-    $startInfo.ArgumentList.Add('http://0.0.0.0:0')
-    $startInfo.Environment['Beacon__HostMode'] = 'fake'
-    $startInfo.Environment['Beacon__StreamingMode'] = 'worker'
+    $startInfo.ArgumentList.Add('https://0.0.0.0:0')
+    $startInfo.Environment['Beacon__TestHost__UseProductionStreamWorker'] = 'true'
     $startInfo.Environment['Beacon__Streaming__WorkerPath'] = $workerPath
     $startInfo.Environment['Beacon__Security__TestHost'] = 'true'
-    $startInfo.Environment['Beacon__Security__IdentityPath'] =
-        Join-Path $ownedRoot "$privateKeyPathMarker.pfx"
+    $startInfo.Environment['Beacon__Security__IdentityPath'] = $identityPath
     $startInfo.Environment['Beacon__Security__CredentialsPath'] = $credentialPath
     $startInfo.Environment['Beacon__Profiles__Path'] = Join-Path $ownedRoot 'profiles.json'
     $startInfo.Environment['Logging__Console__FormatterName'] = 'json'
@@ -1004,28 +1068,84 @@ try {
     $serverAddress = $serverCapture.WaitForListeningAddress()
     $listeningUri = [Uri]$serverAddress
     Require-Condition ($listeningUri.Port -gt 0) 'Kestrel did not select an endpoint port.'
-    $emulatorServerUrl = "http://10.0.2.2:$($listeningUri.Port)"
+    $emulatorServerUrl = "https://10.0.2.2:$($listeningUri.Port)"
     $hostServerUrl = Get-HostServerUrl $listeningUri
+    $serverPublicKeyFingerprint = Get-Gate3PublicKeyFingerprint $identityPath
     $privateKeyCanary = @(
         $privateKeyPathMarker
-        Get-Gate3PrivateKeyEvidence $startInfo.Environment['Beacon__Security__IdentityPath'])
+        Get-Gate3PrivateKeyEvidence $identityPath)
 
-    $httpClient = [System.Net.Http.HttpClient]::new()
+    $httpHandler = [System.Net.Http.HttpClientHandler]::new()
+    $httpHandler.ServerCertificateCustomValidationCallback =
+        [System.Net.Http.HttpClientHandler]::DangerousAcceptAnyServerCertificateValidator
+    $httpClient = [System.Net.Http.HttpClient]::new($httpHandler)
     $httpClient.BaseAddress = [Uri]$hostServerUrl
     $httpClient.Timeout = [Threading.Timeout]::InfiniteTimeSpan
     try {
+        $serverIdentity = Invoke-ServerJson `
+            $httpClient ([System.Net.Http.HttpMethod]::Get) '/identity'
+        Require-Condition (
+            [string]$serverIdentity.publicKeyFingerprint -eq $serverPublicKeyFingerprint) `
+            'The localhost TestHost identity does not match its generated certificate.'
+        if (-not $SessionOnly) {
+            Write-Gate3Stage 'gate4-network-change-instrumentation'
+            $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
+                'gate4DefaultNetworkChangeMonitor' $emulatorServerUrl $clientId `
+                $inputPayloadCanary $serverPublicKeyFingerprint))
+        }
+        Write-Gate3Stage 'gate4-certified-benchmark-instrumentation'
+        $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
+            'gate4CertifiedBenchmarkEvidence' $emulatorServerUrl $clientId `
+            $inputPayloadCanary $serverPublicKeyFingerprint))
+        Write-Gate3Stage 'gate4-session-preflight-instrumentation'
+        $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
+            'gate4CertifiedSessionPreflight' $emulatorServerUrl $clientId `
+            $inputPayloadCanary $serverPublicKeyFingerprint))
+        if (-not $SessionOnly) {
+            Write-Gate3Stage 'gate4-real-hardware-instrumentation'
+            $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
+                'gate4NetworkAndHardwareBenchmark' $emulatorServerUrl $clientId `
+                $inputPayloadCanary $serverPublicKeyFingerprint))
+        }
         Write-Gate3Stage 'first-instrumentation'
         $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
             'gate3ConnectSendAndDisconnect' $emulatorServerUrl $clientId `
-            $inputPayloadCanary))
+            $inputPayloadCanary $serverPublicKeyFingerprint))
         Write-Gate3Stage 'reconnect-instrumentation'
         $instrumentationEvidence.Add((Invoke-AndroidInstrumentation `
             'gate3ReconnectAndStop' $emulatorServerUrl $clientId `
-            $inputPayloadCanary))
+            $inputPayloadCanary $serverPublicKeyFingerprint))
 
         Write-Gate3Stage 'session-evidence'
         $firstSnapshot = Invoke-ServerJson $httpClient ([System.Net.Http.HttpMethod]::Get) '/admin/snapshot'
         Add-Gate3JournalEvidence $journalEvidence $workerDiagnosticEvidence $firstSnapshot
+        $clientSnapshot = @(
+            $firstSnapshot.clients |
+                Where-Object { $_.clientId -eq $clientId })
+        Require-Condition ($clientSnapshot.Count -eq 1) `
+            'The Gate 4 benchmark client snapshot was not retained.'
+        $completedBenchmarks = @(
+            $clientSnapshot[0].benchmarks |
+                Where-Object {
+                    $null -ne $_.completedAt -and $null -ne $_.selectedResult
+                })
+        $pendingBenchmarks = @(
+            $clientSnapshot[0].benchmarks |
+                Where-Object {
+                    $null -eq $_.completedAt -or $null -eq $_.selectedResult
+                })
+        Require-Condition ($completedBenchmarks.Count -ge 2) `
+            'The certified benchmark and session preflight evidence were not retained.'
+        Require-Condition (@(
+            $completedBenchmarks |
+                Where-Object { $_.trigger -eq 'SessionPreflight' }).Count -eq 1) `
+            'Gate 4 did not retain exactly one completed session preflight.'
+        Require-Condition (@(
+            $completedBenchmarks |
+                Where-Object { $_.trigger -ne 'SessionPreflight' }).Count -ge 1) `
+            'Gate 4 did not retain completed hardware benchmark evidence.'
+        Require-Condition ($pendingBenchmarks.Count -eq 0) `
+            'The real Gate 4 observation left an orphaned benchmark run.'
         $operations = @($firstSnapshot.diagnostics | ForEach-Object { $_.operation })
         foreach ($operation in @(
             'worker.connection_observed',
@@ -1038,22 +1158,39 @@ try {
             'worker.transport_disconnected')) {
             Require-Condition ($operations -contains $operation) 'The Gate 3 session did not publish required Worker evidence.'
         }
-        $mediaSequences = @(
+        $mediaEvidence = @(
             $firstSnapshot.diagnostics |
                 Where-Object { $_.operation -eq 'worker.media' } |
-                ForEach-Object { [long]$_.metadata.sequence } |
-                Sort-Object -Unique)
+                ForEach-Object {
+                    [PSCustomObject]@{
+                        Generation = [long]$_.metadata.workerSessionGeneration
+                        Sequence = [long]$_.metadata.sequence
+                    }
+                } |
+                Sort-Object -Property Generation, Sequence -Unique)
+        $mediaGenerations = @($mediaEvidence.Generation | Sort-Object -Unique)
         Require-Condition (
-            $mediaSequences.Count -eq 2 -and $mediaSequences[0] -eq 1 -and $mediaSequences[1] -eq 2) `
-            'The reconnect did not emit the next Worker marker sequence.'
+            $mediaEvidence.Count -eq 2 -and
+            $mediaGenerations.Count -eq 2 -and
+            @($mediaEvidence | Where-Object { $_.Sequence -ne 1 }).Count -eq 0) `
+            'The reconnect did not emit a fresh generation-local Worker media sequence.'
 
         $logcat = (& adb -s $Serial logcat -d -v raw -s BeaconGate3:I) -join [Environment]::NewLine
-        foreach ($marker in @(
+        $requiredMarkers = @(
             'BEACON_GATE3_READY',
             'BEACON_GATE3_FRAME 1',
             'BEACON_GATE3_INPUT_ECHO 1',
             'BEACON_GATE3_FEEDBACK 1',
-            'BEACON_GATE3_RECONNECT_FRESH_TICKET')) {
+            'BEACON_GATE3_RECONNECT_FRESH_TICKET')
+        if (-not $SessionOnly) {
+            $requiredMarkers += @(
+                'BEACON_GATE4_CHANGE_MONITOR',
+                'BEACON_GATE4_REAL_HARDWARE_OBSERVED')
+        }
+        $requiredMarkers += @(
+            'BEACON_GATE4_BENCHMARK_COMPLETE',
+            'BEACON_GATE4_SESSION_PREFLIGHT')
+        foreach ($marker in $requiredMarkers) {
             Require-Condition ($logcat -match [Regex]::Escape($marker)) 'Required Android Gate 3 evidence was not emitted.'
             Write-Output $marker
         }
@@ -1066,7 +1203,7 @@ try {
             $crashLogcat = Start-AndroidGate3Logcat
             $crashInvocation = Start-AndroidInstrumentation `
                 'gate3ConnectAndAwaitWorkerCrash' $emulatorServerUrl $clientId `
-                $inputPayloadCanary
+                $inputPayloadCanary $serverPublicKeyFingerprint
             $armed = Wait-AndroidGate3Marker `
                 $crashLogcat $crashInvocation 'BEACON_GATE3_WORKER_CRASH_ARMED'
             if (-not $armed) {
@@ -1081,12 +1218,23 @@ try {
                     Where-Object { $_.clientId -eq $clientId -and $_.state -eq 'running' })
             Require-Condition ($activeRuntime.Count -eq 1) `
                 'Worker crash instrumentation did not retain exactly one active runtime.'
-            $activeMediaSequences = @(
+            $activeMediaEvidence = @(
                 $beforeCrash.diagnostics |
                     Where-Object { $_.operation -eq 'worker.media' } |
-                    ForEach-Object { [long]$_.metadata.sequence } |
-                    Sort-Object -Unique)
-            Require-Condition ($activeMediaSequences -contains 3) `
+                    ForEach-Object {
+                        [PSCustomObject]@{
+                            Generation = [long]$_.metadata.workerSessionGeneration
+                            Sequence = [long]$_.metadata.sequence
+                        }
+                    } |
+                    Sort-Object -Property Generation, Sequence -Unique)
+            $newActiveMedia = @(
+                $activeMediaEvidence |
+                    Where-Object {
+                        $_.Sequence -eq 1 -and
+                        $_.Generation -notin $mediaGenerations
+                    })
+            Require-Condition ($newActiveMedia.Count -eq 1) `
                 'Worker crash instrumentation did not receive its active media marker.'
 
             $workers = @(
@@ -1148,6 +1296,39 @@ try {
         $logcatEvidence = (& adb -s $Serial logcat -d -v raw) -join [Environment]::NewLine
         $evidenceReady = $true
     }
+    catch {
+        $instrumentationEvidence.Add($_.Exception.ToString())
+        try {
+            $failureSnapshot = Invoke-ServerJson `
+                $httpClient ([System.Net.Http.HttpMethod]::Get) '/admin/snapshot'
+            Add-Gate3JournalEvidence `
+                $journalEvidence $workerDiagnosticEvidence $failureSnapshot
+        }
+        catch {
+            $workerDiagnosticEvidence.Add([pscustomobject]@{
+                operation = 'failure-evidence.snapshot'
+                message = $_.Exception.Message
+            })
+        }
+        try {
+            $logcatEvidence = (& adb -s $Serial logcat -d -v raw) -join `
+                [Environment]::NewLine
+        }
+        catch {
+            $logcatEvidence = "Could not capture Android logcat: $($_.Exception.Message)"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($EvidenceDirectory)) {
+            Write-Gate3Evidence `
+                $EvidenceDirectory `
+                $serverOutputEvidence `
+                $instrumentationEvidence `
+                $journalEvidence `
+                $workerDiagnosticEvidence `
+                $logcatEvidence `
+                @{ failure = $true }
+        }
+        throw
+    }
     finally {
         if ($null -ne $httpClient) {
             $httpClient.Dispose()
@@ -1171,6 +1352,11 @@ finally {
             }
             $server = $null
             $serverCapture = $null
+        }
+        if (-not $evidenceReady -and
+            -not [string]::IsNullOrWhiteSpace($serverOutputEvidence)) {
+            [Console]::Error.WriteLine('--- Beacon Gate 3 server failure evidence ---')
+            [Console]::Error.WriteLine($serverOutputEvidence)
         }
         if ($evidenceReady -and -not [string]::IsNullOrWhiteSpace($EvidenceDirectory)) {
             Require-Condition ($streamTicketCanary.Count -eq 3) `

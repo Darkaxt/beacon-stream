@@ -3,13 +3,49 @@ using Beacon.Platform.Windows.Displays;
 
 namespace Beacon.Platform.Windows.Input;
 
-public sealed class WindowsClientInputSink(
-    IWindowsDisplayApi displayApi,
-    IWindowsInputApi inputApi) : IClientInputSink, IClientInputHealthProvider
+public sealed class WindowsClientInputSink :
+    IClientInputSink,
+    IClientInputHealthProvider,
+    IClientInputSessionLifecycle
 {
-    private static readonly string[] EventTypes = ["pointer", "keyboard"];
+    private static readonly string[] EventTypes = ["pointer", "keyboard", "controller"];
     private static readonly string[] PointerActions = ["move", "down", "up", "tap"];
     private static readonly string[] KeyboardActions = ["down", "up", "press"];
+    private readonly IWindowsDisplayApi displayApi;
+    private readonly IWindowsInputApi inputApi;
+    private readonly IWindowsSessionInputTargetActivator targetActivator;
+    private readonly IWindowsVirtualControllerApi controllerApi;
+
+    public WindowsClientInputSink(
+        IWindowsDisplayApi displayApi,
+        IWindowsInputApi inputApi,
+        IWindowsSessionInputTargetActivator targetActivator,
+        IWindowsVirtualControllerApi controllerApi)
+    {
+        this.displayApi = displayApi;
+        this.inputApi = inputApi;
+        this.targetActivator = targetActivator;
+        this.controllerApi = controllerApi;
+    }
+
+    internal WindowsClientInputSink(
+        IWindowsDisplayApi displayApi,
+        IWindowsInputApi inputApi)
+        : this(
+            displayApi,
+            inputApi,
+            TestSessionInputTargetActivator.Instance,
+            TestWindowsVirtualControllerApi.Instance)
+    {
+    }
+
+    internal WindowsClientInputSink(
+        IWindowsDisplayApi displayApi,
+        IWindowsInputApi inputApi,
+        IWindowsSessionInputTargetActivator targetActivator)
+        : this(displayApi, inputApi, targetActivator, TestWindowsVirtualControllerApi.Instance)
+    {
+    }
 
     public async Task<ClientInputResult> ForwardAsync(ClientInputBatch batch, CancellationToken cancellationToken)
     {
@@ -21,43 +57,88 @@ public sealed class WindowsClientInputSink(
         if (display is null)
         {
             return ClientInputResult.Fail(
-                $"Display '{batch.DisplayId}' is not active; refusing to send input for session '{batch.SessionId}'.");
+                $"Display '{batch.DisplayId}' is not active; refusing to send input for session '{batch.SessionId}'.",
+                "display-inactive");
         }
 
         if (display.Width <= 0 || display.Height <= 0)
         {
             return ClientInputResult.Fail(
-                $"Display '{batch.DisplayId}' has invalid geometry {display.Width}x{display.Height}; refusing to send input.");
+                $"Display '{batch.DisplayId}' has invalid geometry {display.Width}x{display.Height}; refusing to send input.",
+                "display-inactive");
         }
 
         List<WindowsInputCommand> commands = [];
+        List<ClientControllerInput> controllerEvents = [];
         foreach (ClientInputEvent inputEvent in batch.Events)
         {
-            if (!TryAppendCommands(inputEvent, display, commands, out string? error))
+            if (!TryAppendCommands(
+                    inputEvent,
+                    display,
+                    commands,
+                    controllerEvents,
+                    out string? error))
             {
-                return ClientInputResult.Fail(error);
+                return ClientInputResult.Fail(error, "input-invalid");
             }
         }
 
-        WindowsInputResult send = await inputApi.SendAsync(commands, cancellationToken);
-        return send.Success
-            ? ClientInputResult.Ok(batch.Events.Count)
-            : ClientInputResult.Fail(send.Error ?? "Windows input dispatch failed.");
+        WindowsSessionInputTargetResult target = await targetActivator.ActivateAsync(
+            batch,
+            cancellationToken).ConfigureAwait(false);
+        if (!target.Success)
+        {
+            return ClientInputResult.Fail(
+                target.Error ?? "The session-owned Windows input target could not be activated.",
+                "session-target-activation-failed");
+        }
+
+        if (commands.Count > 0)
+        {
+            WindowsInputResult send = await inputApi.SendAsync(commands, cancellationToken);
+            if (!send.Success)
+            {
+                return ClientInputResult.Fail(
+                send.Error ?? "Windows input dispatch failed.",
+                "sendinput-failed");
+            }
+        }
+        if (controllerEvents.Count > 0)
+        {
+            WindowsVirtualControllerResult controller = await controllerApi.ApplyAsync(
+                batch.SessionId,
+                controllerEvents,
+                cancellationToken).ConfigureAwait(false);
+            if (!controller.Success)
+            {
+                return ClientInputResult.Fail(
+                    controller.Error ?? "Windows virtual controller dispatch failed.",
+                    controller.ResultCode);
+            }
+        }
+        return ClientInputResult.Ok(batch.Events.Count);
     }
 
     public ClientInputHealth GetHealth() =>
         new(
             Ready: true,
             Backend: "windows-sendinput",
-            Diagnostic: "Windows SendInput pointer and keyboard sink ready.",
+            Diagnostic: $"Session-targeted Windows input sink ready; activeControllerSessions={controllerApi.ActiveSessionCount}.",
             SupportedEventTypes: EventTypes,
             SupportedPointerActions: PointerActions,
             SupportedKeyboardActions: KeyboardActions);
+
+    public Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+        controllerApi.ReleaseSessionAsync(sessionId, cancellationToken);
+
+    public Task PrepareSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+        controllerApi.PrepareSessionAsync(sessionId, cancellationToken);
 
     private static bool TryAppendCommands(
         ClientInputEvent inputEvent,
         DisplayPathSnapshot display,
         List<WindowsInputCommand> commands,
+        List<ClientControllerInput> controllerEvents,
         out string error)
     {
         if (inputEvent.Pointer is not null)
@@ -74,8 +155,9 @@ public sealed class WindowsClientInputSink(
         }
         if (inputEvent.Controller is not null)
         {
-            error = "Unsupported input category: controller.";
-            return false;
+            controllerEvents.Add(inputEvent.Controller);
+            error = string.Empty;
+            return true;
         }
         if (inputEvent.Touch is not null)
         {
@@ -311,5 +393,36 @@ public sealed class WindowsClientInputSink(
 
         error = $"Unsupported pointer button mask '{buttons}'.";
         return false;
+    }
+
+    private sealed class TestSessionInputTargetActivator : IWindowsSessionInputTargetActivator
+    {
+        public static TestSessionInputTargetActivator Instance { get; } = new();
+
+        public Task<WindowsSessionInputTargetResult> ActivateAsync(
+            ClientInputBatch batch,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(WindowsSessionInputTargetResult.Activated(0, 0));
+    }
+
+    private sealed class TestWindowsVirtualControllerApi : IWindowsVirtualControllerApi
+    {
+        public static TestWindowsVirtualControllerApi Instance { get; } = new();
+
+        public int ActiveSessionCount => 0;
+
+        public Task PrepareSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<WindowsVirtualControllerResult> ApplyAsync(
+            string sessionId,
+            IReadOnlyList<ClientControllerInput> events,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(WindowsVirtualControllerResult.Ok());
+
+        public Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

@@ -1,0 +1,289 @@
+#pragma once
+
+#include "beacon/worker/video/d3d11_video_processor.h"
+#include "beacon/worker/video/media_rate_controller.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <thread>
+#include <vector>
+
+namespace beacon::worker::video {
+
+enum class NvencVideoCodec {
+  h264,
+  hevc_main10,
+};
+
+enum class NvencH264Failure {
+  none,
+  invalid_plan,
+  invalid_frame,
+  timestamp_not_monotonic,
+  thread_ownership_violation,
+  device_unavailable,
+  device_lost,
+  runtime_unavailable,
+  api_unavailable,
+  api_incompatible,
+  session_poisoned,
+  session_unavailable,
+  session_open_failed,
+  h264_unsupported,
+  hevc_unsupported,
+  nv12_unsupported,
+  p010_unsupported,
+  ten_bit_unsupported,
+  dimensions_unsupported,
+  bitrate_reconfiguration_unsupported,
+  preset_unavailable,
+  initialization_failed,
+  bitstream_creation_failed,
+  bitstream_destruction_failed,
+  input_registration_failed,
+  input_mapping_failed,
+  encode_failed,
+  bitstream_lock_failed,
+  bitstream_unlock_failed,
+  input_unmapping_failed,
+  input_unregistration_failed,
+  reconfigure_failed,
+  session_destruction_failed,
+  invalid_bitstream,
+  resource_exhausted,
+};
+
+struct NvencH264Plan {
+  std::uint32_t width{};
+  std::uint32_t height{};
+  std::uint32_t frame_rate_numerator{};
+  std::uint32_t frame_rate_denominator{};
+  std::uint32_t bitrate_bps{};
+  NvencVideoCodec codec{NvencVideoCodec::h264};
+  std::vector<std::uint8_t> hdr_static_info;
+};
+
+struct NvencH264Configuration {
+  std::uint32_t width{};
+  std::uint32_t height{};
+  std::uint32_t frame_rate_numerator{};
+  std::uint32_t frame_rate_denominator{};
+  std::uint32_t bitrate_bps{};
+  VideoPixelFormat input_format{VideoPixelFormat::nv12};
+  VideoRange input_range{VideoRange::limited};
+  VideoColorMatrix matrix{VideoColorMatrix::bt709};
+  bool low_latency{true};
+  std::uint32_t b_frame_count{};
+  bool repeat_parameter_sets{true};
+  NvencVideoCodec codec{NvencVideoCodec::h264};
+  std::vector<std::uint8_t> hdr_static_info;
+};
+
+struct NvencH264NativeContract {
+  std::uint32_t api_version{};
+  std::uint32_t device_type{};
+  std::uint32_t buffer_format{};
+  std::uint32_t tuning_info{};
+  std::uint32_t rate_control_mode{};
+  std::int32_t frame_interval_p{};
+  std::uint32_t gop_length{};
+  bool repeat_sps_pps{};
+  bool enable_encode_async{};
+  bool enable_picture_type_decision{};
+  std::uint32_t first_frame_flags{};
+};
+
+struct NvencH264ApiCapabilities {
+  bool h264{};
+  bool nv12{};
+  bool hevc{};
+  bool p010{};
+  bool ten_bit{};
+  bool dynamic_bitrate{};
+  std::uint32_t max_width{};
+  std::uint32_t max_height{};
+};
+
+struct NvencH264ApiHandleResult {
+  std::uintptr_t handle{};
+  NvencH264Failure failure{NvencH264Failure::none};
+};
+
+struct NvencH264LockedBitstream {
+  const std::uint8_t* data{};
+  std::size_t size{};
+  std::int64_t qpc_timestamp{};
+};
+
+struct NvencH264ApiLockResult {
+  NvencH264LockedBitstream bitstream;
+  NvencH264Failure failure{NvencH264Failure::none};
+};
+
+struct NvencH264Submit {
+  std::uintptr_t mapped_input{};
+  std::uintptr_t output_bitstream{};
+  std::int64_t qpc_timestamp{};
+  bool force_idr{};
+  bool output_parameter_sets{};
+};
+
+struct EncodedVideoAccessUnit {
+  std::vector<std::uint8_t> annex_b;
+  std::int64_t qpc_timestamp{};
+  NvencVideoCodec codec{NvencVideoCodec::h264};
+  bool idr{};
+  bool has_vps{};
+  bool has_sps{};
+  bool has_pps{};
+  bool has_mastering_display_sei{};
+  bool has_content_light_level_sei{};
+};
+
+using EncodedH264AccessUnit = EncodedVideoAccessUnit;
+
+struct HevcAccessUnitDescription {
+  bool has_start_code{};
+  bool idr{};
+  bool has_vps{};
+  bool has_sps{};
+  bool has_pps{};
+  bool has_mastering_display_sei{};
+  bool has_content_light_level_sei{};
+};
+
+struct NvencHevcMain10NativeContract {
+  std::uint32_t buffer_format{};
+  std::uint32_t input_bit_depth{};
+  std::uint32_t output_bit_depth{};
+  bool repeat_vps_sps_pps{};
+  std::uint32_t colour_primaries{};
+  std::uint32_t transfer_characteristics{};
+  std::uint32_t colour_matrix{};
+};
+
+class INvencH264Api {
+ public:
+  virtual ~INvencH264Api() = default;
+
+  [[nodiscard]] virtual void* device_identity(
+      const capture::D3d11Texture& texture) noexcept = 0;
+  [[nodiscard]] virtual NvencH264Failure open(
+      const capture::D3d11Texture& texture,
+      const NvencH264Configuration& configuration) noexcept = 0;
+  [[nodiscard]] virtual NvencH264ApiHandleResult
+  create_bitstream() noexcept = 0;
+  [[nodiscard]] virtual NvencH264ApiHandleResult register_input(
+      const capture::D3d11Texture& texture, std::uint32_t width,
+      std::uint32_t height) noexcept = 0;
+  [[nodiscard]] virtual NvencH264ApiHandleResult map_input(
+      std::uintptr_t registered) noexcept = 0;
+  [[nodiscard]] virtual NvencH264Failure submit(
+      const NvencH264Submit& submit) noexcept = 0;
+  [[nodiscard]] virtual NvencH264ApiLockResult lock_bitstream(
+      std::uintptr_t output_bitstream) noexcept = 0;
+  [[nodiscard]] virtual NvencH264Failure unlock_bitstream(
+      std::uintptr_t output_bitstream) noexcept = 0;
+  [[nodiscard]] virtual NvencH264Failure unmap_input(
+      std::uintptr_t mapped) noexcept = 0;
+  [[nodiscard]] virtual NvencH264Failure unregister_input(
+      std::uintptr_t registered) noexcept = 0;
+  [[nodiscard]] virtual NvencH264Failure reconfigure_bitrate(
+      std::uint32_t bitrate_bps) noexcept = 0;
+  [[nodiscard]] virtual NvencH264Failure destroy_bitstream(
+      std::uintptr_t output_bitstream) noexcept = 0;
+  [[nodiscard]] virtual NvencH264Failure destroy_session() noexcept = 0;
+  virtual void poison_session(
+      const capture::D3d11Texture* texture) noexcept = 0;
+  virtual void unload() noexcept = 0;
+};
+
+class NvencH264Encoder final : public IVideoBitrateControl {
+ public:
+  NvencH264Encoder(std::unique_ptr<INvencH264Api> api,
+                   NvencH264Plan plan);
+  ~NvencH264Encoder();
+
+  NvencH264Encoder(const NvencH264Encoder&) = delete;
+  NvencH264Encoder& operator=(const NvencH264Encoder&) = delete;
+
+  [[nodiscard]] std::optional<EncodedH264AccessUnit> encode(
+      const ConvertedD3d11Frame& frame, bool force_idr = false) noexcept;
+  [[nodiscard]] bool reconfigure_bitrate(
+      std::uint32_t bitrate_bps) noexcept override;
+  [[nodiscard]] std::uint32_t
+  configured_bitrate_bps() const noexcept override;
+  [[nodiscard]] NvencH264Failure failure() const noexcept;
+  [[nodiscard]] bool close() noexcept;
+
+ private:
+  [[nodiscard]] bool valid_plan() const noexcept;
+  [[nodiscard]] bool claim_media_thread() noexcept;
+  [[nodiscard]] bool valid_frame(
+      const ConvertedD3d11Frame& frame) const noexcept;
+  [[nodiscard]] bool ensure_session(
+      const ConvertedD3d11Frame& frame, void* device) noexcept;
+  [[nodiscard]] std::optional<std::uintptr_t> registered_input(
+      const ConvertedD3d11Frame& frame) noexcept;
+  [[nodiscard]] NvencH264Failure release_input(
+      std::uintptr_t mapped, std::uintptr_t registered) noexcept;
+  void poison_session(const ConvertedD3d11Frame* frame) noexcept;
+  void shutdown_session() noexcept;
+
+  std::unique_ptr<INvencH264Api> api_;
+  mutable std::mutex operation_mutex_;
+  NvencH264Plan plan_;
+  void* device_{};
+  std::uintptr_t output_bitstream_{};
+  std::optional<std::int64_t> last_timestamp_;
+  std::optional<std::thread::id> media_thread_;
+  bool session_open_{};
+  bool session_poisoned_{};
+  bool first_frame_{true};
+  bool closed_{};
+  NvencH264Failure failure_{NvencH264Failure::none};
+};
+
+using INvencVideoApi = INvencH264Api;
+using NvencVideoEncoder = NvencH264Encoder;
+using NvencVideoPlan = NvencH264Plan;
+
+[[nodiscard]] NvencH264NativeContract
+nvenc_h264_native_contract() noexcept;
+
+[[nodiscard]] NvencHevcMain10NativeContract
+nvenc_hevc_main10_native_contract() noexcept;
+
+[[nodiscard]] HevcAccessUnitDescription inspect_hevc_annex_b(
+    const std::vector<std::uint8_t>& bytes) noexcept;
+
+[[nodiscard]] NvencH264Failure classify_nvenc_runtime_preflight(
+    bool runtime_loaded, bool entry_points_available,
+    std::uint32_t max_supported_api_version) noexcept;
+
+[[nodiscard]] NvencH264Failure probe_windows_nvenc_runtime() noexcept;
+
+[[nodiscard]] NvencH264Failure validate_nvenc_h264_capabilities(
+    const NvencH264ApiCapabilities& capabilities,
+    const NvencH264Plan& plan) noexcept;
+
+[[nodiscard]] NvencH264Failure validate_nvenc_hevc_main10_capabilities(
+    const NvencH264ApiCapabilities& capabilities,
+    const NvencH264Plan& plan) noexcept;
+
+[[nodiscard]] NvencH264Failure
+probe_windows_nvenc_hevc_main10_capabilities() noexcept;
+
+[[nodiscard]] NvencH264Failure
+probe_windows_nvenc_h264_capabilities() noexcept;
+
+[[nodiscard]] std::unique_ptr<INvencH264Api>
+create_windows_nvenc_h264_api();
+
+[[nodiscard]] std::unique_ptr<INvencVideoApi>
+create_windows_nvenc_video_api();
+
+}  // namespace beacon::worker::video

@@ -1,0 +1,51 @@
+using Beacon.Core.Benchmarks;
+using Beacon.Core.Clients;
+using Beacon.Server.State;
+
+namespace Beacon.Server.TestHost;
+
+internal static class FakeBenchmarkEvidence
+{
+    public static BenchmarkEvidence CreateZFold7(DateTimeOffset completedAt)
+    {
+        BenchmarkTransportPlan transportPlan = BenchmarkSuitePolicy.Create(BenchmarkTrigger.Automatic);
+        NetworkBenchmarkCoverage coverage = BenchmarkSuitePolicy.Coverage(transportPlan);
+        NetworkBenchmarkSample[] networkSamples = Enumerable.Range(0, coverage.ExpectedPacketCount)
+            .Select(sequence => new NetworkBenchmarkSample(
+                sequence,
+                transportPlan.DatagramPayloadBytes,
+                8,
+                1,
+                Received: true,
+                ThroughputMbps: 100,
+                ReorderDistance: 0))
+            .ToArray();
+        DecoderBenchmarkSample[] decoderSamples =
+        [
+            new("av1", "main", 10, 2560, 1600, 120, true, 120, 5, 9, 0, 0),
+            new("hevc", "main10", 10, 2560, 1600, 120, true, 120, 5, 9, 0, 0),
+            new("h264", "high", 8, 2560, 1600, 120, true, 120, 5, 9, 0, 0)
+        ];
+        EndpointPowerSample[] powerSamples = [new(80, false, "nominal")];
+        SelectedBenchmarkResult selected = BenchmarkScorer.Select(new(
+            networkSamples,
+            decoderSamples,
+            powerSamples,
+            NetworkCoverage: coverage));
+
+        return new BenchmarkEvidence(
+            RunId: Guid.Parse("80b224b6-d499-4e59-912d-c5575459c356"),
+            ClientId: new ClientId("z-fold-7"),
+            Trigger: BenchmarkTrigger.Automatic,
+            Fingerprints: new BenchmarkFingerprintSet(
+                new NetworkFingerprint(3, "fake-host", "in-memory", "127.0.0.0/8", null, null, "fake", null),
+                new HardwareFingerprint(3, "z-fold-7-fake", "emulator", "test", "2560x1600-120", "av1-hevc-h264")),
+            StartedAt: completedAt.AddMinutes(-1),
+            CompletedAt: completedAt,
+            NetworkSamples: networkSamples,
+            DecoderSamples: decoderSamples,
+            PowerSamples: powerSamples,
+            SelectedResult: selected,
+            NetworkCoverage: coverage);
+    }
+}

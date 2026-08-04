@@ -7,6 +7,10 @@ add_executable(BeaconMediaDatagramTests media_datagram_tests.cpp)
 target_link_libraries(BeaconMediaDatagramTests PRIVATE Beacon::StreamProtocol)
 add_test(NAME BeaconStreamProtocol.MediaDatagram COMMAND BeaconMediaDatagramTests)
 
+add_executable(BeaconBenchmarkDatagramTests benchmark_datagram_tests.cpp)
+target_link_libraries(BeaconBenchmarkDatagramTests PRIVATE Beacon::StreamProtocol)
+add_test(NAME BeaconStreamProtocol.BenchmarkDatagram COMMAND BeaconBenchmarkDatagramTests)
+
 add_executable(
   BeaconFakeTransportTests
   fake_transport.cpp
@@ -27,6 +31,88 @@ add_executable(BeaconFrameAssemblerTests frame_assembler_tests.cpp)
 target_link_libraries(BeaconFrameAssemblerTests PRIVATE Beacon::StreamProtocol)
 add_test(NAME BeaconStreamProtocol.FrameAssembler COMMAND BeaconFrameAssemblerTests)
 
+add_executable(
+  BeaconServerSessionProtocolTests
+  server_session_protocol_tests.cpp
+)
+target_link_libraries(BeaconServerSessionProtocolTests PRIVATE Beacon::StreamProtocol)
+add_test(NAME BeaconStreamProtocol.ServerSession COMMAND BeaconServerSessionProtocolTests)
+
+add_executable(
+  BeaconVideoMediaPacketizerTests
+  video_media_packetizer_tests.cpp
+)
+target_link_libraries(BeaconVideoMediaPacketizerTests PRIVATE Beacon::StreamProtocol)
+add_test(NAME BeaconStreamProtocol.VideoMediaPacketizer COMMAND BeaconVideoMediaPacketizerTests)
+
+add_executable(
+  BeaconAudioMediaPacketizerTests
+  audio_media_packetizer_tests.cpp
+)
+target_link_libraries(BeaconAudioMediaPacketizerTests PRIVATE Beacon::StreamProtocol)
+add_test(NAME BeaconStreamProtocol.AudioMediaPacketizer COMMAND BeaconAudioMediaPacketizerTests)
+
+add_executable(
+  BeaconAndroidOpusAudioDecoderTests
+  ../../src/Beacon.Android/app/src/main/cpp/streamcore/opus_audio_decoder.cpp
+  ../../src/Beacon.Android/app/src/main/cpp/streamcore/tests/opus_audio_decoder_tests.cpp
+)
+target_include_directories(
+  BeaconAndroidOpusAudioDecoderTests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ../../src/Beacon.Android/app/src/main/cpp/streamcore
+)
+target_link_libraries(BeaconAndroidOpusAudioDecoderTests PRIVATE opus)
+add_test(
+  NAME BeaconAndroid.OpusAudioDecoder
+  COMMAND BeaconAndroidOpusAudioDecoderTests
+)
+
+add_executable(
+  BeaconAccessUnitVectorTests
+  access_unit_vector.cpp
+  access_unit_vector_tests.cpp
+)
+target_compile_definitions(
+  BeaconAccessUnitVectorTests
+  PRIVATE
+    BEACON_REPOSITORY_ROOT="${CMAKE_SOURCE_DIR}/.."
+)
+target_link_libraries(BeaconAccessUnitVectorTests PRIVATE Beacon::StreamProtocol)
+add_test(NAME BeaconStreamProtocol.AccessUnitVector COMMAND BeaconAccessUnitVectorTests)
+
+if(WIN32)
+  add_executable(
+    BeaconAndroidStreamCoreHostTests
+    ../../src/Beacon.Android/app/src/main/cpp/streamcore/benchmark_collector.cpp
+    ../../src/Beacon.Android/app/src/main/cpp/streamcore/opus_audio_decoder.cpp
+    ../../src/Beacon.Android/app/src/main/cpp/streamcore/stream_core.cpp
+    ../../src/Beacon.Android/app/src/main/cpp/streamcore/tests/stream_core_tests.cpp
+  )
+  target_include_directories(
+    BeaconAndroidStreamCoreHostTests
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ../../src/Beacon.Android/app/src/main/cpp/streamcore
+  )
+  target_link_libraries(
+    BeaconAndroidStreamCoreHostTests
+    PRIVATE
+      Beacon::StreamContracts
+      Beacon::StreamProtocol
+      opus
+  )
+  target_compile_options(
+    BeaconAndroidStreamCoreHostTests
+    PRIVATE /W4 /WX /permissive-
+  )
+  add_test(
+    NAME BeaconAndroid.StreamCoreHost
+    COMMAND BeaconAndroidStreamCoreHostTests
+  )
+endif()
+
 if(ANDROID)
   add_executable(
     BeaconAndroidStreamCoreTests
@@ -44,6 +130,22 @@ if(ANDROID)
       ${CMAKE_CURRENT_SOURCE_DIR}
   )
   add_test(NAME BeaconAndroid.StreamCore COMMAND BeaconAndroidStreamCoreTests)
+
+  add_executable(
+    BeaconAndroidBenchmarkCollectorTests
+    ../../src/Beacon.Android/app/src/main/cpp/streamcore/tests/benchmark_collector_tests.cpp
+  )
+  target_link_libraries(
+    BeaconAndroidBenchmarkCollectorTests
+    PRIVATE
+      BeaconAndroidStreamCore
+  )
+  target_include_directories(
+    BeaconAndroidBenchmarkCollectorTests
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+  )
+  add_test(NAME BeaconAndroid.BenchmarkCollector COMMAND BeaconAndroidBenchmarkCollectorTests)
 
   add_executable(
     BeaconAndroidCertificatePinTests
@@ -80,6 +182,69 @@ if(ANDROID)
 endif()
 
 if(BEACON_WITH_MSQUIC)
+  if(UNIX AND NOT ANDROID)
+    add_executable(
+      BeaconHostedBenchmarkWorker
+      access_unit_vector.cpp
+      hosted_benchmark_worker.cpp
+      hosted_benchmark_worker_channel.cpp
+      hosted_video_generation.cpp
+    )
+    target_link_libraries(
+      BeaconHostedBenchmarkWorker
+      PRIVATE Beacon::StreamWorkerPortableCore OpenSSL
+    )
+    target_compile_options(
+      BeaconHostedBenchmarkWorker
+      PRIVATE -Wall -Wextra -Wpedantic -Werror
+    )
+
+    add_executable(
+      BeaconHostedBenchmarkWorkerChannelTests
+      hosted_benchmark_worker_channel.cpp
+      hosted_benchmark_worker_channel_tests.cpp
+    )
+    target_link_libraries(
+      BeaconHostedBenchmarkWorkerChannelTests
+      PRIVATE Beacon::StreamWorkerPortableCore
+    )
+    target_compile_options(
+      BeaconHostedBenchmarkWorkerChannelTests
+      PRIVATE -Wall -Wextra -Wpedantic -Werror
+    )
+    target_compile_definitions(
+      BeaconHostedBenchmarkWorkerChannelTests
+      PRIVATE
+        BEACON_HOSTED_WORKER_PATH="$<TARGET_FILE:BeaconHostedBenchmarkWorker>"
+    )
+    add_dependencies(
+      BeaconHostedBenchmarkWorkerChannelTests
+      BeaconHostedBenchmarkWorker
+    )
+    add_test(
+      NAME BeaconStreamWorker.HostedBenchmarkChannel
+      COMMAND BeaconHostedBenchmarkWorkerChannelTests
+    )
+
+    add_executable(
+      BeaconHostedVideoGenerationTests
+      hosted_video_generation.cpp
+      hosted_video_generation_tests.cpp
+    )
+    target_link_libraries(
+      BeaconHostedVideoGenerationTests
+      PRIVATE Beacon::StreamWorkerPortableCore
+    )
+    target_compile_options(
+      BeaconHostedVideoGenerationTests
+      PRIVATE -Wall -Wextra -Wpedantic -Werror
+    )
+    add_test(
+      NAME BeaconStreamWorker.HostedVideoGeneration
+      COMMAND BeaconHostedVideoGenerationTests
+    )
+  endif()
+
   function(beacon_deploy_msquic target)
     if(WIN32)
       add_custom_command(
@@ -91,6 +256,40 @@ if(BEACON_WITH_MSQUIC)
       )
     endif()
   endfunction()
+
+  add_executable(
+    BeaconHostedEmulatorEndpointServerTests
+    hosted_emulator_endpoint_server.cpp
+    hosted_emulator_endpoint_server_tests.cpp
+  )
+  target_link_libraries(
+    BeaconHostedEmulatorEndpointServerTests
+    PRIVATE Beacon::StreamProtocol
+  )
+  if(WIN32)
+    target_link_libraries(
+      BeaconHostedEmulatorEndpointServerTests
+      PRIVATE ntdll
+    )
+  endif()
+  beacon_deploy_msquic(BeaconHostedEmulatorEndpointServerTests)
+  add_test(
+    NAME BeaconStreamProtocol.HostedEmulatorEndpointServer
+    COMMAND BeaconHostedEmulatorEndpointServerTests
+  )
+
+  if(ANDROID)
+    add_executable(
+      BeaconHostedEmulatorEndpoint
+      access_unit_vector.cpp
+      hosted_emulator_endpoint.cpp
+      hosted_emulator_endpoint_server.cpp
+    )
+    target_link_libraries(
+      BeaconHostedEmulatorEndpoint
+      PRIVATE Beacon::StreamProtocol
+    )
+  endif()
 
   add_executable(BeaconMsQuicApiTests msquic_api_tests.cpp)
   target_link_libraries(BeaconMsQuicApiTests PRIVATE Beacon::StreamProtocol)

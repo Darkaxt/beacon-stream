@@ -28,6 +28,7 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
     private Task? receiveLoop;
     private Exception? terminalError;
     private byte[] workerInstanceId = [];
+    private WorkerCapabilities capabilities = new();
     private long nextRequestId;
     private int initialized;
     private int disposed;
@@ -83,6 +84,8 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
 
     public ReadOnlyMemory<byte> WorkerInstanceId => workerInstanceId;
 
+    public WorkerCapabilities Capabilities => capabilities.Clone();
+
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
@@ -103,6 +106,18 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
             }
             workerInstanceId = hello.WorkerHello.WorkerInstanceId.ToByteArray();
 
+            WorkerIpcEnvelope capabilityEnvelope =
+                await ReadEnvelopeOrProcessExitAsync(cancellationToken).ConfigureAwait(false);
+            ProtocolVersion.EnsureSupported(capabilityEnvelope.ProtocolVersion);
+            if (capabilityEnvelope.BodyCase != WorkerIpcEnvelope.BodyOneofCase.WorkerCapabilities
+                || !ValidCapabilities(
+                    capabilityEnvelope.WorkerCapabilities,
+                    hello.WorkerHello.WorkerInstanceId))
+            {
+                throw new StreamWorkerProtocolException("StreamWorker capabilities are invalid.");
+            }
+            capabilities = capabilityEnvelope.WorkerCapabilities.Clone();
+
             WorkerIpcEnvelope ready = await ReadEnvelopeOrProcessExitAsync(cancellationToken).ConfigureAwait(false);
             ProtocolVersion.EnsureSupported(ready.ProtocolVersion);
             if (ready.BodyCase != WorkerIpcEnvelope.BodyOneofCase.WorkerReady
@@ -116,9 +131,34 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
         }
         catch
         {
+            capabilities = new WorkerCapabilities();
+            workerInstanceId = [];
             Volatile.Write(ref initialized, 0);
             throw;
         }
+    }
+
+    private static bool ValidCapabilities(
+        WorkerCapabilities value,
+        ByteString workerInstanceId)
+    {
+        bool validVideoState = value.VideoAvailable
+            ? value.VideoUnavailableBoundary == DiagnosticBoundary.Unspecified
+                && value.VideoUnavailableCode == 0
+            : value.VideoUnavailableBoundary is DiagnosticBoundary.Capture or DiagnosticBoundary.Encoder
+                && value.VideoUnavailableCode != 0;
+        return value.WorkerInstanceId.Equals(workerInstanceId)
+            && value.VideoCodecs.Count == 1
+            && value.VideoCodecs[0] == WorkerVideoCodec.H264
+            && value.VideoEncoders.Count == 1
+            && value.VideoEncoders[0] == WorkerVideoEncoder.Nvenc
+            && value.CaptureMethods.Count == 1
+            && value.CaptureMethods[0] == WorkerCaptureMethod.WindowsGraphicsCapture
+            && value.QuicDatagrams
+            && value.MaximumSessions == 1
+            && value.MaximumFramesPerSecond == 120
+            && !value.Hdr10
+            && validVideoState;
     }
 
     public async Task<StreamWorkerCommandResponse> SendAsync(
@@ -158,13 +198,14 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
             Task winner = await Task.WhenAny(operation.Task, processExit)
                 .WaitAsync(cancellationToken)
                 .ConfigureAwait(false);
-            if (winner == processExit)
+            if (winner == processExit
+                && command.BodyCase != WorkerIpcEnvelope.BodyOneofCase.ShutdownWorker)
             {
                 int exitCode = await processExit.ConfigureAwait(false);
                 throw new StreamWorkerProcessExitedException(exitCode);
             }
 
-            return await operation.Task.ConfigureAwait(false);
+            return await operation.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -321,7 +362,9 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
     {
         if (envelope.BodyCase == WorkerIpcEnvelope.BodyOneofCase.WorkerDiagnostic)
         {
-            return TranslateConnectionDiagnostic(envelope);
+            return string.IsNullOrWhiteSpace(envelope.SessionId)
+                ? TranslateConnectionDiagnostic(envelope)
+                : TranslateSessionFailure(envelope);
         }
 
         if (string.IsNullOrWhiteSpace(envelope.SessionId))
@@ -338,8 +381,49 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
             WorkerIpcEnvelope.BodyOneofCase.InputReceived => TranslateInput(envelope),
             WorkerIpcEnvelope.BodyOneofCase.FeedbackReceived => TranslateFeedback(envelope),
             WorkerIpcEnvelope.BodyOneofCase.MediaEvidence => TranslateMediaEvidence(envelope),
+            WorkerIpcEnvelope.BodyOneofCase.SessionStateChanged =>
+                TranslateSessionStateChanged(envelope),
             _ => throw new StreamWorkerProtocolException("StreamWorker emitted an unknown unsolicited event."),
         };
+    }
+
+    private StreamWorkerSessionStateChanged TranslateSessionStateChanged(
+        WorkerIpcEnvelope envelope)
+    {
+        var state = envelope.SessionStateChanged;
+        if (state.State != WorkerSessionState.Failed
+            || state.ErrorCode is WorkerErrorCode.Unspecified or WorkerErrorCode.None)
+        {
+            throw new StreamWorkerProtocolException("StreamWorker session state event is invalid.");
+        }
+        return new StreamWorkerSessionStateChanged(
+            processGeneration,
+            envelope.SessionId,
+            state.State,
+            state.ErrorCode);
+    }
+
+    private StreamWorkerSessionFailure TranslateSessionFailure(WorkerIpcEnvelope envelope)
+    {
+        WorkerDiagnostic diagnostic = envelope.WorkerDiagnostic;
+        if (diagnostic.Severity != DiagnosticSeverity.Error
+            || diagnostic.Boundary is not (
+                DiagnosticBoundary.Transport
+                or DiagnosticBoundary.Capture
+                or DiagnosticBoundary.Encoder)
+            || diagnostic.Code != DiagnosticCode.OperationFailed
+            || diagnostic.NumericValue == 0)
+        {
+            throw new StreamWorkerProtocolException("StreamWorker session diagnostic is invalid.");
+        }
+        return new StreamWorkerSessionFailure(
+            processGeneration,
+            envelope.SessionId,
+            diagnostic.NumericValue,
+            diagnostic.Boundary,
+            diagnostic.Code,
+            diagnostic.PlatformErrorCode,
+            diagnostic.FailureStage);
     }
 
     private StreamWorkerEvent TranslateConnectionDiagnostic(WorkerIpcEnvelope envelope)
@@ -501,6 +585,11 @@ public sealed class StreamWorkerNamedPipeClient : IAsyncDisposable
                     feedback.BenchmarkEvidence.SchemaVersion,
                     0UL,
                     checked((uint)feedback.BenchmarkEvidence.Facts.Count)),
+            FeedbackStreamEnvelope.BodyOneofCase.BenchmarkDatagramEcho =>
+                (StreamWorkerFeedbackKind.BenchmarkDatagramEcho,
+                    feedback.BenchmarkDatagramEcho.RoundId,
+                    feedback.BenchmarkDatagramEcho.Sequence,
+                    0u),
             _ => throw new StreamWorkerProtocolException("StreamWorker feedback variant is invalid."),
         };
         return new StreamWorkerFeedbackReceived(

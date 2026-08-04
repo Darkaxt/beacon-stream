@@ -1,9 +1,13 @@
 package dev.beacon.android;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonParser;
+
 import org.junit.Test;
 
 import java.io.IOException;
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
 
@@ -49,37 +53,11 @@ public final class BeaconApiClientTest {
     }
 
     @Test
-    public void profilePatchSerializesOnlyApkAllowedFields() throws Exception {
-        FakeTransport transport = new FakeTransport();
-        BeaconApiClient client = new BeaconApiClient(new BeaconClientConfig("http://server", "z-fold-7"), transport);
-        BeaconApiClient.ProfilePatch patch = new BeaconApiClient.ProfilePatch();
-        patch.preferredWidth = 2560;
-        patch.preferredHeight = 1600;
-        patch.preferredRefreshHz = 120;
-        patch.hdrPreference = "prefer";
-        patch.codecPreference = "av1";
-        patch.qualityMode = "quality";
-        patch.bitrateCapMbps = 65;
-        patch.audioMode = "stereo";
-        patch.keepAppRunningOnDisconnect = false;
-
-        client.patchProfile(patch);
-
-        assertEquals("PATCH", transport.method);
-        assertEquals("/clients/z-fold-7/profile", transport.path);
-        assertTrue(transport.body.contains("\"preferredWidth\":2560"));
-        assertTrue(transport.body.contains("\"preferredHeight\":1600"));
-        assertTrue(transport.body.contains("\"preferredRefreshHz\":120"));
-        assertTrue(transport.body.contains("\"hdrPreference\":\"prefer\""));
-        assertTrue(transport.body.contains("\"codecPreference\":\"av1\""));
-        assertTrue(transport.body.contains("\"qualityMode\":\"quality\""));
-        assertTrue(transport.body.contains("\"bitrateCapMbps\":65"));
-        assertTrue(transport.body.contains("\"audioMode\":\"stereo\""));
-        assertTrue(transport.body.contains("\"keepAppRunningOnDisconnect\":false"));
-        assertFalse(transport.body.contains("mode"));
-        assertFalse(transport.body.contains("blackout"));
-        assertFalse(transport.body.contains("mirror"));
-        assertFalse(transport.body.contains("restorePhysicalDisplayOnEnd"));
+    public void doesNotExposeProfileMutationContract() {
+        assertFalse(Arrays.stream(BeaconApiClient.class.getDeclaredClasses())
+            .anyMatch(type -> type.getSimpleName().equals("ProfilePatch")));
+        assertFalse(Arrays.stream(BeaconApiClient.class.getDeclaredMethods())
+            .anyMatch(method -> method.getName().equals("patchProfile")));
     }
 
     @Test
@@ -99,12 +77,24 @@ public final class BeaconApiClientTest {
         FakeTransport transport = new FakeTransport();
         BeaconApiClient client = new BeaconApiClient(new BeaconClientConfig("http://server", "z-fold-7"), transport);
 
-        client.reportCapabilities(new BeaconApiClient.ClientCapabilities(true, true, true, false, false, 120, true, "2560x1600@120"));
+        BeaconApiClient.ClientDisplayMode current = new BeaconApiClient.ClientDisplayMode(2560, 1600, 120);
+        client.reportCapabilities(new BeaconApiClient.ClientCapabilities(
+            true,
+            true,
+            true,
+            false,
+            false,
+            120,
+            true,
+            current,
+            Arrays.asList(current, new BeaconApiClient.ClientDisplayMode(1920, 1200, 60))));
 
         assertEquals("/clients/z-fold-7/capabilities", transport.path);
         assertTrue(transport.body.contains("\"maxFps\":120"));
         assertTrue(transport.body.contains("\"lowLatencyDecode\":true"));
-        assertTrue(transport.body.contains("\"currentScreenMode\":\"2560x1600@120\""));
+        assertTrue(transport.body.contains("\"currentDisplayMode\":{\"width\":2560,\"height\":1600,\"refreshHz\":120}"));
+        assertTrue(transport.body.contains("\"supportedDisplayModes\":["));
+        assertFalse(transport.body.contains("currentScreenMode"));
     }
 
     @Test
@@ -164,6 +154,63 @@ public final class BeaconApiClientTest {
         assertFalse(transport.body.contains("display"));
         assertFalse(transport.body.contains("mode"));
         assertTrue(result.body().contains("\"state\":\"streaming\""));
+    }
+
+    @Test
+    public void controllerBatchCarriesStableControllerIdentityAndValue() {
+        BeaconApiClient.InputBatch batch =
+            BeaconApiClient.InputBatch.controller(7, 0, 12, 1);
+
+        assertEquals(7, batch.sequence);
+        assertEquals(1, batch.events.length);
+        assertEquals("controller", batch.events[0].type);
+        assertEquals("value", batch.events[0].action);
+        assertEquals(0, batch.events[0].controllerIndex);
+        assertEquals(12, batch.events[0].controlId);
+        assertEquals(1, batch.events[0].controllerValue);
+    }
+
+    @Test
+    public void benchmarkCompletionPostsRawNetworkDecoderAndPowerFacts() throws Exception {
+        FakeTransport transport = new FakeTransport();
+        BeaconApiClient client = new BeaconApiClient(
+            new BeaconClientConfig("http://server", "z-fold-7"),
+            transport);
+        BeaconStreamCore.BenchmarkNetworkResult network =
+            new BeaconStreamCore.BenchmarkNetworkResult(
+                96.5,
+                Arrays.asList(
+                    new BeaconStreamCore.BenchmarkNetworkSample(0, 1000, 2000, 0, 0, true),
+                    new BeaconStreamCore.BenchmarkNetworkSample(1, 1000, 2500, 300, 1, false)));
+        BeaconBenchmarkCompletionRequest completion =
+            BeaconBenchmarkCompletionRequest.fromNetworkResult(
+                network,
+                Collections.singletonList(new BeaconBenchmarkCompletionRequest.DecoderSample(
+                    "h264", "high", 8, 2560, 1600, 120, true,
+                    120.0, 5.0, 9.0, 0, 0, false, false)),
+                Collections.singletonList(new BeaconBenchmarkCompletionRequest.PowerSample(
+                    80, false, "nominal")));
+
+        client.completeBenchmark(
+            "3c13df40-26c4-40c6-8414-268734f1024d",
+            completion);
+
+        assertEquals(
+            "/clients/z-fold-7/benchmarks/3c13df40-26c4-40c6-8414-268734f1024d/complete",
+            transport.path);
+        JsonArray networkSamples = JsonParser.parseString(transport.body)
+            .getAsJsonObject()
+            .getAsJsonArray("networkSamples");
+        assertEquals(96.5, networkSamples.get(0).getAsJsonObject()
+            .get("throughputMbps").getAsDouble(), 0.001);
+        assertEquals(0.0, networkSamples.get(1).getAsJsonObject()
+            .get("throughputMbps").getAsDouble(), 0.001);
+        assertTrue(transport.body.contains("\"rttMs\":2.5"));
+        assertTrue(transport.body.contains("\"jitterMs\":0.3"));
+        assertTrue(transport.body.contains("\"throughputMbps\":96.5"));
+        assertTrue(transport.body.contains("\"reorderDistance\":1"));
+        assertTrue(transport.body.contains("\"codec\":\"h264\""));
+        assertTrue(transport.body.contains("\"thermalState\":\"nominal\""));
     }
 
     private static final class FakeTransport implements BeaconHttpTransport {

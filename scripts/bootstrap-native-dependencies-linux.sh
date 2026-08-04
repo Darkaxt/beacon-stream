@@ -38,7 +38,7 @@ import pathlib
 import sys
 
 lock = json.loads(pathlib.Path(sys.argv[1]).read_text())
-for name in ("msquic", "quictls", "protobuf", "abseil-cpp"):
+for name in ("msquic", "quictls", "protobuf", "abseil-cpp", "opus"):
     item = lock["dependencies"][name]
     print("\t".join((name, item["repository"], item["revision"], item["ref"], item["path"])))
 PY

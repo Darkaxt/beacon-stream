@@ -448,14 +448,48 @@ void grant_mapping_matches_every_current_protocol_mode() {
   BEACON_TEST_REQUIRE(!android_stream::map_grant_video_codec("vp9", codec));
   BEACON_TEST_REQUIRE(!android_stream::map_grant_dynamic_range("dolby_vision", dynamic_range));
   android_stream::SelectedVideo selected;
+  const std::vector<std::byte> hdr_static_info{
+      std::byte{0}, std::byte{0x48}, std::byte{0x8a}, std::byte{0x08},
+      std::byte{0x39}, std::byte{0x34}, std::byte{0x21}, std::byte{0xaa},
+      std::byte{0x9b}, std::byte{0x96}, std::byte{0x19}, std::byte{0xfc},
+      std::byte{0x08}, std::byte{0x13}, std::byte{0x3d}, std::byte{0x42},
+      std::byte{0x40}, std::byte{0xe8}, std::byte{0x03}, std::byte{0x32},
+      std::byte{0x00}, std::byte{0xe8}, std::byte{0x03}, std::byte{0x90},
+      std::byte{0x01}};
   BEACON_TEST_REQUIRE(android_stream::map_selected_video_grant(
-      "av1", 2560, 1600, 120, 1, "hdr10", selected));
-  BEACON_TEST_REQUIRE(selected.codec == beacon::stream::v1::VIDEO_CODEC_AV1);
+      "hevc", 2560, 1600, 120, 1, "hdr10", "hevcMain10", 10,
+      "bt2020", "pq", "bt2020NonConstantLuminance", "limited",
+      hdr_static_info, true, selected));
+  BEACON_TEST_REQUIRE(selected.codec == beacon::stream::v1::VIDEO_CODEC_HEVC);
   BEACON_TEST_REQUIRE(selected.width == 2560);
   BEACON_TEST_REQUIRE(selected.height == 1600);
   BEACON_TEST_REQUIRE(selected.fps_numerator == 120);
   BEACON_TEST_REQUIRE(selected.fps_denominator == 1);
   BEACON_TEST_REQUIRE(selected.dynamic_range == beacon::stream::v1::DYNAMIC_RANGE_HDR10);
+  BEACON_TEST_REQUIRE(selected.profile == beacon::stream::v1::VIDEO_PROFILE_HEVC_MAIN10);
+  BEACON_TEST_REQUIRE(selected.bit_depth == 10);
+  BEACON_TEST_REQUIRE(selected.color_primaries == beacon::stream::v1::COLOR_PRIMARIES_BT2020);
+  BEACON_TEST_REQUIRE(selected.transfer_function == beacon::stream::v1::TRANSFER_FUNCTION_PQ);
+  BEACON_TEST_REQUIRE(
+      selected.matrix_coefficients ==
+      beacon::stream::v1::MATRIX_COEFFICIENTS_BT2020_NON_CONSTANT_LUMINANCE);
+  BEACON_TEST_REQUIRE(selected.color_range == beacon::stream::v1::COLOR_RANGE_LIMITED);
+  BEACON_TEST_REQUIRE(selected.hdr_static_info.size() == 25);
+  BEACON_TEST_REQUIRE(selected.hdr_static_info_in_bitstream);
+  beacon::stream::v1::AudioCodec audio_codec{};
+  BEACON_TEST_REQUIRE(android_stream::grant_audio_codec_enum_name("opus") ==
+                      "AUDIO_CODEC_OPUS");
+  BEACON_TEST_REQUIRE(android_stream::map_grant_audio_codec("opus", audio_codec));
+  BEACON_TEST_REQUIRE(audio_codec == beacon::stream::v1::AUDIO_CODEC_OPUS);
+  BEACON_TEST_REQUIRE(!android_stream::map_grant_audio_codec("aac", audio_codec));
+  android_stream::SelectedAudio audio;
+  BEACON_TEST_REQUIRE(android_stream::map_selected_audio_grant(
+      "opus", 48'000, 2, 20'000, 96'000, audio));
+  BEACON_TEST_REQUIRE(audio.codec == beacon::stream::v1::AUDIO_CODEC_OPUS);
+  BEACON_TEST_REQUIRE(audio.sample_rate_hz == 48'000);
+  BEACON_TEST_REQUIRE(audio.channel_count == 2);
+  BEACON_TEST_REQUIRE(audio.frame_duration_us == 20'000);
+  BEACON_TEST_REQUIRE(audio.bitrate_bps == 96'000);
 }
 
 void closing_registry_retains_until_callback_completion() {

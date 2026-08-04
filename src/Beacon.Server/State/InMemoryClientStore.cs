@@ -69,7 +69,8 @@ public sealed class InMemoryClientStore
     {
         lock (gate)
         {
-            profiles[profile.ClientId.Value] = profile;
+            ClientProfile resolved = ResolveDisplayPolicy(profile);
+            profiles[resolved.ClientId.Value] = resolved;
             PersistProfiles();
         }
     }
@@ -96,19 +97,50 @@ public sealed class InMemoryClientStore
 
     public EndpointCapabilities GetCapabilities(string clientId) =>
         WithLock(() => capabilities.GetValueOrDefault(clientId)
-        ?? new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: true, VirtualDisplayHdrSupported: false));
+        ?? new EndpointCapabilities(Av1: false, Hevc: false, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false));
 
-    public void SaveCapabilities(string clientId, EndpointCapabilities value)
+    public ClientProfile SaveCapabilities(string clientId, EndpointCapabilities value)
     {
         lock (gate)
         {
+            if (!profiles.TryGetValue(clientId, out ClientProfile? profile))
+            {
+                throw new KeyNotFoundException($"Client '{clientId}' is not registered.");
+            }
+
+            ClientDisplayMode selectedMode = ClientDisplayModeSelectionPolicy.Select(
+                profile.Display.PreferredMode,
+                value);
+            ClientProfile resolved = profile with
+            {
+                Display = profile.Display with { SelectedMode = selectedMode }
+            };
             capabilities[clientId] = value;
+            profiles[clientId] = resolved;
+            PersistProfiles();
+            return resolved;
         }
+    }
+
+    private ClientProfile ResolveDisplayPolicy(ClientProfile profile)
+    {
+        if (!capabilities.TryGetValue(profile.ClientId.Value, out EndpointCapabilities? current))
+        {
+            return profile;
+        }
+
+        ClientDisplayMode selectedMode = ClientDisplayModeSelectionPolicy.Select(
+            profile.Display.PreferredMode,
+            current);
+        return profile with
+        {
+            Display = profile.Display with { SelectedMode = selectedMode }
+        };
     }
 
     public TelemetrySnapshot GetTelemetry(string clientId) =>
         WithLock(() => telemetry.GetValueOrDefault(clientId)
-        ?? new TelemetrySnapshot(RttMs: 8, PacketLossPercent: 0, DecoderLoadPercent: null));
+        ?? new TelemetrySnapshot(RttMs: null, PacketLossPercent: null, DecoderLoadPercent: null));
 
     public void SaveTelemetry(string clientId, TelemetrySnapshot value)
     {
@@ -224,6 +256,28 @@ public sealed class InMemoryClientStore
         }
     }
 
+    public bool TryCancelBenchmarkEvidence(Guid runId, string clientId)
+    {
+        lock (gate)
+        {
+            if (!benchmarkEvidence.TryGetValue(runId, out BenchmarkEvidence? pending) ||
+                !pending.ClientId.Value.Equals(clientId, StringComparison.OrdinalIgnoreCase) ||
+                pending.CompletedAt is not null ||
+                pending.SelectedResult is not null)
+            {
+                return false;
+            }
+
+            BenchmarkEvidence[] persisted = benchmarkEvidence.Values
+                .Where(value => value.RunId != runId)
+                .OrderBy(value => value.StartedAt)
+                .ThenBy(value => value.RunId)
+                .ToArray();
+            benchmarkRepository.SaveEvidence(persisted);
+            return benchmarkEvidence.Remove(runId);
+        }
+    }
+
     public BenchmarkEvidence? GetBenchmarkEvidence(Guid runId) =>
         WithLock(() => benchmarkEvidence.GetValueOrDefault(runId));
 
@@ -253,6 +307,26 @@ public sealed class InMemoryClientStore
             .FirstOrDefault()
             ?.ToPlanEvidence(codecPreference)
             : null);
+    }
+
+    public BenchmarkEvidence? GetLatestBenchmarkHardwareEvidence(
+        string clientId,
+        HardwareFingerprint hardware,
+        DateTimeOffset evaluatedAt,
+        TimeSpan maximumEvidenceAge)
+    {
+        ArgumentNullException.ThrowIfNull(hardware);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(maximumEvidenceAge, TimeSpan.Zero);
+        return WithLock(() => benchmarkEvidence.Values
+            .Where(value => value.ClientId.Value.Equals(clientId, StringComparison.OrdinalIgnoreCase))
+            .Where(value => value.Fingerprints.Hardware == hardware)
+            .Where(value => value.CompletedAt is not null && value.SelectedResult is not null)
+            .Where(value => value.DecoderSamples.Count > 0)
+            .Where(value => value.CompletedAt <= evaluatedAt)
+            .Where(value => evaluatedAt - value.CompletedAt!.Value <= maximumEvidenceAge)
+            .OrderByDescending(value => value.CompletedAt)
+            .ThenByDescending(value => value.RunId)
+            .FirstOrDefault());
     }
 
     private void PersistAndPublishBenchmarkEvidence(BenchmarkEvidence evidence)

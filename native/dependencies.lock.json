@@ -13,6 +13,18 @@
       "windowsSha256": "69569cbc178cd5785ecb7d93569913110677eafeb4b8f82970c361fad4c7cd66",
       "linuxArchive": "https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-linux-x86_64.zip",
       "linuxSha256": "e9c129c176bb7df02546c4cd6185126ca53c89e7d2f09511e209319704b5dd7e"
+    },
+    "windowsAppSdk": {
+      "releaseVersion": "2.3.1",
+      "foundationVersion": "2.3.5",
+      "foundationArchive": "https://api.nuget.org/v3-flatcontainer/microsoft.windowsappsdk.foundation/2.3.5/microsoft.windowsappsdk.foundation.2.3.5.nupkg",
+      "foundationSha256": "15d78449c8566f889e0f95ae6ebc0610d79b32f95ce296b621f54b8ec8f496cb",
+      "interactiveExperiencesVersion": "2.1.3",
+      "interactiveExperiencesArchive": "https://api.nuget.org/v3-flatcontainer/microsoft.windowsappsdk.interactiveexperiences/2.1.3/microsoft.windowsappsdk.interactiveexperiences.2.1.3.nupkg",
+      "interactiveExperiencesSha256": "e8063437eb853b5abe4dc6b6bdb2ecfb82f49ec281764c82cd04b4d94e144f68",
+      "runtimeVersion": "2.3.1",
+      "runtimeArchive": "https://api.nuget.org/v3-flatcontainer/microsoft.windowsappsdk.runtime/2.3.1/microsoft.windowsappsdk.runtime.2.3.1.nupkg",
+      "runtimeSha256": "f15c6c682a81a019e13beaee512de9fb83ffd5a1f3e83b99209b6860a7aebba2"
     }
   },
   "dependencies": {

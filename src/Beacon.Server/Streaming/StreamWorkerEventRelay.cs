@@ -6,7 +6,7 @@ using Beacon.Platform.Windows.Streaming;
 namespace Beacon.Server.Streaming;
 
 public sealed class StreamWorkerEventRelay(
-    IGenerationBoundStreamWorkerHost eventSource,
+    IStreamWorkerHost eventSource,
     IStreamWorkerRuntimeEvents runtimeEvents,
     IClientInputSink inputSink,
     IDiagnosticEventSink diagnostics) : BackgroundService
@@ -15,6 +15,8 @@ public sealed class StreamWorkerEventRelay(
     private readonly TaskCompletionSource gracefulStopRequested =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Lock stopGate = new();
+    private (long ProcessGeneration, ulong WorkerSessionGeneration)? feedbackDiagnosticGeneration;
+    private (long ProcessGeneration, ulong WorkerSessionGeneration)? mediaDiagnosticGeneration;
     private Task? stopTask;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -84,17 +86,14 @@ public sealed class StreamWorkerEventRelay(
     private async Task StopCoreAsync(CancellationToken cancellationToken)
     {
         bool graceful = false;
-        if (eventSource is IStreamWorkerHost lifecycleHost)
+        try
         {
-            try
-            {
-                await lifecycleHost.ShutdownAsync(cancellationToken).ConfigureAwait(false);
-                graceful = true;
-            }
-            catch (Exception)
-            {
-                PublishShutdownFailure();
-            }
+            await eventSource.ShutdownAsync(cancellationToken).ConfigureAwait(false);
+            graceful = true;
+        }
+        catch (Exception)
+        {
+            PublishShutdownFailure();
         }
 
         if (graceful)
@@ -199,10 +198,15 @@ public sealed class StreamWorkerEventRelay(
                     input,
                     result.Success ? DiagnosticSeverity.Information : DiagnosticSeverity.Warning,
                     ("sequence", input.Sequence),
-                    ("eventCount", input.Events.Count));
+                    ("eventCount", input.Events.Count),
+                    ("resultCode", result.ResultCode));
                 break;
             case StreamWorkerFeedbackReceived feedback:
                 bool feedbackAccepted = runtimeEvents.IsCurrent(feedback);
+                if (feedbackAccepted && !ShouldPublishFeedbackDiagnostic(feedback))
+                {
+                    break;
+                }
                 Publish(
                     feedbackAccepted ? "worker.feedback" : "worker.feedback_rejected",
                     feedbackAccepted
@@ -219,6 +223,10 @@ public sealed class StreamWorkerEventRelay(
                 break;
             case StreamWorkerMediaEvidence media:
                 bool mediaAccepted = runtimeEvents.IsCurrent(media);
+                if (mediaAccepted && !ShouldPublishMediaDiagnostic(media))
+                {
+                    break;
+                }
                 Publish(
                     mediaAccepted ? "worker.media" : "worker.media_rejected",
                     mediaAccepted
@@ -244,6 +252,27 @@ public sealed class StreamWorkerEventRelay(
                     DiagnosticSeverity.Information,
                     ("workerSessionGeneration", disconnected.WorkerSessionGeneration));
                 break;
+            case StreamWorkerSessionStateChanged state:
+                Publish(
+                    "worker.session_failed",
+                    "Worker streaming session entered a failed state.",
+                    state,
+                    DiagnosticSeverity.Warning,
+                    ("state", state.State),
+                    ("errorCode", state.ErrorCode));
+                break;
+            case StreamWorkerSessionFailure failure:
+                Publish(
+                    "worker.video_failed",
+                    "Worker video pipeline failed.",
+                    failure,
+                    DiagnosticSeverity.Error,
+                    ("workerSessionGeneration", failure.WorkerSessionGeneration),
+                    ("boundary", failure.Boundary),
+                    ("code", failure.Code),
+                    ("platformStatusCode", failure.PlatformErrorCode),
+                    ("failureStage", failure.FailureStage));
+                break;
             case StreamWorkerProcessExited exited:
                 runtimeEvents.ProcessExited(exited);
                 Publish(
@@ -254,6 +283,30 @@ public sealed class StreamWorkerEventRelay(
                     ("exitCode", exited.ExitCode));
                 break;
         }
+    }
+
+    private bool ShouldPublishFeedbackDiagnostic(StreamWorkerFeedbackReceived feedback)
+    {
+        var generation = (feedback.ProcessGeneration, feedback.WorkerSessionGeneration);
+        if (feedbackDiagnosticGeneration == generation)
+        {
+            return false;
+        }
+
+        feedbackDiagnosticGeneration = generation;
+        return true;
+    }
+
+    private bool ShouldPublishMediaDiagnostic(StreamWorkerMediaEvidence media)
+    {
+        var generation = (media.ProcessGeneration, media.WorkerSessionGeneration);
+        if (mediaDiagnosticGeneration == generation)
+        {
+            return false;
+        }
+
+        mediaDiagnosticGeneration = generation;
+        return true;
     }
 
     private void Publish(

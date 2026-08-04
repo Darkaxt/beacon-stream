@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -11,6 +12,29 @@
 namespace beacon::android::streamcore {
 
 namespace stream_v1 = beacon::stream::v1;
+
+namespace {
+
+std::uint64_t monotonic_us() noexcept {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
+
+bool is_valid_decoder_state(stream_v1::DecoderState state) noexcept {
+  switch (state) {
+    case stream_v1::DECODER_STATE_READY:
+    case stream_v1::DECODER_STATE_AWAITING_IDR:
+    case stream_v1::DECODER_STATE_FAILED:
+      return true;
+    case stream_v1::DECODER_STATE_UNSPECIFIED:
+    default:
+      return false;
+  }
+}
+
+}  // namespace
 
 #ifndef NDEBUG
 namespace {
@@ -102,8 +126,32 @@ bool StreamCore::start(ConnectionGrant grant) {
   if (state_ != State::idle && state_ != State::stopped && state_ != State::failed) {
     return false;
   }
+  pending_decoder_feedback_.reset();
   const auto selected_limit = derive_maximum_frame_bytes(
       grant.video.width, grant.video.height);
+  std::unique_ptr<OpusAudioDecoder> audio_decoder;
+  if (!grant.benchmark.has_value()) {
+    if (grant.audio.codec != stream_v1::AUDIO_CODEC_OPUS ||
+        grant.audio.sample_rate_hz != opus_sample_rate_hz ||
+        grant.audio.channel_count != opus_channel_count ||
+        grant.audio.frame_duration_us != opus_frame_duration_us) {
+      return false;
+    }
+    audio_decoder = std::make_unique<OpusAudioDecoder>();
+    if (!audio_decoder->ready()) return false;
+  }
+  if (grant.benchmark.has_value()) {
+    const BenchmarkGrant &benchmark = *grant.benchmark;
+    if (benchmark.run_id.empty() || benchmark.schema_version == 0 ||
+        !benchmark_collector_.start({
+            .run_token = benchmark.run_token,
+            .reliable_packet_count = benchmark.reliable_packet_count,
+            .reliable_payload_bytes = benchmark.reliable_payload_bytes,
+            .datagram_packet_count = benchmark.datagram_packet_count,
+            .datagram_payload_bytes = benchmark.datagram_payload_bytes})) {
+      return false;
+    }
+  }
 #ifndef NDEBUG
   inject_start_fault(StartFaultPoint::assembler_allocation);
 #endif
@@ -111,11 +159,14 @@ bool StreamCore::start(ConnectionGrant grant) {
       std::min(maximum_frame_bytes_, selected_limit));
   grant_ = std::move(grant);
   assembler_ = std::move(replacement);
+  audio_decoder_ = std::move(audio_decoder);
   session_bytes_.clear();
   session_sequence_ = 0;
   input_sequence_ = 0;
   feedback_sequence_ = 0;
   last_complete_sequence_ = 0;
+  last_server_sequence_ = 0;
+  benchmark_result_.reset();
   shutdown_ = false;
   transition(State::connecting);
   if (!transport_.connect(grant_.endpoint)) {
@@ -138,7 +189,12 @@ bool StreamCore::on_connected() {
 }
 
 bool StreamCore::receive_session(std::span<const std::byte> bytes) {
-  if (state_ != State::authenticating) {
+  return receive_session(bytes, monotonic_us());
+}
+
+bool StreamCore::receive_session(std::span<const std::byte> bytes,
+                                 std::uint64_t received_at_us) {
+  if (state_ != State::authenticating && state_ != State::benchmarking) {
     fail();
     return false;
   }
@@ -162,16 +218,64 @@ bool StreamCore::receive_session(std::span<const std::byte> bytes) {
                                              static_cast<int>(length));
     session_bytes_.erase(session_bytes_.begin(),
                          session_bytes_.begin() + 4U + length);
-    if (state_ != State::authenticating || !parsed ||
-        reply.protocol_version() != 1 ||
+    if (!parsed || reply.protocol_version() != 1 ||
         reply.session_id() != grant_.session_id ||
-        reply.sequence() != 1 ||
-        reply.body_case() != stream_v1::SessionStreamEnvelope::kSessionAuthenticated ||
-        !reply.session_authenticated().accepted()) {
+        reply.sequence() <= last_server_sequence_) {
       fail();
       return false;
     }
-    if (!send_start()) {
+
+    if (state_ == State::authenticating) {
+      if (reply.sequence() != 1 ||
+          reply.body_case() !=
+              stream_v1::SessionStreamEnvelope::kSessionAuthenticated ||
+          !reply.session_authenticated().accepted()) {
+        fail();
+        return false;
+      }
+      last_server_sequence_ = reply.sequence();
+      if (!send_start()) {
+        return false;
+      }
+    } else if (reply.body_case() ==
+               stream_v1::SessionStreamEnvelope::kBenchmarkReliableChunk) {
+      const auto &chunk = reply.benchmark_reliable_chunk();
+      if (!grant_.benchmark.has_value() ||
+          chunk.run_id() != grant_.benchmark->run_id || chunk.round_id() != 1 ||
+          !benchmark_collector_.observe_reliable(
+              chunk.sequence(), static_cast<std::uint32_t>(chunk.payload().size()),
+              received_at_us)) {
+        fail();
+        return false;
+      }
+      last_server_sequence_ = reply.sequence();
+    } else if (reply.body_case() ==
+               stream_v1::SessionStreamEnvelope::kBenchmarkRoundCompleted) {
+      const auto &completed = reply.benchmark_round_completed();
+      if (!grant_.benchmark.has_value() ||
+          completed.run_id() != grant_.benchmark->run_id ||
+          completed.round_id() != 2 ||
+          completed.expected_packet_count() !=
+              grant_.benchmark->datagram_packet_count ||
+          completed.payload_bytes() !=
+              grant_.benchmark->datagram_payload_bytes) {
+        fail();
+        return false;
+      }
+      std::vector<BenchmarkRttObservation> rtt;
+      rtt.reserve(static_cast<std::size_t>(completed.rtt_observations_size()));
+      for (const auto &observation : completed.rtt_observations()) {
+        rtt.push_back({.sequence = observation.sequence(),
+                       .rtt_us = observation.rtt_us()});
+      }
+      benchmark_result_ = benchmark_collector_.complete(received_at_us, rtt);
+      if (!benchmark_result_.has_value()) {
+        fail();
+        return false;
+      }
+      last_server_sequence_ = reply.sequence();
+    } else {
+      fail();
       return false;
     }
   }
@@ -179,8 +283,39 @@ bool StreamCore::receive_session(std::span<const std::byte> bytes) {
 }
 
 bool StreamCore::receive_datagram(std::span<const std::byte> bytes) {
+  return receive_datagram(bytes, monotonic_us());
+}
+
+bool StreamCore::receive_datagram(std::span<const std::byte> bytes,
+                                  std::uint64_t received_at_us) {
+  if (state_ == State::benchmarking) {
+    auto parsed = stream::parse_benchmark_datagram(bytes);
+    if (!parsed.has_value() ||
+        !benchmark_collector_.observe_datagram(bytes, received_at_us)) {
+      return false;
+    }
+    return send_benchmark_echo(parsed->header);
+  }
   if (state_ != State::streaming) {
     return false;
+  }
+  const auto parsed = stream::parse_media_datagram(bytes);
+  if (parsed.error != stream::MediaDatagramError::none) return false;
+  if (parsed.header.media_kind == stream::MediaKind::audio) {
+    if (audio_decoder_ == nullptr || parsed.header.chunk_index != 0 ||
+        parsed.header.chunk_count != 1 || parsed.header.payload_offset != 0 ||
+        parsed.header.frame_bytes != parsed.header.payload_bytes ||
+        parsed.header.flags != stream::MediaDatagramFlags::end_of_access_unit) {
+      return false;
+    }
+    auto result = audio_decoder_->decode(
+        parsed.payload, parsed.header.sequence,
+        parsed.header.presentation_time_us);
+    if (result.status == AudioDecodeStatus::failed) return false;
+    for (auto &frame : result.frames) {
+      sink_.audio(std::move(frame));
+    }
+    return true;
   }
   auto result = assembler_->value.push(bytes);
   if (!drain_assembler_events()) return false;
@@ -191,10 +326,32 @@ bool StreamCore::receive_datagram(std::span<const std::byte> bytes) {
   last_complete_sequence_ = frame.sequence;
   const bool idr = (static_cast<std::uint16_t>(frame.flags) &
                     static_cast<std::uint16_t>(stream::MediaDatagramFlags::idr)) != 0;
+  const bool codec_configuration =
+      (static_cast<std::uint16_t>(frame.flags) &
+       static_cast<std::uint16_t>(
+           stream::MediaDatagramFlags::codec_configuration)) != 0;
   sink_.frame({.bytes = std::move(frame.bytes),
                .presentation_time_us = frame.presentation_time_us,
                .sequence = frame.sequence,
-               .idr = idr});
+               .idr = idr,
+               .codec_configuration = codec_configuration});
+  return true;
+}
+
+bool StreamCore::send_benchmark_echo(
+    const stream::BenchmarkDatagramHeader &header) {
+  stream_v1::FeedbackStreamEnvelope envelope;
+  envelope.set_protocol_version(1);
+  envelope.set_session_id(grant_.session_id);
+  envelope.set_sequence(++feedback_sequence_);
+  auto *echo = envelope.mutable_benchmark_datagram_echo();
+  echo->set_run_id(grant_.benchmark->run_id);
+  echo->set_round_id(header.round_id);
+  echo->set_sequence(header.sequence);
+  if (!transport_.send(StreamRole::feedback, frame_message(envelope))) {
+    fail();
+    return false;
+  }
   return true;
 }
 
@@ -213,13 +370,23 @@ bool StreamCore::drain_assembler_events() {
 }
 
 bool StreamCore::send_request_idr() {
+  return request_idr(stream_v1::IDR_REQUEST_REASON_FRAME_EVICTED,
+                     last_complete_sequence_);
+}
+
+bool StreamCore::request_idr(stream_v1::IdrRequestReason reason,
+                             std::uint64_t last_complete_sequence) {
+  if (state_ != State::streaming ||
+      reason == stream_v1::IDR_REQUEST_REASON_UNSPECIFIED) {
+    return false;
+  }
   stream_v1::SessionStreamEnvelope envelope;
   envelope.set_protocol_version(1);
   envelope.set_session_id(grant_.session_id);
   envelope.set_sequence(++session_sequence_);
   auto *request = envelope.mutable_request_idr();
-  request->set_reason(stream_v1::IDR_REQUEST_REASON_FRAME_EVICTED);
-  request->set_last_complete_sequence(last_complete_sequence_);
+  request->set_reason(reason);
+  request->set_last_complete_sequence(last_complete_sequence);
   if (!transport_.send(StreamRole::session, frame_message(envelope))) {
     fail();
     return false;
@@ -251,6 +418,37 @@ bool StreamCore::send_feedback(const stream_v1::QueueDepthFeedback &feedback) {
   return transport_.send(StreamRole::feedback, frame_message(envelope));
 }
 
+bool StreamCore::send_feedback(const stream_v1::DecoderFeedback &feedback) {
+  if (!is_valid_decoder_state(feedback.state()) ||
+      grant_.benchmark.has_value()) {
+    return false;
+  }
+  if (state_ == State::connecting || state_ == State::authenticating) {
+    pending_decoder_feedback_ = feedback;
+    return true;
+  }
+  if (state_ != State::streaming) return false;
+  stream_v1::FeedbackStreamEnvelope envelope;
+  envelope.set_protocol_version(1);
+  envelope.set_session_id(grant_.session_id);
+  envelope.set_sequence(++feedback_sequence_);
+  envelope.mutable_decoder()->CopyFrom(feedback);
+  return transport_.send(StreamRole::feedback, frame_message(envelope));
+}
+
+bool StreamCore::send_feedback(
+    const stream_v1::RenderedFrameFeedback &feedback) {
+  if (state_ != State::streaming || feedback.frame_sequence() == 0) {
+    return false;
+  }
+  stream_v1::FeedbackStreamEnvelope envelope;
+  envelope.set_protocol_version(1);
+  envelope.set_session_id(grant_.session_id);
+  envelope.set_sequence(++feedback_sequence_);
+  envelope.mutable_rendered_frame()->CopyFrom(feedback);
+  return transport_.send(StreamRole::feedback, frame_message(envelope));
+}
+
 void StreamCore::on_connection_lost() {
   if (state_ != State::released && state_ != State::stopped) {
     fail();
@@ -258,10 +456,12 @@ void StreamCore::on_connection_lost() {
 }
 
 void StreamCore::stop() noexcept {
+  pending_decoder_feedback_.reset();
   if (state_ == State::released || state_ == State::stopped) {
     return;
   }
-  if (state_ == State::streaming) {
+  bool terminal_send_queued = false;
+  if (state_ == State::streaming || state_ == State::benchmarking) {
     try {
 #ifndef NDEBUG
       inject_close_fault(CloseFaultPoint::stop_envelope_allocation);
@@ -275,11 +475,13 @@ void StreamCore::stop() noexcept {
 #ifndef NDEBUG
       inject_close_fault(CloseFaultPoint::stop_serialization);
 #endif
-      transport_.send(StreamRole::session, frame_message(envelope));
+      terminal_send_queued = transport_.send_final(
+          StreamRole::session, frame_message(envelope));
     } catch (...) {
     }
   }
-  if (!shutdown_) {
+  benchmark_collector_.cancel();
+  if (!terminal_send_queued && !shutdown_) {
     shutdown_ = true;
     try {
       transport_.shutdown();
@@ -294,6 +496,7 @@ void StreamCore::stop() noexcept {
 }
 
 void StreamCore::release() noexcept {
+  pending_decoder_feedback_.reset();
   if (released_) {
     return;
   }
@@ -313,6 +516,12 @@ void StreamCore::release() noexcept {
 State StreamCore::state() const noexcept { return state_; }
 
 bool StreamCore::ticket_consumed() const noexcept { return grant_.ticket.consumed(); }
+
+std::optional<BenchmarkCollectionResult> StreamCore::take_benchmark_result() {
+  auto result = std::move(benchmark_result_);
+  benchmark_result_.reset();
+  return result;
+}
 
 template <typename Message>
 std::vector<std::byte> StreamCore::frame_message(const Message &message) {
@@ -347,6 +556,9 @@ bool StreamCore::send_authenticate() {
 }
 
 bool StreamCore::send_start() {
+  if (grant_.benchmark.has_value()) {
+    return send_start_benchmark();
+  }
   stream_v1::SessionStreamEnvelope envelope;
   envelope.set_protocol_version(1);
   envelope.set_session_id(grant_.session_id);
@@ -358,11 +570,67 @@ bool StreamCore::send_start() {
   video->set_frames_per_second_numerator(grant_.video.fps_numerator);
   video->set_frames_per_second_denominator(grant_.video.fps_denominator);
   video->set_dynamic_range(grant_.video.dynamic_range);
+  video->set_profile(grant_.video.profile);
+  video->set_bit_depth(grant_.video.bit_depth);
+  video->set_color_primaries(grant_.video.color_primaries);
+  video->set_transfer_function(grant_.video.transfer_function);
+  video->set_matrix_coefficients(grant_.video.matrix_coefficients);
+  video->set_color_range(grant_.video.color_range);
+  video->set_hdr_static_info(grant_.video.hdr_static_info.data(),
+                             grant_.video.hdr_static_info.size());
+  video->set_hdr_static_info_in_bitstream(
+      grant_.video.hdr_static_info_in_bitstream);
+  auto *audio = envelope.mutable_start_session()->mutable_selected_audio();
+  audio->set_codec(grant_.audio.codec);
+  audio->set_sample_rate_hz(grant_.audio.sample_rate_hz);
+  audio->set_channel_count(grant_.audio.channel_count);
+  audio->set_frame_duration_us(grant_.audio.frame_duration_us);
+  audio->set_bitrate_bps(grant_.audio.bitrate_bps);
   if (!transport_.send(StreamRole::session, frame_message(envelope))) {
     fail();
     return false;
   }
   transition(State::streaming);
+  return flush_pending_decoder_feedback();
+}
+
+bool StreamCore::flush_pending_decoder_feedback() {
+  if (!pending_decoder_feedback_.has_value()) return true;
+  auto feedback = std::move(*pending_decoder_feedback_);
+  pending_decoder_feedback_.reset();
+  try {
+    if (send_feedback(feedback)) return true;
+  } catch (...) {
+  }
+  fail();
+  return false;
+}
+
+bool StreamCore::send_start_benchmark() {
+  const BenchmarkGrant &benchmark = *grant_.benchmark;
+  stream_v1::SessionStreamEnvelope envelope;
+  envelope.set_protocol_version(1);
+  envelope.set_session_id(grant_.session_id);
+  envelope.set_sequence(++session_sequence_);
+  auto *start = envelope.mutable_start_benchmark();
+  start->set_run_id(benchmark.run_id);
+  start->set_schema_version(benchmark.schema_version);
+  start->set_run_token(benchmark.run_token.data(), benchmark.run_token.size());
+  auto *reliable = start->mutable_reliable_round();
+  reliable->set_packet_count(benchmark.reliable_packet_count);
+  reliable->set_payload_bytes(benchmark.reliable_payload_bytes);
+  reliable->set_measurement_interval_us(
+      benchmark.reliable_measurement_interval_us);
+  auto *datagram = start->mutable_datagram_round();
+  datagram->set_packet_count(benchmark.datagram_packet_count);
+  datagram->set_payload_bytes(benchmark.datagram_payload_bytes);
+  datagram->set_measurement_interval_us(
+      benchmark.datagram_measurement_interval_us);
+  if (!transport_.send(StreamRole::session, frame_message(envelope))) {
+    fail();
+    return false;
+  }
+  transition(State::benchmarking);
   return true;
 }
 
@@ -372,6 +640,8 @@ void StreamCore::transition(State state) {
 }
 
 void StreamCore::fail() {
+  pending_decoder_feedback_.reset();
+  benchmark_collector_.cancel();
   if (!shutdown_) {
     shutdown_ = true;
     transport_.shutdown();

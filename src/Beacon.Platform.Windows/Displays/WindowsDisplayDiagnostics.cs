@@ -1,5 +1,12 @@
 namespace Beacon.Platform.Windows.Displays;
 
+internal enum DisplayTargetActivationAction
+{
+    None,
+    ApplyExtendedTopology,
+    ApplySuppliedTopology
+}
+
 public static class WindowsDisplayDiagnostics
 {
     public const uint AdvancedColorSupported = 0x00000001;
@@ -108,6 +115,69 @@ public static class WindowsDisplayDiagnostics
         return candidates.FirstOrDefault(candidate => candidate.X != 0 || candidate.Y != 0)?.DisplayId;
     }
 
+    public static bool RequiresExtendedTopologyRepair(
+        IReadOnlyList<DisplayRestoreCandidate> activeDisplays,
+        string requiredDisplayName) =>
+        !activeDisplays.Any(candidate =>
+            string.Equals(candidate.DisplayId, requiredDisplayName, StringComparison.OrdinalIgnoreCase)) ||
+        !activeDisplays.Any(candidate => candidate.Kind == DisplayPathKind.Physical);
+
+    internal static DisplayTargetActivationAction PlanTargetActivation(
+        IReadOnlyList<DisplayRestoreCandidate> activeDisplays,
+        string requiredDisplayName,
+        bool mirrorMode)
+    {
+        if (mirrorMode || !activeDisplays.Any(candidate => candidate.Kind == DisplayPathKind.Physical))
+        {
+            return DisplayTargetActivationAction.ApplyExtendedTopology;
+        }
+
+        return activeDisplays.Any(candidate =>
+            string.Equals(candidate.DisplayId, requiredDisplayName, StringComparison.OrdinalIgnoreCase))
+                ? DisplayTargetActivationAction.None
+                : DisplayTargetActivationAction.ApplySuppliedTopology;
+    }
+
+    public static bool ShouldRetryWithSuppliedDisplayConfig(uint topologyStatus) =>
+        topologyStatus != 0;
+
+    internal static string? SelectPhysicalAttachCandidate(
+        IReadOnlyList<PhysicalDisplayAttachCandidate> candidates) =>
+        candidates
+            .Where(candidate => candidate.Width > 0 && candidate.Height > 0)
+            .OrderByDescending(candidate => candidate.Internal)
+            .ThenByDescending(candidate => (ulong)candidate.Width * candidate.Height)
+            .ThenByDescending(candidate => candidate.RefreshHz)
+            .ThenBy(candidate => candidate.DisplayId, StringComparer.OrdinalIgnoreCase)
+            .Select(candidate => candidate.DisplayId)
+            .FirstOrDefault();
+
+    internal static PhysicalDisplayAttachPosition? SelectPhysicalAttachPosition(
+        IReadOnlyList<DisplayPathSnapshot> activePaths,
+        uint physicalWidth)
+    {
+        if (physicalWidth == 0 || physicalWidth > int.MaxValue)
+        {
+            return null;
+        }
+
+        DisplayPathSnapshot? anchor = activePaths
+            .Where(path => path.Width > 0 && path.Height > 0)
+            .OrderBy(path => path.X)
+            .ThenBy(path => path.Y)
+            .ThenBy(path => path.DisplayId, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+        if (anchor is null)
+        {
+            return new PhysicalDisplayAttachPosition(0, 0);
+        }
+
+        long x = (long)anchor.X - physicalWidth;
+        return x >= int.MinValue
+            ? new PhysicalDisplayAttachPosition(checked((int)x), anchor.Y)
+            : null;
+    }
+
     public static DisplayApiResult VerifyPhysicalRestore(string displayName, DisplayTopologySnapshot topology) =>
         topology.PhysicalPrimaryVerified
             ? DisplayApiResult.Ok()
@@ -123,3 +193,12 @@ public sealed record DisplayRestoreCandidate(
     bool IsPrimary,
     int X,
     int Y);
+
+internal sealed record PhysicalDisplayAttachCandidate(
+    string DisplayId,
+    bool Internal,
+    uint Width,
+    uint Height,
+    uint RefreshHz);
+
+internal sealed record PhysicalDisplayAttachPosition(int X, int Y);

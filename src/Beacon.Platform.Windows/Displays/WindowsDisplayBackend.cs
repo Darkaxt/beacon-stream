@@ -2,21 +2,45 @@ using Beacon.Core.Displays;
 
 namespace Beacon.Platform.Windows.Displays;
 
-public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBackend
+public sealed class WindowsDisplayBackend : IDisplayBackend
 {
+    private readonly IWindowsDisplayApi api;
+    private readonly IWindowsDisplayLeaseSession driverLeaseSession;
     private readonly List<DisplayOperationLogEntry> operationLog = [];
+
+    public WindowsDisplayBackend(IWindowsDisplayApi api)
+        : this(
+            api,
+            api as IWindowsDisplayLeaseSession ?? throw new ArgumentException(
+                "The Windows display API must provide a SudoVDA driver lease session.",
+                nameof(api)))
+    {
+    }
+
+    public WindowsDisplayBackend(
+        IWindowsDisplayApi api,
+        IWindowsDisplayLeaseSession driverLeaseSession)
+    {
+        this.api = api;
+        this.driverLeaseSession = driverLeaseSession;
+    }
 
     public IReadOnlyList<DisplayOperationLogEntry> OperationLog => operationLog;
 
     public async Task<DisplayHealth> GetHealthAsync(CancellationToken cancellationToken)
     {
         DisplayDriverStatus driverStatus = api.GetDriverStatus();
+        SudoVdaDriverLeaseSessionSnapshot sessionSnapshot = driverLeaseSession.Snapshot;
+        bool driverReady = driverStatus.Ready && sessionSnapshot.Healthy;
+        string driverDiagnostic = sessionSnapshot.Healthy && sessionSnapshot.LeaseCount == 0
+            ? driverStatus.Diagnostic
+            : $"{driverStatus.Diagnostic} {sessionSnapshot.Diagnostic}";
         try
         {
             DisplayTopologySnapshot topology = await api.QueryTopologyAsync(cancellationToken);
             return new DisplayHealth(
-                DriverReady: driverStatus.Ready,
-                Diagnostic: driverStatus.Diagnostic,
+                DriverReady: driverReady,
+                Diagnostic: driverDiagnostic,
                 TopologyAvailable: true,
                 MirrorMode: topology.IsMirrorMode,
                 PhysicalPrimaryVerified: topology.PhysicalPrimaryVerified,
@@ -35,8 +59,8 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
         catch (Exception ex)
         {
             return new DisplayHealth(
-                DriverReady: driverStatus.Ready,
-                Diagnostic: $"{driverStatus.Diagnostic} Topology query failed: {ex.Message}",
+                DriverReady: driverReady,
+                Diagnostic: $"{driverDiagnostic} Topology query failed: {ex.Message}",
                 TopologyAvailable: false,
                 MirrorMode: false,
                 PhysicalPrimaryVerified: false,
@@ -57,6 +81,18 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
         {
             DisplayEnsureResult fail = DisplayEnsureResult.Fail(driverStatus.Diagnostic);
             LogEnsure(displayId, width, height, refreshHz, before: null, after: null, fail, "driver-not-ready");
+            return fail;
+        }
+
+        await using DriverLeaseAttempt leaseAttempt = await DriverLeaseAttempt.CreateAsync(
+            driverLeaseSession,
+            displayId,
+            cancellationToken);
+        if (!leaseAttempt.HoldResult.Success)
+        {
+            DisplayEnsureResult fail = DisplayEnsureResult.Fail(
+                leaseAttempt.HoldResult.Error ?? $"Unable to hold SudoVDA driver session for {displayId}.");
+            LogEnsure(displayId, width, height, refreshHz, before: null, after: null, fail, "driver-session-hold-failed");
             return fail;
         }
 
@@ -129,9 +165,24 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
             return fail;
         }
 
-        DisplayHdrCapability hdrCapability = await api.QueryHdrCapabilityAsync(displayId, cancellationToken);
-        DisplayEnsureResult result = NegotiateHdr(hdrPreference, hdrCapability);
+        DisplayEnsureResult result = await NegotiateHdrAsync(
+            displayId,
+            hdrPreference,
+            cancellationToken).ConfigureAwait(false);
+        if (!result.Success && createdDisplay)
+        {
+            result = await FailAfterCreateAsync(
+                displayId,
+                result.Error ?? $"HDR negotiation failed for {displayId}.",
+                cancellationToken);
+        }
+
         LogEnsure(displayId, width, height, refreshHz, before, afterPrimary, result, "virtual-primary topology verified");
+        if (result.Success)
+        {
+            leaseAttempt.Commit();
+        }
+
         return result;
     }
 
@@ -148,6 +199,18 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
         {
             DisplayEnsureResult fail = DisplayEnsureResult.Fail(driverStatus.Diagnostic);
             LogPrepare(displayId, width, height, refreshHz, before: null, after: null, fail, "driver-not-ready");
+            return fail;
+        }
+
+        await using DriverLeaseAttempt leaseAttempt = await DriverLeaseAttempt.CreateAsync(
+            driverLeaseSession,
+            displayId,
+            cancellationToken);
+        if (!leaseAttempt.HoldResult.Success)
+        {
+            DisplayEnsureResult fail = DisplayEnsureResult.Fail(
+                leaseAttempt.HoldResult.Error ?? $"Unable to hold SudoVDA driver session for {displayId}.");
+            LogPrepare(displayId, width, height, refreshHz, before: null, after: null, fail, "driver-session-hold-failed");
             return fail;
         }
 
@@ -245,9 +308,24 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
             }
         }
 
-        DisplayHdrCapability hdrCapability = await api.QueryHdrCapabilityAsync(displayId, cancellationToken);
-        DisplayEnsureResult result = NegotiateHdr(hdrPreference, hdrCapability);
+        DisplayEnsureResult result = await NegotiateHdrAsync(
+            displayId,
+            hdrPreference,
+            cancellationToken).ConfigureAwait(false);
+        if (!result.Success && createdDisplay)
+        {
+            result = await FailAfterCreateAsync(
+                displayId,
+                result.Error ?? $"HDR negotiation failed for {displayId}.",
+                cancellationToken);
+        }
+
         LogPrepare(displayId, width, height, refreshHz, before, preparedTopology, result, "prepared extended topology verified");
+        if (result.Success)
+        {
+            leaseAttempt.Commit();
+        }
+
         return result;
     }
 
@@ -255,6 +333,12 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
     {
         var seenUnverifiedTopologies = new HashSet<string>(StringComparer.Ordinal);
         DisplayTopologySnapshot before = await api.QueryTopologyAsync(cancellationToken);
+        if (before.PhysicalPrimaryVerified)
+        {
+            DisplayRestoreResult alreadyRestored = DisplayRestoreResult.Ok();
+            LogRestore(before, before, alreadyRestored, "physical primary already verified");
+            return alreadyRestored;
+        }
 
         while (true)
         {
@@ -287,9 +371,13 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
     public async Task<DisplayRemoveResult> RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken)
     {
         DisplayApiResult result = await api.RemoveVirtualDisplayAsync(displayId, cancellationToken);
-        return result.Success
-            ? DisplayRemoveResult.Ok()
-            : DisplayRemoveResult.Fail(result.Error ?? $"Virtual display {displayId} removal failed.");
+        if (!result.Success)
+        {
+            return DisplayRemoveResult.Fail(result.Error ?? $"Virtual display {displayId} removal failed.");
+        }
+
+        await driverLeaseSession.ReleaseAsync(displayId, CancellationToken.None);
+        return DisplayRemoveResult.Ok();
     }
 
     private static DisplayEnsureResult NegotiateHdr(HdrPreference preference, DisplayHdrCapability capability)
@@ -310,6 +398,36 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
         }
 
         return DisplayEnsureResult.Ok(hdrReason: capability.Reason);
+    }
+
+    private async Task<DisplayEnsureResult> NegotiateHdrAsync(
+        string displayId,
+        HdrPreference preference,
+        CancellationToken cancellationToken)
+    {
+        DisplayHdrCapability capability = await api.QueryHdrCapabilityAsync(
+            displayId,
+            cancellationToken).ConfigureAwait(false);
+        if (preference == HdrPreference.Off || !capability.Supported || capability.Enabled)
+        {
+            return NegotiateHdr(preference, capability);
+        }
+
+        DisplayApiResult setResult = await api.SetHdrStateAsync(
+            displayId,
+            enabled: true,
+            cancellationToken).ConfigureAwait(false);
+        if (!setResult.Success)
+        {
+            string reason = setResult.Error ?? "Windows rejected the HDR state change.";
+            return preference == HdrPreference.Require
+                ? DisplayEnsureResult.Fail($"HDR required but could not be enabled: {reason}")
+                : DisplayEnsureResult.Ok(hdrReason: reason);
+        }
+
+        capability = await api.QueryHdrCapabilityAsync(displayId, cancellationToken)
+            .ConfigureAwait(false);
+        return NegotiateHdr(preference, capability);
     }
 
     private async Task<DisplayEnsureResult> FailAfterCreateAsync(
@@ -398,5 +516,38 @@ public sealed class WindowsDisplayBackend(IWindowsDisplayApi api) : IDisplayBack
             Reason: result.Success ? reason : $"{reason}: {result.Error}",
             Before: before,
             After: after));
+    }
+
+    private sealed class DriverLeaseAttempt(
+        IWindowsDisplayLeaseSession session,
+        string displayId,
+        SudoVdaDriverLeaseHoldResult holdResult)
+        : IAsyncDisposable
+    {
+        private bool committed;
+
+        public SudoVdaDriverLeaseHoldResult HoldResult { get; } = holdResult;
+
+        public static async Task<DriverLeaseAttempt> CreateAsync(
+            IWindowsDisplayLeaseSession session,
+            string displayId,
+            CancellationToken cancellationToken)
+        {
+            SudoVdaDriverLeaseHoldResult result = await session.HoldAsync(displayId, cancellationToken);
+            return new DriverLeaseAttempt(session, displayId, result);
+        }
+
+        public void Commit()
+        {
+            committed = true;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (HoldResult.Acquired && !committed)
+            {
+                await session.ReleaseAsync(displayId, CancellationToken.None);
+            }
+        }
     }
 }

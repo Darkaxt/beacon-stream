@@ -13,48 +13,24 @@ public final class AndroidDeviceTelemetryProbe {
         return new AndroidDeviceTelemetryProbe(new AndroidSystemTelemetrySource(context));
     }
 
-    public BeaconApiClient.ClientTelemetry read(
-        int rttMs,
-        double packetLossPercent,
-        int decoderLoadPercent,
-        int estimatedBandwidthMbps,
-        String fallbackWifiBand,
-        int fallbackBatteryPercent,
-        String fallbackThermalState) {
+    public BeaconApiClient.ClientTelemetry read() {
         AndroidDeviceTelemetry device = source == null ? AndroidDeviceTelemetry.empty() : source.read();
         if (device == null) {
             device = AndroidDeviceTelemetry.empty();
         }
 
         return new BeaconApiClient.ClientTelemetry(
-            rttMs,
-            packetLossPercent,
-            decoderLoadPercent,
-            estimatedBandwidthMbps,
-            chooseString(device.wifiBand(), fallbackWifiBand),
-            chooseBattery(device.batteryPercent(), fallbackBatteryPercent),
-            chooseString(device.thermalState(), fallbackThermalState));
+            null,
+            null,
+            null,
+            null,
+            normalize(device.wifiBand()),
+            validBattery(device.batteryPercent()),
+            normalize(device.thermalState()));
     }
 
-    private static String chooseString(String primary, String fallback) {
-        String normalizedPrimary = normalize(primary);
-        if (!normalizedPrimary.isEmpty()) {
-            return normalizedPrimary;
-        }
-
-        return normalize(fallback);
-    }
-
-    private static int chooseBattery(Integer primary, int fallback) {
-        if (isValidBattery(primary)) {
-            return primary;
-        }
-
-        return isValidBattery(fallback) ? fallback : 0;
-    }
-
-    private static boolean isValidBattery(Integer value) {
-        return value != null && value >= 1 && value <= 100;
+    private static Integer validBattery(Integer value) {
+        return value != null && value >= 1 && value <= 100 ? value : null;
     }
 
     private static String normalize(String value) {

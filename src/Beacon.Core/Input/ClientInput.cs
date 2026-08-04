@@ -148,9 +148,13 @@ public sealed record ClientInputBatch(
 
 public sealed record ClientInputResult(bool Success, int EventCount, string? Error)
 {
-    public static ClientInputResult Ok(int eventCount) => new(true, eventCount, null);
+    public string ResultCode { get; init; } = Success ? "input-forwarded" : "input-rejected";
 
-    public static ClientInputResult Fail(string error) => new(false, 0, error);
+    public static ClientInputResult Ok(int eventCount) =>
+        new(true, eventCount, null) { ResultCode = "input-forwarded" };
+
+    public static ClientInputResult Fail(string error, string resultCode = "input-rejected") =>
+        new(false, 0, error) { ResultCode = resultCode };
 }
 
 public sealed record ClientInputHealth(
@@ -175,24 +179,9 @@ public interface IClientInputHealthProvider
     ClientInputHealth GetHealth();
 }
 
-public sealed class NoOpClientInputSink : IClientInputSink, IClientInputHealthProvider
+public interface IClientInputSessionLifecycle
 {
-    private static readonly string[] EventTypes = ["pointer", "keyboard"];
-    private static readonly string[] PointerActions = ["move", "down", "up", "tap"];
-    private static readonly string[] KeyboardActions = ["down", "up", "press"];
+    Task PrepareSessionAsync(string sessionId, CancellationToken cancellationToken);
 
-    public Task<ClientInputResult> ForwardAsync(ClientInputBatch batch, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(ClientInputResult.Ok(batch.Events.Count));
-    }
-
-    public ClientInputHealth GetHealth() =>
-        new(
-            Ready: true,
-            Backend: "no-op",
-            Diagnostic: "No-op input sink active for fake host mode.",
-            SupportedEventTypes: EventTypes,
-            SupportedPointerActions: PointerActions,
-            SupportedKeyboardActions: KeyboardActions);
+    Task ReleaseSessionAsync(string sessionId, CancellationToken cancellationToken);
 }

@@ -3,86 +3,43 @@ package dev.beacon.android;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 
 public final class AndroidDeviceTelemetryProbeTest {
     @Test
-    public void deviceFactsEnrichManualNetworkSample() {
+    public void reportsOnlyFactsAvailableFromTheProductionSource() {
         AndroidDeviceTelemetryProbe probe = new AndroidDeviceTelemetryProbe(
-            new FixedTelemetrySource(new AndroidDeviceTelemetry(64, "moderate", "wifi")));
+            new FixedTelemetrySource(new AndroidDeviceTelemetry(64, "moderate", "6-ghz")));
 
-        BeaconApiClient.ClientTelemetry telemetry = probe.read(
-            12,
-            0.5,
-            27,
-            140,
-            "",
-            0,
-            "");
+        BeaconApiClient.ClientTelemetry telemetry = probe.read();
 
-        assertEquals(12, telemetry.rttMs);
-        assertEquals(0.5, telemetry.packetLossPercent, 0.001);
-        assertEquals(27, telemetry.decoderLoadPercent);
-        assertEquals(140, telemetry.estimatedBandwidthMbps);
-        assertEquals("wifi", telemetry.wifiBand);
-        assertEquals(64, telemetry.batteryPercent);
+        assertNull(telemetry.rttMs);
+        assertNull(telemetry.packetLossPercent);
+        assertNull(telemetry.decoderLoadPercent);
+        assertNull(telemetry.estimatedBandwidthMbps);
+        assertEquals("6-ghz", telemetry.wifiBand);
+        assertEquals(Integer.valueOf(64), telemetry.batteryPercent);
         assertEquals("moderate", telemetry.thermalState);
     }
 
     @Test
-    public void fallbackValuesAreUsedWhenDeviceFactsAreMissing() {
+    public void missingDeviceFactsRemainUnknown() {
         AndroidDeviceTelemetryProbe probe = new AndroidDeviceTelemetryProbe(
             new FixedTelemetrySource(AndroidDeviceTelemetry.empty()));
 
-        BeaconApiClient.ClientTelemetry telemetry = probe.read(
-            8,
-            0,
-            20,
-            120,
-            "wifi-7",
-            80,
-            "nominal");
-
-        assertEquals("wifi-7", telemetry.wifiBand);
-        assertEquals(80, telemetry.batteryPercent);
-        assertEquals("nominal", telemetry.thermalState);
-    }
-
-    @Test
-    public void invalidBatteryAndBlankStringsAreIgnored() {
-        AndroidDeviceTelemetryProbe probe = new AndroidDeviceTelemetryProbe(
-            new FixedTelemetrySource(new AndroidDeviceTelemetry(-1, " ", "")));
-
-        BeaconApiClient.ClientTelemetry telemetry = probe.read(
-            8,
-            0,
-            20,
-            0,
-            "",
-            0,
-            "");
+        BeaconApiClient.ClientTelemetry telemetry = probe.read();
 
         assertEquals("", telemetry.wifiBand);
-        assertEquals(0, telemetry.batteryPercent);
+        assertNull(telemetry.batteryPercent);
         assertEquals("", telemetry.thermalState);
     }
 
     @Test
-    public void deviceFactsOverrideFallbackValues() {
-        AndroidDeviceTelemetryProbe probe = new AndroidDeviceTelemetryProbe(
-            new FixedTelemetrySource(new AndroidDeviceTelemetry(35, "hot", "wifi")));
-
-        BeaconApiClient.ClientTelemetry telemetry = probe.read(
-            95,
-            3.2,
-            88,
-            80,
-            "wifi-5",
-            75,
-            "nominal");
-
-        assertEquals("wifi", telemetry.wifiBand);
-        assertEquals(35, telemetry.batteryPercent);
-        assertEquals("hot", telemetry.thermalState);
+    public void systemTelemetryMapsOnlyObservedWifiFrequenciesToBands() {
+        assertEquals("2.4-ghz", AndroidSystemTelemetrySource.wifiBand(2412));
+        assertEquals("5-ghz", AndroidSystemTelemetrySource.wifiBand(5745));
+        assertEquals("6-ghz", AndroidSystemTelemetrySource.wifiBand(6135));
+        assertEquals("", AndroidSystemTelemetrySource.wifiBand(0));
     }
 
     private static final class FixedTelemetrySource implements AndroidDeviceTelemetrySource {

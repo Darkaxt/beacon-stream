@@ -2,7 +2,12 @@ using System.Text.Json;
 
 namespace Beacon.Platform.Windows.Displays;
 
-public sealed class WindowsDisplayNameMap
+public interface IWindowsDisplayNameResolver
+{
+    bool TryResolveDisplayName(string displayId, out string? displayName);
+}
+
+public sealed class WindowsDisplayNameMap : IWindowsDisplayNameResolver
 {
     private readonly Lock gate = new();
     private readonly WindowsDisplayNameMapStore store;
@@ -28,6 +33,16 @@ public sealed class WindowsDisplayNameMap
     {
         lock (gate)
         {
+            string[] displacedDisplayIds = displayNameByDisplayId
+                .Where(pair =>
+                    !string.Equals(pair.Key, displayId, StringComparison.Ordinal) &&
+                    string.Equals(pair.Value, displayName, StringComparison.OrdinalIgnoreCase))
+                .Select(pair => pair.Key)
+                .ToArray();
+            foreach (string displacedDisplayId in displacedDisplayIds)
+            {
+                displayNameByDisplayId.Remove(displacedDisplayId);
+            }
             displayNameByDisplayId[displayId] = displayName;
             store.Save(displayNameByDisplayId);
         }
@@ -48,10 +63,13 @@ public sealed class WindowsDisplayNameMap
     {
         lock (gate)
         {
-            return displayNameByDisplayId.ToDictionary(
-                pair => pair.Value,
-                pair => pair.Key,
-                StringComparer.OrdinalIgnoreCase);
+            var displayIdByDisplayName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, string> pair in displayNameByDisplayId)
+            {
+                displayIdByDisplayName[pair.Value] = pair.Key;
+            }
+
+            return displayIdByDisplayName;
         }
     }
 }

@@ -5,6 +5,16 @@ Beacon's Windows display backend is the real SudoVDA and DisplayConfig integrati
 ## Prerequisites
 
 - SudoVDA is installed and enabled.
+- Beacon owns its SudoVDA control session and heartbeat while Beacon display leases exist. It
+  does not require or control Apollo, and it does not rewrite machine-wide SudoVDA settings.
+- The lease-owned SudoVDA handle performs display add, display remove, watchdog query, and
+  heartbeat operations. Add or remove must not open a second short-lived control handle:
+  the driver's watchdog state is associated with the handle that created the display.
+- DisplayConfig work runs on a fresh thread bound to the current Windows input desktop. This
+  preserves CCD access when Windows switches from `Default` to `Screen-saver` without weakening
+  secure-desktop boundaries.
+- Removing a lease whose driver monitor is already absent is idempotent. Win32 `1168`
+  (`ERROR_NOT_FOUND`) still releases Beacon's lease and heartbeat ownership.
 - `dotnet build Beacon.slnx -warnaserror` succeeds.
 - Visual Studio and WDK are only needed for driver rebuild work, not for running the Beacon display probe.
 
@@ -15,6 +25,15 @@ Read-only status:
 ```powershell
 dotnet run --project src/Beacon.DisplayProbe -- status
 ```
+
+Native driver-session validation without creating or changing a display:
+
+```powershell
+dotnet run --project src/Beacon.DisplayProbe -- driver-session
+```
+
+This opens Beacon's own SudoVDA control session, queries the watchdog, sends an immediate
+heartbeat, reports the session state, and releases it. It does not query or control Apollo.
 
 Topology-changing commands:
 
@@ -29,26 +48,48 @@ Use `restore-physical` before `remove` when recovering from an active virtual-pr
 
 `restore-physical` uses the verified backend path, not the raw one-shot API call. The command can fail even after Windows accepts the DisplayConfig apply if the follow-up topology query still shows a virtual primary or no physical primary.
 
-## Server Host Mode
+## Signed Runtime Evidence - 2026-07-21
 
-Beacon Server defaults to fake host mode, which is safe for deterministic local tests and does not call the Windows display driver:
+- Source: `4a27d6e30720f8fe239ab80e0b88b62dbe8c422d`
+- Signed workflow: `29829298958`
+- Update transaction: `f0ef9810-7ffd-41a3-acaa-d6da7cacd004`
+- Installed package: `agent-4a27d6e30720f8fe239ab80e0b88b62dbe8c422d-4f4caed3dd7d480e8ace8d654ceb0291`
+- The unattended bootstrap update completed without a consent process. Host Agent status reported
+  SudoVDA protocol `0.2.1`, CCD ready, zero initial leases, and the physical panel primary at
+  `2560x1600@240`.
+- `prepare` created `client-codex-z-fold-7` at `2560x1600@120`, retained the physical panel as
+  primary, and kept mirror mode disabled. A separate probe after seven seconds still found the
+  same extended virtual display while the three-second driver watchdog reported an active,
+  healthy heartbeat.
+- `primary` made the virtual display primary while retaining the physical display as extended.
+  `restore-physical` then restored the physical panel as primary without removing the virtual
+  lease. `remove` finally returned to one physical display, zero leases, and no heartbeat.
+
+## Server Composition
+
+Beacon Server has one production composition:
 
 ```powershell
-dotnet run --project src\Beacon.Server
+dotnet run --project src\Beacon.Server -- --urls https://127.0.0.1:5001
 ```
 
-Real Windows host composition must be selected explicitly:
+It always registers `WindowsDisplayBackend`, `WindowsGameLauncher`,
+`WindowsSessionActivityInspector`, `WindowsClientInputSink`, `WindowsRecoveryBackend`,
+and `StreamWorkerStreamingBackend`. `/admin/snapshot` exposes the active boundary names.
+There is no host or streaming mode selector.
+
+Deterministic API and fake-client tests run a separate test-only executable:
 
 ```powershell
-$env:BEACON_HOST_MODE='windows'
-dotnet run --project src\Beacon.Server
+dotnet run --project tests\Beacon.Server.TestHost -- --urls http://127.0.0.1:5000 --Beacon:Security:TestHost=true
 ```
 
-In Windows host mode, the server registers `WindowsDisplayBackend`, `WindowsGameLauncher`, and `WindowsSessionActivityInspector`. The media boundary is `UnavailableStreamingBackend` until Beacon StreamWorker is implemented, so launch preflight fails before virtual-display or application side effects instead of fabricating a stream. `/admin/snapshot` exposes `host.mode` and the active boundary names so the composition is visible before testing.
+The fake runtime and seeded fixtures are compiled only from `tests/`; they cannot be
+selected in the shipped server.
 
 ## Manual Recovery Actions
 
-Windows host mode also registers `WindowsRecoveryBackend` for explicit local-admin recovery. These endpoints are manual actions:
+The production server registers `WindowsRecoveryBackend` for explicit local-admin recovery. These endpoints are manual actions:
 
 ```powershell
 curl.exe -X POST http://localhost:5000/admin/recovery/restore-physical

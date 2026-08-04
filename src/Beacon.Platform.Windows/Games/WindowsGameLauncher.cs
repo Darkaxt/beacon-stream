@@ -34,7 +34,7 @@ public sealed class WindowsGameLauncher : IGameLauncher
                 request.Game.Id,
                 request.Game.Launch.Type,
                 request.Game.Launch.Command,
-                process?.Id,
+                SelectOwnedProcessId(command.UseShellExecute, process?.Id),
                 request.DisplayId,
                 Started: true);
 
@@ -45,6 +45,9 @@ public sealed class WindowsGameLauncher : IGameLauncher
             return await Task.FromResult(GameLaunchResult.Fail($"Failed to launch '{request.Game.Title}': {ex.Message}"));
         }
     }
+
+    internal static int? SelectOwnedProcessId(bool useShellExecute, int? startedProcessId) =>
+        useShellExecute ? null : startedProcessId;
 
     public static WindowsGameLaunchCommand CreateCommand(GameLaunchRequest request)
     {

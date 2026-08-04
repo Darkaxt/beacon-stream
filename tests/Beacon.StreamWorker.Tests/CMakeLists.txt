@@ -6,18 +6,128 @@ add_executable(BeaconStreamWorkerChannelTests named_pipe_channel_tests.cpp)
 target_link_libraries(BeaconStreamWorkerChannelTests PRIVATE Beacon::StreamWorkerCore)
 add_test(NAME BeaconStreamWorker.Channel COMMAND BeaconStreamWorkerChannelTests)
 
-add_executable(BeaconStreamWorkerQuicSessionTests quic_session_tests.cpp)
-target_link_libraries(BeaconStreamWorkerQuicSessionTests PRIVATE Beacon::StreamWorkerCore)
-add_test(NAME BeaconStreamWorker.QuicSession COMMAND BeaconStreamWorkerQuicSessionTests)
+add_executable(BeaconStreamWorkerQuicTicketStoreTests quic_ticket_store_tests.cpp)
+target_link_libraries(BeaconStreamWorkerQuicTicketStoreTests PRIVATE Beacon::StreamWorkerCore)
+add_test(NAME BeaconStreamWorker.QuicTicketStore COMMAND BeaconStreamWorkerQuicTicketStoreTests)
 
-add_executable(BeaconStreamWorkerSyntheticMediaTests synthetic_media_source_tests.cpp)
-target_link_libraries(BeaconStreamWorkerSyntheticMediaTests PRIVATE Beacon::StreamWorkerCore)
-add_test(NAME BeaconStreamWorker.SyntheticAccessUnitMarker COMMAND BeaconStreamWorkerSyntheticMediaTests)
+add_executable(BeaconStreamWorkerBenchmarkSourceTests benchmark_source_tests.cpp)
+target_link_libraries(BeaconStreamWorkerBenchmarkSourceTests PRIVATE Beacon::StreamWorkerCore)
+add_test(NAME BeaconStreamWorker.BenchmarkSource COMMAND BeaconStreamWorkerBenchmarkSourceTests)
 
 add_executable(BeaconStreamWorkerOutboundQueueTests outbound_queue_tests.cpp)
 target_link_libraries(BeaconStreamWorkerOutboundQueueTests PRIVATE Beacon::StreamWorkerCore)
 add_test(NAME BeaconStreamWorker.OutboundQueue COMMAND BeaconStreamWorkerOutboundQueueTests)
 
-add_executable(BeaconStreamWorkerQuicListenerProbe quic_listener_probe.cpp)
+add_executable(BeaconStreamWorkerWgcCaptureTests wgc_display_capture_tests.cpp)
+target_link_libraries(BeaconStreamWorkerWgcCaptureTests PRIVATE Beacon::StreamWorkerCore)
+add_test(NAME BeaconStreamWorker.WgcCapture COMMAND BeaconStreamWorkerWgcCaptureTests)
+
+add_executable(BeaconStreamWorkerWgcCaptureProbe wgc_capture_probe.cpp)
+target_link_libraries(BeaconStreamWorkerWgcCaptureProbe PRIVATE Beacon::StreamWorkerCore d3d11)
+beacon_use_windows_app_sdk(BeaconStreamWorkerWgcCaptureProbe)
+
+add_executable(BeaconStreamWorkerDxgiDuplicationProbe dxgi_duplication_probe.cpp)
+target_link_libraries(BeaconStreamWorkerDxgiDuplicationProbe PRIVATE Beacon::StreamWorkerCore d3d11 dxgi)
+
+add_executable(BeaconStreamWorkerDisplayIdCaptureProbe display_id_capture_probe.cpp)
+target_link_libraries(BeaconStreamWorkerDisplayIdCaptureProbe PRIVATE runtimeobject windowsapp)
+beacon_use_windows_app_sdk(BeaconStreamWorkerDisplayIdCaptureProbe)
+
+add_executable(BeaconStreamWorkerD3d11VideoProcessorTests d3d11_video_processor_tests.cpp)
+target_link_libraries(BeaconStreamWorkerD3d11VideoProcessorTests PRIVATE Beacon::StreamWorkerCore)
+add_test(NAME BeaconStreamWorker.D3d11VideoProcessor COMMAND BeaconStreamWorkerD3d11VideoProcessorTests)
+
+add_executable(BeaconStreamWorkerD3d11VideoProcessorProbe d3d11_video_processor_probe.cpp)
+target_link_libraries(BeaconStreamWorkerD3d11VideoProcessorProbe PRIVATE Beacon::StreamWorkerCore d3d11 dxgi)
+
+add_executable(BeaconStreamWorkerNvencH264EncoderTests nvenc_h264_encoder_tests.cpp)
+target_link_libraries(BeaconStreamWorkerNvencH264EncoderTests PRIVATE Beacon::StreamWorkerCore)
+target_include_directories(
+  BeaconStreamWorkerNvencH264EncoderTests
+  SYSTEM PRIVATE
+    "${CMAKE_SOURCE_DIR}/vendor/nv-codec-headers/include"
+)
+add_test(NAME BeaconStreamWorker.NvencH264Encoder COMMAND BeaconStreamWorkerNvencH264EncoderTests)
+
+add_executable(BeaconStreamWorkerNvencHevcMain10EncoderTests nvenc_hevc_main10_encoder_tests.cpp)
+target_link_libraries(BeaconStreamWorkerNvencHevcMain10EncoderTests PRIVATE Beacon::StreamWorkerCore)
+target_include_directories(
+  BeaconStreamWorkerNvencHevcMain10EncoderTests
+  SYSTEM PRIVATE
+    "${CMAKE_SOURCE_DIR}/vendor/nv-codec-headers/include"
+)
+add_test(NAME BeaconStreamWorker.NvencHevcMain10Encoder COMMAND BeaconStreamWorkerNvencHevcMain10EncoderTests)
+
+add_executable(BeaconStreamWorkerNvencH264EncoderProbe nvenc_h264_encoder_probe.cpp)
+target_link_libraries(
+  BeaconStreamWorkerNvencH264EncoderProbe
+  PRIVATE
+    Beacon::StreamWorkerCore
+    d3d11
+    dxgi
+)
+
+add_executable(BeaconStreamWorkerMediaRateControllerTests media_rate_controller_tests.cpp)
+target_link_libraries(BeaconStreamWorkerMediaRateControllerTests PRIVATE Beacon::StreamWorkerCore)
+add_test(NAME BeaconStreamWorker.MediaRateController COMMAND BeaconStreamWorkerMediaRateControllerTests)
+
+add_executable(BeaconStreamWorkerVideoMediaSessionTests video_media_session_tests.cpp)
+target_link_libraries(BeaconStreamWorkerVideoMediaSessionTests PRIVATE Beacon::StreamWorkerCore)
+add_test(NAME BeaconStreamWorker.VideoMediaSession COMMAND BeaconStreamWorkerVideoMediaSessionTests)
+
+add_executable(BeaconStreamWorkerAudioMediaSessionTests audio_media_session_tests.cpp)
+target_link_libraries(BeaconStreamWorkerAudioMediaSessionTests PRIVATE Beacon::StreamWorkerCore)
+add_test(NAME BeaconStreamWorker.AudioMediaSession COMMAND BeaconStreamWorkerAudioMediaSessionTests)
+
+add_executable(BeaconStreamWorkerOpusAudioEncoderTests opus_audio_encoder_tests.cpp)
+target_link_libraries(BeaconStreamWorkerOpusAudioEncoderTests PRIVATE Beacon::StreamWorkerCore opus)
+add_test(NAME BeaconStreamWorker.OpusAudioEncoder COMMAND BeaconStreamWorkerOpusAudioEncoderTests)
+
+add_executable(BeaconStreamWorkerWasapiLoopbackCaptureTests wasapi_loopback_capture_tests.cpp)
+target_link_libraries(BeaconStreamWorkerWasapiLoopbackCaptureTests PRIVATE Beacon::StreamWorkerCore)
+add_test(NAME BeaconStreamWorker.WasapiLoopbackCapture COMMAND BeaconStreamWorkerWasapiLoopbackCaptureTests)
+
+add_executable(BeaconStreamWorkerAudioPipelineTests worker_audio_pipeline_tests.cpp)
+target_link_libraries(BeaconStreamWorkerAudioPipelineTests PRIVATE Beacon::StreamWorkerCore)
+add_test(NAME BeaconStreamWorker.AudioPipeline COMMAND BeaconStreamWorkerAudioPipelineTests)
+
+add_executable(BeaconStreamWorkerProductionAudioGenerationTests production_audio_generation_tests.cpp)
+target_link_libraries(BeaconStreamWorkerProductionAudioGenerationTests PRIVATE Beacon::StreamWorkerCore opus)
+add_test(NAME BeaconStreamWorker.ProductionAudioGeneration COMMAND BeaconStreamWorkerProductionAudioGenerationTests)
+
+add_executable(BeaconStreamWorkerQuicMediaRateAdapterTests quic_media_rate_adapter_tests.cpp)
+target_link_libraries(BeaconStreamWorkerQuicMediaRateAdapterTests PRIVATE Beacon::StreamWorkerCore)
+add_test(NAME BeaconStreamWorker.QuicMediaRateAdapter COMMAND BeaconStreamWorkerQuicMediaRateAdapterTests)
+
+add_executable(BeaconStreamWorkerVideoPipelineTests worker_video_pipeline_tests.cpp)
+target_link_libraries(BeaconStreamWorkerVideoPipelineTests PRIVATE Beacon::StreamWorkerCore)
+add_test(NAME BeaconStreamWorker.VideoPipeline COMMAND BeaconStreamWorkerVideoPipelineTests)
+
+add_executable(BeaconStreamWorkerProductionVideoGenerationTests production_video_generation_tests.cpp)
+target_link_libraries(BeaconStreamWorkerProductionVideoGenerationTests PRIVATE Beacon::StreamWorkerCore)
+add_test(NAME BeaconStreamWorker.ProductionVideoGeneration COMMAND BeaconStreamWorkerProductionVideoGenerationTests)
+
+add_executable(
+  BeaconStreamWorkerQuicListenerProbe
+  quic_listener_probe.cpp
+  probe_process_runtime.cpp
+)
+target_sources(
+  BeaconStreamWorkerQuicListenerProbe
+  PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../../src/Beacon.Android/app/src/main/cpp/streamcore/benchmark_collector.cpp"
+)
+target_include_directories(
+  BeaconStreamWorkerQuicListenerProbe
+  PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../../src/Beacon.Android/app/src/main/cpp/streamcore"
+)
 target_link_libraries(BeaconStreamWorkerQuicListenerProbe PRIVATE Beacon::StreamWorkerCore)
 beacon_deploy_msquic(BeaconStreamWorkerQuicListenerProbe)
+
+add_executable(
+  BeaconStreamWorkerProbeRuntimeTests
+  probe_process_runtime_tests.cpp
+  probe_process_runtime.cpp
+)
+add_test(NAME BeaconStreamWorker.ProbeRuntime COMMAND BeaconStreamWorkerProbeRuntimeTests)

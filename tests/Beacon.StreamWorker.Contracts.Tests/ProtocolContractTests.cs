@@ -64,6 +64,59 @@ public sealed class ProtocolContractTests
     }
 
     [Fact]
+    public void SelectedVideoMode_RepresentsHevcMain10Hdr10WithoutImplicitDefaults()
+    {
+        var video = new SelectedVideoMode
+        {
+            Codec = VideoCodec.Hevc,
+            Width = 2560,
+            Height = 1600,
+            FramesPerSecondNumerator = 120,
+            FramesPerSecondDenominator = 1,
+            DynamicRange = DynamicRange.Hdr10,
+            Profile = VideoProfile.HevcMain10,
+            BitDepth = 10,
+            ColorPrimaries = ColorPrimaries.Bt2020,
+            TransferFunction = TransferFunction.Pq,
+            MatrixCoefficients = MatrixCoefficients.Bt2020NonConstantLuminance,
+            ColorRange = ColorRange.Limited,
+            HdrStaticInfo = ByteString.CopyFrom(
+                0, 0x48, 0x8a, 0x08, 0x39, 0x34, 0x21, 0xaa, 0x9b,
+                0x96, 0x19, 0xfc, 0x08, 0x13, 0x3d, 0x42, 0x40,
+                0xe8, 0x03, 0x32, 0x00, 0xe8, 0x03, 0x90, 0x01),
+            HdrStaticInfoInBitstream = true,
+        };
+
+        Assert.Equal(VideoProfile.HevcMain10, video.Profile);
+        Assert.Equal(10u, video.BitDepth);
+        Assert.Equal(ColorPrimaries.Bt2020, video.ColorPrimaries);
+        Assert.Equal(TransferFunction.Pq, video.TransferFunction);
+        Assert.Equal(MatrixCoefficients.Bt2020NonConstantLuminance, video.MatrixCoefficients);
+        Assert.Equal(ColorRange.Limited, video.ColorRange);
+        Assert.Equal(25, video.HdrStaticInfo.Length);
+        Assert.True(video.HdrStaticInfoInBitstream);
+    }
+
+    [Fact]
+    public void SelectedAudioMode_RepresentsTheR2ProductionGrant()
+    {
+        var audio = new SelectedAudioMode
+        {
+            Codec = AudioCodec.Opus,
+            SampleRateHz = 48_000,
+            ChannelCount = 2,
+            FrameDurationUs = 20_000,
+            BitrateBps = 96_000,
+        };
+
+        Assert.Equal(1, (int)audio.Codec);
+        Assert.Equal(48_000u, audio.SampleRateHz);
+        Assert.Equal(2u, audio.ChannelCount);
+        Assert.Equal(20_000u, audio.FrameDurationUs);
+        Assert.Equal(96_000u, audio.BitrateBps);
+    }
+
+    [Fact]
     public void ProtocolVersion_RejectsUnsupportedVersions()
     {
         ProtocolVersion.EnsureSupported(ProtocolVersion.Current);
@@ -94,6 +147,14 @@ public sealed class ProtocolContractTests
                 FramesPerSecondDenominator = 1,
                 DynamicRange = DynamicRange.Sdr,
             },
+            SelectedAudio = new SelectedAudioMode
+            {
+                Codec = AudioCodec.Opus,
+                SampleRateHz = 48_000,
+                ChannelCount = 2,
+                FrameDurationUs = 20_000,
+                BitrateBps = 96_000,
+            },
             PlanRevision = 9,
             PlanExplanation = "Measured path supports this plan.",
         };
@@ -119,6 +180,7 @@ public sealed class ProtocolContractTests
             "stream_ticket",
             "pinned_server_fingerprint",
             "selected_video",
+            "selected_audio",
             "plan_revision",
             "plan_explanation",
         };

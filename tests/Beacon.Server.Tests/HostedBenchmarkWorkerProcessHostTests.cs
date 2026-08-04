@@ -1,0 +1,564 @@
+using System.Diagnostics;
+using System.ComponentModel;
+using Beacon.Platform.Windows.Streaming;
+using Beacon.Server.TestHost;
+using Beacon.StreamWorker.Contracts.Framing;
+using Beacon.StreamWorker.Contracts.Worker.V1;
+
+namespace Beacon.Server.Tests;
+
+public sealed class HostedBenchmarkWorkerProcessHostTests
+{
+    [Fact]
+    public void StartInfoIncludesValidatedHostedVideoVectors()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            $"beacon-hosted-worker-start-info-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        string executable = Path.Combine(directory, "worker");
+        string identity = Path.Combine(directory, "identity.pfx");
+        string video720p = Path.Combine(directory, "video-720p.bau");
+        string video360p = Path.Combine(directory, "video-360p.bau");
+        File.WriteAllBytes(executable, []);
+        File.WriteAllBytes(identity, []);
+        File.WriteAllBytes(video720p, []);
+        File.WriteAllBytes(video360p, []);
+
+        try
+        {
+            ProcessStartInfo startInfo = HostedBenchmarkWorkerProcessHost.CreateStartInfo(
+                HostedBenchmarkWorkerOptions.Create(
+                    executable,
+                    identity,
+                    video720p,
+                    video360p));
+
+            Assert.Equal(
+                ["--identity", identity, "--video-720p", video720p, "--video-360p", video360p],
+                startInfo.ArgumentList);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task DuplexStreamReadsFromOutputAndWritesToInput()
+    {
+        await using var read = new MemoryStream([1, 2, 3]);
+        await using var write = new MemoryStream();
+        await using var duplex = new ReadWriteDuplexStream(read, write, leaveOpen: true);
+        byte[] received = new byte[3];
+
+        await duplex.ReadExactlyAsync(received);
+        await duplex.WriteAsync(new byte[] { 4, 5, 6 });
+        await duplex.FlushAsync();
+
+        Assert.Equal(new byte[] { 1, 2, 3 }, received);
+        Assert.Equal(new byte[] { 4, 5, 6 }, write.ToArray());
+        Assert.False(duplex.CanSeek);
+    }
+
+    [Fact]
+    public async Task StartsLazilyAndCompletesHandshakeAndCorrelatedCommand()
+    {
+        using var fixture = HostedWorkerFixture.Create("normal");
+        await using var host = fixture.CreateHost();
+
+        Assert.False(host.IsReady);
+        Assert.Equal(0, host.ProcessId);
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        long generation = host.CurrentProcessGeneration;
+        StreamWorkerCommandResponse response = await host.SendAsync(
+            generation,
+            Command("correlated-session"),
+            CancellationToken.None);
+
+        Assert.True(host.IsReady);
+        Assert.False(host.ProcessHasExited);
+        Assert.Null(host.ProcessExitCode);
+        Assert.Null(host.ClientTerminalError);
+        Assert.True(generation > 0);
+        Assert.True(response.Completion.RequestId > 0);
+        Assert.Equal("correlated-session", response.Completion.SessionId);
+        Assert.True(response.Completion.WorkerCompletion.Succeeded);
+        Assert.Equal(
+            host.WorkerInstanceId.ToArray(),
+            host.Capabilities.WorkerInstanceId.ToByteArray());
+    }
+
+    [Fact]
+    public async Task InvalidExecutablePreservesLaunchFailureAndLeavesNoActiveProcess()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            $"beacon-hosted-worker-invalid-executable-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        string executable = Path.Combine(directory, "not-an-executable.exe");
+        string identity = Path.Combine(directory, "identity.pfx");
+        File.WriteAllBytes(executable, []);
+        File.WriteAllBytes(identity, []);
+
+        try
+        {
+            await using var host = new HostedBenchmarkWorkerProcessHost(
+                HostedBenchmarkWorkerOptions.Create(executable, identity));
+
+            await Assert.ThrowsAsync<Win32Exception>(() =>
+                host.EnsureReadyAsync(CancellationToken.None));
+            Assert.Equal(0, host.ProcessId);
+            Assert.False(host.IsReady);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PublishesTranslatedWorkerEvents()
+    {
+        using var fixture = HostedWorkerFixture.Create("normal");
+        await using var host = fixture.CreateHost();
+        var events = host.Events;
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        StreamWorkerEvent workerEvent = await events.ReadAsync(CancellationToken.None);
+
+        StreamWorkerConnectionObserved observed = Assert.IsType<StreamWorkerConnectionObserved>(workerEvent);
+        Assert.Equal(host.CurrentProcessGeneration, observed.ProcessGeneration);
+        Assert.Equal(41ul, observed.ConnectionGeneration);
+    }
+
+    [Fact]
+    public async Task GracefulShutdownUsesTypedCommandAndAllowsNewGeneration()
+    {
+        using var fixture = HostedWorkerFixture.Create("normal");
+        await using var host = fixture.CreateHost();
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        long firstGeneration = host.CurrentProcessGeneration;
+        int firstProcessId = host.ProcessId;
+
+        await host.ShutdownAsync(CancellationToken.None);
+
+        Assert.False(host.IsReady);
+        Assert.Equal(0, host.ProcessId);
+        Assert.Contains("BEACON_FAKE_HOSTED_WORKER_STOPPED", host.Diagnostics);
+        AssertProcessExited(firstProcessId);
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+
+        Assert.True(host.IsReady);
+        Assert.True(host.CurrentProcessGeneration > firstGeneration);
+    }
+
+    [Fact]
+    public async Task CleanExitCanWinTheExplicitShutdownCompletionRace()
+    {
+        using var fixture = HostedWorkerFixture.Create("clean-exit-on-shutdown");
+        await using var host = fixture.CreateHost();
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        int processId = host.ProcessId;
+
+        await host.ShutdownAsync(CancellationToken.None);
+
+        Assert.False(host.IsReady);
+        Assert.Equal(0, host.ProcessId);
+        Assert.Contains("BEACON_FAKE_HOSTED_WORKER_STOPPED", host.Diagnostics);
+        AssertProcessExited(processId);
+    }
+
+    [Fact]
+    public async Task ChildExitFailsCommandAndPublishesGenerationExit()
+    {
+        using var fixture = HostedWorkerFixture.Create("exit-on-command");
+        await using var host = fixture.CreateHost();
+        var events = host.Events;
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        long generation = host.CurrentProcessGeneration;
+
+        Exception? commandFailure = await Record.ExceptionAsync(
+            () => host.SendAsync(generation, Command("exit-session"), CancellationToken.None));
+        StreamWorkerProcessExited exited = Assert.IsType<StreamWorkerProcessExited>(
+            await events.ReadAsync(CancellationToken.None));
+
+        Assert.True(
+            commandFailure is IOException or StreamWorkerProcessExitedException,
+            commandFailure?.ToString());
+        Assert.Equal(generation, exited.ProcessGeneration);
+        Assert.Equal(23, exited.ExitCode);
+        Assert.False(host.IsReady);
+        Assert.True(host.ProcessHasExited);
+        Assert.Equal(23, host.ProcessExitCode);
+        Assert.NotNull(host.ClientTerminalError);
+    }
+
+    [Fact]
+    public async Task DisposalTerminatesChildAfterBrokenControlChannel()
+    {
+        using var fixture = HostedWorkerFixture.Create("break-on-command");
+        var host = fixture.CreateHost();
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        int processId = host.ProcessId;
+        long generation = host.CurrentProcessGeneration;
+        await Assert.ThrowsAsync<ProtobufFrameException>(
+            () => host.SendAsync(generation, Command("broken-session"), CancellationToken.None));
+
+        await host.DisposeAsync();
+
+        AssertProcessExited(processId);
+    }
+
+    [Fact]
+    public async Task DisposalForceTerminatesChildWithoutRequestingCooperativeShutdown()
+    {
+        const string shutdownStalledMarker = "BEACON_FAKE_HOSTED_WORKER_SHUTDOWN_STALLED";
+        using var fixture = HostedWorkerFixture.Create("stall-on-shutdown");
+        var shutdownCommandObserved = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var host = fixture.CreateHost(diagnosticSink: marker =>
+        {
+            if (string.Equals(marker, shutdownStalledMarker, StringComparison.Ordinal))
+            {
+                shutdownCommandObserved.TrySetResult();
+            }
+        });
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        using Process child = Process.GetProcessById(host.ProcessId);
+        Task processExit = child.WaitForExitAsync();
+        Task disposal = host.DisposeAsync().AsTask();
+        Task firstSignal = await Task.WhenAny(
+            processExit,
+            shutdownCommandObserved.Task,
+            disposal);
+
+        try
+        {
+            Assert.NotSame(shutdownCommandObserved.Task, firstSignal);
+            await disposal;
+            await processExit;
+            Assert.False(shutdownCommandObserved.Task.IsCompleted);
+        }
+        finally
+        {
+            if (!child.HasExited)
+            {
+                child.Kill(entireProcessTree: true);
+                await processExit;
+            }
+            await disposal;
+        }
+    }
+
+    [Fact]
+    public async Task DisposalTerminatesBeforeWaitingForStalledShutdownAndCancelsIt()
+    {
+        const string shutdownStalledMarker = "BEACON_FAKE_HOSTED_WORKER_SHUTDOWN_STALLED";
+        using var fixture = HostedWorkerFixture.Create("stall-on-shutdown");
+        var shutdownStalled = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminationInitiated = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var host = fixture.CreateHost(
+            diagnosticSink: marker =>
+            {
+                if (string.Equals(marker, shutdownStalledMarker, StringComparison.Ordinal))
+                {
+                    shutdownStalled.TrySetResult();
+                }
+            },
+            terminateProcessTree: process =>
+            {
+                terminationInitiated.TrySetResult();
+                process.Kill(entireProcessTree: true);
+            });
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        using Process child = Process.GetProcessById(host.ProcessId);
+        Task processExit = child.WaitForExitAsync();
+        Task shutdown = host.ShutdownAsync(CancellationToken.None);
+        Task? disposal = null;
+
+        try
+        {
+            Task firstSignal = await Task.WhenAny(
+                shutdownStalled.Task,
+                shutdown,
+                processExit);
+            Assert.Same(shutdownStalled.Task, firstSignal);
+            disposal = host.DisposeAsync().AsTask();
+            Assert.True(terminationInitiated.Task.IsCompleted);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => shutdown);
+            await disposal;
+            await processExit;
+        }
+        finally
+        {
+            if (!child.HasExited)
+            {
+                child.Kill(entireProcessTree: true);
+                await processExit;
+            }
+            disposal ??= host.DisposeAsync().AsTask();
+            _ = await Record.ExceptionAsync(() => shutdown);
+            _ = await Record.ExceptionAsync(() => disposal);
+        }
+    }
+
+    [Fact]
+    public async Task DisposalTerminatesBeforeWaitingForStalledInitializationAndCancelsIt()
+    {
+        const string initializationStalledMarker =
+            "BEACON_FAKE_HOSTED_WORKER_INITIALIZATION_STALLED";
+        using var fixture = HostedWorkerFixture.Create("stall-on-initialize");
+        var initializationStalled = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminationInitiated = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var host = fixture.CreateHost(
+            diagnosticSink: marker =>
+            {
+                if (string.Equals(marker, initializationStalledMarker, StringComparison.Ordinal))
+                {
+                    initializationStalled.TrySetResult();
+                }
+            },
+            terminateProcessTree: process =>
+            {
+                terminationInitiated.TrySetResult();
+                process.Kill(entireProcessTree: true);
+            });
+
+        Task initialization = host.EnsureReadyAsync(CancellationToken.None);
+        Process? child = null;
+        Task? processExit = null;
+        Task? disposal = null;
+
+        try
+        {
+            Task firstSignal = await Task.WhenAny(
+                initializationStalled.Task,
+                initialization);
+            Assert.Same(initializationStalled.Task, firstSignal);
+            child = Process.GetProcessById(host.ProcessId);
+            processExit = child.WaitForExitAsync();
+            disposal = host.DisposeAsync().AsTask();
+            Assert.True(terminationInitiated.Task.IsCompleted);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => initialization);
+            await disposal;
+            await processExit;
+        }
+        finally
+        {
+            if (child is not null && !child.HasExited)
+            {
+                child.Kill(entireProcessTree: true);
+                await processExit!;
+            }
+            disposal ??= host.DisposeAsync().AsTask();
+            _ = await Record.ExceptionAsync(() => initialization);
+            _ = await Record.ExceptionAsync(() => disposal);
+            child?.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task DisposalCompletesEventsBeforeProcessExitPublication()
+    {
+        using var fixture = HostedWorkerFixture.Create("normal");
+        var host = fixture.CreateHost(eventCapacity: 1);
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        Assert.True(await host.Events.WaitToReadAsync(CancellationToken.None));
+        using Process child = Process.GetProcessById(host.ProcessId);
+        Task processExit = child.WaitForExitAsync();
+        Task disposal = host.DisposeAsync().AsTask();
+
+        try
+        {
+            Task firstSignal = await Task.WhenAny(processExit, disposal);
+            if (ReferenceEquals(disposal, firstSignal))
+            {
+                await disposal;
+            }
+            else
+            {
+                await processExit;
+            }
+            Assert.True(child.HasExited);
+            Assert.True(host.Events.TryRead(out StreamWorkerEvent? bufferedEvent));
+            Assert.IsType<StreamWorkerConnectionObserved>(bufferedEvent);
+            await disposal;
+
+            Assert.False(host.Events.TryRead(out _));
+            await host.Events.Completion;
+        }
+        finally
+        {
+            if (!child.HasExited)
+            {
+                child.Kill(entireProcessTree: true);
+                await processExit;
+            }
+            _ = await Record.ExceptionAsync(() => disposal);
+        }
+    }
+
+    [Fact]
+    public async Task DisposalReapsWorkerBeforeRethrowingPreGateTerminationFailure()
+    {
+        const string terminationFailureMessage = "injected pre-gate termination failure";
+        using var fixture = HostedWorkerFixture.Create("normal");
+        int terminationAttempts = 0;
+        var host = fixture.CreateHost(terminateProcessTree: process =>
+        {
+            if (Interlocked.Increment(ref terminationAttempts) == 1)
+            {
+                throw new InvalidOperationException(terminationFailureMessage);
+            }
+            process.Kill(entireProcessTree: true);
+        });
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        using Process child = Process.GetProcessById(host.ProcessId);
+        Task processExit = child.WaitForExitAsync();
+        Task disposal = host.DisposeAsync().AsTask();
+        Task firstSignal = await Task.WhenAny(processExit, disposal);
+
+        try
+        {
+            InvalidOperationException failure;
+            if (ReferenceEquals(disposal, firstSignal))
+            {
+                failure = await Assert.ThrowsAsync<InvalidOperationException>(() => disposal);
+            }
+            else
+            {
+                await processExit;
+                failure = await Assert.ThrowsAsync<InvalidOperationException>(() => disposal);
+            }
+
+            Assert.Equal(terminationFailureMessage, failure.Message);
+            Assert.True(child.HasExited);
+            await processExit;
+            Assert.Equal(2, Volatile.Read(ref terminationAttempts));
+            Assert.Equal(0, host.ProcessId);
+        }
+        finally
+        {
+            if (!child.HasExited)
+            {
+                child.Kill(entireProcessTree: true);
+                await processExit;
+            }
+            _ = await Record.ExceptionAsync(() => disposal);
+        }
+    }
+
+    [Fact]
+    public async Task StderrDiagnosticsAreBoundedAndDoNotExposeIdentityPath()
+    {
+        using var fixture = HostedWorkerFixture.Create("diagnostics");
+        await using var host = fixture.CreateHost(diagnosticCapacity: 4);
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        await host.ShutdownAsync(CancellationToken.None);
+
+        Assert.Equal(4, host.Diagnostics.Count);
+        Assert.All(host.Diagnostics, line => Assert.DoesNotContain(fixture.IdentityPath, line, StringComparison.Ordinal));
+        Assert.Equal("BEACON_FAKE_HOSTED_WORKER_STOPPED", host.Diagnostics[^1]);
+    }
+
+    [Fact]
+    public async Task ForwardsOnlySanitizedWorkerMarkersToDiagnosticSink()
+    {
+        using var fixture = HostedWorkerFixture.Create("diagnostics");
+        var forwarded = new List<string>();
+        await using var host = fixture.CreateHost(diagnosticSink: forwarded.Add);
+
+        await host.EnsureReadyAsync(CancellationToken.None);
+        await host.ShutdownAsync(CancellationToken.None);
+
+        Assert.Contains("BEACON_FAKE_HOSTED_WORKER_READY", forwarded);
+        Assert.Contains("BEACON_FAKE_HOSTED_WORKER_STOPPED", forwarded);
+        Assert.DoesNotContain(forwarded, value => value.Contains("not-safe", StringComparison.Ordinal));
+        Assert.All(forwarded, value => Assert.DoesNotContain(fixture.IdentityPath, value, StringComparison.Ordinal));
+    }
+
+    private static WorkerIpcEnvelope Command(string sessionId) => new()
+    {
+        SessionId = sessionId,
+        PrepareBenchmark = new PrepareBenchmark(),
+    };
+
+    private static void AssertProcessExited(int processId) =>
+        Assert.Throws<ArgumentException>(() => Process.GetProcessById(processId));
+
+    private sealed class HostedWorkerFixture : IDisposable
+    {
+        private HostedWorkerFixture(string directoryPath, string executablePath, string identityPath)
+        {
+            DirectoryPath = directoryPath;
+            ExecutablePath = executablePath;
+            IdentityPath = identityPath;
+        }
+
+        public string DirectoryPath { get; }
+
+        public string ExecutablePath { get; }
+
+        public string IdentityPath { get; }
+
+        public static HostedWorkerFixture Create(string mode)
+        {
+            string directory = Path.Combine(
+                Path.GetTempPath(),
+                $"beacon-hosted-worker-process-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(directory);
+            string testHostAssembly = typeof(TestHostProgram).Assembly.Location;
+            string executable = Path.ChangeExtension(testHostAssembly, ".exe");
+            if (!File.Exists(executable))
+            {
+                throw new FileNotFoundException("Beacon TestHost apphost is unavailable.", executable);
+            }
+            string identity = Path.Combine(directory, "identity-mode.txt");
+            File.WriteAllText(identity, mode);
+            return new HostedWorkerFixture(directory, executable, identity);
+        }
+
+        public HostedBenchmarkWorkerProcessHost CreateHost(
+            int eventCapacity = 16,
+            int diagnosticCapacity = 16,
+            Action<string>? diagnosticSink = null,
+            Action<Process>? terminateProcessTree = null)
+        {
+            HostedBenchmarkWorkerOptions options = HostedBenchmarkWorkerOptions.Create(
+                ExecutablePath,
+                IdentityPath);
+            return new HostedBenchmarkWorkerProcessHost(
+                options,
+                CreateStartInfo,
+                eventCapacity,
+                diagnosticCapacity,
+                diagnosticSink,
+                terminateProcessTree);
+        }
+
+        private static ProcessStartInfo CreateStartInfo(HostedBenchmarkWorkerOptions options)
+        {
+            ProcessStartInfo startInfo = HostedBenchmarkWorkerProcessHost.CreateStartInfo(options);
+            startInfo.ArgumentList.Insert(0, "--fake-hosted-worker");
+            return startInfo;
+        }
+
+        public void Dispose() => Directory.Delete(DirectoryPath, recursive: true);
+    }
+}

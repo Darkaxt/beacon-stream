@@ -73,7 +73,7 @@ These are generic primitives with valuable tests, but their names or current own
 
 - `AndroidMediaCodecCatalog` and `AndroidCodecDescriptor`: retain for capability inventory and hardware benchmark candidate selection.
 - `AndroidMediaCodecFactory`, `EncodedVideoCodec`, `EncodedVideoCodecFactory`, and `SurfaceEncodedVideoDecoder`: retain as the current Surface/MediaCodec adapter boundary.
-- `EncodedVideoDecodeRequest`, `EncodedVideoDecodeResult`, `EncodedVideoSample`, `EncodedVideoDecoder`, `EncodedVideoSurfaceProvider`, and `AndroidSurfaceViewProvider`: retain only as decoder/presentation primitives; remove HTTP/test/GameStream ownership.
+- `EncodedVideoDecodeRequest`, `EncodedVideoDecodeResult`, `EncodedVideoSample`, `EncodedVideoSurfaceProvider`, and `AndroidSurfaceViewProvider`: retain only as decoder/presentation primitives; remove HTTP/test/GameStream ownership. The unused `EncodedVideoDecoder` interface was removed during the Gate 5 ownership audit; `SurfaceEncodedVideoDecoder` is the sole decoder lifecycle owner.
 - `AnnexBAccessUnitSplitter`: retain only if the StreamCore source audit confirms Java-side access-unit splitting remains necessary; otherwise delete before Gate 3 implementation.
 - `NativeStreamPresentation`: rename under the Beacon StreamCore contract or delete if native rendering no longer needs a Java presentation record.
 - `IStreamingBackend`: retain the service boundary name during Gates 0–2, but remove protocol, wrapper, endpoint, launch-URI, and native-session concepts. A single production StreamWorker implementation and one fake test implementation are the only permitted implementations after Gate 3.
@@ -119,7 +119,7 @@ Windows host mode must fail closed with an explicit architecture-recovery backen
 - WPF formatting and models for those fields.
 - tests that require these removed fields.
 
-Launch, stop, ownership, display, and recovery behavior remain. During recovery, a Windows launch fails stream preflight explicitly until StreamWorker is implemented; fake-host integration tests continue through the protocol-neutral fake backend.
+Launch, stop, ownership, display, and recovery behavior remain. Production now always uses the Beacon StreamWorker; protocol-neutral deterministic doubles and the process-level fake server are compiled only from dedicated projects under `tests/`.
 
 ## Delete: Android Compatibility Paths
 

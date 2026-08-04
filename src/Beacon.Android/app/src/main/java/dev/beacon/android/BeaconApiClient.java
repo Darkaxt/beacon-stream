@@ -1,10 +1,15 @@
 package dev.beacon.android;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import android.content.Context;
 
 public final class BeaconApiClient implements BeaconViewModel.BeaconService {
@@ -54,11 +59,6 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
     }
 
     @Override
-    public BeaconResult patchProfile(ProfilePatch patch) throws IOException {
-        return patch("/clients/" + config.clientId() + "/profile", patch.toJson());
-    }
-
-    @Override
     public BeaconResult reportCapabilities(ClientCapabilities capabilities) throws IOException {
         return post("/clients/" + config.clientId() + "/capabilities", capabilities.toJson());
     }
@@ -90,6 +90,35 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         return post("/clients/" + config.clientId() + "/launch", game.toJson());
     }
 
+    public BeaconResult prepareBenchmark(BeaconBenchmarkPrepareRequest request) throws IOException {
+        if (request == null) {
+            throw new IllegalArgumentException("Benchmark preparation request is required.");
+        }
+        return post(
+            "/clients/" + config.clientId() + "/benchmarks/prepare",
+            request.toJson());
+    }
+
+    public BeaconResult completeBenchmark(
+        String runId,
+        BeaconBenchmarkCompletionRequest request) throws IOException {
+        if (runId == null || runId.trim().isEmpty() || request == null) {
+            throw new IllegalArgumentException("Benchmark run and completion evidence are required.");
+        }
+        return post(
+            "/clients/" + config.clientId() + "/benchmarks/" + runId.trim() + "/complete",
+            request.toJson());
+    }
+
+    public BeaconResult cancelBenchmark(String runId) throws IOException {
+        if (runId == null || runId.trim().isEmpty()) {
+            throw new IllegalArgumentException("Benchmark run is required.");
+        }
+        return post(
+            "/clients/" + config.clientId() + "/benchmarks/" + runId.trim() + "/cancel",
+            new JsonObject());
+    }
+
     @Override
     public BeaconResult reconnect() throws IOException {
         return post("/clients/" + config.clientId() + "/reconnect", new JsonObject());
@@ -117,10 +146,6 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
 
     private BeaconResult post(String path, JsonObject body) throws IOException {
         return send("POST", path, body);
-    }
-
-    private BeaconResult patch(String path, JsonObject body) throws IOException {
-        return send("PATCH", path, body);
     }
 
     private BeaconResult get(String path) throws IOException {
@@ -181,29 +206,40 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         }
     }
 
-    public static final class ProfilePatch {
-        public Integer preferredWidth;
-        public Integer preferredHeight;
-        public Integer preferredRefreshHz;
-        public String hdrPreference;
-        public String codecPreference;
-        public String qualityMode;
-        public Integer bitrateCapMbps;
-        public String audioMode;
-        public Boolean keepAppRunningOnDisconnect;
+    public static final class ClientDisplayMode {
+        public final int width;
+        public final int height;
+        public final int refreshHz;
+
+        public ClientDisplayMode(int width, int height, int refreshHz) {
+            this.width = width;
+            this.height = height;
+            this.refreshHz = refreshHz;
+        }
 
         JsonObject toJson() {
             JsonObject json = new JsonObject();
-            add(json, "preferredWidth", preferredWidth);
-            add(json, "preferredHeight", preferredHeight);
-            add(json, "preferredRefreshHz", preferredRefreshHz);
-            add(json, "hdrPreference", hdrPreference);
-            add(json, "codecPreference", codecPreference);
-            add(json, "qualityMode", qualityMode);
-            add(json, "bitrateCapMbps", bitrateCapMbps);
-            add(json, "audioMode", audioMode);
-            add(json, "keepAppRunningOnDisconnect", keepAppRunningOnDisconnect);
+            json.addProperty("width", width);
+            json.addProperty("height", height);
+            json.addProperty("refreshHz", refreshHz);
             return json;
+        }
+
+        @Override
+        public boolean equals(Object value) {
+            if (this == value) {
+                return true;
+            }
+            if (!(value instanceof ClientDisplayMode)) {
+                return false;
+            }
+            ClientDisplayMode mode = (ClientDisplayMode)value;
+            return width == mode.width && height == mode.height && refreshHz == mode.refreshHz;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(width, height, refreshHz);
         }
     }
 
@@ -215,10 +251,20 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         public boolean virtualDisplayHdrSupported;
         public int maxFps;
         public boolean lowLatencyDecode;
-        public String currentScreenMode;
+        public ClientDisplayMode currentDisplayMode;
+        public List<ClientDisplayMode> supportedDisplayModes;
 
         public ClientCapabilities(boolean av1, boolean hevc, boolean h264, boolean hdr10, boolean virtualDisplayHdrSupported) {
-            this(av1, hevc, h264, hdr10, virtualDisplayHdrSupported, 120, true, null);
+            this(
+                av1,
+                hevc,
+                h264,
+                hdr10,
+                virtualDisplayHdrSupported,
+                120,
+                true,
+                null,
+                Collections.emptyList());
         }
 
         public ClientCapabilities(
@@ -229,7 +275,8 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             boolean virtualDisplayHdrSupported,
             int maxFps,
             boolean lowLatencyDecode,
-            String currentScreenMode) {
+            ClientDisplayMode currentDisplayMode,
+            List<ClientDisplayMode> supportedDisplayModes) {
             this.av1 = av1;
             this.hevc = hevc;
             this.h264 = h264;
@@ -237,7 +284,9 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             this.virtualDisplayHdrSupported = virtualDisplayHdrSupported;
             this.maxFps = maxFps;
             this.lowLatencyDecode = lowLatencyDecode;
-            this.currentScreenMode = currentScreenMode;
+            this.currentDisplayMode = currentDisplayMode;
+            this.supportedDisplayModes = Collections.unmodifiableList(
+                new ArrayList<>(supportedDisplayModes == null ? Collections.emptyList() : supportedDisplayModes));
         }
 
         JsonObject toJson() {
@@ -249,18 +298,25 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             json.addProperty("virtualDisplayHdrSupported", virtualDisplayHdrSupported);
             json.addProperty("maxFps", maxFps);
             json.addProperty("lowLatencyDecode", lowLatencyDecode);
-            add(json, "currentScreenMode", currentScreenMode);
+            if (currentDisplayMode != null) {
+                json.add("currentDisplayMode", currentDisplayMode.toJson());
+            }
+            JsonArray modes = new JsonArray();
+            for (ClientDisplayMode mode : supportedDisplayModes) {
+                modes.add(mode.toJson());
+            }
+            json.add("supportedDisplayModes", modes);
             return json;
         }
     }
 
     public static final class ClientTelemetry {
-        public int rttMs;
-        public double packetLossPercent;
-        public int decoderLoadPercent;
-        public int estimatedBandwidthMbps;
+        public Integer rttMs;
+        public Double packetLossPercent;
+        public Integer decoderLoadPercent;
+        public Integer estimatedBandwidthMbps;
         public String wifiBand;
-        public int batteryPercent;
+        public Integer batteryPercent;
         public String thermalState;
 
         public ClientTelemetry(int rttMs, double packetLossPercent, int decoderLoadPercent) {
@@ -268,12 +324,12 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         }
 
         public ClientTelemetry(
-            int rttMs,
-            double packetLossPercent,
-            int decoderLoadPercent,
-            int estimatedBandwidthMbps,
+            Integer rttMs,
+            Double packetLossPercent,
+            Integer decoderLoadPercent,
+            Integer estimatedBandwidthMbps,
             String wifiBand,
-            int batteryPercent,
+            Integer batteryPercent,
             String thermalState) {
             this.rttMs = rttMs;
             this.packetLossPercent = packetLossPercent;
@@ -286,16 +342,12 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
 
         JsonObject toJson() {
             JsonObject json = new JsonObject();
-            json.addProperty("rttMs", rttMs);
-            json.addProperty("packetLossPercent", packetLossPercent);
-            json.addProperty("decoderLoadPercent", decoderLoadPercent);
-            if (estimatedBandwidthMbps > 0) {
-                json.addProperty("estimatedBandwidthMbps", estimatedBandwidthMbps);
-            }
+            add(json, "rttMs", rttMs);
+            add(json, "packetLossPercent", packetLossPercent);
+            add(json, "decoderLoadPercent", decoderLoadPercent);
+            add(json, "estimatedBandwidthMbps", estimatedBandwidthMbps);
             add(json, "wifiBand", wifiBand);
-            if (batteryPercent > 0) {
-                json.addProperty("batteryPercent", batteryPercent);
-            }
+            add(json, "batteryPercent", batteryPercent);
             add(json, "thermalState", thermalState);
             return json;
         }
@@ -349,6 +401,23 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             return batch;
         }
 
+        public static InputBatch controller(
+            int sequence,
+            int controllerIndex,
+            int controlId,
+            int value) {
+            if (sequence < 0 || controllerIndex != 0 || controlId < 1 || controlId > 21 ||
+                value < Short.MIN_VALUE || value > Short.MAX_VALUE) {
+                throw new IllegalArgumentException("Controller input values are invalid.");
+            }
+            InputBatch batch = new InputBatch();
+            batch.sequence = sequence;
+            batch.events = new InputEvent[] {
+                InputEvent.controller(controllerIndex, controlId, value)
+            };
+            return batch;
+        }
+
     }
 
     public static final class InputEvent {
@@ -360,6 +429,9 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
         public Integer buttons;
         public String key;
         public String code;
+        public int controllerIndex;
+        public int controlId;
+        public int controllerValue;
 
         static InputEvent pointer(String action, int pointerId, double x, double y, Integer buttons) {
             InputEvent event = new InputEvent();
@@ -378,6 +450,16 @@ public final class BeaconApiClient implements BeaconViewModel.BeaconService {
             event.action = action;
             event.key = key;
             event.code = code;
+            return event;
+        }
+
+        static InputEvent controller(int controllerIndex, int controlId, int value) {
+            InputEvent event = new InputEvent();
+            event.type = "controller";
+            event.action = "value";
+            event.controllerIndex = controllerIndex;
+            event.controlId = controlId;
+            event.controllerValue = value;
             return event;
         }
 
