@@ -177,6 +177,12 @@ WorkerIpcEnvelope prepare_video(std::uint64_t request_id = 20) {
   plan->set_frames_per_second_numerator(120);
   plan->set_frames_per_second_denominator(1);
   plan->set_dynamic_range(beacon::worker::v1::WORKER_DYNAMIC_RANGE_SDR);
+  plan->set_video_profile(beacon::stream::v1::VIDEO_PROFILE_H264_HIGH);
+  plan->set_video_bit_depth(8);
+  plan->set_color_primaries(beacon::stream::v1::COLOR_PRIMARIES_BT709);
+  plan->set_transfer_function(beacon::stream::v1::TRANSFER_FUNCTION_BT709);
+  plan->set_matrix_coefficients(beacon::stream::v1::MATRIX_COEFFICIENTS_BT709);
+  plan->set_color_range(beacon::stream::v1::COLOR_RANGE_LIMITED);
   plan->set_audio_codec(beacon::worker::v1::WORKER_AUDIO_CODEC_OPUS);
   plan->set_audio_sample_rate_hz(48'000);
   plan->set_audio_channel_count(2);
@@ -190,6 +196,55 @@ WorkerIpcEnvelope prepare_video(std::uint64_t request_id = 20) {
 
 video::ProductionVideoCapabilities available_video() {
   return {.available = true};
+}
+
+audio::ProductionAudioCapabilities available_audio();
+
+WorkerIpcEnvelope prepare_hdr10(std::uint64_t request_id = 25) {
+  auto prepare = prepare_video(request_id);
+  auto* plan = prepare.mutable_prepare_session();
+  plan->set_video_codec(beacon::worker::v1::WORKER_VIDEO_CODEC_HEVC);
+  plan->set_dynamic_range(beacon::worker::v1::WORKER_DYNAMIC_RANGE_HDR10);
+  plan->set_video_profile(beacon::stream::v1::VIDEO_PROFILE_HEVC_MAIN10);
+  plan->set_video_bit_depth(10);
+  plan->set_color_primaries(beacon::stream::v1::COLOR_PRIMARIES_BT2020);
+  plan->set_transfer_function(beacon::stream::v1::TRANSFER_FUNCTION_PQ);
+  plan->set_matrix_coefficients(
+      beacon::stream::v1::MATRIX_COEFFICIENTS_BT2020_NON_CONSTANT_LUMINANCE);
+  std::string metadata(25, '\0');
+  metadata[17] = static_cast<char>(0xe8);
+  metadata[18] = static_cast<char>(0x03);
+  metadata[21] = static_cast<char>(0xe8);
+  metadata[22] = static_cast<char>(0x03);
+  metadata[23] = static_cast<char>(0x90);
+  metadata[24] = static_cast<char>(0x01);
+  plan->set_hdr_static_info(metadata);
+  plan->set_hdr_static_info_in_bitstream(true);
+  return prepare;
+}
+
+void exact_hdr10_capability_and_prepare_are_truthful() {
+  RecordingTransport transport;
+  RecordingPipeline pipeline;
+  AuthorizedQuicTicketStore tickets;
+  WorkerHost host({std::byte{1}}, 42, transport, tickets, pipeline,
+                  pipeline.audio,
+                  {.available = true, .hevc_main10_hdr10_available = true},
+                  available_audio());
+
+  const auto capabilities = host.capabilities().worker_capabilities();
+  BEACON_TEST_REQUIRE(capabilities.hdr10());
+  BEACON_TEST_REQUIRE(capabilities.video_codecs_size() == 2);
+  BEACON_TEST_REQUIRE(capabilities.video_codecs(1) ==
+                      beacon::worker::v1::WORKER_VIDEO_CODEC_HEVC);
+  BEACON_TEST_REQUIRE(
+      completion(host.dispatch(prepare_hdr10())).worker_completion().succeeded());
+  BEACON_TEST_REQUIRE(pipeline.plans.size() == 1);
+  BEACON_TEST_REQUIRE(pipeline.plans[0].codec ==
+                      beacon::stream::v1::VIDEO_CODEC_HEVC);
+  BEACON_TEST_REQUIRE(pipeline.plans[0].dynamic_range ==
+                      beacon::stream::v1::DYNAMIC_RANGE_HDR10);
+  BEACON_TEST_REQUIRE(pipeline.plans[0].hdr_static_info.size() == 25);
 }
 
 audio::ProductionAudioCapabilities available_audio() {
@@ -662,6 +717,7 @@ void audio_failure_events_preserve_boundary_stage_and_platform_status() {
 int main() {
   return beacon::stream::testing::run_tests([] {
     hello_capabilities_and_ready_are_typed_and_instance_bound();
+    exact_hdr10_capability_and_prepare_are_truthful();
     unavailable_video_is_reported_without_poisoning_worker();
     unavailable_audio_is_reported_without_preparing_a_session();
     unsupported_versions_receive_one_correlated_failure();

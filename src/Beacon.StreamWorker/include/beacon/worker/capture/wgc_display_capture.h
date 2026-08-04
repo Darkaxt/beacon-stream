@@ -18,11 +18,17 @@ class D3d11Texture {
   [[nodiscard]] virtual void* native_texture() const noexcept = 0;
 };
 
+enum class WgcCapturePixelFormat {
+  bgra8,
+  rgba16_float,
+};
+
 struct CapturedD3d11Frame {
   std::shared_ptr<D3d11Texture> texture;
   std::uint32_t width{};
   std::uint32_t height{};
   std::int64_t qpc_timestamp{};
+  WgcCapturePixelFormat pixel_format{WgcCapturePixelFormat::bgra8};
 };
 
 struct WgcDisplayTargetSnapshot {
@@ -43,6 +49,7 @@ struct WgcAdapterSnapshot {
 
 struct WgcCapturePlan {
   std::wstring device_name;
+  WgcCapturePixelFormat pixel_format{WgcCapturePixelFormat::bgra8};
 };
 
 enum class WgcCaptureFailure {
@@ -113,10 +120,12 @@ class IWgcCapturePlatform {
   [[nodiscard]] virtual bool start_capture(
       const WgcDisplayTargetSnapshot& target,
       const WgcAdapterSnapshot& adapter,
+      WgcCapturePixelFormat pixel_format,
       FrameCallback callback,
       FailureCallback failure_callback) = 0;
   [[nodiscard]] virtual bool recreate_frame_pool(std::uint32_t width,
-                                                 std::uint32_t height) = 0;
+                                                 std::uint32_t height,
+                                                 WgcCapturePixelFormat pixel_format) = 0;
   [[nodiscard]] virtual WgcCapturePlatformFailure
   capture_failure() const noexcept = 0;
   virtual void stop_capture() noexcept = 0;
@@ -167,6 +176,7 @@ class WgcDisplayCapture final {
   std::wstring selected_adapter_description_;
   std::uint32_t pool_width_{};
   std::uint32_t pool_height_{};
+  WgcCapturePixelFormat pixel_format_{WgcCapturePixelFormat::bgra8};
   std::size_t active_callbacks_{};
   bool active_{};
   bool platform_started_{};

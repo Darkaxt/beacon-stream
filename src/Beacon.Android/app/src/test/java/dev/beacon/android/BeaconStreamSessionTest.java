@@ -3,6 +3,7 @@ package dev.beacon.android;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -45,6 +46,35 @@ public final class BeaconStreamSessionTest {
         assertEquals("hdr10", session.selectedVideo().dynamicRange());
         assertEquals(2560, session.selectedVideo().width());
         assertEquals(120, session.selectedVideo().framesPerSecondNumerator());
+    }
+
+    @Test
+    public void parsesCompleteHevcMain10Hdr10GrantMetadata() {
+        BeaconStreamSession session = BeaconStreamSession.parse(
+            "https://beacon.example",
+            "client",
+            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":3,\"planExplanation\":\"hdr\",\"sessionId\":\"hdr-session\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"hevc\",\"width\":3840,\"height\":2160,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"hdr10\",\"profile\":\"hevcMain10\",\"bitDepth\":10,\"colorPrimaries\":\"bt2020\",\"transferFunction\":\"pq\",\"matrixCoefficients\":\"bt2020NonConstantLuminance\",\"colorRange\":\"limited\",\"hdrStaticInfo\":\"AEiKCDk0Iaqblhn8CBM9QkDoAzIA6AOQAQ==\",\"hdrStaticInfoInBitstream\":true},\"selectedAudio\":{\"codec\":\"opus\",\"sampleRateHz\":48000,\"channelCount\":2,\"frameDurationUs\":20000,\"bitrateBps\":96000}}}");
+
+        BeaconStreamSession.SelectedVideo video = session.selectedVideo();
+        assertEquals("hevcMain10", video.profile());
+        assertEquals(10, video.bitDepth());
+        assertEquals("bt2020", video.colorPrimaries());
+        assertEquals("pq", video.transferFunction());
+        assertEquals("bt2020NonConstantLuminance", video.matrixCoefficients());
+        assertEquals("limited", video.colorRange());
+        assertArrayEquals(validHdrStaticInfo(), video.hdrStaticInfo());
+        assertTrue(video.hdrStaticInfoInBitstream());
+        byte[] copy = video.hdrStaticInfo();
+        copy[0] = 99;
+        assertEquals(0, video.hdrStaticInfo()[0]);
+    }
+
+    private static byte[] validHdrStaticInfo() {
+        return new byte[] {
+            0, 0x48, (byte) 0x8a, 0x08, 0x39, 0x34, 0x21, (byte) 0xaa,
+            (byte) 0x9b, (byte) 0x96, 0x19, (byte) 0xfc, 0x08, 0x13, 0x3d,
+            0x42, 0x40, (byte) 0xe8, 0x03, 0x32, 0x00, (byte) 0xe8, 0x03,
+            (byte) 0x90, 0x01};
     }
 
     @Test

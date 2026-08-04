@@ -9,6 +9,7 @@ import java.util.Map;
 final class DecoderBenchmarkMeasurements {
     private final BeaconBenchmarkHardwarePlan.DecoderRound round;
     private final int expectedFrames;
+    private final EncodedVideoDecodeRequest request;
     private final Map<Long, Long> inputTimesNs = new HashMap<>();
     private final List<Double> decodeLatenciesMs = new ArrayList<>();
     private final List<Double> presentationLatenciesMs = new ArrayList<>();
@@ -18,12 +19,15 @@ final class DecoderBenchmarkMeasurements {
     private int outputErrors;
     private long firstInputNs = Long.MAX_VALUE;
     private long lastOutputNs;
+    private boolean exactOutputFormat;
 
     DecoderBenchmarkMeasurements(
         BeaconBenchmarkHardwarePlan.DecoderRound round,
-        int expectedFrames) {
+        int expectedFrames,
+        EncodedVideoDecodeRequest request) {
         this.round = round;
         this.expectedFrames = expectedFrames;
+        this.request = request;
     }
 
     void recordInput(long presentationTimeUs, long queuedAtNs) {
@@ -47,13 +51,29 @@ final class DecoderBenchmarkMeasurements {
         outputErrors++;
     }
 
-    BeaconBenchmarkCompletionRequest.DecoderSample toSample(boolean configured) {
+    void recordOutputFormat(EncodedVideoOutputFormat format) {
+        exactOutputFormat = AndroidMediaCodecFactory.outputFormatMatches(request, format);
+    }
+
+    BeaconBenchmarkCompletionRequest.DecoderSample toSample(
+        boolean configured,
+        boolean physicalDisplaySurface,
+        boolean hdr10PresentationVerified) {
         double durationSeconds = firstInputNs == Long.MAX_VALUE || lastOutputNs <= firstInputNs
             ? 0.0
             : (lastOutputNs - firstInputNs) / 1_000_000_000.0;
         double sustainedFps = durationSeconds <= 0.0
             ? 0.0
             : outputFrames / durationSeconds;
+        boolean tenBitPresentationVerified = configured &&
+            request.bitDepth() == 10 &&
+            exactOutputFormat &&
+            physicalDisplaySurface &&
+            presentedFrames > 0 &&
+            outputErrors == 0;
+        boolean verifiedHdrPresentation = tenBitPresentationVerified &&
+            request.isHevcMain10Hdr10() &&
+            hdr10PresentationVerified;
         return new BeaconBenchmarkCompletionRequest.DecoderSample(
             round.codec(),
             round.profile(),
@@ -69,8 +89,8 @@ final class DecoderBenchmarkMeasurements {
                 : percentile95(presentationLatenciesMs),
             Math.max(0, expectedFrames - presentedFrames),
             outputErrors,
-            false,
-            false);
+            tenBitPresentationVerified,
+            verifiedHdrPresentation);
     }
 
     private void recordLatency(

@@ -148,6 +148,7 @@ bool WgcDisplayCapture::start(const WgcCapturePlan& plan,
         selected_adapter_description_ = adapter->description;
         pool_width_ = target->width;
         pool_height_ = target->height;
+        pixel_format_ = plan.pixel_format;
         sink_ = std::move(sink);
         active_ = true;
       }
@@ -157,7 +158,7 @@ bool WgcDisplayCapture::start(const WgcCapturePlan& plan,
     }
     consumer_thread_ = std::thread([this] { consume_frames(); });
     const bool platform_started = platform_->start_capture(
-        *target, *adapter,
+        *target, *adapter, plan.pixel_format,
         [this](CapturedD3d11Frame frame) {
           receive_frame(std::move(frame));
         },
@@ -288,6 +289,7 @@ std::wstring WgcDisplayCapture::selected_adapter_description() const {
 void WgcDisplayCapture::receive_frame(CapturedD3d11Frame frame) noexcept {
   std::uint32_t pool_width = 0;
   std::uint32_t pool_height = 0;
+  WgcCapturePixelFormat pixel_format{};
   {
     std::lock_guard lock{mutex_};
     if (!active_) {
@@ -296,14 +298,16 @@ void WgcDisplayCapture::receive_frame(CapturedD3d11Frame frame) noexcept {
     ++active_callbacks_;
     pool_width = pool_width_;
     pool_height = pool_height_;
+    pixel_format = pixel_format_;
   }
 
   try {
     if (!frame.texture || frame.width == 0 || frame.height == 0 ||
-        frame.qpc_timestamp <= 0) {
+        frame.qpc_timestamp <= 0 || frame.pixel_format != pixel_format) {
       report_async_failure(WgcCaptureFailure::frame_invalid);
     } else if (frame.width != pool_width || frame.height != pool_height) {
-      if (platform_->recreate_frame_pool(frame.width, frame.height)) {
+      if (platform_->recreate_frame_pool(frame.width, frame.height,
+                                         pixel_format)) {
         std::lock_guard lock{mutex_};
         pool_width_ = frame.width;
         pool_height_ = frame.height;

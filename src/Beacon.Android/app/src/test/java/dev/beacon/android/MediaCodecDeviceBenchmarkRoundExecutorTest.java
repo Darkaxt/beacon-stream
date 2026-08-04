@@ -1,6 +1,7 @@
 package dev.beacon.android;
 
 import com.google.gson.JsonParser;
+import com.google.gson.JsonObject;
 
 import org.junit.Test;
 
@@ -11,6 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
@@ -194,12 +196,86 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
         assertTrue(surfaces.closed);
     }
 
+    @Test
+    public void exactHdrOutputAndPhysicalHdrSurfaceVerifyBenchmarkPresentation() {
+        RecordingCodec codec = new RecordingCodec();
+        RecordingSurfaceFactory surfaces = new RecordingSurfaceFactory(true, true);
+        MediaCodecDeviceBenchmarkRoundExecutor executor =
+            new MediaCodecDeviceBenchmarkRoundExecutor(
+                ignored -> codec,
+                ignored -> twoFrameVector(),
+                surfaces,
+                Runnable::run);
+        RecordingRoundObserver observer = new RecordingRoundObserver();
+
+        executor.start(hdrRound(), observer);
+        assertTrue(codec.request.isHevcMain10Hdr10());
+        codec.observer.onOutputFormatChanged(hdrOutputFormat());
+        EncodedVideoSample first = codec.sampleProvider.nextSample();
+        codec.observer.onInputQueued(first.sequence(), first.presentationTimeUs(), 1_000_000);
+        codec.observer.onOutputReleased(
+            first.sequence(), first.presentationTimeUs(), 6_000_000, true);
+        codec.observer.onFrameRendered(
+            first.sequence(), first.presentationTimeUs(), 10_000_000);
+        codec.observer.onEndOfStream();
+
+        JsonObject json = observer.sample.toJson();
+        assertTrue(json.get("tenBitPresentationVerified").getAsBoolean());
+        assertTrue(json.get("hdrPresentationVerified").getAsBoolean());
+    }
+
+    @Test
+    public void emulatorStyleSurfaceCannotVerifyHdrEvenWithExactDecoderOutput() {
+        RecordingCodec codec = new RecordingCodec();
+        RecordingSurfaceFactory surfaces = new RecordingSurfaceFactory(false, false);
+        MediaCodecDeviceBenchmarkRoundExecutor executor =
+            new MediaCodecDeviceBenchmarkRoundExecutor(
+                ignored -> codec,
+                ignored -> twoFrameVector(),
+                surfaces,
+                Runnable::run);
+        RecordingRoundObserver observer = new RecordingRoundObserver();
+
+        executor.start(hdrRound(), observer);
+        codec.observer.onOutputFormatChanged(hdrOutputFormat());
+        EncodedVideoSample first = codec.sampleProvider.nextSample();
+        codec.observer.onInputQueued(first.sequence(), first.presentationTimeUs(), 1_000_000);
+        codec.observer.onOutputReleased(
+            first.sequence(), first.presentationTimeUs(), 6_000_000, true);
+        codec.observer.onFrameRendered(
+            first.sequence(), first.presentationTimeUs(), 10_000_000);
+        codec.observer.onEndOfStream();
+
+        JsonObject json = observer.sample.toJson();
+        assertFalse(json.get("tenBitPresentationVerified").getAsBoolean());
+        assertFalse(json.get("hdrPresentationVerified").getAsBoolean());
+    }
+
     private static BeaconBenchmarkHardwarePlan.DecoderRound round() {
         return BeaconBenchmarkHardwarePlan.parse(JsonParser.parseString(
             "{\"schemaVersion\":1,\"samplePowerBeforeAndAfterEachRound\":true," +
                 "\"decoderRounds\":[{\"vectorId\":\"vector-a\",\"codec\":\"h264\",\"profile\":\"high\"," +
                 "\"bitDepth\":8,\"width\":1280,\"height\":720,\"targetFps\":60,\"repetitionCount\":1}]}")
             .getAsJsonObject()).decoderRounds().get(0);
+    }
+
+    private static BeaconBenchmarkHardwarePlan.DecoderRound hdrRound() {
+        return BeaconBenchmarkHardwarePlan.parse(JsonParser.parseString(
+            "{\"schemaVersion\":1,\"samplePowerBeforeAndAfterEachRound\":true," +
+                "\"decoderRounds\":[{\"vectorId\":\"beacon-hevc-main10-hdr10-320x180-30-v1\"," +
+                "\"codec\":\"hevc\",\"profile\":\"main10\",\"bitDepth\":10," +
+                "\"width\":320,\"height\":180,\"targetFps\":30,\"repetitionCount\":1}]}" )
+            .getAsJsonObject()).decoderRounds().get(0);
+    }
+
+    private static EncodedVideoOutputFormat hdrOutputFormat() {
+        return new EncodedVideoOutputFormat(
+            "video/hevc",
+            android.media.MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10,
+            android.media.MediaFormat.COLOR_STANDARD_BT2020,
+            android.media.MediaFormat.COLOR_TRANSFER_ST2084,
+            android.media.MediaFormat.COLOR_RANGE_LIMITED,
+            BenchmarkEncodedVideoRequestFactory.hdrStaticInfo());
     }
 
     private static byte[] twoFrameVector() {
@@ -220,6 +296,7 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
     }
 
     private static final class RecordingCodec implements EncodedVideoCodec {
+        private EncodedVideoDecodeRequest request;
         private EncodedVideoSampleProvider sampleProvider;
         private EncodedVideoCodecObserver observer;
         private RuntimeException configurationFailure;
@@ -244,6 +321,7 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
             EncodedVideoSampleProvider sampleProvider,
             EncodedVideoCodecObserver observer) {
             if (configurationFailure != null) throw configurationFailure;
+            this.request = request;
             this.sampleProvider = sampleProvider;
             this.observer = observer;
         }
@@ -265,6 +343,19 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
         private boolean closed;
         private Long presentationTimeUsOnClose;
         private long presentedAtNsOnClose;
+        private final boolean physicalDisplaySurface;
+        private final boolean hdr10PresentationVerified;
+
+        RecordingSurfaceFactory() {
+            this(false, false);
+        }
+
+        RecordingSurfaceFactory(
+            boolean physicalDisplaySurface,
+            boolean hdr10PresentationVerified) {
+            this.physicalDisplaySurface = physicalDisplaySurface;
+            this.hdr10PresentationVerified = hdr10PresentationVerified;
+        }
 
         void presentOnClose(long presentationTimeUs, long presentedAtNs) {
             presentationTimeUsOnClose = presentationTimeUs;
@@ -276,6 +367,12 @@ public final class MediaCodecDeviceBenchmarkRoundExecutorTest {
             this.observer = observer;
             return new BenchmarkPresentationSurface() {
                 @Override public Object surface() { return new Object(); }
+                @Override public boolean physicalDisplaySurface() {
+                    return physicalDisplaySurface;
+                }
+                @Override public boolean hdr10PresentationVerified() {
+                    return hdr10PresentationVerified;
+                }
                 @Override public void close() {
                     if (presentationTimeUsOnClose != null) {
                         observer.onFramePresented(

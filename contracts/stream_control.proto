@@ -18,6 +18,36 @@ enum DynamicRange {
   DYNAMIC_RANGE_HDR10 = 2;
 }
 
+enum VideoProfile {
+  VIDEO_PROFILE_UNSPECIFIED = 0;
+  VIDEO_PROFILE_H264_HIGH = 1;
+  VIDEO_PROFILE_HEVC_MAIN10 = 2;
+}
+
+enum ColorPrimaries {
+  COLOR_PRIMARIES_UNSPECIFIED = 0;
+  COLOR_PRIMARIES_BT709 = 1;
+  COLOR_PRIMARIES_BT2020 = 2;
+}
+
+enum TransferFunction {
+  TRANSFER_FUNCTION_UNSPECIFIED = 0;
+  TRANSFER_FUNCTION_BT709 = 1;
+  TRANSFER_FUNCTION_PQ = 2;
+}
+
+enum MatrixCoefficients {
+  MATRIX_COEFFICIENTS_UNSPECIFIED = 0;
+  MATRIX_COEFFICIENTS_BT709 = 1;
+  MATRIX_COEFFICIENTS_BT2020_NON_CONSTANT_LUMINANCE = 2;
+}
+
+enum ColorRange {
+  COLOR_RANGE_UNSPECIFIED = 0;
+  COLOR_RANGE_LIMITED = 1;
+  COLOR_RANGE_FULL = 2;
+}
+
 enum AudioCodec {
   AUDIO_CODEC_UNSPECIFIED = 0;
   AUDIO_CODEC_OPUS = 1;
@@ -99,6 +129,15 @@ message SelectedVideoMode {
   uint32 frames_per_second_numerator = 4;
   uint32 frames_per_second_denominator = 5;
   DynamicRange dynamic_range = 6;
+  VideoProfile profile = 7;
+  uint32 bit_depth = 8;
+  ColorPrimaries color_primaries = 9;
+  TransferFunction transfer_function = 10;
+  MatrixCoefficients matrix_coefficients = 11;
+  ColorRange color_range = 12;
+  // CTA-861.3 HDR Static Metadata Type 1, including the descriptor ID byte.
+  bytes hdr_static_info = 13;
+  bool hdr_static_info_in_bitstream = 14;
 }
 
 message SelectedAudioMode {

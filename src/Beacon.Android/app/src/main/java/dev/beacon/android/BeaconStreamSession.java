@@ -145,13 +145,24 @@ public final class BeaconStreamSession {
     }
 
     private static SelectedVideo parseSelectedVideo(JsonObject video) {
+        String dynamicRange = requireText(
+            video.get("dynamicRange").getAsString(), "selectedVideo.dynamicRange");
+        boolean sdr = "sdr".equalsIgnoreCase(dynamicRange);
         return new SelectedVideo(
             requireText(video.get("codec").getAsString(), "selectedVideo.codec"),
             requiredInt(video, "width"),
             requiredInt(video, "height"),
             requiredInt(video, "framesPerSecondNumerator"),
             requiredInt(video, "framesPerSecondDenominator"),
-            requireText(video.get("dynamicRange").getAsString(), "selectedVideo.dynamicRange"));
+            dynamicRange,
+            optionalText(video, "profile", sdr ? "h264High" : "unspecified"),
+            optionalInt(video, "bitDepth", sdr ? 8 : 0),
+            optionalText(video, "colorPrimaries", sdr ? "bt709" : "unspecified"),
+            optionalText(video, "transferFunction", sdr ? "bt709" : "unspecified"),
+            optionalText(video, "matrixCoefficients", sdr ? "bt709" : "unspecified"),
+            optionalText(video, "colorRange", sdr ? "limited" : "unspecified"),
+            optionalBytes(video, "hdrStaticInfo"),
+            optionalBoolean(video, "hdrStaticInfoInBitstream"));
     }
 
     private static SelectedAudio parseSelectedAudio(JsonObject audio) {
@@ -214,6 +225,29 @@ public final class BeaconStreamSession {
         return value;
     }
 
+    private static int optionalInt(JsonObject object, String name, int fallback) {
+        return object.has(name) && !object.get(name).isJsonNull()
+            ? object.get(name).getAsInt()
+            : fallback;
+    }
+
+    private static String optionalText(JsonObject object, String name, String fallback) {
+        return object.has(name) && !object.get(name).isJsonNull()
+            ? requireText(object.get(name).getAsString(), "selectedVideo." + name)
+            : fallback;
+    }
+
+    private static byte[] optionalBytes(JsonObject object, String name) {
+        if (!object.has(name) || object.get(name).isJsonNull()) return new byte[0];
+        String encoded = object.get(name).getAsString();
+        return encoded.isEmpty() ? new byte[0] : Base64.getDecoder().decode(encoded);
+    }
+
+    private static boolean optionalBoolean(JsonObject object, String name) {
+        return object.has(name) && !object.get(name).isJsonNull() &&
+            object.get(name).getAsBoolean();
+    }
+
     private static String requireText(String value, String name) {
         if (value == null || value.trim().isEmpty()) {
             throw new IllegalArgumentException(name + " is required.");
@@ -228,14 +262,52 @@ public final class BeaconStreamSession {
         private final int framesPerSecondNumerator;
         private final int framesPerSecondDenominator;
         private final String dynamicRange;
+        private final String profile;
+        private final int bitDepth;
+        private final String colorPrimaries;
+        private final String transferFunction;
+        private final String matrixCoefficients;
+        private final String colorRange;
+        private final byte[] hdrStaticInfo;
+        private final boolean hdrStaticInfoInBitstream;
 
         SelectedVideo(String codec, int width, int height, int fpsNumerator, int fpsDenominator, String dynamicRange) {
+            this(codec, width, height, fpsNumerator, fpsDenominator, dynamicRange,
+                "h264High", 8, "bt709", "bt709", "bt709", "limited",
+                new byte[0], false);
+        }
+
+        SelectedVideo(
+            String codec,
+            int width,
+            int height,
+            int fpsNumerator,
+            int fpsDenominator,
+            String dynamicRange,
+            String profile,
+            int bitDepth,
+            String colorPrimaries,
+            String transferFunction,
+            String matrixCoefficients,
+            String colorRange,
+            byte[] hdrStaticInfo,
+            boolean hdrStaticInfoInBitstream) {
             this.codec = codec;
             this.width = width;
             this.height = height;
             this.framesPerSecondNumerator = fpsNumerator;
             this.framesPerSecondDenominator = fpsDenominator;
             this.dynamicRange = dynamicRange;
+            this.profile = profile;
+            this.bitDepth = bitDepth;
+            this.colorPrimaries = colorPrimaries;
+            this.transferFunction = transferFunction;
+            this.matrixCoefficients = matrixCoefficients;
+            this.colorRange = colorRange;
+            this.hdrStaticInfo = hdrStaticInfo == null
+                ? new byte[0]
+                : Arrays.copyOf(hdrStaticInfo, hdrStaticInfo.length);
+            this.hdrStaticInfoInBitstream = hdrStaticInfoInBitstream;
         }
 
         public String codec() { return codec; }
@@ -244,6 +316,14 @@ public final class BeaconStreamSession {
         public int framesPerSecondNumerator() { return framesPerSecondNumerator; }
         public int framesPerSecondDenominator() { return framesPerSecondDenominator; }
         public String dynamicRange() { return dynamicRange; }
+        public String profile() { return profile; }
+        public int bitDepth() { return bitDepth; }
+        public String colorPrimaries() { return colorPrimaries; }
+        public String transferFunction() { return transferFunction; }
+        public String matrixCoefficients() { return matrixCoefficients; }
+        public String colorRange() { return colorRange; }
+        public byte[] hdrStaticInfo() { return Arrays.copyOf(hdrStaticInfo, hdrStaticInfo.length); }
+        public boolean hdrStaticInfoInBitstream() { return hdrStaticInfoInBitstream; }
     }
 
     public static final class SelectedAudio {

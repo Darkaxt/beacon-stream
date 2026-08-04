@@ -63,7 +63,7 @@ public:
                              std::uint16_t maximum_datagram_bytes);
   [[nodiscard]] VideoMediaSendResult
   send_access_unit(std::uint64_t session_generation,
-                   const EncodedH264AccessUnit &access_unit,
+                   const EncodedVideoAccessUnit &access_unit,
                    std::uint64_t presentation_time_us);
   [[nodiscard]] MediaRateDecision observe(MediaRateEvidence evidence);
   [[nodiscard]] VideoEncoderControlResult apply_pending_encoder_control();

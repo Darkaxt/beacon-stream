@@ -34,7 +34,7 @@ public sealed class SessionPlannerTests
         Assert.Equal(120, plan.Display.RefreshHz);
         Assert.Equal("virtual-primary", plan.Display.Mode);
         Assert.Equal(120, plan.Stream.Fps);
-        Assert.Equal("av1", plan.Stream.Codec);
+        Assert.Equal("h264", plan.Stream.Codec);
         Assert.Equal("opus", plan.Audio.Codec);
         Assert.Equal(48_000, plan.Audio.SampleRateHz);
         Assert.Equal(2, plan.Audio.ChannelCount);
@@ -63,7 +63,7 @@ public sealed class SessionPlannerTests
     }
 
     [Fact]
-    public void HdrPreferFallsBackToSdrWithReasonWhenDisplayCannotExposeHdr()
+    public void H264HighRemainsSdrWhenHdrIsPreferred()
     {
         SessionPlanResult result = SessionPlanner.CreatePlan(
             ClientProfile.CreateZFold7Default(),
@@ -75,7 +75,7 @@ public sealed class SessionPlannerTests
         SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
         Assert.False(plan.Display.HdrEnabled);
         Assert.Equal("sdr", plan.Display.HdrMode);
-        Assert.Contains("virtual display", plan.Display.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("H.264", plan.Display.Reason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -109,7 +109,7 @@ public sealed class SessionPlannerTests
         SessionPlanResult result = SessionPlanner.CreatePlan(
             profile,
             new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: true, VirtualDisplayHdrSupported: false),
-            CreateEvidence(),
+            CreateEvidence(codec: "hevc", tenBitPresentationVerified: true, hdrPresentationVerified: true),
             Dispatch);
 
         Assert.False(result.Success);
@@ -124,7 +124,7 @@ public sealed class SessionPlannerTests
         SessionPlanResult result = SessionPlanner.CreatePlan(
             ClientProfile.CreateZFold7Default(),
             new EndpointCapabilities(Av1: false, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false),
-            CreateEvidence(codec: "hevc", fps: 60, bitrateMbps: 25, rttMs: 95, packetLossPercent: 3.5),
+            CreateEvidence(codec: "h264", fps: 60, bitrateMbps: 25, rttMs: 95, packetLossPercent: 3.5),
             Dispatch);
 
         Assert.True(result.Success);
@@ -132,7 +132,7 @@ public sealed class SessionPlannerTests
         Assert.Equal(2560, plan.Display.Width);
         Assert.Equal(1600, plan.Display.Height);
         Assert.Equal(25, plan.Stream.InitialBitrateMbps);
-        Assert.Equal("hevc", plan.Stream.Codec);
+        Assert.Equal("h264", plan.Stream.Codec);
         Assert.Equal("latency-protect", plan.Stream.CongestionPolicy);
         Assert.Equal("lan-conservative", plan.Stream.Transport);
     }
@@ -149,7 +149,7 @@ public sealed class SessionPlannerTests
         SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
         Assert.Equal(120, plan.Stream.Fps);
         Assert.Equal(65, plan.Stream.InitialBitrateMbps);
-        Assert.Equal("av1", plan.Stream.Codec);
+        Assert.Equal("h264", plan.Stream.Codec);
         Assert.Contains("excellent LAN", plan.Stream.Reason, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -176,13 +176,13 @@ public sealed class SessionPlannerTests
         SessionPlanResult result = SessionPlanner.CreatePlan(
             ClientProfile.CreateZFold7Default(),
             new EndpointCapabilities(Av1: false, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false, MaxFps: 120),
-            CreateEvidence(codec: "hevc", bitrateMbps: 35, rttMs: 22, packetLossPercent: 3.2),
+            CreateEvidence(codec: "h264", bitrateMbps: 35, rttMs: 22, packetLossPercent: 3.2),
             Dispatch);
 
         SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
         Assert.Equal(2560, plan.Display.Width);
         Assert.Equal(1600, plan.Display.Height);
-        Assert.Equal("hevc", plan.Stream.Codec);
+        Assert.Equal("h264", plan.Stream.Codec);
         Assert.Equal(35, plan.Stream.InitialBitrateMbps);
         Assert.Equal("loss-protect", plan.Stream.CongestionPolicy);
     }
@@ -232,8 +232,12 @@ public sealed class SessionPlannerTests
 
         SessionPlanResult result = SessionPlanner.CreatePlan(
             profile,
-            new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false, MaxFps: 120),
-            CreateEvidence(codec: "hevc", reason: "Codec selected from profile preference hevc."),
+            new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: true, VirtualDisplayHdrSupported: true, MaxFps: 120),
+            CreateEvidence(
+                codec: "hevc",
+                reason: "Codec selected from profile preference hevc.",
+                tenBitPresentationVerified: true,
+                hdrPresentationVerified: true),
             Dispatch);
 
         SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
@@ -272,7 +276,7 @@ public sealed class SessionPlannerTests
     }
 
     private static BenchmarkPlanEvidence CreateEvidence(
-        string codec = "av1",
+        string codec = "h264",
         int fps = 120,
         int bitrateMbps = 65,
         double rttMs = 8,
@@ -280,7 +284,9 @@ public sealed class SessionPlannerTests
         bool powerConstrained = false,
         string reason = "Active benchmark selected the stream limits.",
         string revision = "benchmark-a",
-        Guid? runId = null) =>
+        Guid? runId = null,
+        bool tenBitPresentationVerified = false,
+        bool hdrPresentationVerified = false) =>
         new(
             RunId: runId ?? Guid.Parse("39b5f009-f495-4f84-b5e6-6d3911bfaa16"),
             Revision: revision,
@@ -303,8 +309,8 @@ public sealed class SessionPlannerTests
                 BitDepth: codec.Equals("h264", StringComparison.OrdinalIgnoreCase) ? 8 : 10,
                 Width: 2560,
                 Height: 1600,
-                TenBitPresentationVerified: false,
-                HdrPresentationVerified: false,
+                TenBitPresentationVerified: tenBitPresentationVerified,
+                HdrPresentationVerified: hdrPresentationVerified,
                 P95DecodeLatencyMs: 5,
                 P95PresentationLatencyMs: 9));
 }

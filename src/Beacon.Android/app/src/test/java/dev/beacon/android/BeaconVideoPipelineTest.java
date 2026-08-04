@@ -47,6 +47,32 @@ public final class BeaconVideoPipelineTest {
     }
 
     @Test
+    public void selectedHdrVideoCarriesEveryFieldIntoDecoderRequest() {
+        RecordingCodec codec = new RecordingCodec();
+        BeaconVideoPipeline pipeline = pipeline(
+            new SequenceCodecFactory(codec),
+            new RecordingSurfaceProvider(new Object()),
+            new RecordingPipelineObserver());
+        byte[] staticInfo = new byte[25];
+        staticInfo[24] = 7;
+
+        pipeline.start(new BeaconStreamSession.SelectedVideo(
+            "hevc", 3840, 2160, 60, 1, "hdr10", "hevcMain10", 10,
+            "bt2020", "pq", "bt2020NonConstantLuminance", "limited",
+            staticInfo, true));
+
+        assertEquals("hevcMain10", codec.request.profile());
+        assertEquals(10, codec.request.bitDepth());
+        assertEquals("bt2020", codec.request.colorPrimaries());
+        assertEquals("pq", codec.request.transferFunction());
+        assertEquals("bt2020NonConstantLuminance", codec.request.matrixCoefficients());
+        assertEquals("limited", codec.request.colorRange());
+        assertEquals(7, codec.request.hdrStaticInfo()[24]);
+        assertEquals(true, codec.request.hdrStaticInfoInBitstream());
+        pipeline.close();
+    }
+
+    @Test
     public void decoderFailureReportsCodeDropsQueueAndRecreatesDecoder() {
         RecordingCodec first = new RecordingCodec();
         RecordingCodec second = new RecordingCodec();
@@ -76,6 +102,30 @@ public final class BeaconVideoPipelineTest {
 
         pipeline.onFrame(frame(12, true, true));
         assertEquals(12, second.sampleProvider.nextSample().sequence());
+        pipeline.close();
+    }
+
+    @Test
+    public void hdrOutputFormatMismatchStopsWithoutDecoderRecovery() {
+        RecordingCodec first = new RecordingCodec();
+        RecordingCodec second = new RecordingCodec();
+        RecordingPipelineObserver observer = new RecordingPipelineObserver();
+        BeaconVideoPipeline pipeline = pipeline(
+            new SequenceCodecFactory(first, second),
+            new RecordingSurfaceProvider(new Object()),
+            observer);
+        pipeline.start(new BeaconStreamSession.SelectedVideo(
+            "hevc", 3840, 2160, 60, 1, "hdr10", "hevcMain10", 10,
+            "bt2020", "pq", "bt2020NonConstantLuminance", "limited",
+            new byte[25], true));
+
+        first.observer.onError(new EncodedVideoOutputFormatMismatch(
+            "MediaCodec output format does not match HDR10."));
+
+        assertEquals(1, first.stopCount);
+        assertEquals(1, first.releaseCount);
+        assertEquals(0, second.startCount);
+        assertEquals(1, observer.failures.size());
         pipeline.close();
     }
 
@@ -215,6 +265,7 @@ public final class BeaconVideoPipelineTest {
         private final List<QueueState> queueStates = new ArrayList<>();
         private final List<Long> idrRequests = new ArrayList<>();
         private final List<RenderedFrame> renderedFrames = new ArrayList<>();
+        private final List<Throwable> failures = new ArrayList<>();
 
         @Override
         public void onDecoderStateChanged(
@@ -244,7 +295,7 @@ public final class BeaconVideoPipelineTest {
                 renderedAtUs));
         }
 
-        @Override public void onFailure(Throwable failure) { }
+        @Override public void onFailure(Throwable failure) { failures.add(failure); }
     }
 
     private static final class RecordingSurfaceProvider implements EncodedVideoSurfaceProvider {
@@ -283,6 +334,7 @@ public final class BeaconVideoPipelineTest {
     }
 
     private static final class RecordingCodec implements EncodedVideoCodec {
+        private EncodedVideoDecodeRequest request;
         private EncodedVideoSampleProvider sampleProvider;
         private EncodedVideoCodecObserver observer;
         private Object surface;
@@ -304,6 +356,7 @@ public final class BeaconVideoPipelineTest {
             Object surface,
             EncodedVideoSampleProvider sampleProvider,
             EncodedVideoCodecObserver observer) {
+            this.request = request;
             this.surface = surface;
             this.sampleProvider = sampleProvider;
             this.observer = observer;

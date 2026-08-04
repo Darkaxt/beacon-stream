@@ -139,13 +139,32 @@ android_stream::ConnectionGrant grant() {
                   .height = 1080,
                   .fps_numerator = 60,
                   .fps_denominator = 1,
-                  .dynamic_range = stream_v1::DYNAMIC_RANGE_SDR};
+                  .dynamic_range = stream_v1::DYNAMIC_RANGE_SDR,
+                  .profile = stream_v1::VIDEO_PROFILE_H264_HIGH,
+                  .bit_depth = 8,
+                  .color_primaries = stream_v1::COLOR_PRIMARIES_BT709,
+                  .transfer_function = stream_v1::TRANSFER_FUNCTION_BT709,
+                  .matrix_coefficients = stream_v1::MATRIX_COEFFICIENTS_BT709,
+                  .color_range = stream_v1::COLOR_RANGE_LIMITED,
+                  .hdr_static_info = {},
+                  .hdr_static_info_in_bitstream = false};
   result.audio = {.codec = stream_v1::AUDIO_CODEC_OPUS,
                   .sample_rate_hz = 48'000,
                   .channel_count = 2,
                   .frame_duration_us = 20'000,
                   .bitrate_bps = 96'000};
   return result;
+}
+
+std::vector<std::byte> valid_hdr_static_info() {
+  return {
+      std::byte{0}, std::byte{0x48}, std::byte{0x8a}, std::byte{0x08},
+      std::byte{0x39}, std::byte{0x34}, std::byte{0x21}, std::byte{0xaa},
+      std::byte{0x9b}, std::byte{0x96}, std::byte{0x19}, std::byte{0xfc},
+      std::byte{0x08}, std::byte{0x13}, std::byte{0x3d}, std::byte{0x42},
+      std::byte{0x40}, std::byte{0xe8}, std::byte{0x03}, std::byte{0x32},
+      std::byte{0x00}, std::byte{0xe8}, std::byte{0x03}, std::byte{0x90},
+      std::byte{0x01}};
 }
 
 android_stream::ConnectionGrant benchmark_grant() {
@@ -388,6 +407,45 @@ void accepted_auth_starts_selected_video() {
   BEACON_TEST_REQUIRE(start.start_session().selected_audio().bitrate_bps() == 96'000);
 }
 
+void accepted_auth_starts_exact_hevc_main10_hdr10_video() {
+  FakeTransport transport;
+  FakeSink sink;
+  android_stream::StreamCore core(transport, sink);
+  auto connection = grant();
+  connection.video.codec = stream_v1::VIDEO_CODEC_HEVC;
+  connection.video.dynamic_range = stream_v1::DYNAMIC_RANGE_HDR10;
+  connection.video.profile = stream_v1::VIDEO_PROFILE_HEVC_MAIN10;
+  connection.video.bit_depth = 10;
+  connection.video.color_primaries = stream_v1::COLOR_PRIMARIES_BT2020;
+  connection.video.transfer_function = stream_v1::TRANSFER_FUNCTION_PQ;
+  connection.video.matrix_coefficients =
+      stream_v1::MATRIX_COEFFICIENTS_BT2020_NON_CONSTANT_LUMINANCE;
+  connection.video.color_range = stream_v1::COLOR_RANGE_LIMITED;
+  connection.video.hdr_static_info = valid_hdr_static_info();
+  connection.video.hdr_static_info_in_bitstream = true;
+  BEACON_TEST_REQUIRE(core.start(std::move(connection)));
+  BEACON_TEST_REQUIRE(core.on_connected());
+  BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
+
+  const auto start = parse_session(transport.sends[1].bytes);
+  const auto &video = start.start_session().selected_video();
+  BEACON_TEST_REQUIRE(video.codec() == stream_v1::VIDEO_CODEC_HEVC);
+  BEACON_TEST_REQUIRE(video.dynamic_range() == stream_v1::DYNAMIC_RANGE_HDR10);
+  BEACON_TEST_REQUIRE(video.profile() == stream_v1::VIDEO_PROFILE_HEVC_MAIN10);
+  BEACON_TEST_REQUIRE(video.bit_depth() == 10);
+  BEACON_TEST_REQUIRE(video.color_primaries() == stream_v1::COLOR_PRIMARIES_BT2020);
+  BEACON_TEST_REQUIRE(video.transfer_function() == stream_v1::TRANSFER_FUNCTION_PQ);
+  BEACON_TEST_REQUIRE(
+      video.matrix_coefficients() ==
+      stream_v1::MATRIX_COEFFICIENTS_BT2020_NON_CONSTANT_LUMINANCE);
+  BEACON_TEST_REQUIRE(video.color_range() == stream_v1::COLOR_RANGE_LIMITED);
+  const auto expected_static_info = valid_hdr_static_info();
+  BEACON_TEST_REQUIRE(video.hdr_static_info() == std::string(
+      reinterpret_cast<const char *>(expected_static_info.data()),
+      expected_static_info.size()));
+  BEACON_TEST_REQUIRE(video.hdr_static_info_in_bitstream());
+}
+
 void accepted_auth_starts_benchmark_without_starting_video() {
   FakeTransport transport;
   FakeSink sink;
@@ -476,19 +534,26 @@ void accepted_auth_forwards_every_selected_video_mode_exactly() {
            ExpectedMode{stream_v1::VIDEO_CODEC_H264,
                         stream_v1::DYNAMIC_RANGE_SDR},
            ExpectedMode{stream_v1::VIDEO_CODEC_HEVC,
-                        stream_v1::DYNAMIC_RANGE_HDR10},
-           ExpectedMode{stream_v1::VIDEO_CODEC_AV1,
                         stream_v1::DYNAMIC_RANGE_HDR10}}) {
     FakeTransport transport;
     FakeSink sink;
     android_stream::StreamCore core(transport, sink);
     auto connection = grant();
-    connection.video = {.codec = expected.codec,
-                        .width = 2560,
-                        .height = 1600,
-                        .fps_numerator = 120,
-                        .fps_denominator = 1,
-                        .dynamic_range = expected.dynamic_range};
+    connection.video.width = 2560;
+    connection.video.height = 1600;
+    connection.video.fps_numerator = 120;
+    connection.video.codec = expected.codec;
+    connection.video.dynamic_range = expected.dynamic_range;
+    if (expected.codec == stream_v1::VIDEO_CODEC_HEVC) {
+      connection.video.profile = stream_v1::VIDEO_PROFILE_HEVC_MAIN10;
+      connection.video.bit_depth = 10;
+      connection.video.color_primaries = stream_v1::COLOR_PRIMARIES_BT2020;
+      connection.video.transfer_function = stream_v1::TRANSFER_FUNCTION_PQ;
+      connection.video.matrix_coefficients =
+          stream_v1::MATRIX_COEFFICIENTS_BT2020_NON_CONSTANT_LUMINANCE;
+      connection.video.hdr_static_info = valid_hdr_static_info();
+      connection.video.hdr_static_info_in_bitstream = true;
+    }
     BEACON_TEST_REQUIRE(core.start(std::move(connection)));
     BEACON_TEST_REQUIRE(core.on_connected());
     BEACON_TEST_REQUIRE(core.receive_session(accepted_reply()));
@@ -1014,6 +1079,7 @@ int main() {
   return beacon::stream::testing::run_tests([] {
     starts_one_route_and_consumes_ticket();
     accepted_auth_starts_selected_video();
+    accepted_auth_starts_exact_hevc_main10_hdr10_video();
     accepted_auth_starts_benchmark_without_starting_video();
     benchmark_packets_produce_echoes_and_explicit_completion_evidence();
     benchmark_stop_finishes_the_session();

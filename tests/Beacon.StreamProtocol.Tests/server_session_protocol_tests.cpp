@@ -1,4 +1,6 @@
 #include "beacon/stream/server_session_protocol.h"
+#include "beacon/stream/hdr_static_metadata.h"
+#include "beacon/stream/selected_video_mode.h"
 #include "beacon/stream/secure_bytes.h"
 
 #include "test_failure.h"
@@ -65,6 +67,12 @@ stream_v1::SelectedVideoMode selected_video() {
   video.set_frames_per_second_numerator(120);
   video.set_frames_per_second_denominator(1);
   video.set_dynamic_range(stream_v1::DYNAMIC_RANGE_SDR);
+  video.set_profile(stream_v1::VIDEO_PROFILE_H264_HIGH);
+  video.set_bit_depth(8);
+  video.set_color_primaries(stream_v1::COLOR_PRIMARIES_BT709);
+  video.set_transfer_function(stream_v1::TRANSFER_FUNCTION_BT709);
+  video.set_matrix_coefficients(stream_v1::MATRIX_COEFFICIENTS_BT709);
+  video.set_color_range(stream_v1::COLOR_RANGE_LIMITED);
   return video;
 }
 
@@ -76,6 +84,66 @@ stream_v1::SelectedAudioMode selected_audio() {
   audio.set_frame_duration_us(20'000);
   audio.set_bitrate_bps(96'000);
   return audio;
+}
+
+void exact_video_mode_tuples_reject_cross_product_capabilities() {
+  auto sdr = selected_video();
+  BEACON_TEST_REQUIRE(beacon::stream::classify_selected_video_mode(sdr) ==
+                      beacon::stream::SelectedVideoModeKind::h264_sdr);
+
+  auto hdr = sdr;
+  hdr.set_codec(stream_v1::VIDEO_CODEC_HEVC);
+  hdr.set_dynamic_range(stream_v1::DYNAMIC_RANGE_HDR10);
+  hdr.set_profile(stream_v1::VIDEO_PROFILE_HEVC_MAIN10);
+  hdr.set_bit_depth(10);
+  hdr.set_color_primaries(stream_v1::COLOR_PRIMARIES_BT2020);
+  hdr.set_transfer_function(stream_v1::TRANSFER_FUNCTION_PQ);
+  hdr.set_matrix_coefficients(
+      stream_v1::MATRIX_COEFFICIENTS_BT2020_NON_CONSTANT_LUMINANCE);
+  const std::array<unsigned char, 25> static_info{
+      0, 0x48, 0x8a, 0x08, 0x39, 0x34, 0x21, 0xaa, 0x9b,
+      0x96, 0x19, 0xfc, 0x08, 0x13, 0x3d, 0x42, 0x40,
+      0xe8, 0x03, 0x32, 0x00, 0xe8, 0x03, 0x90, 0x01};
+  hdr.set_hdr_static_info(static_info.data(), static_info.size());
+  hdr.set_hdr_static_info_in_bitstream(true);
+  BEACON_TEST_REQUIRE(beacon::stream::classify_selected_video_mode(hdr) ==
+                      beacon::stream::SelectedVideoModeKind::hevc_main10_hdr10);
+
+  auto mixed = hdr;
+  mixed.set_bit_depth(8);
+  BEACON_TEST_REQUIRE(!beacon::stream::valid_selected_video_mode(mixed));
+  mixed = hdr;
+  mixed.clear_hdr_static_info();
+  BEACON_TEST_REQUIRE(!beacon::stream::valid_selected_video_mode(mixed));
+  mixed = sdr;
+  mixed.set_codec(stream_v1::VIDEO_CODEC_AV1);
+  BEACON_TEST_REQUIRE(!beacon::stream::valid_selected_video_mode(mixed));
+}
+
+void cta_hdr_static_metadata_is_parsed_and_validated() {
+  const std::array<unsigned char, 25> bytes{
+      0, 0x48, 0x8a, 0x08, 0x39, 0x34, 0x21, 0xaa, 0x9b,
+      0x96, 0x19, 0xfc, 0x08, 0x13, 0x3d, 0x42, 0x40,
+      0xe8, 0x03, 0x32, 0x00, 0xe8, 0x03, 0x90, 0x01};
+  const std::string_view encoded{
+      reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+  const auto parsed = beacon::stream::parse_cta861_3_hdr_static_info(encoded);
+  BEACON_TEST_REQUIRE(parsed.has_value());
+  BEACON_TEST_REQUIRE((parsed->red ==
+                       beacon::stream::HdrChromaticity{35'400, 14'600}));
+  BEACON_TEST_REQUIRE((parsed->green ==
+                       beacon::stream::HdrChromaticity{8'500, 39'850}));
+  BEACON_TEST_REQUIRE(parsed->maximum_mastering_luminance == 1'000);
+  BEACON_TEST_REQUIRE(parsed->minimum_mastering_luminance == 50);
+  BEACON_TEST_REQUIRE(parsed->maximum_content_light_level == 1'000);
+  BEACON_TEST_REQUIRE(parsed->maximum_frame_average_light_level == 400);
+
+  auto invalid = bytes;
+  invalid[0] = 1;
+  BEACON_TEST_REQUIRE(!beacon::stream::parse_cta861_3_hdr_static_info(
+                           {reinterpret_cast<const char*>(invalid.data()),
+                            invalid.size()})
+                           .has_value());
 }
 
 struct TestAuthorizedTicket {
@@ -225,13 +293,7 @@ stream_v1::SessionStreamEnvelope start_session(std::uint64_t sequence) {
   message.set_protocol_version(1);
   message.set_session_id("session-a");
   message.set_sequence(sequence);
-  auto *video = message.mutable_start_session()->mutable_selected_video();
-  video->set_codec(stream_v1::VIDEO_CODEC_H264);
-  video->set_width(2560);
-  video->set_height(1600);
-  video->set_frames_per_second_numerator(120);
-  video->set_frames_per_second_denominator(1);
-  video->set_dynamic_range(stream_v1::DYNAMIC_RANGE_SDR);
+  *message.mutable_start_session()->mutable_selected_video() = selected_video();
   *message.mutable_start_session()->mutable_selected_audio() = selected_audio();
   return message;
 }
@@ -502,6 +564,24 @@ void start_session_must_match_every_authorized_video_field() {
        [](auto& video) { video.set_frames_per_second_denominator(2); }},
       {"dynamic-range",
        [](auto& video) { video.set_dynamic_range(stream_v1::DYNAMIC_RANGE_HDR10); }},
+      {"profile",
+       [](auto& video) { video.set_profile(stream_v1::VIDEO_PROFILE_HEVC_MAIN10); }},
+      {"bit-depth", [](auto& video) { video.set_bit_depth(10); }},
+      {"color-primaries",
+       [](auto& video) { video.set_color_primaries(stream_v1::COLOR_PRIMARIES_BT2020); }},
+      {"transfer-function",
+       [](auto& video) { video.set_transfer_function(stream_v1::TRANSFER_FUNCTION_PQ); }},
+      {"matrix-coefficients",
+       [](auto& video) {
+         video.set_matrix_coefficients(
+             stream_v1::MATRIX_COEFFICIENTS_BT2020_NON_CONSTANT_LUMINANCE);
+       }},
+      {"color-range",
+       [](auto& video) { video.set_color_range(stream_v1::COLOR_RANGE_FULL); }},
+      {"hdr-static-info",
+       [](auto& video) { video.set_hdr_static_info(std::string(25, '\x01')); }},
+      {"hdr-static-info-in-bitstream",
+       [](auto& video) { video.set_hdr_static_info_in_bitstream(true); }},
   };
 
   for (const auto& [name, mutate] : mismatches) {
@@ -889,6 +969,8 @@ void unauthenticated_data_and_oversized_frames_fail_closed() {
 
 int main() {
   return beacon::stream::testing::run_tests([] {
+    cta_hdr_static_metadata_is_parsed_and_validated();
+    exact_video_mode_tuples_reject_cross_product_capabilities();
     stream_ids_have_one_unambiguous_role();
     fragmented_authentication_consumes_ticket_and_returns_negotiated_limit();
     replay_and_version_mismatch_return_typed_rejections();

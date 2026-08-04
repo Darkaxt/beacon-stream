@@ -23,6 +23,7 @@ final class BeaconVideoPipeline implements
             long presentationTimeUs,
             long renderedAtUs);
         void onFailure(Throwable failure);
+        default void onOutputFormatChanged(EncodedVideoOutputFormat format) { }
     }
 
     private final Object gate = new Object();
@@ -58,12 +59,36 @@ final class BeaconVideoPipeline implements
     }
 
     void start(String codec, int width, int height, int fps) {
-        EncodedVideoDecodeRequest replacement = new EncodedVideoDecodeRequest(
+        start(new EncodedVideoDecodeRequest(
             codec,
             width,
             height,
             fps,
-            queue);
+            queue));
+    }
+
+    void start(BeaconStreamSession.SelectedVideo video) {
+        if (video == null) {
+            throw new IllegalArgumentException("Selected video is required.");
+        }
+        start(new EncodedVideoDecodeRequest(
+            video.codec(),
+            video.width(),
+            video.height(),
+            framesPerSecond(video),
+            video.profile(),
+            video.bitDepth(),
+            video.dynamicRange(),
+            video.colorPrimaries(),
+            video.transferFunction(),
+            video.matrixCoefficients(),
+            video.colorRange(),
+            video.hdrStaticInfo(),
+            video.hdrStaticInfoInBitstream(),
+            queue));
+    }
+
+    private void start(EncodedVideoDecodeRequest replacement) {
         boolean resetQueue;
         synchronized (gate) {
             if (closed) {
@@ -79,6 +104,16 @@ final class BeaconVideoPipeline implements
         }
         if (resetQueue) queue.resetForDecoder();
         executeLifecycle(() -> startRequestedDecoder(replacement));
+    }
+
+    private static int framesPerSecond(BeaconStreamSession.SelectedVideo video) {
+        long numerator = video.framesPerSecondNumerator();
+        long denominator = video.framesPerSecondDenominator();
+        long rounded = (numerator + denominator / 2) / denominator;
+        if (rounded <= 0 || rounded > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("Selected video frame rate is invalid.");
+        }
+        return (int) rounded;
     }
 
     void stop() {
@@ -151,10 +186,22 @@ final class BeaconVideoPipeline implements
     }
 
     @Override
+    public void onOutputFormatChanged(EncodedVideoOutputFormat format) {
+        synchronized (gate) {
+            if (closed || request == null || !decoderActive) return;
+        }
+        observer.onOutputFormatChanged(format);
+    }
+
+    @Override
     public void onEndOfStream() { }
 
     @Override
     public void onError(Throwable failure) {
+        if (failure instanceof EncodedVideoOutputFormatMismatch) {
+            failClosed(failure);
+            return;
+        }
         int platformErrorCode = failure instanceof EncodedVideoCodecFailure codecFailure
             ? codecFailure.platformErrorCode()
             : 0;
@@ -171,6 +218,21 @@ final class BeaconVideoPipeline implements
             }
             observer.onFailure(schedulingFailure);
         }
+    }
+
+    private void failClosed(Throwable failure) {
+        synchronized (gate) {
+            if (closed || request == null) return;
+        }
+        publishState(DecoderState.FAILED, 0);
+        synchronized (gate) {
+            request = null;
+            decoderActive = false;
+            recoveryScheduled = false;
+        }
+        queue.resetForDecoder();
+        executeLifecycle(this::stopDecoderSafely);
+        observer.onFailure(failure);
     }
 
     @Override

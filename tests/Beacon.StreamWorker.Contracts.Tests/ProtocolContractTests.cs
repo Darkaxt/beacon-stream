@@ -64,6 +64,40 @@ public sealed class ProtocolContractTests
     }
 
     [Fact]
+    public void SelectedVideoMode_RepresentsHevcMain10Hdr10WithoutImplicitDefaults()
+    {
+        var video = new SelectedVideoMode
+        {
+            Codec = VideoCodec.Hevc,
+            Width = 2560,
+            Height = 1600,
+            FramesPerSecondNumerator = 120,
+            FramesPerSecondDenominator = 1,
+            DynamicRange = DynamicRange.Hdr10,
+            Profile = VideoProfile.HevcMain10,
+            BitDepth = 10,
+            ColorPrimaries = ColorPrimaries.Bt2020,
+            TransferFunction = TransferFunction.Pq,
+            MatrixCoefficients = MatrixCoefficients.Bt2020NonConstantLuminance,
+            ColorRange = ColorRange.Limited,
+            HdrStaticInfo = ByteString.CopyFrom(
+                0, 0x48, 0x8a, 0x08, 0x39, 0x34, 0x21, 0xaa, 0x9b,
+                0x96, 0x19, 0xfc, 0x08, 0x13, 0x3d, 0x42, 0x40,
+                0xe8, 0x03, 0x32, 0x00, 0xe8, 0x03, 0x90, 0x01),
+            HdrStaticInfoInBitstream = true,
+        };
+
+        Assert.Equal(VideoProfile.HevcMain10, video.Profile);
+        Assert.Equal(10u, video.BitDepth);
+        Assert.Equal(ColorPrimaries.Bt2020, video.ColorPrimaries);
+        Assert.Equal(TransferFunction.Pq, video.TransferFunction);
+        Assert.Equal(MatrixCoefficients.Bt2020NonConstantLuminance, video.MatrixCoefficients);
+        Assert.Equal(ColorRange.Limited, video.ColorRange);
+        Assert.Equal(25, video.HdrStaticInfo.Length);
+        Assert.True(video.HdrStaticInfoInBitstream);
+    }
+
+    [Fact]
     public void SelectedAudioMode_RepresentsTheR2ProductionGrant()
     {
         var audio = new SelectedAudioMode

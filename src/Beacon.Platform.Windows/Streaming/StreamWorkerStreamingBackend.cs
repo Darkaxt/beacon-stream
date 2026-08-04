@@ -154,6 +154,11 @@ public sealed class StreamWorkerStreamingBackend :
             {
                 return StreamingPreflightResult.Fail(VideoUnavailableError(capabilities));
             }
+            string? unsupported = ValidateWorkerCapabilities(plan, capabilities);
+            if (unsupported is not null)
+            {
+                return StreamingPreflightResult.Fail(unsupported);
+            }
             return StreamingPreflightResult.Ok();
         }
         catch (Exception error) when (error is not OperationCanceledException)
@@ -208,6 +213,11 @@ public sealed class StreamWorkerStreamingBackend :
         if (!capabilities.VideoAvailable)
         {
             return StreamingStartResult.Fail(VideoUnavailableError(capabilities));
+        }
+        string? unsupported = ValidateWorkerCapabilities(plan, capabilities);
+        if (unsupported is not null)
+        {
+            return StreamingStartResult.Fail(unsupported);
         }
         lock (runtimeGate)
         {
@@ -1079,7 +1089,7 @@ public sealed class StreamWorkerStreamingBackend :
         && completion.WorkerCompletion.ErrorCode == WorkerErrorCode.None;
 
     private static StreamingCapabilities Capabilities(WorkerCapabilities value) => new(
-        Codecs: value.VideoCodecs.Contains(WorkerVideoCodec.H264) ? ["h264"] : [],
+        Codecs: SupportedCodecs(value),
         Encoders: value.VideoEncoders.Contains(WorkerVideoEncoder.Nvenc) ? ["nvenc"] : [],
         CaptureMethods: value.CaptureMethods.Contains(WorkerCaptureMethod.WindowsGraphicsCapture)
             ? ["wgc"]
@@ -1088,7 +1098,21 @@ public sealed class StreamWorkerStreamingBackend :
         MaxBitrateMbps: value.MaximumBitrateKbps == 0
             ? null
             : checked((int)Math.Ceiling(value.MaximumBitrateKbps / 1000d)),
-        Hdr10: value.Hdr10);
+        Hdr10: value.Hdr10 && value.VideoCodecs.Contains(WorkerVideoCodec.Hevc));
+
+    private static IReadOnlyList<string> SupportedCodecs(WorkerCapabilities value)
+    {
+        var codecs = new List<string>(2);
+        if (value.VideoCodecs.Contains(WorkerVideoCodec.H264))
+        {
+            codecs.Add("h264");
+        }
+        if (value.Hdr10 && value.VideoCodecs.Contains(WorkerVideoCodec.Hevc))
+        {
+            codecs.Add("hevc");
+        }
+        return codecs;
+    }
 
     private static string VideoUnavailableError(WorkerCapabilities value) =>
         $"Beacon StreamWorker production video is unavailable " +
@@ -1101,19 +1125,65 @@ public sealed class StreamWorkerStreamingBackend :
 
     private static string? ValidatePlan(SessionPlan plan)
     {
-        if (!string.Equals(plan.Stream.Codec, "h264", StringComparison.OrdinalIgnoreCase))
+        bool h264 = string.Equals(plan.Stream.Codec, "h264", StringComparison.OrdinalIgnoreCase);
+        bool hevc = string.Equals(plan.Stream.Codec, "hevc", StringComparison.OrdinalIgnoreCase);
+        if (!h264 && !hevc)
         {
-            return "Beacon StreamWorker currently supports h264 only.";
+            return string.Equals(plan.Stream.Codec, "av1", StringComparison.OrdinalIgnoreCase)
+                ? "AV1 is not supported by the production streaming path."
+                : "Beacon StreamWorker received an unsupported production video codec.";
         }
-        if (plan.Display.HdrEnabled)
+
+        bool exactH264Sdr = h264
+            && string.Equals(plan.Stream.CodecProfile, "high", StringComparison.OrdinalIgnoreCase)
+            && plan.Stream.BitDepth == 8
+            && !plan.Display.HdrEnabled
+            && string.Equals(plan.Display.HdrMode, "sdr", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(plan.Stream.ColorPrimaries, "bt709", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(plan.Stream.TransferFunction, "bt709", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(plan.Stream.MatrixCoefficients, "bt709", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(plan.Stream.ColorRange, "limited", StringComparison.OrdinalIgnoreCase)
+            && plan.Stream.HdrStaticInfo.Length == 0
+            && !plan.Stream.HdrStaticInfoInBitstream
+            && !plan.Stream.TenBitPresentationVerified
+            && !plan.Stream.HdrPresentationVerified;
+        bool exactHevcHdr10 = hevc
+            && string.Equals(plan.Stream.CodecProfile, "main10", StringComparison.OrdinalIgnoreCase)
+            && plan.Stream.BitDepth == 10
+            && plan.Display.HdrEnabled
+            && string.Equals(plan.Display.HdrMode, "hdr10", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(plan.Stream.ColorPrimaries, "bt2020", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(plan.Stream.TransferFunction, "pq", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(plan.Stream.MatrixCoefficients, "bt2020-ncl", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(plan.Stream.ColorRange, "limited", StringComparison.OrdinalIgnoreCase)
+            && plan.Stream.HdrStaticInfo.AsSpan().SequenceEqual(Hdr10StaticMetadata.Cta8613Descriptor)
+            && plan.Stream.HdrStaticInfoInBitstream
+            && plan.Stream.TenBitPresentationVerified
+            && plan.Stream.HdrPresentationVerified;
+        if (!exactH264Sdr && !exactHevcHdr10)
         {
-            return "Beacon StreamWorker currently supports SDR only.";
+            return "Beacon StreamWorker requires the exact H.264 High 8-bit BT709 limited SDR " +
+                "or HEVC Main10 10-bit BT2020/PQ limited HDR10 production tuple.";
         }
         if (plan.Stream.Width <= 0 || plan.Stream.Height <= 0)
         {
             return "Beacon StreamWorker requires a positive benchmark-certified stream mode.";
         }
         return null;
+    }
+
+    private static string? ValidateWorkerCapabilities(SessionPlan plan, WorkerCapabilities capabilities)
+    {
+        if (string.Equals(plan.Stream.Codec, "h264", StringComparison.OrdinalIgnoreCase))
+        {
+            return capabilities.VideoCodecs.Contains(WorkerVideoCodec.H264)
+                ? null
+                : "Beacon StreamWorker does not advertise the H.264 High SDR production path.";
+        }
+
+        return capabilities.VideoCodecs.Contains(WorkerVideoCodec.Hevc) && capabilities.Hdr10
+            ? null
+            : "Beacon StreamWorker does not advertise the HEVC Main10 HDR10 production path.";
     }
 
     private static string? ValidateBenchmarkPlan(BenchmarkRuntimePlan plan)
@@ -1133,19 +1203,32 @@ public sealed class StreamWorkerStreamingBackend :
 
     private static WorkerIpcEnvelope CreatePrepareCommand(
         SessionPlan plan,
-        string displayDeviceName) => new()
+        string displayDeviceName)
+    {
+        bool hevcHdr10 = string.Equals(plan.Stream.Codec, "hevc", StringComparison.OrdinalIgnoreCase);
+        return new()
         {
             SessionId = plan.SessionId,
             PrepareSession = new PrepareSession
             {
                 DisplayTarget = plan.Display.DisplayId,
                 DisplayDeviceName = displayDeviceName,
-                VideoCodec = WorkerVideoCodec.H264,
+                VideoCodec = hevcHdr10 ? WorkerVideoCodec.Hevc : WorkerVideoCodec.H264,
                 Width = checked((uint)plan.Stream.Width),
                 Height = checked((uint)plan.Stream.Height),
                 FramesPerSecondNumerator = checked((uint)plan.Stream.Fps),
                 FramesPerSecondDenominator = 1,
-                DynamicRange = WorkerDynamicRange.Sdr,
+                DynamicRange = hevcHdr10 ? WorkerDynamicRange.Hdr10 : WorkerDynamicRange.Sdr,
+                VideoProfile = hevcHdr10 ? VideoProfile.HevcMain10 : VideoProfile.H264High,
+                VideoBitDepth = hevcHdr10 ? 10u : 8u,
+                ColorPrimaries = hevcHdr10 ? ColorPrimaries.Bt2020 : ColorPrimaries.Bt709,
+                TransferFunction = hevcHdr10 ? TransferFunction.Pq : TransferFunction.Bt709,
+                MatrixCoefficients = hevcHdr10
+                    ? MatrixCoefficients.Bt2020NonConstantLuminance
+                    : MatrixCoefficients.Bt709,
+                ColorRange = ColorRange.Limited,
+                HdrStaticInfo = ByteString.CopyFrom(plan.Stream.HdrStaticInfo),
+                HdrStaticInfoInBitstream = plan.Stream.HdrStaticInfoInBitstream,
                 MinimumBitrateKbps = checked((uint)Math.Max(1000, plan.Stream.InitialBitrateMbps * 500)),
                 InitialBitrateKbps = checked((uint)plan.Stream.InitialBitrateMbps * 1000),
                 MaximumBitrateKbps = checked((uint)plan.Stream.InitialBitrateMbps * 2000),
@@ -1156,6 +1239,7 @@ public sealed class StreamWorkerStreamingBackend :
                 AudioBitrateBps = checked((uint)plan.Audio.BitrateBps),
             },
         };
+    }
 
     private bool TryResolveDisplayDeviceName(
         SessionPlan plan,

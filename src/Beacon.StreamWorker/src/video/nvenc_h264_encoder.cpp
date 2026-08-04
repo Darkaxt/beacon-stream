@@ -1,4 +1,5 @@
 #include "beacon/worker/video/nvenc_h264_encoder.h"
+#include "beacon/stream/hdr_static_metadata.h"
 
 #include <Windows.h>
 #include <d3d11.h>
@@ -62,6 +63,22 @@ std::uint32_t one_frame_vbv(const NvencH264Configuration& configuration) {
       value, std::numeric_limits<std::uint32_t>::max()));
 }
 
+const GUID& codec_guid(NvencVideoCodec codec) noexcept {
+  return codec == NvencVideoCodec::hevc_main10 ? NV_ENC_CODEC_HEVC_GUID
+                                                : NV_ENC_CODEC_H264_GUID;
+}
+
+NV_ENC_BUFFER_FORMAT buffer_format(NvencVideoCodec codec) noexcept {
+  return codec == NvencVideoCodec::hevc_main10
+             ? NV_ENC_BUFFER_FORMAT_YUV420_10BIT
+             : NV_ENC_BUFFER_FORMAT_NV12;
+}
+
+DXGI_FORMAT texture_format(NvencVideoCodec codec) noexcept {
+  return codec == NvencVideoCodec::hevc_main10 ? DXGI_FORMAT_P010
+                                                : DXGI_FORMAT_NV12;
+}
+
 struct H264AccessUnitDescription {
   bool has_start_code{};
   bool idr{};
@@ -95,6 +112,100 @@ H264AccessUnitDescription inspect_annex_b(
     result.sps = result.sps || type == 7U;
     result.pps = result.pps || type == 8U;
     index = header + 1U;
+  }
+  return result;
+}
+
+void inspect_hevc_sei(const std::vector<std::uint8_t>& bytes,
+                      std::size_t begin, std::size_t end,
+                      HevcAccessUnitDescription& result) noexcept {
+  try {
+    std::vector<std::uint8_t> rbsp;
+    rbsp.reserve(end - begin);
+    std::size_t zero_count{};
+    for (std::size_t index = begin; index < end; ++index) {
+      const auto value = bytes[index];
+      if (zero_count >= 2U && value == 3U) {
+        zero_count = 0;
+        continue;
+      }
+      rbsp.push_back(value);
+      zero_count = value == 0 ? zero_count + 1U : 0U;
+    }
+    std::size_t offset{};
+    while (offset + 1U < rbsp.size()) {
+      std::uint32_t payload_type{};
+      while (offset < rbsp.size() && rbsp[offset] == 0xffU) {
+        payload_type += 0xffU;
+        ++offset;
+      }
+      if (offset >= rbsp.size()) {
+        return;
+      }
+      payload_type += rbsp[offset++];
+      std::size_t payload_size{};
+      while (offset < rbsp.size() && rbsp[offset] == 0xffU) {
+        payload_size += 0xffU;
+        ++offset;
+      }
+      if (offset >= rbsp.size()) {
+        return;
+      }
+      payload_size += rbsp[offset++];
+      if (payload_size > rbsp.size() - offset) {
+        return;
+      }
+      result.has_mastering_display_sei =
+          result.has_mastering_display_sei || payload_type == 137U;
+      result.has_content_light_level_sei =
+          result.has_content_light_level_sei || payload_type == 144U;
+      offset += payload_size;
+    }
+  } catch (...) {
+  }
+}
+
+HevcAccessUnitDescription inspect_hevc_annex_b_internal(
+    const std::vector<std::uint8_t>& bytes) noexcept {
+  HevcAccessUnitDescription result;
+  std::size_t index{};
+  while (index + 3U < bytes.size()) {
+    std::size_t header{};
+    if (bytes[index] == 0 && bytes[index + 1U] == 0 &&
+        bytes[index + 2U] == 1) {
+      header = index + 3U;
+    } else if (index + 4U < bytes.size() && bytes[index] == 0 &&
+               bytes[index + 1U] == 0 && bytes[index + 2U] == 0 &&
+               bytes[index + 3U] == 1) {
+      header = index + 4U;
+    } else {
+      ++index;
+      continue;
+    }
+    if (header >= bytes.size()) {
+      break;
+    }
+    result.has_start_code = true;
+    const auto type = static_cast<std::uint8_t>((bytes[header] >> 1U) & 0x3FU);
+    result.idr = result.idr || type == 19U || type == 20U;
+    result.has_vps = result.has_vps || type == 32U;
+    result.has_sps = result.has_sps || type == 33U;
+    result.has_pps = result.has_pps || type == 34U;
+    std::size_t next = header + 2U;
+    while (next < bytes.size()) {
+      if (next + 2U < bytes.size() && bytes[next] == 0 &&
+          bytes[next + 1U] == 0 &&
+          (bytes[next + 2U] == 1 ||
+           (next + 3U < bytes.size() && bytes[next + 2U] == 0 &&
+            bytes[next + 3U] == 1))) {
+        break;
+      }
+      ++next;
+    }
+    if ((type == 39U || type == 40U) && header + 2U <= bytes.size()) {
+      inspect_hevc_sei(bytes, header + 2U, next, result);
+    }
+    index = next;
   }
   return result;
 }
@@ -145,7 +256,7 @@ class WindowsNvencH264Api final : public INvencH264Api {
       }
       D3D11_TEXTURE2D_DESC description{};
       texture->GetDesc(&description);
-      if (description.Format != DXGI_FORMAT_NV12 ||
+      if (description.Format != texture_format(configuration.codec) ||
           description.Width != configuration.width ||
           description.Height != configuration.height) {
         return NvencH264Failure::invalid_frame;
@@ -199,15 +310,22 @@ class WindowsNvencH264Api final : public INvencH264Api {
         return cleanup_open_failure(failure);
       }
 
-      const auto capabilities = query_capabilities();
-      const auto capability_failure =
-          validate_nvenc_h264_capabilities(capabilities, {
+      const auto capabilities = query_capabilities(configuration.codec);
+      const NvencH264Plan capability_plan{
               .width = configuration.width,
               .height = configuration.height,
               .frame_rate_numerator = configuration.frame_rate_numerator,
               .frame_rate_denominator = configuration.frame_rate_denominator,
               .bitrate_bps = configuration.bitrate_bps,
-          });
+              .codec = configuration.codec,
+              .hdr_static_info = configuration.hdr_static_info,
+          };
+      const auto capability_failure =
+          configuration.codec == NvencVideoCodec::hevc_main10
+              ? validate_nvenc_hevc_main10_capabilities(capabilities,
+                                                         capability_plan)
+              : validate_nvenc_h264_capabilities(capabilities,
+                                                  capability_plan);
       if (capability_failure != NvencH264Failure::none) {
         return cleanup_open_failure(capability_failure);
       }
@@ -216,7 +334,7 @@ class WindowsNvencH264Api final : public INvencH264Api {
       preset.version = NV_ENC_PRESET_CONFIG_VER;
       preset.presetCfg.version = NV_ENC_CONFIG_VER;
       const auto preset_status = functions_.nvEncGetEncodePresetConfigEx(
-          encoder_, NV_ENC_CODEC_H264_GUID, NV_ENC_PRESET_P1_GUID,
+          encoder_, codec_guid(configuration.codec), NV_ENC_PRESET_P1_GUID,
           NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, &preset);
       if (preset_status != NV_ENC_SUCCESS) {
         const auto failure = operation_failure(
@@ -230,7 +348,7 @@ class WindowsNvencH264Api final : public INvencH264Api {
       configure_encoder(configuration_);
       initialize_parameters_ = {};
       initialize_parameters_.version = NV_ENC_INITIALIZE_PARAMS_VER;
-      initialize_parameters_.encodeGUID = NV_ENC_CODEC_H264_GUID;
+      initialize_parameters_.encodeGUID = codec_guid(configuration.codec);
       initialize_parameters_.presetGUID = NV_ENC_PRESET_P1_GUID;
       initialize_parameters_.encodeWidth = configuration.width;
       initialize_parameters_.encodeHeight = configuration.height;
@@ -309,7 +427,7 @@ class WindowsNvencH264Api final : public INvencH264Api {
     registration.pitch = 0;
     registration.subResourceIndex = 0;
     registration.resourceToRegister = texture;
-    registration.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
+    registration.bufferFormat = buffer_format(configuration_.codec);
     registration.bufferUsage = NV_ENC_INPUT_IMAGE;
     const auto status =
         functions_.nvEncRegisterResource(encoder_, &registration);
@@ -336,7 +454,7 @@ class WindowsNvencH264Api final : public INvencH264Api {
     auto failure = operation_failure(
         status, NvencH264Failure::input_mapping_failed);
     if (failure == NvencH264Failure::none &&
-        mapping.mappedBufferFmt != NV_ENC_BUFFER_FORMAT_NV12) {
+        mapping.mappedBufferFmt != buffer_format(configuration_.codec)) {
       if (mapping.mappedResource != nullptr) {
         const auto unmap_failure = operation_failure(
             functions_.nvEncUnmapInputResource(encoder_,
@@ -349,7 +467,9 @@ class WindowsNvencH264Api final : public INvencH264Api {
         }
       }
       if (failure == NvencH264Failure::none) {
-        failure = NvencH264Failure::nv12_unsupported;
+        failure = configuration_.codec == NvencVideoCodec::hevc_main10
+                      ? NvencH264Failure::p010_unsupported
+                      : NvencH264Failure::nv12_unsupported;
       }
     }
     return {.handle = mapping.mappedResource == nullptr
@@ -381,8 +501,33 @@ class WindowsNvencH264Api final : public INvencH264Api {
         reinterpret_cast<NV_ENC_INPUT_PTR>(submit.mapped_input);
     picture.outputBitstream =
         reinterpret_cast<NV_ENC_OUTPUT_PTR>(submit.output_bitstream);
-    picture.bufferFmt = NV_ENC_BUFFER_FORMAT_NV12;
+    picture.bufferFmt = buffer_format(configuration_.codec);
     picture.pictureStruct = NV_ENC_PIC_STRUCT_FRAME;
+    MASTERING_DISPLAY_INFO mastering{};
+    CONTENT_LIGHT_LEVEL content_light{};
+    if (configuration_.codec == NvencVideoCodec::hevc_main10) {
+      const std::string_view bytes{
+          reinterpret_cast<const char*>(configuration_.hdr_static_info.data()),
+          configuration_.hdr_static_info.size()};
+      const auto metadata = stream::parse_cta861_3_hdr_static_info(bytes);
+      if (!metadata) {
+        return NvencH264Failure::invalid_plan;
+      }
+      mastering.r = {metadata->red.x, metadata->red.y};
+      mastering.g = {metadata->green.x, metadata->green.y};
+      mastering.b = {metadata->blue.x, metadata->blue.y};
+      mastering.whitePoint = {metadata->white.x, metadata->white.y};
+      mastering.maxLuma =
+          static_cast<std::uint32_t>(metadata->maximum_mastering_luminance) *
+          10'000U;
+      mastering.minLuma = metadata->minimum_mastering_luminance;
+      content_light.maxContentLightLevel =
+          metadata->maximum_content_light_level;
+      content_light.maxPicAverageLightLevel =
+          metadata->maximum_frame_average_light_level;
+      picture.codecPicParams.hevcPicParams.pMasteringDisplay = &mastering;
+      picture.codecPicParams.hevcPicParams.pMaxCll = &content_light;
+    }
     const auto status = functions_.nvEncEncodePicture(encoder_, &picture);
     const auto failure =
         operation_failure(status, NvencH264Failure::encode_failed);
@@ -589,7 +734,8 @@ class WindowsNvencH264Api final : public INvencH264Api {
            functions_.nvEncDestroyEncoder != nullptr;
   }
 
-  [[nodiscard]] NvencH264ApiCapabilities query_capabilities() {
+  [[nodiscard]] NvencH264ApiCapabilities query_capabilities(
+      NvencVideoCodec requested_codec) {
     NvencH264ApiCapabilities capabilities;
     std::uint32_t codec_count{};
     if (functions_.nvEncGetEncodeGUIDCount(encoder_, &codec_count) !=
@@ -608,18 +754,25 @@ class WindowsNvencH264Api final : public INvencH264Api {
         [](const GUID& codec) {
           return same_guid(codec, NV_ENC_CODEC_H264_GUID);
         });
-    if (!capabilities.h264) {
+    capabilities.hevc = std::any_of(
+        codecs.begin(), codecs.begin() + std::min(codec_count, written_codecs),
+        [](const GUID& codec) {
+          return same_guid(codec, NV_ENC_CODEC_HEVC_GUID);
+        });
+    if ((requested_codec == NvencVideoCodec::h264 && !capabilities.h264) ||
+        (requested_codec == NvencVideoCodec::hevc_main10 &&
+         !capabilities.hevc)) {
       return capabilities;
     }
 
     std::uint32_t format_count{};
     if (functions_.nvEncGetInputFormatCount(
-            encoder_, NV_ENC_CODEC_H264_GUID, &format_count) == NV_ENC_SUCCESS &&
+            encoder_, codec_guid(requested_codec), &format_count) == NV_ENC_SUCCESS &&
         format_count > 0) {
       std::vector<NV_ENC_BUFFER_FORMAT> formats(format_count);
       std::uint32_t written_formats{};
       if (functions_.nvEncGetInputFormats(
-              encoder_, NV_ENC_CODEC_H264_GUID, formats.data(), format_count,
+              encoder_, codec_guid(requested_codec), formats.data(), format_count,
               &written_formats) == NV_ENC_SUCCESS) {
         capabilities.nv12 = std::find(
             formats.begin(),
@@ -627,21 +780,31 @@ class WindowsNvencH264Api final : public INvencH264Api {
             NV_ENC_BUFFER_FORMAT_NV12) !=
                             formats.begin() +
                                 std::min(format_count, written_formats);
+        capabilities.p010 = std::find(
+            formats.begin(),
+            formats.begin() + std::min(format_count, written_formats),
+            NV_ENC_BUFFER_FORMAT_YUV420_10BIT) !=
+                            formats.begin() +
+                                std::min(format_count, written_formats);
       }
     }
-    capabilities.max_width = query_capability(NV_ENC_CAPS_WIDTH_MAX);
-    capabilities.max_height = query_capability(NV_ENC_CAPS_HEIGHT_MAX);
+    capabilities.max_width = query_capability(requested_codec, NV_ENC_CAPS_WIDTH_MAX);
+    capabilities.max_height = query_capability(requested_codec, NV_ENC_CAPS_HEIGHT_MAX);
     capabilities.dynamic_bitrate =
-        query_capability(NV_ENC_CAPS_SUPPORT_DYN_BITRATE_CHANGE) != 0;
+        query_capability(requested_codec,
+                         NV_ENC_CAPS_SUPPORT_DYN_BITRATE_CHANGE) != 0;
+    capabilities.ten_bit =
+        query_capability(requested_codec, NV_ENC_CAPS_SUPPORT_10BIT_ENCODE) != 0;
     return capabilities;
   }
 
-  [[nodiscard]] std::uint32_t query_capability(NV_ENC_CAPS capability) noexcept {
+  [[nodiscard]] std::uint32_t query_capability(
+      NvencVideoCodec codec, NV_ENC_CAPS capability) noexcept {
     NV_ENC_CAPS_PARAM parameter{};
     parameter.version = NV_ENC_CAPS_PARAM_VER;
     parameter.capsToQuery = capability;
     int value{};
-    if (functions_.nvEncGetEncodeCaps(encoder_, NV_ENC_CODEC_H264_GUID,
+    if (functions_.nvEncGetEncodeCaps(encoder_, codec_guid(codec),
                                       &parameter, &value) != NV_ENC_SUCCESS ||
         value < 0) {
       return 0;
@@ -651,7 +814,10 @@ class WindowsNvencH264Api final : public INvencH264Api {
 
   void configure_encoder(
       const NvencH264Configuration& configuration) noexcept {
-    encode_configuration_.profileGUID = NV_ENC_H264_PROFILE_HIGH_GUID;
+    encode_configuration_.profileGUID =
+        configuration.codec == NvencVideoCodec::hevc_main10
+            ? NV_ENC_HEVC_PROFILE_MAIN10_GUID
+            : NV_ENC_H264_PROFILE_HIGH_GUID;
     encode_configuration_.gopLength = NVENC_INFINITE_GOPLENGTH;
     encode_configuration_.frameIntervalP = 1;
     encode_configuration_.frameFieldMode =
@@ -666,6 +832,27 @@ class WindowsNvencH264Api final : public INvencH264Api {
     encode_configuration_.rcParams.enableLookahead = 0;
     encode_configuration_.rcParams.zeroReorderDelay = 1;
     encode_configuration_.rcParams.multiPass = NV_ENC_MULTI_PASS_DISABLED;
+    if (configuration.codec == NvencVideoCodec::hevc_main10) {
+      auto& hevc = encode_configuration_.encodeCodecConfig.hevcConfig;
+      hevc.repeatSPSPPS = 1;
+      hevc.idrPeriod = NVENC_INFINITE_GOPLENGTH;
+      hevc.chromaFormatIDC = 1;
+      hevc.inputBitDepth = NV_ENC_BIT_DEPTH_10;
+      hevc.outputBitDepth = NV_ENC_BIT_DEPTH_10;
+      hevc.outputMasteringDisplay = 1;
+      hevc.outputMaxCll = 1;
+      hevc.hevcVUIParameters.videoSignalTypePresentFlag = 1;
+      hevc.hevcVUIParameters.videoFormat = NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED;
+      hevc.hevcVUIParameters.videoFullRangeFlag = 0;
+      hevc.hevcVUIParameters.colourDescriptionPresentFlag = 1;
+      hevc.hevcVUIParameters.colourPrimaries =
+          NV_ENC_VUI_COLOR_PRIMARIES_BT2020;
+      hevc.hevcVUIParameters.transferCharacteristics =
+          NV_ENC_VUI_TRANSFER_CHARACTERISTIC_SMPTE2084;
+      hevc.hevcVUIParameters.colourMatrix =
+          NV_ENC_VUI_MATRIX_COEFFS_BT2020_NCL;
+      return;
+    }
     auto& h264 = encode_configuration_.encodeCodecConfig.h264Config;
     h264.repeatSPSPPS = 1;
     h264.idrPeriod = NVENC_INFINITE_GOPLENGTH;
@@ -711,6 +898,19 @@ class WindowsNvencH264Api final : public INvencH264Api {
   bool poisoned_{};
 };
 
+class NvencProbeTexture final : public capture::D3d11Texture {
+ public:
+  explicit NvencProbeTexture(winrt::com_ptr<ID3D11Texture2D> texture)
+      : texture_(std::move(texture)) {}
+
+  [[nodiscard]] void* native_texture() const noexcept override {
+    return texture_.get();
+  }
+
+ private:
+  winrt::com_ptr<ID3D11Texture2D> texture_;
+};
+
 }  // namespace
 
 NvencH264Encoder::NvencH264Encoder(std::unique_ptr<INvencH264Api> api,
@@ -719,7 +919,9 @@ NvencH264Encoder::NvencH264Encoder(std::unique_ptr<INvencH264Api> api,
 
 NvencH264Encoder::~NvencH264Encoder() {
   std::lock_guard lock{operation_mutex_};
-  shutdown_session();
+  if (!closed_) {
+    shutdown_session();
+  }
 }
 
 std::optional<EncodedH264AccessUnit> NvencH264Encoder::encode(
@@ -864,10 +1066,19 @@ std::optional<EncodedH264AccessUnit> NvencH264Encoder::encode(
     return std::nullopt;
   }
 
-  const auto description = inspect_annex_b(bytes);
-  if (!description.has_start_code ||
-      (request_idr &&
-       (!description.idr || !description.sps || !description.pps))) {
+  const auto h264_description = inspect_annex_b(bytes);
+  const auto hevc_description = inspect_hevc_annex_b_internal(bytes);
+  const bool hevc = plan_.codec == NvencVideoCodec::hevc_main10;
+  const bool valid_access_unit =
+      hevc ? hevc_description.has_start_code : h264_description.has_start_code;
+  const bool valid_idr =
+      hevc ? hevc_description.idr && hevc_description.has_vps &&
+                 hevc_description.has_sps && hevc_description.has_pps &&
+                 hevc_description.has_mastering_display_sei &&
+                 hevc_description.has_content_light_level_sei
+           : h264_description.idr && h264_description.sps &&
+                 h264_description.pps;
+  if (!valid_access_unit || (request_idr && !valid_idr)) {
     failure_ = NvencH264Failure::invalid_bitstream;
     first_frame_ = true;
     return std::nullopt;
@@ -877,9 +1088,15 @@ std::optional<EncodedH264AccessUnit> NvencH264Encoder::encode(
   return EncodedH264AccessUnit{
       .annex_b = std::move(bytes),
       .qpc_timestamp = locked.bitstream.qpc_timestamp,
-      .idr = description.idr,
-      .has_sps = description.sps,
-      .has_pps = description.pps,
+      .codec = plan_.codec,
+      .idr = hevc ? hevc_description.idr : h264_description.idr,
+      .has_vps = hevc && hevc_description.has_vps,
+      .has_sps = hevc ? hevc_description.has_sps : h264_description.sps,
+      .has_pps = hevc ? hevc_description.has_pps : h264_description.pps,
+      .has_mastering_display_sei =
+          hevc && hevc_description.has_mastering_display_sei,
+      .has_content_light_level_sei =
+          hevc && hevc_description.has_content_light_level_sei,
   };
 }
 
@@ -923,8 +1140,20 @@ NvencH264Failure NvencH264Encoder::failure() const noexcept {
   return failure_;
 }
 
+bool NvencH264Encoder::close() noexcept {
+  std::lock_guard lock{operation_mutex_};
+  failure_ = NvencH264Failure::none;
+  shutdown_session();
+  return closed_ && failure_ == NvencH264Failure::none;
+}
+
 bool NvencH264Encoder::valid_plan() const noexcept {
-  return plan_.width > 0 && plan_.height > 0 &&
+  const bool metadata_valid =
+      plan_.codec != NvencVideoCodec::hevc_main10 ||
+      stream::parse_cta861_3_hdr_static_info(std::string_view{
+          reinterpret_cast<const char*>(plan_.hdr_static_info.data()),
+          plan_.hdr_static_info.size()}).has_value();
+  return metadata_valid && plan_.width > 0 && plan_.height > 0 &&
          (plan_.width % 2U) == 0 && (plan_.height % 2U) == 0 &&
          plan_.frame_rate_numerator > 0 &&
          plan_.frame_rate_denominator > 0 && plan_.bitrate_bps > 0;
@@ -947,9 +1176,15 @@ bool NvencH264Encoder::valid_frame(
     const ConvertedD3d11Frame& frame) const noexcept {
   return frame.texture && frame.texture->native_texture() != nullptr &&
          frame.width == plan_.width && frame.height == plan_.height &&
-         frame.qpc_timestamp > 0 && frame.format == VideoPixelFormat::nv12 &&
-         frame.range == VideoRange::limited &&
-         frame.matrix == VideoColorMatrix::bt709;
+         frame.qpc_timestamp > 0 && frame.range == VideoRange::limited &&
+         (plan_.codec == NvencVideoCodec::hevc_main10
+              ? frame.format == VideoPixelFormat::p010 &&
+                    frame.matrix ==
+                        VideoColorMatrix::bt2020_non_constant_luminance &&
+                    frame.transfer_function == VideoTransferFunction::pq
+              : frame.format == VideoPixelFormat::nv12 &&
+                    frame.matrix == VideoColorMatrix::bt709 &&
+                    frame.transfer_function == VideoTransferFunction::bt709);
 }
 
 bool NvencH264Encoder::ensure_session(const ConvertedD3d11Frame& frame,
@@ -957,18 +1192,25 @@ bool NvencH264Encoder::ensure_session(const ConvertedD3d11Frame& frame,
   if (session_open_) {
     return true;
   }
+  closed_ = false;
   const NvencH264Configuration configuration{
       .width = plan_.width,
       .height = plan_.height,
       .frame_rate_numerator = plan_.frame_rate_numerator,
       .frame_rate_denominator = plan_.frame_rate_denominator,
       .bitrate_bps = plan_.bitrate_bps,
-      .input_format = VideoPixelFormat::nv12,
+      .input_format = plan_.codec == NvencVideoCodec::hevc_main10
+                          ? VideoPixelFormat::p010
+                          : VideoPixelFormat::nv12,
       .input_range = VideoRange::limited,
-      .matrix = VideoColorMatrix::bt709,
+      .matrix = plan_.codec == NvencVideoCodec::hevc_main10
+                    ? VideoColorMatrix::bt2020_non_constant_luminance
+                    : VideoColorMatrix::bt709,
       .low_latency = true,
       .b_frame_count = 0,
       .repeat_parameter_sets = true,
+      .codec = plan_.codec,
+      .hdr_static_info = plan_.hdr_static_info,
   };
   failure_ = api_->open(*frame.texture, configuration);
   if (failure_ != NvencH264Failure::none) {
@@ -1030,6 +1272,9 @@ void NvencH264Encoder::poison_session(
 }
 
 void NvencH264Encoder::shutdown_session() noexcept {
+  if (closed_) {
+    return;
+  }
   if (!api_ || session_poisoned_) {
     return;
   }
@@ -1056,6 +1301,7 @@ void NvencH264Encoder::shutdown_session() noexcept {
   device_ = nullptr;
   first_frame_ = true;
   last_timestamp_.reset();
+  closed_ = true;
 }
 
 NvencH264NativeContract nvenc_h264_native_contract() noexcept {
@@ -1073,6 +1319,25 @@ NvencH264NativeContract nvenc_h264_native_contract() noexcept {
       .first_frame_flags =
           NV_ENC_PIC_FLAG_FORCEIDR | NV_ENC_PIC_FLAG_OUTPUT_SPSPPS,
   };
+}
+
+NvencHevcMain10NativeContract
+nvenc_hevc_main10_native_contract() noexcept {
+  return {
+      .buffer_format = NV_ENC_BUFFER_FORMAT_YUV420_10BIT,
+      .input_bit_depth = NV_ENC_BIT_DEPTH_10,
+      .output_bit_depth = NV_ENC_BIT_DEPTH_10,
+      .repeat_vps_sps_pps = true,
+      .colour_primaries = NV_ENC_VUI_COLOR_PRIMARIES_BT2020,
+      .transfer_characteristics =
+          NV_ENC_VUI_TRANSFER_CHARACTERISTIC_SMPTE2084,
+      .colour_matrix = NV_ENC_VUI_MATRIX_COEFFS_BT2020_NCL,
+  };
+}
+
+HevcAccessUnitDescription inspect_hevc_annex_b(
+    const std::vector<std::uint8_t>& bytes) noexcept {
+  return inspect_hevc_annex_b_internal(bytes);
 }
 
 NvencH264Failure classify_nvenc_runtime_preflight(
@@ -1135,8 +1400,153 @@ NvencH264Failure validate_nvenc_h264_capabilities(
   return NvencH264Failure::none;
 }
 
+NvencH264Failure validate_nvenc_hevc_main10_capabilities(
+    const NvencH264ApiCapabilities& capabilities,
+    const NvencH264Plan& plan) noexcept {
+  if (!capabilities.hevc) {
+    return NvencH264Failure::hevc_unsupported;
+  }
+  if (!capabilities.p010) {
+    return NvencH264Failure::p010_unsupported;
+  }
+  if (!capabilities.ten_bit) {
+    return NvencH264Failure::ten_bit_unsupported;
+  }
+  if (!capabilities.dynamic_bitrate) {
+    return NvencH264Failure::bitrate_reconfiguration_unsupported;
+  }
+  if (plan.width == 0 || plan.height == 0 ||
+      plan.width > capabilities.max_width ||
+      plan.height > capabilities.max_height) {
+    return NvencH264Failure::dimensions_unsupported;
+  }
+  return NvencH264Failure::none;
+}
+
+NvencH264Failure probe_windows_nvenc_capabilities(
+    NvencVideoCodec codec) noexcept {
+  const auto runtime = probe_windows_nvenc_runtime();
+  if (runtime != NvencH264Failure::none) {
+    return runtime;
+  }
+  try {
+    winrt::com_ptr<IDXGIFactory1> factory;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(factory.put())))) {
+      return NvencH264Failure::device_unavailable;
+    }
+    NvencH264Failure last_failure{NvencH264Failure::device_unavailable};
+    for (UINT index = 0;; ++index) {
+      winrt::com_ptr<IDXGIAdapter1> adapter;
+      if (factory->EnumAdapters1(index, adapter.put()) == DXGI_ERROR_NOT_FOUND) {
+        break;
+      }
+      DXGI_ADAPTER_DESC1 adapter_description{};
+      if (FAILED(adapter->GetDesc1(&adapter_description)) ||
+          adapter_description.VendorId != 0x10de ||
+          (adapter_description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0) {
+        continue;
+      }
+      winrt::com_ptr<ID3D11Device> device;
+      winrt::com_ptr<ID3D11DeviceContext> context;
+      D3D_FEATURE_LEVEL level{};
+      if (FAILED(D3D11CreateDevice(
+              adapter.get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+              D3D11_CREATE_DEVICE_VIDEO_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
+              device.put(), &level, context.put()))) {
+        continue;
+      }
+      D3D11_TEXTURE2D_DESC description{};
+      description.Width = 640;
+      description.Height = 400;
+      description.MipLevels = 1;
+      description.ArraySize = 1;
+      description.Format = texture_format(codec);
+      description.SampleDesc.Count = 1;
+      description.Usage = D3D11_USAGE_DEFAULT;
+      description.BindFlags = D3D11_BIND_RENDER_TARGET;
+      winrt::com_ptr<ID3D11Texture2D> texture;
+      if (FAILED(device->CreateTexture2D(&description, nullptr,
+                                         texture.put()))) {
+        continue;
+      }
+      auto probe_texture =
+          std::make_shared<NvencProbeTexture>(std::move(texture));
+      std::vector<std::uint8_t> metadata(25);
+      if (codec == NvencVideoCodec::hevc_main10) {
+        metadata[17] = 0xe8;
+        metadata[18] = 0x03;
+        metadata[21] = 0xe8;
+        metadata[22] = 0x03;
+        metadata[23] = 0x90;
+        metadata[24] = 0x01;
+      } else {
+        metadata.clear();
+      }
+      NvencVideoEncoder encoder{
+          create_windows_nvenc_video_api(),
+          {.width = 640,
+           .height = 400,
+           .frame_rate_numerator = 60,
+           .frame_rate_denominator = 1,
+           .bitrate_bps = 1'000'000,
+           .codec = codec,
+           .hdr_static_info = std::move(metadata)}};
+      const ConvertedD3d11Frame frame{
+          .texture = std::move(probe_texture),
+          .width = 640,
+          .height = 400,
+          .qpc_timestamp = 1,
+          .format = codec == NvencVideoCodec::hevc_main10
+                        ? VideoPixelFormat::p010
+                        : VideoPixelFormat::nv12,
+          .range = VideoRange::limited,
+          .matrix = codec == NvencVideoCodec::hevc_main10
+                        ? VideoColorMatrix::bt2020_non_constant_luminance
+                        : VideoColorMatrix::bt709,
+          .transfer_function = codec == NvencVideoCodec::hevc_main10
+                                   ? VideoTransferFunction::pq
+                                   : VideoTransferFunction::bt709};
+      const auto encoded = encoder.encode(frame, true);
+      last_failure = encoder.failure();
+      const bool content_valid =
+          encoded && encoded->idr && encoded->has_sps && encoded->has_pps &&
+          (codec != NvencVideoCodec::hevc_main10 ||
+           (encoded->has_vps && encoded->has_mastering_display_sei &&
+            encoded->has_content_light_level_sei));
+      if (!content_valid) {
+        if (last_failure == NvencH264Failure::none) {
+          last_failure = NvencH264Failure::invalid_bitstream;
+        }
+        static_cast<void>(encoder.close());
+        continue;
+      }
+      if (!encoder.close()) {
+        last_failure = encoder.failure();
+        continue;
+      }
+      return NvencH264Failure::none;
+    }
+    return last_failure;
+  } catch (...) {
+    return NvencH264Failure::device_unavailable;
+  }
+}
+
+NvencH264Failure
+probe_windows_nvenc_hevc_main10_capabilities() noexcept {
+  return probe_windows_nvenc_capabilities(NvencVideoCodec::hevc_main10);
+}
+
+NvencH264Failure probe_windows_nvenc_h264_capabilities() noexcept {
+  return probe_windows_nvenc_capabilities(NvencVideoCodec::h264);
+}
+
 std::unique_ptr<INvencH264Api> create_windows_nvenc_h264_api() {
   return std::make_unique<WindowsNvencH264Api>();
+}
+
+std::unique_ptr<INvencVideoApi> create_windows_nvenc_video_api() {
+  return create_windows_nvenc_h264_api();
 }
 
 }  // namespace beacon::worker::video

@@ -227,6 +227,22 @@ public final class BeaconStreamCoreInstrumentationTest {
     }
 
     @Test
+    public void testProductionJniCarriesExactHevcMain10Hdr10Grant() {
+        BeaconStreamCore core = new BeaconStreamCore(frame -> { });
+        BeaconStreamSession session = BeaconStreamSession.parse(
+            "https://127.0.0.1",
+            "z-fold-7",
+            "{\"connection\":{\"protocolVersion\":1,\"ticket\":\"AQID\",\"expiresAt\":\"2030-01-01T00:00:00Z\",\"planRevision\":10,\"planExplanation\":\"hdr\",\"sessionId\":\"hdr-session\",\"port\":47990,\"publicKeyFingerprint\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"selectedVideo\":{\"codec\":\"hevc\",\"width\":3840,\"height\":2160,\"framesPerSecondNumerator\":60,\"framesPerSecondDenominator\":1,\"dynamicRange\":\"hdr10\",\"profile\":\"hevcMain10\",\"bitDepth\":10,\"colorPrimaries\":\"bt2020\",\"transferFunction\":\"pq\",\"matrixCoefficients\":\"bt2020NonConstantLuminance\",\"colorRange\":\"limited\",\"hdrStaticInfo\":\"AEiKCDk0Iaqblhn8CBM9QkDoAzIA6AOQAQ==\",\"hdrStaticInfoInBitstream\":true},\"selectedAudio\":{\"codec\":\"opus\",\"sampleRateHz\":48000,\"channelCount\":2,\"frameDurationUs\":20000,\"bitrateBps\":96000}}}");
+        BeaconStreamSession.NativeGrant grant = session.consumeNativeGrant(1);
+        try {
+            assertTrue(BeaconStreamCore.parseNativeGrantForTest(grant));
+        } finally {
+            grant.clearSecrets();
+            core.close();
+        }
+    }
+
+    @Test
     public void testProductionJniMapsControllerInput() {
         int[] values = BeaconStreamCore.parseNativeControllerInputForTest(
             BeaconApiClient.InputBatch.controller(9, 0, 12, 1));

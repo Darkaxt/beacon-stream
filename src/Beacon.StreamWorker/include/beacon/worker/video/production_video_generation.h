@@ -21,7 +21,7 @@ public:
       WorkerVideoPlan plan, IWorkerMediaTransport &transport,
       std::unique_ptr<capture::IWgcCapturePlatform> capture_platform,
       std::unique_ptr<ID3d11VideoProcessorPlatform> processor_platform,
-      std::unique_ptr<INvencH264Api> encoder_api,
+      std::unique_ptr<INvencVideoApi> encoder_api,
       VideoPipelineFailureSink failure_sink);
   ~ProductionVideoGeneration() override;
 
@@ -46,7 +46,7 @@ private:
   VideoPipelineFailureSink failure_sink_;
   capture::WgcDisplayCapture capture_;
   D3d11VideoProcessor processor_;
-  NvencH264Encoder encoder_;
+  NvencVideoEncoder encoder_;
   VideoMediaSession media_session_;
   std::atomic_uint64_t session_generation_{};
   std::atomic_uint64_t next_evidence_sequence_{1};

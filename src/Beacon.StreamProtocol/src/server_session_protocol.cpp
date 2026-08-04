@@ -102,7 +102,16 @@ bool video_modes_equal(const stream_v1::SelectedVideoMode &left,
              right.frames_per_second_numerator() &&
          left.frames_per_second_denominator() ==
              right.frames_per_second_denominator() &&
-         left.dynamic_range() == right.dynamic_range();
+         left.dynamic_range() == right.dynamic_range() &&
+         left.profile() == right.profile() &&
+         left.bit_depth() == right.bit_depth() &&
+         left.color_primaries() == right.color_primaries() &&
+         left.transfer_function() == right.transfer_function() &&
+         left.matrix_coefficients() == right.matrix_coefficients() &&
+         left.color_range() == right.color_range() &&
+         left.hdr_static_info() == right.hdr_static_info() &&
+         left.hdr_static_info_in_bitstream() ==
+             right.hdr_static_info_in_bitstream();
 }
 
 bool audio_modes_equal(const stream_v1::SelectedAudioMode &left,

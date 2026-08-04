@@ -8,6 +8,7 @@ final class BeaconVideoSession implements BeaconViewModel.VideoSession {
     private final ExecutorService decoderExecutor;
     private final BeaconVideoFeedbackBridge feedback;
     private final BeaconVideoPipeline pipeline;
+    private final HdrWindowModeController windowMode;
     private boolean closed;
 
     BeaconVideoSession(
@@ -23,7 +24,12 @@ final class BeaconVideoSession implements BeaconViewModel.VideoSession {
         EncodedVideoSurfaceProvider surfaceProvider,
         BeaconVideoFeedbackBridge.FailureObserver failureObserver,
         BeaconVideoFeedbackBridge.Observer observer) {
-        this(surfaceProvider, failureObserver, observer, ignored -> { });
+        this(
+            surfaceProvider,
+            failureObserver,
+            observer,
+            ignored -> { },
+            HdrWindowModeController.noOp());
     }
 
     BeaconVideoSession(
@@ -31,15 +37,33 @@ final class BeaconVideoSession implements BeaconViewModel.VideoSession {
         BeaconVideoFeedbackBridge.FailureObserver failureObserver,
         BeaconVideoFeedbackBridge.Observer observer,
         Consumer<BeaconVideoPipelineObserverSwitch> observerRegistration) {
+        this(
+            surfaceProvider,
+            failureObserver,
+            observer,
+            observerRegistration,
+            HdrWindowModeController.noOp());
+    }
+
+    BeaconVideoSession(
+        EncodedVideoSurfaceProvider surfaceProvider,
+        BeaconVideoFeedbackBridge.FailureObserver failureObserver,
+        BeaconVideoFeedbackBridge.Observer observer,
+        Consumer<BeaconVideoPipelineObserverSwitch> observerRegistration,
+        HdrWindowModeController windowMode) {
         if (surfaceProvider == null || failureObserver == null || observer == null) {
             throw new IllegalArgumentException("Beacon video session dependencies are required.");
         }
-        if (observerRegistration == null) {
+        if (observerRegistration == null || windowMode == null) {
             throw new IllegalArgumentException("Beacon video observer registration is required.");
         }
+        this.windowMode = windowMode;
         decoderExecutor = Executors.newSingleThreadExecutor(
             action -> new Thread(action, "beacon-video-decoder"));
-        feedback = new BeaconVideoFeedbackBridge(failureObserver, observer);
+        feedback = new BeaconVideoFeedbackBridge(failure -> {
+            windowMode.setHdrEnabled(false);
+            failureObserver.onFailure(failure);
+        }, observer);
         BeaconVideoPipelineObserverSwitch pipelineObserver =
             new BeaconVideoPipelineObserverSwitch(feedback);
         observerRegistration.accept(pipelineObserver);
@@ -63,11 +87,14 @@ final class BeaconVideoSession implements BeaconViewModel.VideoSession {
             throw new IllegalArgumentException("Beacon video start is incomplete.");
         }
         feedback.activate(generation, new CoreFeedbackSink(streamCore));
-        pipeline.start(
-            video.codec(),
-            video.width(),
-            video.height(),
-            framesPerSecond(video));
+        boolean hdr = "hdr10".equalsIgnoreCase(video.dynamicRange());
+        windowMode.setHdrEnabled(hdr);
+        try {
+            pipeline.start(video);
+        } catch (RuntimeException failure) {
+            windowMode.setHdrEnabled(false);
+            throw failure;
+        }
     }
 
     @Override
@@ -75,6 +102,7 @@ final class BeaconVideoSession implements BeaconViewModel.VideoSession {
         if (closed) return;
         feedback.deactivate();
         pipeline.stop();
+        windowMode.setHdrEnabled(false);
     }
 
     @Override
@@ -88,17 +116,8 @@ final class BeaconVideoSession implements BeaconViewModel.VideoSession {
         closed = true;
         feedback.deactivate();
         pipeline.close();
+        windowMode.setHdrEnabled(false);
         decoderExecutor.shutdown();
-    }
-
-    private static int framesPerSecond(BeaconStreamSession.SelectedVideo video) {
-        long numerator = video.framesPerSecondNumerator();
-        long denominator = video.framesPerSecondDenominator();
-        long rounded = (numerator + denominator / 2) / denominator;
-        if (rounded <= 0 || rounded > Integer.MAX_VALUE) {
-            throw new IllegalArgumentException("Selected video frame rate is invalid.");
-        }
-        return (int) rounded;
     }
 
     private static final class CoreFeedbackSink

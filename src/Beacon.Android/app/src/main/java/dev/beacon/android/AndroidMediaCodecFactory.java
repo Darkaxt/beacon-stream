@@ -2,6 +2,7 @@ package dev.beacon.android;
 
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
 import android.media.MediaFormat;
 import android.os.Build;
 import android.os.Handler;
@@ -10,18 +11,14 @@ import android.view.Surface;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.Locale;
 import java.util.OptionalLong;
 
 public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory {
     @Override
     public EncodedVideoCodec create(String codec) {
-        String mimeType = mimeType(codec);
-        try {
-            return new AndroidMediaCodec(MediaCodec.createDecoderByType(mimeType), mimeType);
-        } catch (IOException | RuntimeException ex) {
-            throw new IllegalStateException("Unable to create MediaCodec decoder for " + codec + ".", ex);
-        }
+        return new AndroidMediaCodec(mimeType(codec));
     }
 
     private static String mimeType(String codec) {
@@ -43,14 +40,92 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
             (flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0;
     }
 
+    static MediaFormat buildMediaFormat(
+        EncodedVideoDecodeRequest request,
+        int maxInputBytes,
+        boolean lowLatency) {
+        MediaFormat format = MediaFormat.createVideoFormat(
+            mimeType(request.codec()), request.width(), request.height());
+        format.setInteger(MediaFormat.KEY_FRAME_RATE, request.fps());
+        if (request.isHevcMain10Hdr10()) {
+            format.setInteger(
+                MediaFormat.KEY_PROFILE,
+                MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10);
+            format.setInteger(
+                MediaFormat.KEY_COLOR_STANDARD,
+                MediaFormat.COLOR_STANDARD_BT2020);
+            format.setInteger(
+                MediaFormat.KEY_COLOR_TRANSFER,
+                MediaFormat.COLOR_TRANSFER_ST2084);
+            format.setInteger(
+                MediaFormat.KEY_COLOR_RANGE,
+                MediaFormat.COLOR_RANGE_LIMITED);
+            format.setByteBuffer(
+                MediaFormat.KEY_HDR_STATIC_INFO,
+                ByteBuffer.wrap(request.hdrStaticInfo()).asReadOnlyBuffer());
+        }
+        if (lowLatency) format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
+        if (maxInputBytes > 0) {
+            format.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxInputBytes);
+        }
+        return format;
+    }
+
+    static boolean outputFormatMatches(
+        EncodedVideoDecodeRequest request,
+        EncodedVideoOutputFormat output) {
+        return outputFormatMatches(request, output, true);
+    }
+
+    static boolean outputFormatMatches(
+        EncodedVideoDecodeRequest request,
+        EncodedVideoOutputFormat output,
+        boolean decoderHdr10ProfileSupported) {
+        if (!request.isHevcMain10Hdr10()) return true;
+        boolean profileMatches = output.profile() == -1 ||
+            output.profile() == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10;
+        byte[] outputStaticInfo = output.hdrStaticInfo();
+        boolean staticInfoMatches = outputStaticInfo.length == 0
+            ? request.hdrStaticInfoInBitstream()
+            : Arrays.equals(request.hdrStaticInfo(), outputStaticInfo);
+        return MediaFormat.MIMETYPE_VIDEO_HEVC.equalsIgnoreCase(output.mimeType()) &&
+            decoderHdr10ProfileSupported &&
+            profileMatches &&
+            output.colorStandard() == MediaFormat.COLOR_STANDARD_BT2020 &&
+            output.colorTransfer() == MediaFormat.COLOR_TRANSFER_ST2084 &&
+            output.colorRange() == MediaFormat.COLOR_RANGE_LIMITED &&
+            staticInfoMatches;
+    }
+
+    private static EncodedVideoOutputFormat outputFormat(MediaFormat format) {
+        return new EncodedVideoOutputFormat(
+            format.getString(MediaFormat.KEY_MIME),
+            integer(format, MediaFormat.KEY_PROFILE),
+            integer(format, MediaFormat.KEY_COLOR_STANDARD),
+            integer(format, MediaFormat.KEY_COLOR_TRANSFER),
+            integer(format, MediaFormat.KEY_COLOR_RANGE),
+            bytes(format.getByteBuffer(MediaFormat.KEY_HDR_STATIC_INFO)));
+    }
+
+    private static int integer(MediaFormat format, String key) {
+        return format.containsKey(key) ? format.getInteger(key) : -1;
+    }
+
+    private static byte[] bytes(ByteBuffer value) {
+        if (value == null) return new byte[0];
+        ByteBuffer copy = value.asReadOnlyBuffer();
+        byte[] result = new byte[copy.remaining()];
+        copy.get(result);
+        return result;
+    }
+
     private static final class AndroidMediaCodec implements EncodedVideoCodec {
-        private final MediaCodec codec;
         private final String mimeType;
+        private MediaCodec codec;
         private QueueingCallback callback;
         private HandlerThread callbackThread;
 
-        AndroidMediaCodec(MediaCodec codec, String mimeType) {
-            this.codec = codec;
+        AndroidMediaCodec(String mimeType) {
             this.mimeType = mimeType;
         }
 
@@ -76,25 +151,47 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
                 throw new IllegalStateException("Encoded video codec observer is required.");
             }
 
-            callback = new QueueingCallback(sampleProvider, observer);
-            callbackThread = new HandlerThread("beacon-mediacodec-callback");
-            callbackThread.start();
-            Handler callbackHandler = new Handler(callbackThread.getLooper());
-            codec.setCallback(callback, callbackHandler);
-            codec.setOnFrameRenderedListener(callback, callbackHandler);
-            MediaFormat format = MediaFormat.createVideoFormat(mimeType, request.width(), request.height());
-            format.setInteger(MediaFormat.KEY_FRAME_RATE, request.fps());
-            if (MediaCodecLowLatencyPolicy.shouldEnable(
-                Build.VERSION.SDK_INT,
-                decoderSupportsLowLatency())) {
-                format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
+            MediaFormat format = buildMediaFormat(
+                request, sampleProvider.maxSampleBytes(), false);
+            String decoderName = new MediaCodecList(MediaCodecList.REGULAR_CODECS)
+                .findDecoderForFormat(format);
+            if (decoderName == null || decoderName.isBlank()) {
+                throw new IllegalStateException(
+                    "No MediaCodec decoder supports the exact selected video format.");
             }
-            if (sampleProvider.maxSampleBytes() > 0) {
-                format.setInteger(
-                    MediaFormat.KEY_MAX_INPUT_SIZE,
-                    sampleProvider.maxSampleBytes());
+            try {
+                codec = MediaCodec.createByCodecName(decoderName);
+                boolean decoderHdr10ProfileSupported =
+                    !request.isHevcMain10Hdr10() || decoderSupportsHdr10Profile();
+                if (!decoderHdr10ProfileSupported) {
+                    throw new IllegalStateException(
+                        "Selected MediaCodec decoder does not advertise an HEVC HDR10 profile.");
+                }
+                if (MediaCodecLowLatencyPolicy.shouldEnable(
+                    Build.VERSION.SDK_INT,
+                    decoderSupportsLowLatency())) {
+                    format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
+                }
+                callback = new QueueingCallback(
+                    request,
+                    sampleProvider,
+                    observer,
+                    decoderHdr10ProfileSupported);
+                callbackThread = new HandlerThread("beacon-mediacodec-callback");
+                callbackThread.start();
+                Handler callbackHandler = new Handler(callbackThread.getLooper());
+                codec.setCallback(callback, callbackHandler);
+                codec.setOnFrameRenderedListener(callback, callbackHandler);
+                codec.configure(format, androidSurface, null, 0);
+            } catch (IOException | RuntimeException failure) {
+                closeCallback();
+                MediaCodec owned = codec;
+                codec = null;
+                if (owned != null) owned.release();
+                throw new IllegalStateException(
+                    "Unable to configure exact MediaCodec decoder " + decoderName + ".",
+                    failure);
             }
-            codec.configure(format, androidSurface, null, 0);
         }
 
         private boolean decoderSupportsLowLatency() {
@@ -109,15 +206,36 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
             }
         }
 
+        private boolean decoderSupportsHdr10Profile() {
+            try {
+                MediaCodecInfo.CodecCapabilities capabilities =
+                    codec.getCodecInfo().getCapabilitiesForType(mimeType);
+                for (MediaCodecInfo.CodecProfileLevel level : capabilities.profileLevels) {
+                    if (level.profile ==
+                            MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10 ||
+                        level.profile ==
+                            MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10HDR10Plus) {
+                        return true;
+                    }
+                }
+                return false;
+            } catch (RuntimeException unavailable) {
+                return false;
+            }
+        }
+
         @Override
         public void start() {
+            if (codec == null) throw new IllegalStateException("MediaCodec is not configured.");
             codec.start();
         }
 
         @Override
         public void stop() {
+            MediaCodec owned = codec;
+            if (owned == null) return;
             try {
-                codec.stop();
+                owned.stop();
             } finally {
                 closeCallback();
             }
@@ -125,8 +243,14 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
 
         @Override
         public void release() {
+            MediaCodec owned = codec;
+            codec = null;
+            if (owned == null) {
+                closeCallback();
+                return;
+            }
             try {
-                codec.release();
+                owned.release();
             } finally {
                 closeCallback();
             }
@@ -145,6 +269,8 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
             implements MediaCodec.OnFrameRenderedListener, AutoCloseable {
             private final EncodedVideoSampleProvider sampleProvider;
             private final EncodedVideoCodecObserver observer;
+            private final EncodedVideoDecodeRequest request;
+            private final boolean decoderHdr10ProfileSupported;
             private final SerialInputBufferFeeder feeder = SerialInputBufferFeeder.system();
             private final EncodedFramePresentationTracker presentationTracker =
                 new EncodedFramePresentationTracker();
@@ -152,10 +278,14 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
             private volatile boolean closed;
 
             QueueingCallback(
+                EncodedVideoDecodeRequest request,
                 EncodedVideoSampleProvider sampleProvider,
-                EncodedVideoCodecObserver observer) {
+                EncodedVideoCodecObserver observer,
+                boolean decoderHdr10ProfileSupported) {
+                this.request = request;
                 this.sampleProvider = sampleProvider;
                 this.observer = observer;
+                this.decoderHdr10ProfileSupported = decoderHdr10ProfileSupported;
             }
 
             @Override
@@ -285,6 +415,19 @@ public final class AndroidMediaCodecFactory implements EncodedVideoCodecFactory 
 
             @Override
             public void onOutputFormatChanged(MediaCodec codec, MediaFormat format) {
+                if (closed) return;
+                try {
+                    EncodedVideoOutputFormat output = outputFormat(format);
+                    if (!outputFormatMatches(
+                        request, output, decoderHdr10ProfileSupported)) {
+                        observer.onError(new EncodedVideoOutputFormatMismatch(
+                            "MediaCodec output format does not match the selected HDR10 mode."));
+                        return;
+                    }
+                    observer.onOutputFormatChanged(output);
+                } catch (RuntimeException failure) {
+                    observer.onError(failure);
+                }
             }
 
             @Override

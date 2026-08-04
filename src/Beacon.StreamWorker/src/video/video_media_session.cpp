@@ -40,7 +40,7 @@ bool VideoMediaSession::begin_transport_generation(
 
 VideoMediaSendResult
 VideoMediaSession::send_access_unit(std::uint64_t session_generation,
-                                    const EncodedH264AccessUnit &access_unit,
+                                    const EncodedVideoAccessUnit &access_unit,
                                     std::uint64_t presentation_time_us) {
   std::lock_guard send_lock{send_mutex_};
   std::uint16_t maximum_datagram_bytes = 0;
@@ -62,10 +62,14 @@ VideoMediaSession::send_access_unit(std::uint64_t session_generation,
     sequence = next_access_unit_sequence_++;
   }
 
+  const bool complete_codec_configuration =
+      access_unit.codec == NvencVideoCodec::hevc_main10
+          ? access_unit.has_vps && access_unit.has_sps && access_unit.has_pps
+          : access_unit.has_sps && access_unit.has_pps;
   const stream::EncodedVideoAccessUnitView packetizer_input{
       .bytes = access_unit.annex_b,
       .idr = access_unit.idr,
-      .codec_configuration = access_unit.has_sps || access_unit.has_pps,
+      .codec_configuration = complete_codec_configuration,
   };
   auto packetized = packetizer_.packetize(packetizer_input, sequence,
                                           presentation_time_us,

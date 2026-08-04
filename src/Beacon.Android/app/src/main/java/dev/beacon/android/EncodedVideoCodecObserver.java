@@ -13,6 +13,7 @@ interface EncodedVideoCodecObserver {
         long renderedAtNs);
     void onEndOfStream();
     void onError(Throwable failure);
+    default void onOutputFormatChanged(EncodedVideoOutputFormat format) { }
 
     static EncodedVideoCodecObserver noOp() {
         return new EncodedVideoCodecObserver() {

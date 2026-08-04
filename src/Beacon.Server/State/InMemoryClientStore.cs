@@ -97,7 +97,7 @@ public sealed class InMemoryClientStore
 
     public EndpointCapabilities GetCapabilities(string clientId) =>
         WithLock(() => capabilities.GetValueOrDefault(clientId)
-        ?? new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: true, VirtualDisplayHdrSupported: false));
+        ?? new EndpointCapabilities(Av1: false, Hevc: false, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false));
 
     public ClientProfile SaveCapabilities(string clientId, EndpointCapabilities value)
     {

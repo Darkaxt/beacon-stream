@@ -7,6 +7,7 @@ using Beacon.Core.Streaming;
 using Beacon.Platform.Windows.Displays;
 using Beacon.Platform.Windows.Streaming;
 using Beacon.StreamWorker.Contracts.Framing;
+using Beacon.StreamWorker.Contracts.Stream.V1;
 using Beacon.StreamWorker.Contracts.Worker.V1;
 using System.Threading.Channels;
 
@@ -342,6 +343,14 @@ public sealed class StreamWorkerStreamingBackendTests
         Assert.Equal(120u, prepare.FramesPerSecondNumerator);
         Assert.Equal(WorkerVideoCodec.H264, prepare.VideoCodec);
         Assert.Equal(WorkerDynamicRange.Sdr, prepare.DynamicRange);
+        Assert.Equal(VideoProfile.H264High, prepare.VideoProfile);
+        Assert.Equal(8u, prepare.VideoBitDepth);
+        Assert.Equal(ColorPrimaries.Bt709, prepare.ColorPrimaries);
+        Assert.Equal(TransferFunction.Bt709, prepare.TransferFunction);
+        Assert.Equal(MatrixCoefficients.Bt709, prepare.MatrixCoefficients);
+        Assert.Equal(ColorRange.Limited, prepare.ColorRange);
+        Assert.True(prepare.HdrStaticInfo.IsEmpty);
+        Assert.False(prepare.HdrStaticInfoInBitstream);
         Assert.Equal(45000u, prepare.InitialBitrateKbps);
         Assert.Equal(WorkerAudioCodec.Opus, prepare.AudioCodec);
         Assert.Equal(48_000u, prepare.AudioSampleRateHz);
@@ -701,7 +710,137 @@ public sealed class StreamWorkerStreamingBackendTests
         StreamingPreflightResult result = await backend.CheckReadinessAsync(plan, CancellationToken.None);
 
         Assert.False(result.Success);
-        Assert.Contains("h264", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("AV1", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("production", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(host.Commands);
+    }
+
+    [Fact]
+    public async Task HevcMain10Hdr10MapsExactPrepareTupleAndRequiresTruthfulWorkerCapability()
+    {
+        var host = new RecordingStreamWorkerHost();
+        host.Capabilities.VideoCodecs.Add(WorkerVideoCodec.Hevc);
+        host.Capabilities.Hdr10 = true;
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan() with
+        {
+            Display = CreatePlan().Display with
+            {
+                HdrPreference = HdrPreference.Require,
+                HdrEnabled = true,
+                HdrMode = "hdr10",
+            },
+            Stream = CreatePlan().Stream with
+            {
+                Codec = "hevc",
+                CodecProfile = "main10",
+                BitDepth = 10,
+                TenBitPresentationVerified = true,
+                HdrPresentationVerified = true,
+                ColorPrimaries = "bt2020",
+                TransferFunction = "pq",
+                MatrixCoefficients = "bt2020-ncl",
+                ColorRange = "limited",
+                HdrStaticInfo = Hdr10StaticMetadata.CreateCta8613Descriptor(),
+                HdrStaticInfoInBitstream = true,
+            },
+        };
+
+        StreamingStartResult result = await backend.StartAsync(plan, CancellationToken.None);
+
+        Assert.True(result.Success);
+        PrepareSession prepare = Assert.IsType<PrepareSession>(host.Commands[0].PrepareSession);
+        Assert.Equal(WorkerVideoCodec.Hevc, prepare.VideoCodec);
+        Assert.Equal(WorkerDynamicRange.Hdr10, prepare.DynamicRange);
+        Assert.Equal(VideoProfile.HevcMain10, prepare.VideoProfile);
+        Assert.Equal(10u, prepare.VideoBitDepth);
+        Assert.Equal(ColorPrimaries.Bt2020, prepare.ColorPrimaries);
+        Assert.Equal(TransferFunction.Pq, prepare.TransferFunction);
+        Assert.Equal(MatrixCoefficients.Bt2020NonConstantLuminance, prepare.MatrixCoefficients);
+        Assert.Equal(ColorRange.Limited, prepare.ColorRange);
+        Assert.Equal(25, prepare.HdrStaticInfo.Length);
+        Assert.Equal(Hdr10StaticMetadata.Cta8613Descriptor.ToArray(), prepare.HdrStaticInfo.ToByteArray());
+        Assert.True(prepare.HdrStaticInfoInBitstream);
+    }
+
+    [Fact]
+    public async Task HevcMain10Hdr10FailsWhenWorkerOnlyAdvertisesHevcCodec()
+    {
+        var host = new RecordingStreamWorkerHost();
+        host.Capabilities.VideoCodecs.Add(WorkerVideoCodec.Hevc);
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan() with
+        {
+            Display = CreatePlan().Display with { HdrEnabled = true, HdrMode = "hdr10" },
+            Stream = CreatePlan().Stream with
+            {
+                Codec = "hevc",
+                CodecProfile = "main10",
+                BitDepth = 10,
+                TenBitPresentationVerified = true,
+                HdrPresentationVerified = true,
+                ColorPrimaries = "bt2020",
+                TransferFunction = "pq",
+                MatrixCoefficients = "bt2020-ncl",
+                ColorRange = "limited",
+                HdrStaticInfo = Hdr10StaticMetadata.CreateCta8613Descriptor(),
+                HdrStaticInfoInBitstream = true,
+            },
+        };
+
+        StreamingPreflightResult result = await backend.CheckReadinessAsync(plan, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("HDR10", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(host.Commands);
+    }
+
+    [Fact]
+    public async Task WorkerCapabilitiesAdvertiseHevcOnlyAsTheCompleteHdr10Path()
+    {
+        var host = new RecordingStreamWorkerHost();
+        host.Capabilities.VideoCodecs.Add(WorkerVideoCodec.Hevc);
+        var backend = new StreamWorkerStreamingBackend(host);
+
+        StreamingBackendHealth codecOnly = await backend.GetHealthAsync(CancellationToken.None);
+        host.Capabilities.Hdr10 = true;
+        StreamingBackendHealth completeTuple = await backend.GetHealthAsync(CancellationToken.None);
+
+        Assert.DoesNotContain("hevc", codecOnly.Capabilities.Codecs);
+        Assert.False(codecOnly.Capabilities.Hdr10);
+        Assert.Contains("hevc", completeTuple.Capabilities.Codecs);
+        Assert.True(completeTuple.Capabilities.Hdr10);
+    }
+
+    [Fact]
+    public async Task MixedHevcHdr10ColorimetryFailsBeforeWorkerReadiness()
+    {
+        var host = new RecordingStreamWorkerHost();
+        var backend = new StreamWorkerStreamingBackend(host);
+        SessionPlan plan = CreatePlan() with
+        {
+            Display = CreatePlan().Display with { HdrEnabled = true, HdrMode = "hdr10" },
+            Stream = CreatePlan().Stream with
+            {
+                Codec = "hevc",
+                CodecProfile = "main10",
+                BitDepth = 10,
+                TenBitPresentationVerified = true,
+                HdrPresentationVerified = true,
+                ColorPrimaries = "bt2020",
+                TransferFunction = "bt709",
+                MatrixCoefficients = "bt2020-ncl",
+                ColorRange = "limited",
+                HdrStaticInfo = Hdr10StaticMetadata.CreateCta8613Descriptor(),
+                HdrStaticInfoInBitstream = true,
+            },
+        };
+
+        StreamingPreflightResult result = await backend.CheckReadinessAsync(plan, CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("exact", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, host.EnsureReadyCalls);
         Assert.Empty(host.Commands);
     }
 
@@ -830,7 +969,15 @@ public sealed class StreamWorkerStreamingBackendTests
             "adaptive",
             "test",
             Guid.Parse("33acde60-b29f-4f03-b2b2-f51337bdb9a5"),
-            "test-benchmark-revision"),
+            "test-benchmark-revision")
+        {
+            CodecProfile = "high",
+            BitDepth = 8,
+            ColorPrimaries = "bt709",
+            TransferFunction = "bt709",
+            MatrixCoefficients = "bt709",
+            ColorRange = "limited",
+        },
         new PlannedAudio("opus", 48_000, 2, 20_000, 96_000, "R2 test audio."));
 
     private sealed class FixedDisplayNameResolver(string? displayName)

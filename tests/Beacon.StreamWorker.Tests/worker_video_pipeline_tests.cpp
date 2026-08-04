@@ -98,6 +98,14 @@ video::WorkerVideoPlan plan() {
       .minimum_bitrate_bps = 8'000'000,
       .initial_bitrate_bps = 24'000'000,
       .maximum_bitrate_bps = 40'000'000,
+      .codec = stream_v1::VIDEO_CODEC_H264,
+      .dynamic_range = stream_v1::DYNAMIC_RANGE_SDR,
+      .profile = stream_v1::VIDEO_PROFILE_H264_HIGH,
+      .bit_depth = 8,
+      .color_primaries = stream_v1::COLOR_PRIMARIES_BT709,
+      .transfer_function = stream_v1::TRANSFER_FUNCTION_BT709,
+      .matrix_coefficients = stream_v1::MATRIX_COEFFICIENTS_BT709,
+      .color_range = stream_v1::COLOR_RANGE_LIMITED,
   };
 }
 
@@ -109,6 +117,12 @@ stream_v1::SelectedVideoMode selected_video() {
   mode.set_frames_per_second_numerator(120);
   mode.set_frames_per_second_denominator(1);
   mode.set_dynamic_range(stream_v1::DYNAMIC_RANGE_SDR);
+  mode.set_profile(stream_v1::VIDEO_PROFILE_H264_HIGH);
+  mode.set_bit_depth(8);
+  mode.set_color_primaries(stream_v1::COLOR_PRIMARIES_BT709);
+  mode.set_transfer_function(stream_v1::TRANSFER_FUNCTION_BT709);
+  mode.set_matrix_coefficients(stream_v1::MATRIX_COEFFICIENTS_BT709);
+  mode.set_color_range(stream_v1::COLOR_RANGE_LIMITED);
   return mode;
 }
 

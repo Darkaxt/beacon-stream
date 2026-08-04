@@ -204,16 +204,16 @@ the retained artifacts. Stop before Core Stage 2 implementation.
 - Modify: `tests/Beacon.StreamWorker.Tests/CMakeLists.txt`
 - Test: `tests/Beacon.Platform.Windows.Tests/Streaming/StreamWorkerStreamingBackendTests.cs`
 
-- [ ] Add explicit capture format, conversion format, codec profile, bit depth, color primaries,
+- [x] Add explicit capture format, conversion format, codec profile, bit depth, color primaries,
   transfer function, matrix, range, mastering metadata, and content-light metadata to Worker
   capabilities, prepare requests, and session diagnostics.
-- [ ] Preserve HDR capture through FP16 or another proven HDR-preserving WGC/D3D11 format and convert
+- [x] Preserve HDR capture through FP16 or another proven HDR-preserving WGC/D3D11 format and convert
   to the encoder's 10-bit input without an 8-bit intermediate.
-- [ ] Implement HEVC Main10 behind the existing encoder interface. Select AV1 10-bit instead only if
+- [x] Implement HEVC Main10 behind the existing encoder interface. Select AV1 10-bit instead only if
   Checkpoint 1.1's measured server/client evidence proves it is the viable first adapter.
-- [ ] Keep `hdr10=false` until runtime probing proves the complete selected Worker path. Reject a
+- [x] Keep `hdr10=false` until runtime probing proves the complete selected Worker path. Reject a
   mismatched HDR plan before display or application side effects.
-- [ ] Prove the encoded stream profile, bit depth, colorimetry, and HDR metadata with a parser that is
+- [x] Prove the encoded stream profile, bit depth, colorimetry, and HDR metadata with a parser that is
   independent of the encoder's own success return.
 
 **Exit:** StreamWorker emits a verified moving 10-bit HDR bitstream from the selected virtual display
@@ -230,19 +230,25 @@ through the same Beacon media contract, while H.264 SDR tests remain green.
 - Test: `src/Beacon.Android/app/src/main/cpp/streamcore/tests`
 - Test: `src/Beacon.Android/app/src/test/java/dev/beacon/android`
 
-- [ ] Map the selected 10-bit codec profile and Beacon HDR metadata to MediaCodec without a Java or
+- [x] Map the selected 10-bit codec profile and Beacon HDR metadata to MediaCodec without a Java or
   alternate decoder route.
-- [ ] Configure the production Surface/window color mode for HDR and record decoder output format,
+- [x] Configure the production Surface/window color mode for HDR and record decoder output format,
   color standard, transfer, range, bit depth, dropped frames, and Android display HDR state.
-- [ ] Make Android advertise HDR10 only after decoder inventory, 10-bit vector presentation, display
+- [x] Make Android advertise HDR10 only after decoder inventory, 10-bit vector presentation, display
   HDR support, and active presentation all succeed.
-- [ ] Extend the hardware benchmark to qualify SDR and HDR candidates separately; emulator evidence
+- [x] Extend the hardware benchmark to qualify SDR and HDR candidates separately; emulator evidence
   validates contracts only and cannot certify physical HDR.
-- [ ] Prove resource release and SDR/HDR switching through the existing generation-owned StreamCore
+- [x] Prove resource release and SDR/HDR switching through the existing generation-owned StreamCore
   lifecycle with no leaked codec or Surface.
 
 **Exit:** The standard APK can decode and present the production 10-bit stream through StreamCore,
 and diagnostics distinguish decoded HDR from physically presented HDR.
+
+**2026-08-04 status:** Checkpoint 2.1 is complete. Checkpoint 2.2 implementation and its static,
+native, and emulator contract validation are complete. The emulator has no exact HEVC Main10 HDR10
+decoder and cannot certify a physical HDR presentation, so the Checkpoint 2.2 exit and Checkpoint 2.3
+remain open until a real HDR Android device runs the guarded transaction. See
+`docs/validation/2026-08-04-hdr10-pipeline.md`.
 
 ### Checkpoint 2.3: Prove HDR And Fallback On Physical Hardware
 

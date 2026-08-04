@@ -468,7 +468,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
                 new { width = 2560, height = 1600, refreshHz = 120 }
             }
         });
-        await CompleteBenchmarkAsync(client, clientId, codec: "hevc", fps: 60, throughputMbps: 36, rttMs: 95);
+        await CompleteBenchmarkAsync(client, clientId, codec: "h264", fps: 60, throughputMbps: 36, rttMs: 95);
         HttpResponseMessage plan = await client.PostAsJsonAsync($"/clients/{clientId}/plan", new
         {
             appId = "steam-shortcut:3767414131",
@@ -482,7 +482,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         using JsonDocument document = await JsonDocument.ParseAsync(await plan.Content.ReadAsStreamAsync());
         JsonElement root = document.RootElement;
 
-        Assert.Equal("hevc", root.GetProperty("stream").GetProperty("codec").GetString());
+        Assert.Equal("h264", root.GetProperty("stream").GetProperty("codec").GetString());
         Assert.Equal(25, root.GetProperty("stream").GetProperty("initialBitrateMbps").GetInt32());
         Assert.Equal("lan-conservative", root.GetProperty("stream").GetProperty("transport").GetString());
         Assert.Equal("latency-protect", root.GetProperty("stream").GetProperty("congestionPolicy").GetString());
@@ -521,7 +521,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
                 new { width = 2560, height = 1600, refreshHz = 120 }
             }
         });
-        await CompleteBenchmarkAsync(client, clientId, codec: "av1", fps: 120, throughputMbps: 100, rttMs: 8);
+        await CompleteBenchmarkAsync(client, clientId, codec: "h264", fps: 120, throughputMbps: 100, rttMs: 8);
 
         HttpResponseMessage response = await client.PostAsJsonAsync($"/clients/{clientId}/plan", new
         {
@@ -586,8 +586,8 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         HttpClient client = factory.CreateClient();
         await client.PostAsJsonAsync("/clients/z-fold-7/capabilities", new
         {
-            av1 = true,
-            hevc = true,
+            av1 = false,
+            hevc = false,
             h264 = true,
             hdr10 = false,
             virtualDisplayHdrSupported = false,
@@ -597,6 +597,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
                 new { width = 2560, height = 1600, refreshHz = 120 }
             }
         });
+        await CompleteBenchmarkAsync(client, "z-fold-7", codec: "h264", fps: 120, throughputMbps: 100, rttMs: 8);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
         {
@@ -611,7 +612,7 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         Assert.Equal("client-z-fold-7", root.GetProperty("displayId").GetString());
         Assert.Equal("steam-rungameid", root.GetProperty("launch").GetProperty("launchType").GetString());
         Assert.Equal("running", root.GetProperty("stream").GetProperty("state").GetString());
-        Assert.Equal("av1", root.GetProperty("stream").GetProperty("codec").GetString());
+        Assert.Equal("h264", root.GetProperty("stream").GetProperty("codec").GetString());
         Assert.Equal(120, root.GetProperty("stream").GetProperty("fps").GetInt32());
         Assert.Equal(1, root.GetProperty("connection").GetProperty("protocolVersion").GetInt32());
         JsonElement connection = root.GetProperty("connection");
@@ -624,12 +625,20 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
             $"{savedPlan.Display.Reason} {savedPlan.Stream.Reason} {savedPlan.Audio.Reason}",
             connection.GetProperty("planExplanation").GetString());
         JsonElement selectedVideo = connection.GetProperty("selectedVideo");
-        Assert.Equal("av1", selectedVideo.GetProperty("codec").GetString());
+        Assert.Equal("h264", selectedVideo.GetProperty("codec").GetString());
         Assert.Equal(2560, selectedVideo.GetProperty("width").GetInt32());
         Assert.Equal(1600, selectedVideo.GetProperty("height").GetInt32());
         Assert.Equal(120, selectedVideo.GetProperty("framesPerSecondNumerator").GetInt32());
         Assert.Equal(1, selectedVideo.GetProperty("framesPerSecondDenominator").GetInt32());
         Assert.Equal("sdr", selectedVideo.GetProperty("dynamicRange").GetString());
+        Assert.Equal("h264High", selectedVideo.GetProperty("profile").GetString());
+        Assert.Equal(8, selectedVideo.GetProperty("bitDepth").GetInt32());
+        Assert.Equal("bt709", selectedVideo.GetProperty("colorPrimaries").GetString());
+        Assert.Equal("bt709", selectedVideo.GetProperty("transferFunction").GetString());
+        Assert.Equal("bt709", selectedVideo.GetProperty("matrixCoefficients").GetString());
+        Assert.Equal("limited", selectedVideo.GetProperty("colorRange").GetString());
+        Assert.Equal(string.Empty, selectedVideo.GetProperty("hdrStaticInfo").GetString());
+        Assert.False(selectedVideo.GetProperty("hdrStaticInfoInBitstream").GetBoolean());
         JsonElement selectedAudio = connection.GetProperty("selectedAudio");
         Assert.Equal("opus", selectedAudio.GetProperty("codec").GetString());
         Assert.Equal(48_000, selectedAudio.GetProperty("sampleRateHz").GetInt32());
@@ -707,6 +716,63 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         Assert.Equal(720, savedPlan.Display.Height);
         Assert.Equal(1280, savedPlan.Stream.Width);
         Assert.Equal(720, savedPlan.Stream.Height);
+    }
+
+    [Fact]
+    public async Task LaunchGrantCarriesExactHevcMain10Hdr10Tuple()
+    {
+        WebApplicationFactory<Program> streamingFactory = factory.WithWebHostBuilder(_ => { });
+        FakeStreamingBackend backend = Assert.IsType<FakeStreamingBackend>(
+            streamingFactory.Services.GetRequiredService<IStreamingBackend>());
+        backend.ActiveListenerPort = 51236;
+        HttpClient client = streamingFactory.CreateClient();
+        await client.PostAsJsonAsync("/clients/z-fold-7/capabilities", new
+        {
+            av1 = false,
+            hevc = true,
+            h264 = true,
+            hdr10 = true,
+            virtualDisplayHdrSupported = true,
+            maxFps = 60,
+            currentDisplayMode = new { width = 2560, height = 1600, refreshHz = 60 },
+            supportedDisplayModes = new[]
+            {
+                new { width = 2560, height = 1600, refreshHz = 60 }
+            }
+        });
+        await CompleteBenchmarkAsync(
+            client,
+            "z-fold-7",
+            codec: "hevc",
+            fps: 60,
+            throughputMbps: 60,
+            rttMs: 8,
+            tenBitPresentationVerified: true,
+            hdrPresentationVerified: true);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/clients/z-fold-7/launch", new
+        {
+            gameId = "steam-shortcut:3767414131"
+        });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using JsonDocument document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement selectedVideo = document.RootElement.GetProperty("connection").GetProperty("selectedVideo");
+        Assert.Equal("hevc", selectedVideo.GetProperty("codec").GetString());
+        Assert.Equal("hdr10", selectedVideo.GetProperty("dynamicRange").GetString());
+        Assert.Equal("hevcMain10", selectedVideo.GetProperty("profile").GetString());
+        Assert.Equal(10, selectedVideo.GetProperty("bitDepth").GetInt32());
+        Assert.Equal("bt2020", selectedVideo.GetProperty("colorPrimaries").GetString());
+        Assert.Equal("pq", selectedVideo.GetProperty("transferFunction").GetString());
+        Assert.Equal(
+            "bt2020NonConstantLuminance",
+            selectedVideo.GetProperty("matrixCoefficients").GetString());
+        Assert.Equal("limited", selectedVideo.GetProperty("colorRange").GetString());
+        Assert.Equal(
+            Hdr10StaticMetadata.Cta8613Descriptor.ToArray(),
+            Convert.FromBase64String(Assert.IsType<string>(
+                selectedVideo.GetProperty("hdrStaticInfo").GetString())));
+        Assert.True(selectedVideo.GetProperty("hdrStaticInfoInBitstream").GetBoolean());
     }
 
     [Fact]
@@ -2474,7 +2540,9 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
         double throughputMbps,
         double rttMs,
         int width = 2560,
-        int height = 1600)
+        int height = 1600,
+        bool tenBitPresentationVerified = false,
+        bool hdrPresentationVerified = false)
     {
         object fingerprints = new
         {
@@ -2516,7 +2584,23 @@ public sealed class ClientApiTests(BeaconServerTestFactory factory) : IClassFixt
                     .Select(sequence => new { sequence, payloadBytes, rttMs, jitterMs = 1.0, received = true, throughputMbps, reorderDistance = 0 }),
                 decoderSamples = new[]
                 {
-                    new { codec, profile = "main", bitDepth = 8, width, height, targetFps = fps, configured = true, sustainedFps = fps, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0 }
+                    new
+                    {
+                        codec,
+                        profile = codec.Equals("h264", StringComparison.OrdinalIgnoreCase) ? "high" : codec.Equals("hevc", StringComparison.OrdinalIgnoreCase) ? "main10" : "main",
+                        bitDepth = codec.Equals("h264", StringComparison.OrdinalIgnoreCase) ? 8 : 10,
+                        width,
+                        height,
+                        targetFps = fps,
+                        configured = true,
+                        sustainedFps = fps,
+                        p95DecodeLatencyMs = 5,
+                        p95PresentationLatencyMs = 9,
+                        droppedFrames = 0,
+                        outputErrors = 0,
+                        tenBitPresentationVerified,
+                        hdrPresentationVerified
+                    }
                 },
                 powerSamples = new[]
                 {

@@ -24,6 +24,7 @@ using beacon::worker::capture::WgcCaptureFailure;
 using beacon::worker::capture::WgcCapturePlatformFailure;
 using beacon::worker::capture::WgcCapturePlatformStage;
 using beacon::worker::capture::WgcCapturePlan;
+using beacon::worker::capture::WgcCapturePixelFormat;
 using beacon::worker::capture::WgcDisplayCapture;
 using beacon::worker::capture::WgcDisplayTargetSnapshot;
 using beacon::worker::capture::detail::resolve_capture_item_failure;
@@ -62,6 +63,7 @@ class FakePlatform final : public IWgcCapturePlatform {
   std::uint64_t selected_adapter{};
   std::uint32_t recreated_width{};
   std::uint32_t recreated_height{};
+  WgcCapturePixelFormat selected_format{WgcCapturePixelFormat::bgra8};
   FrameCallback callback;
   FailureCallback failure_callback;
   std::function<void()> during_start;
@@ -78,11 +80,13 @@ class FakePlatform final : public IWgcCapturePlatform {
   [[nodiscard]] bool start_capture(
       const WgcDisplayTargetSnapshot& target,
       const WgcAdapterSnapshot& adapter,
+      WgcCapturePixelFormat format,
       FrameCallback value,
       FailureCallback failure) override {
     ++start_count;
     selected_monitor = target.monitor;
     selected_adapter = adapter.luid;
+    selected_format = format;
     callback = std::move(value);
     failure_callback = std::move(failure);
     if (throw_during_start) {
@@ -95,10 +99,12 @@ class FakePlatform final : public IWgcCapturePlatform {
   }
 
   [[nodiscard]] bool recreate_frame_pool(std::uint32_t width,
-                                         std::uint32_t height) override {
+                                         std::uint32_t height,
+                                         WgcCapturePixelFormat format) override {
     ++recreate_count;
     recreated_width = width;
     recreated_height = height;
+    selected_format = format;
     return recreate_result;
   }
 
@@ -119,7 +125,8 @@ class FakePlatform final : public IWgcCapturePlatform {
       target({.texture = std::make_shared<FakeTexture>(),
               .width = width,
               .height = height,
-              .qpc_timestamp = qpc_timestamp});
+              .qpc_timestamp = qpc_timestamp,
+              .pixel_format = selected_format});
     }
   }
 
@@ -146,6 +153,36 @@ void exact_active_display_and_nvidia_adapter_are_selected() {
   BEACON_TEST_REQUIRE(observed->selected_monitor == 1);
   BEACON_TEST_REQUIRE(observed->selected_adapter == 2);
   BEACON_TEST_REQUIRE(capture.selected_adapter_description() == L"NVIDIA RTX");
+}
+
+void hdr_capture_requests_and_preserves_fp16_scrgb() {
+  auto platform = std::make_unique<FakePlatform>();
+  auto* observed = platform.get();
+  WgcDisplayCapture capture{std::move(platform)};
+  CapturedD3d11Frame delivered;
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool received{};
+  auto hdr_plan = plan();
+  hdr_plan.pixel_format = WgcCapturePixelFormat::rgba16_float;
+
+  BEACON_TEST_REQUIRE(capture.start(
+      hdr_plan, [&](CapturedD3d11Frame frame) {
+        std::lock_guard lock{mutex};
+        delivered = std::move(frame);
+        received = true;
+        changed.notify_all();
+      }));
+  BEACON_TEST_REQUIRE(observed->selected_format ==
+                      WgcCapturePixelFormat::rgba16_float);
+  observed->emit(2560, 1600, 77);
+  {
+    std::unique_lock lock{mutex};
+    changed.wait(lock, [&] { return received; });
+  }
+  capture.stop();
+  BEACON_TEST_REQUIRE(delivered.pixel_format ==
+                      WgcCapturePixelFormat::rgba16_float);
 }
 
 void missing_and_inactive_targets_fail_before_capture() {
@@ -425,6 +462,7 @@ void stop_waits_for_inflight_callback_and_releases_once() {
 int main() {
   return beacon::stream::testing::run_tests([] {
     exact_active_display_and_nvidia_adapter_are_selected();
+    hdr_capture_requests_and_preserves_fp16_scrgb();
     missing_and_inactive_targets_fail_before_capture();
     missing_nvidia_adapter_and_platform_start_failure_are_truthful();
     platform_start_failure_preserves_stage_and_hresult();

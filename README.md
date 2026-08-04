@@ -30,14 +30,14 @@ repository state. Delivery now follows the outcome-driven
   disconnect and fresh-ticket reconnect, quit, released ownership, and verified physical-only
   restoration. R1 is integration evidence, not a playable user release.
 
-The playable R2 transaction is paused. Core Stage 1 first selects and hardens one HDR-capable
-virtual-display driver through durable recovery and clean-machine evidence. Core Stage 2 then proves
-one complete production HDR path from Windows Advanced Color through 10-bit encoding and physical
-Android presentation. The current Worker remains H.264 SDR only; HDR policy and diagnostics are
-static-tested behavior, not a functional HDR stream. Audio, controller, physical-client benchmark,
-tablet input, motion, remaining codecs, multi-client work, packaging, and UI work cannot become the
-active target until both core stages pass or an explicit HDR feasibility decision changes the
-product requirement.
+The playable R2 transaction is paused while the core display and HDR path is hardened. Beacon now
+implements one production HDR10 route: Windows Advanced Color capture in FP16, P010 conversion,
+NVENC HEVC Main10 encoding, exact HDR metadata transport, and StreamCore/MediaCodec HDR10 decoding
+and presentation control. The Worker path is hardware-validated and the Android contract is covered
+by unit, native, and emulator tests. A physical HDR Android device is still required to certify that
+the standard APK presents the decoded stream as HDR on real hardware; emulator evidence cannot make
+that claim. H.264 SDR remains the proven fallback. Audio, tablet input, motion, remaining codecs,
+multi-client work, packaging, and UI work remain outside this core checkpoint.
 
 `2560x1600` is not a universal client default. Production planning uses each client's reported
 display geometry and supported modes, preferring an exact match and then the closest same-aspect

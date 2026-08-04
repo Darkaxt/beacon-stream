@@ -8,6 +8,8 @@
 #include "stream_core.h"
 #include "surface_owner.h"
 
+#include "beacon/stream/hdr_static_metadata.h"
+
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 #include <jni.h>
@@ -104,6 +106,19 @@ jint java_int(JNIEnv *environment, jobject object, const char *field_name) {
   check_jni(environment);
   environment->DeleteLocalRef(type);
   return result;
+}
+
+bool java_boolean(JNIEnv *environment, jobject object, const char *field_name) {
+  if (object == nullptr) throw std::invalid_argument("Java object is required.");
+  jclass type = require_jni_ref(
+      environment, environment->GetObjectClass(object), "Java object class is unavailable.");
+  jfieldID field = require_jni_ref(
+      environment, environment->GetFieldID(type, field_name, "Z"),
+      "Required Java boolean field is unavailable.");
+  const jboolean result = environment->GetBooleanField(object, field);
+  check_jni(environment);
+  environment->DeleteLocalRef(type);
+  return result == JNI_TRUE;
 }
 
 jlong java_long(JNIEnv *environment, jobject object, const char *field_name) {
@@ -775,14 +790,29 @@ ConnectionGrant parse_grant(JNIEnv *environment, jobject native_grant) {
     const std::string codec_text = java_string(environment, video, "codec");
     const std::string dynamic_range_text =
         java_string(environment, video, "dynamicRange");
+    const std::string profile_text =
+        java_string(environment, video, "profile");
+    const std::string color_primaries_text =
+        java_string(environment, video, "colorPrimaries");
+    const std::string transfer_function_text =
+        java_string(environment, video, "transferFunction");
+    const std::string matrix_coefficients_text =
+        java_string(environment, video, "matrixCoefficients");
+    const std::string color_range_text =
+        java_string(environment, video, "colorRange");
     const jint width = java_int(environment, video, "width");
     const jint height = java_int(environment, video, "height");
     const jint fps_numerator = java_int(
         environment, video, "framesPerSecondNumerator");
     const jint fps_denominator = java_int(
         environment, video, "framesPerSecondDenominator");
+    const jint bit_depth = java_int(environment, video, "bitDepth");
+    const auto hdr_static_info =
+        java_bytes(environment, video, "hdrStaticInfo");
+    const bool hdr_static_info_in_bitstream =
+        java_boolean(environment, video, "hdrStaticInfoInBitstream");
     if (width <= 0 || height <= 0 || fps_numerator <= 0 ||
-        fps_denominator <= 0) {
+        fps_denominator <= 0 || bit_depth <= 0) {
       environment->DeleteLocalRef(audio);
       environment->DeleteLocalRef(video);
       throw std::invalid_argument(
@@ -793,6 +823,10 @@ ConnectionGrant parse_grant(JNIEnv *environment, jobject native_grant) {
             static_cast<std::uint32_t>(height),
             static_cast<std::uint32_t>(fps_numerator),
             static_cast<std::uint32_t>(fps_denominator), dynamic_range_text,
+            profile_text, static_cast<std::uint32_t>(bit_depth),
+            color_primaries_text, transfer_function_text,
+            matrix_coefficients_text, color_range_text, hdr_static_info,
+            hdr_static_info_in_bitstream,
             grant.video)) {
       environment->DeleteLocalRef(audio);
       environment->DeleteLocalRef(video);
@@ -1382,9 +1416,33 @@ Java_dev_beacon_android_BeaconStreamCore_nativeTestParseGrant(
   try {
     ConnectionGrant grant =
         beacon::android::streamcore::parse_grant(environment, native_grant);
-    return grant.benchmark.has_value() &&
-                   grant.video.codec ==
-                       beacon::stream::v1::VIDEO_CODEC_UNSPECIFIED
+    if (grant.benchmark.has_value()) {
+      return grant.video.codec ==
+                     beacon::stream::v1::VIDEO_CODEC_UNSPECIFIED
+                 ? JNI_TRUE
+                 : JNI_FALSE;
+    }
+    const std::string_view static_info{
+        reinterpret_cast<const char *>(grant.video.hdr_static_info.data()),
+        grant.video.hdr_static_info.size()};
+    return grant.video.codec == beacon::stream::v1::VIDEO_CODEC_HEVC &&
+                   grant.video.dynamic_range ==
+                       beacon::stream::v1::DYNAMIC_RANGE_HDR10 &&
+                   grant.video.profile ==
+                       beacon::stream::v1::VIDEO_PROFILE_HEVC_MAIN10 &&
+                   grant.video.bit_depth == 10 &&
+                   grant.video.color_primaries ==
+                       beacon::stream::v1::COLOR_PRIMARIES_BT2020 &&
+                   grant.video.transfer_function ==
+                       beacon::stream::v1::TRANSFER_FUNCTION_PQ &&
+                   grant.video.matrix_coefficients ==
+                       beacon::stream::v1::
+                           MATRIX_COEFFICIENTS_BT2020_NON_CONSTANT_LUMINANCE &&
+                   grant.video.color_range ==
+                       beacon::stream::v1::COLOR_RANGE_LIMITED &&
+                   beacon::stream::parse_cta861_3_hdr_static_info(static_info)
+                       .has_value() &&
+                   grant.video.hdr_static_info_in_bitstream
                ? JNI_TRUE
                : JNI_FALSE;
   } catch (const beacon::android::streamcore::PendingJniException &) {

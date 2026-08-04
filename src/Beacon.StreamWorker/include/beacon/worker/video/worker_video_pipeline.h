@@ -1,6 +1,7 @@
 #pragma once
 
 #include "beacon/worker/quic_listener.h"
+#include "beacon/stream/selected_video_mode.h"
 
 #include <cstdint>
 #include <memory>
@@ -19,6 +20,16 @@ struct WorkerVideoPlan {
   std::uint32_t minimum_bitrate_bps{};
   std::uint32_t initial_bitrate_bps{};
   std::uint32_t maximum_bitrate_bps{};
+  stream::v1::VideoCodec codec{stream::v1::VIDEO_CODEC_H264};
+  stream::v1::DynamicRange dynamic_range{stream::v1::DYNAMIC_RANGE_SDR};
+  stream::v1::VideoProfile profile{stream::v1::VIDEO_PROFILE_H264_HIGH};
+  std::uint32_t bit_depth{8};
+  stream::v1::ColorPrimaries color_primaries{stream::v1::COLOR_PRIMARIES_BT709};
+  stream::v1::TransferFunction transfer_function{stream::v1::TRANSFER_FUNCTION_BT709};
+  stream::v1::MatrixCoefficients matrix_coefficients{stream::v1::MATRIX_COEFFICIENTS_BT709};
+  stream::v1::ColorRange color_range{stream::v1::COLOR_RANGE_LIMITED};
+  std::string hdr_static_info;
+  bool hdr_static_info_in_bitstream{};
 
   bool operator==(const WorkerVideoPlan &) const = default;
 };

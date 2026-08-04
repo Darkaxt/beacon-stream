@@ -10,7 +10,7 @@ ProductionVideoGeneration::ProductionVideoGeneration(
     WorkerVideoPlan plan, IWorkerMediaTransport &transport,
     std::unique_ptr<capture::IWgcCapturePlatform> capture_platform,
     std::unique_ptr<ID3d11VideoProcessorPlatform> processor_platform,
-    std::unique_ptr<INvencH264Api> encoder_api,
+    std::unique_ptr<INvencVideoApi> encoder_api,
     VideoPipelineFailureSink failure_sink)
     : plan_(std::move(plan)), transport_(transport),
       failure_sink_(std::move(failure_sink)),
@@ -21,7 +21,13 @@ ProductionVideoGeneration::ProductionVideoGeneration(
                 .height = plan_.height,
                 .frame_rate_numerator = plan_.frame_rate_numerator,
                 .frame_rate_denominator = plan_.frame_rate_denominator,
-                .bitrate_bps = plan_.initial_bitrate_bps}),
+                .bitrate_bps = plan_.initial_bitrate_bps,
+                .codec = plan_.codec == stream::v1::VIDEO_CODEC_HEVC
+                             ? NvencVideoCodec::hevc_main10
+                             : NvencVideoCodec::h264,
+                .hdr_static_info = std::vector<std::uint8_t>(
+                    plan_.hdr_static_info.begin(),
+                    plan_.hdr_static_info.end())}),
       media_session_(
           transport_, encoder_,
           {.minimum_bitrate_bps = plan_.minimum_bitrate_bps,
@@ -48,7 +54,11 @@ bool ProductionVideoGeneration::start(
 
   const auto weak = weak_from_this();
   const bool capture_started = capture_.start(
-      {.device_name = plan_.display_device_name},
+      {.device_name = plan_.display_device_name,
+       .pixel_format =
+           plan_.dynamic_range == stream::v1::DYNAMIC_RANGE_HDR10
+               ? capture::WgcCapturePixelFormat::rgba16_float
+               : capture::WgcCapturePixelFormat::bgra8},
       [weak](capture::CapturedD3d11Frame frame) {
         if (const auto generation = weak.lock()) {
           generation->process_frame(std::move(frame));
@@ -139,7 +149,8 @@ void ProductionVideoGeneration::process_frame(
       {.output_width = plan_.width,
        .output_height = plan_.height,
        .frame_rate_numerator = plan_.frame_rate_numerator,
-       .frame_rate_denominator = plan_.frame_rate_denominator});
+       .frame_rate_denominator = plan_.frame_rate_denominator,
+       .dynamic_range = plan_.dynamic_range});
   if (!converted) {
     fail(VideoPipelineFailureBoundary::video_processor,
          static_cast<std::uint32_t>(processor_.failure()));
@@ -202,7 +213,7 @@ ProductionVideoGenerationFactory::create(const WorkerVideoPlan &plan) {
   return std::make_shared<ProductionVideoGeneration>(
       plan, transport_, capture::create_windows_wgc_capture_platform(),
       create_windows_d3d11_video_processor_platform(),
-      create_windows_nvenc_h264_api(), failure_sink_);
+      create_windows_nvenc_video_api(), failure_sink_);
 }
 
 } // namespace beacon::worker::video

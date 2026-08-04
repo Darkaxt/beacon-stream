@@ -30,11 +30,13 @@ using beacon::worker::video::NvencH264Failure;
 using beacon::worker::video::NvencH264LockedBitstream;
 using beacon::worker::video::NvencH264Plan;
 using beacon::worker::video::NvencH264Submit;
+using beacon::worker::video::NvencVideoCodec;
 using beacon::worker::video::nvenc_h264_native_contract;
 using beacon::worker::video::validate_nvenc_h264_capabilities;
 using beacon::worker::video::VideoColorMatrix;
 using beacon::worker::video::VideoPixelFormat;
 using beacon::worker::video::VideoRange;
+using beacon::worker::video::VideoTransferFunction;
 
 class FakeTexture final : public D3d11Texture {
  public:
@@ -133,6 +135,19 @@ class FakeApi final : public INvencH264Api {
     }
     const auto& submit = trace_->submits.back();
     if (submit.force_idr) {
+      if (trace_->configuration.codec == NvencVideoCodec::hevc_main10) {
+        idr_bytes_ = {0, 0, 0, 1, static_cast<std::uint8_t>(32U << 1U), 1,
+                      0, 0, 1, static_cast<std::uint8_t>(33U << 1U), 1,
+                      0, 0, 1, static_cast<std::uint8_t>(34U << 1U), 1,
+                      0, 0, 1, static_cast<std::uint8_t>(39U << 1U), 1,
+                      137, 1, 0, 0x80,
+                      0, 0, 1, static_cast<std::uint8_t>(39U << 1U), 1,
+                      144, 1, 0, 0x80,
+                      0, 0, 1, static_cast<std::uint8_t>(19U << 1U), 1};
+        return {.bitstream = {.data = idr_bytes_.data(),
+                              .size = idr_bytes_.size(),
+                              .qpc_timestamp = submit.qpc_timestamp}};
+      }
       idr_bytes_ = omit_parameter_sets
                        ? std::vector<std::uint8_t>{0, 0, 0, 1, 0x65, 0xaa}
                        : std::vector<std::uint8_t>{
@@ -211,8 +226,55 @@ NvencH264Plan plan() {
           .bitrate_bps = 35'000'000};
 }
 
+std::vector<std::uint8_t> hdr_static_info() {
+  std::vector<std::uint8_t> metadata(25);
+  metadata[17] = 0xe8;
+  metadata[18] = 0x03;
+  return metadata;
+}
+
 ConvertedD3d11Frame frame(std::uintptr_t texture = 0x2000,
-                          std::int64_t timestamp = 100) {
+                          std::int64_t timestamp = 100);
+
+void hevc_main10_encoder_requests_p010_hdr_configuration() {
+  auto trace = std::make_shared<FakeTrace>();
+  auto api = std::make_unique<FakeApi>(trace);
+  auto hevc_plan = plan();
+  hevc_plan.codec = NvencVideoCodec::hevc_main10;
+  hevc_plan.hdr_static_info = hdr_static_info();
+  NvencH264Encoder encoder{std::move(api), std::move(hevc_plan)};
+  auto p010 = frame();
+  p010.format = VideoPixelFormat::p010;
+  p010.matrix = VideoColorMatrix::bt2020_non_constant_luminance;
+  p010.transfer_function = VideoTransferFunction::pq;
+
+  const auto encoded = encoder.encode(p010);
+
+  BEACON_TEST_REQUIRE(encoded.has_value());
+  BEACON_TEST_REQUIRE(encoded->idr && encoded->has_vps && encoded->has_sps &&
+                      encoded->has_pps &&
+                      encoded->has_mastering_display_sei &&
+                      encoded->has_content_light_level_sei);
+  BEACON_TEST_REQUIRE(trace->configuration.codec ==
+                      NvencVideoCodec::hevc_main10);
+  BEACON_TEST_REQUIRE(trace->configuration.input_format ==
+                      VideoPixelFormat::p010);
+  BEACON_TEST_REQUIRE(trace->configuration.hdr_static_info ==
+                      hdr_static_info());
+  BEACON_TEST_REQUIRE(encoder.reconfigure_bitrate(20'000'000));
+  p010.qpc_timestamp = 101;
+  const auto recovery = encoder.encode(p010, true);
+  BEACON_TEST_REQUIRE(recovery.has_value());
+  BEACON_TEST_REQUIRE(recovery->idr && recovery->has_vps && recovery->has_sps &&
+                      recovery->has_pps &&
+                      recovery->has_mastering_display_sei &&
+                      recovery->has_content_light_level_sei);
+  BEACON_TEST_REQUIRE(trace->bitrates ==
+                      std::vector<std::uint32_t>{20'000'000});
+}
+
+ConvertedD3d11Frame frame(std::uintptr_t texture,
+                          std::int64_t timestamp) {
   return {.texture = std::make_shared<FakeTexture>(
               reinterpret_cast<void*>(texture)),
           .width = 2560,
@@ -806,6 +868,7 @@ void device_changes_and_destruction_follow_exact_cleanup_order() {
 int main() {
   return beacon::stream::testing::run_tests([] {
     native_contract_is_fixed_for_sdr_low_latency_h264();
+    hevc_main10_encoder_requests_p010_hdr_configuration();
     runtime_and_capability_preflight_failures_are_typed();
     invalid_input_fails_before_native_api_calls();
     poisoned_native_open_is_not_retried();

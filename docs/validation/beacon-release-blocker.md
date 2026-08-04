@@ -31,14 +31,17 @@ verified physical-only topology.
 
 ## Active Outcome
 
-Core Stage 1 Driver Capability And Recovery: select one virtual-display driver only after it proves a
-real HDR-capable 10-bit Windows output, then close its durable ownership, update, reconciliation, and
-abnormal-event recovery matrix. Core Stage 2 end-to-end HDR blocks all later product work.
+Core Stage 1 has proved the selected virtual display can expose and activate real Windows Advanced
+Color state. Its broader durable ownership and recovery matrix remains a separate hardening track.
+Core Stage 2 now has one implemented production HDR10 path from FP16 capture through P010, NVENC HEVC
+Main10, exact metadata transport, and StreamCore/MediaCodec presentation control.
 
-The completed R1 transaction is H.264 SDR integration evidence. It does not establish HDR, production
-HEVC/AV1, or durable driver recovery. The production Worker currently advertises `hdr10=false`,
-rejects HDR plans, and emits H.264 SDR. HDR planner and diagnostics tests establish truthful fallback
-behavior only.
+The Worker runtime probe advertises HDR10 only after a real P010 register, map, encode, lock, parse,
+and cleanup transaction proves Main10, BT.2020/PQ colorimetry, and both mastering-display and
+content-light metadata. H.264 SDR remains green and is not routed through the HDR path. Android unit,
+native, and emulator validation is green, but no physical HDR Android device was connected for this
+checkpoint. Physical presentation therefore remains unverified rather than inferred from emulator or
+decoder configuration evidence.
 
 Every driver/topology checkpoint must arm an independent recovery owner and end with the laptop's
 internal panel independently verified active and primary at its captured physical baseline, mirror
@@ -97,36 +100,23 @@ the structured version 2 model so existing per-client setup is retained.
 
 ## Current Blocker
 
-The first blocker is driver/HDR feasibility, not the paused physical-client R2 transaction. Historical
-target-laptop SudoVDA probe evidence reported Windows Advanced Color unsupported, 8 bits per channel,
-and `ERROR_NOT_SUPPORTED` when changing HDR state. That evidence is not current enough to reject HDR,
-but it is sufficient to prohibit assuming the existing driver works.
+The remaining HDR blocker is physical Android certification, not missing Worker or StreamCore
+implementation. Neither connected emulator exposes an exact HEVC Main10 HDR10 decoder, and an emulator
+cannot prove that a display presented HDR even if codec configuration succeeds. The guarded physical
+transaction therefore remains required before Core Stage 2 can be called complete.
 
-The active plan must run one guarded, current capability transaction against the packaged SudoVDA
-revision. If it fails, the same transaction evaluates a pinned fork of Nonary `libvirtualdisplay`,
-whose current source implements the IddCx 1.10 HDR DDIs, FP16 capability, 10-bit mode/dithering data,
-HDR metadata handling, and driver-record generation fencing. Source support is candidate evidence;
-only the Windows postcondition on this laptop selects the driver.
-
-After selection, Core Stage 1 still lacks a HostAgent-owned display recovery journal, startup
-reconciliation, production recovery supervisor, abnormal-event matrix, and clean-machine proof. Core
-Stage 2 then lacks the entire production HDR stream: HDR-preserving capture, 10-bit conversion,
-HEVC Main10 or AV1 10-bit encoding, Beacon HDR metadata, StreamCore decoding, and physical Android HDR
-presentation. These boundaries cannot be reported as implemented from planner or fallback tests.
+Core Stage 1 still has a broader hardening backlog around the recovery journal, startup
+reconciliation, abnormal-event matrix, and clean-machine proof. Those items do not invalidate the
+current Windows HDR postcondition or the independently parsed HEVC Main10 bitstream, but they remain
+release work before unattended topology changes are considered durable.
 
 ## Next Falsifiable Proof
 
-Implement `scripts/test-virtual-display-driver-capability.ps1` and run it first against the exact
-packaged SudoVDA binary, with the independent display guard armed before monitor creation. The proof
-must record driver identity, IddCx runtime, exact per-client output, Advanced Color 2 flags, active
-color mode, bits per channel, pixel encoding, and topology generations. It must then remove the test
-lease and independently verify the internal panel active and primary at its captured physical mode,
-mirror disabled, zero Beacon leases, no heartbeat, and a usable input desktop.
-
-If SudoVDA cannot produce an HDR-supported, HDR-active 10-bit output, repeat the exact transaction with
-a pinned `Darkaxt/libvirtualdisplay` fork. If neither candidate succeeds, stop and publish the exact
-driver/Windows boundary for a product decision; do not proceed to controller, tablet, motion, remaining
-codec, packaging, or UI work.
+Connect a physical HDR10 Android device and run the guarded Core Stage 2 transaction with HDR required.
+Retain the selected video tuple, Windows Advanced Color state, parsed Main10 bitstream, MediaCodec input
+and output formats, active HDR window mode, Android display HDR/SDR ratio, rendered-frame evidence, and
+the final physical-only laptop baseline. A decoder/configuration success without physical presentation
+must fail the certification rather than silently downgrade the claim.
 
 ## Prior Evidence
 

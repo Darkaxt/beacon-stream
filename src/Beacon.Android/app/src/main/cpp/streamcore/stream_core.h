@@ -83,6 +83,17 @@ struct SelectedVideo {
   std::uint32_t fps_numerator{};
   std::uint32_t fps_denominator{};
   stream::v1::DynamicRange dynamic_range{stream::v1::DYNAMIC_RANGE_UNSPECIFIED};
+  stream::v1::VideoProfile profile{stream::v1::VIDEO_PROFILE_UNSPECIFIED};
+  std::uint32_t bit_depth{};
+  stream::v1::ColorPrimaries color_primaries{
+      stream::v1::COLOR_PRIMARIES_UNSPECIFIED};
+  stream::v1::TransferFunction transfer_function{
+      stream::v1::TRANSFER_FUNCTION_UNSPECIFIED};
+  stream::v1::MatrixCoefficients matrix_coefficients{
+      stream::v1::MATRIX_COEFFICIENTS_UNSPECIFIED};
+  stream::v1::ColorRange color_range{stream::v1::COLOR_RANGE_UNSPECIFIED};
+  std::vector<std::byte> hdr_static_info;
+  bool hdr_static_info_in_bitstream{};
 };
 
 struct SelectedAudio {

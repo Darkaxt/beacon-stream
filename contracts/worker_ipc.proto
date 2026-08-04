@@ -27,6 +27,7 @@ enum WorkerSessionState {
 enum WorkerVideoCodec {
   WORKER_VIDEO_CODEC_UNSPECIFIED = 0;
   WORKER_VIDEO_CODEC_H264 = 1;
+  WORKER_VIDEO_CODEC_HEVC = 2;
 }
 
 enum WorkerVideoEncoder {
@@ -52,6 +53,7 @@ enum WorkerCaptureMethod {
 enum WorkerDynamicRange {
   WORKER_DYNAMIC_RANGE_UNSPECIFIED = 0;
   WORKER_DYNAMIC_RANGE_SDR = 1;
+  WORKER_DYNAMIC_RANGE_HDR10 = 2;
 }
 
 enum StopMediaReason {
@@ -206,6 +208,14 @@ message PrepareSession {
   uint32 audio_channel_count = 14;
   uint32 audio_frame_duration_us = 15;
   uint32 audio_bitrate_bps = 16;
+  beacon.stream.v1.VideoProfile video_profile = 17;
+  uint32 video_bit_depth = 18;
+  beacon.stream.v1.ColorPrimaries color_primaries = 19;
+  beacon.stream.v1.TransferFunction transfer_function = 20;
+  beacon.stream.v1.MatrixCoefficients matrix_coefficients = 21;
+  beacon.stream.v1.ColorRange color_range = 22;
+  bytes hdr_static_info = 23;
+  bool hdr_static_info_in_bitstream = 24;
 }
 
 message PrepareBenchmark {

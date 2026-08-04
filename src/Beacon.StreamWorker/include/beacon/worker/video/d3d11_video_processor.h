@@ -1,6 +1,7 @@
 #pragma once
 
 #include "beacon/worker/capture/wgc_display_capture.h"
+#include "stream_control.pb.h"
 
 #include <cstdint>
 #include <memory>
@@ -11,7 +12,9 @@ namespace beacon::worker::video {
 
 enum class VideoPixelFormat {
   bgra8,
+  rgba16_float,
   nv12,
+  p010,
 };
 
 enum class VideoRange {
@@ -21,6 +24,12 @@ enum class VideoRange {
 
 enum class VideoColorMatrix {
   bt709,
+  bt2020_non_constant_luminance,
+};
+
+enum class VideoTransferFunction {
+  bt709,
+  pq,
 };
 
 struct VideoRectangle {
@@ -42,6 +51,7 @@ struct D3d11VideoProcessorPlan {
   std::uint32_t output_height{};
   std::uint32_t frame_rate_numerator{};
   std::uint32_t frame_rate_denominator{};
+  stream::v1::DynamicRange dynamic_range{stream::v1::DYNAMIC_RANGE_SDR};
 };
 
 struct D3d11VideoProcessorConfiguration {
@@ -56,6 +66,7 @@ struct D3d11VideoProcessorConfiguration {
   VideoRange input_range{VideoRange::full};
   VideoRange output_range{VideoRange::limited};
   VideoColorMatrix matrix{VideoColorMatrix::bt709};
+  VideoTransferFunction transfer_function{VideoTransferFunction::bt709};
 
   bool operator==(const D3d11VideoProcessorConfiguration&) const = default;
 };
@@ -94,6 +105,7 @@ struct ConvertedD3d11Frame {
   VideoPixelFormat format{VideoPixelFormat::nv12};
   VideoRange range{VideoRange::limited};
   VideoColorMatrix matrix{VideoColorMatrix::bt709};
+  VideoTransferFunction transfer_function{VideoTransferFunction::bt709};
 };
 
 class ID3d11VideoProcessorPlatform {
@@ -153,10 +165,16 @@ calculate_video_processor_layout(std::uint32_t input_width,
 [[nodiscard]] D3d11VideoProcessorNativeConversionQuery
 d3d11_sdr_video_conversion_query() noexcept;
 
+[[nodiscard]] D3d11VideoProcessorNativeConversionQuery
+d3d11_hdr10_video_conversion_query() noexcept;
+
 [[nodiscard]] D3d11VideoProcessorFailure classify_d3d11_video_conversion_query(
     std::int32_t status, bool supported, bool device_removed) noexcept;
 
 [[nodiscard]] std::unique_ptr<ID3d11VideoProcessorPlatform>
 create_windows_d3d11_video_processor_platform();
+
+[[nodiscard]] D3d11VideoProcessorFailure
+probe_windows_d3d11_hdr10_video_conversion() noexcept;
 
 }  // namespace beacon::worker::video

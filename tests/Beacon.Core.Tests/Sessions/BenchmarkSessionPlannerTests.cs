@@ -54,6 +54,14 @@ public sealed class BenchmarkSessionPlannerTests
         Assert.Equal(35, plan.Stream.InitialBitrateMbps);
         Assert.Equal(evidence.RunId, plan.Stream.BenchmarkRunId);
         Assert.Equal(evidence.Revision, plan.Stream.BenchmarkEvidenceRevision);
+        Assert.Equal("high", plan.Stream.CodecProfile);
+        Assert.Equal(8, plan.Stream.BitDepth);
+        Assert.Equal("bt709", plan.Stream.ColorPrimaries);
+        Assert.Equal("bt709", plan.Stream.TransferFunction);
+        Assert.Equal("bt709", plan.Stream.MatrixCoefficients);
+        Assert.Equal("limited", plan.Stream.ColorRange);
+        Assert.Empty(plan.Stream.HdrStaticInfo);
+        Assert.False(plan.Stream.HdrStaticInfoInBitstream);
         Assert.Contains(evidence.RunId.ToString("D"), plan.Stream.Reason, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -81,20 +89,20 @@ public sealed class BenchmarkSessionPlannerTests
     }
 
     [Fact]
-    public void RejectsSelectionThatCurrentCapabilitiesNoLongerAdvertise()
+    public void RejectsAv1ForProductionEvenWhenCurrentCapabilitiesAdvertiseIt()
     {
         BenchmarkPlanEvidence evidence = CreatePlanEvidence("av1", 120, 70);
 
         SessionPlanResult result = SessionPlanner.CreatePlan(
             ClientProfile.CreateZFold7Default(),
-            new EndpointCapabilities(Av1: false, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false),
+            new EndpointCapabilities(Av1: true, Hevc: true, H264: true, Hdr10: false, VirtualDisplayHdrSupported: false),
             evidence,
             Dispatch);
 
         Assert.False(result.Success);
         Assert.Null(result.Plan);
-        Assert.Contains("benchmark", result.Error, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("capabil", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("AV1", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("production", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -168,9 +176,10 @@ public sealed class BenchmarkSessionPlannerTests
             evidence,
             Dispatch);
 
-        SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
-        Assert.False(plan.Display.HdrEnabled);
-        Assert.Contains("benchmark", plan.Display.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.False(result.Success);
+        Assert.Null(result.Plan);
+        Assert.Contains("HEVC Main10", result.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("HDR10", result.Error, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -195,6 +204,16 @@ public sealed class BenchmarkSessionPlannerTests
         SessionPlan plan = Assert.IsType<SessionPlan>(result.Plan);
         Assert.True(plan.Display.HdrEnabled);
         Assert.Equal("hdr10", plan.Display.HdrMode);
+        Assert.Equal("hevc", plan.Stream.Codec);
+        Assert.Equal("main10", plan.Stream.CodecProfile);
+        Assert.Equal(10, plan.Stream.BitDepth);
+        Assert.Equal("bt2020", plan.Stream.ColorPrimaries);
+        Assert.Equal("pq", plan.Stream.TransferFunction);
+        Assert.Equal("bt2020-ncl", plan.Stream.MatrixCoefficients);
+        Assert.Equal("limited", plan.Stream.ColorRange);
+        Assert.Equal(25, plan.Stream.HdrStaticInfo.Length);
+        Assert.Equal(Hdr10StaticMetadata.Cta8613Descriptor.ToArray(), plan.Stream.HdrStaticInfo);
+        Assert.True(plan.Stream.HdrStaticInfoInBitstream);
     }
 
     [Fact]

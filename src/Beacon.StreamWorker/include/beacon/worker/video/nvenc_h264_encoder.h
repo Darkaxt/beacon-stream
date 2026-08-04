@@ -13,6 +13,11 @@
 
 namespace beacon::worker::video {
 
+enum class NvencVideoCodec {
+  h264,
+  hevc_main10,
+};
+
 enum class NvencH264Failure {
   none,
   invalid_plan,
@@ -28,7 +33,10 @@ enum class NvencH264Failure {
   session_unavailable,
   session_open_failed,
   h264_unsupported,
+  hevc_unsupported,
   nv12_unsupported,
+  p010_unsupported,
+  ten_bit_unsupported,
   dimensions_unsupported,
   bitrate_reconfiguration_unsupported,
   preset_unavailable,
@@ -54,6 +62,8 @@ struct NvencH264Plan {
   std::uint32_t frame_rate_numerator{};
   std::uint32_t frame_rate_denominator{};
   std::uint32_t bitrate_bps{};
+  NvencVideoCodec codec{NvencVideoCodec::h264};
+  std::vector<std::uint8_t> hdr_static_info;
 };
 
 struct NvencH264Configuration {
@@ -68,6 +78,8 @@ struct NvencH264Configuration {
   bool low_latency{true};
   std::uint32_t b_frame_count{};
   bool repeat_parameter_sets{true};
+  NvencVideoCodec codec{NvencVideoCodec::h264};
+  std::vector<std::uint8_t> hdr_static_info;
 };
 
 struct NvencH264NativeContract {
@@ -87,6 +99,9 @@ struct NvencH264NativeContract {
 struct NvencH264ApiCapabilities {
   bool h264{};
   bool nv12{};
+  bool hevc{};
+  bool p010{};
+  bool ten_bit{};
   bool dynamic_bitrate{};
   std::uint32_t max_width{};
   std::uint32_t max_height{};
@@ -116,12 +131,38 @@ struct NvencH264Submit {
   bool output_parameter_sets{};
 };
 
-struct EncodedH264AccessUnit {
+struct EncodedVideoAccessUnit {
   std::vector<std::uint8_t> annex_b;
   std::int64_t qpc_timestamp{};
+  NvencVideoCodec codec{NvencVideoCodec::h264};
   bool idr{};
+  bool has_vps{};
   bool has_sps{};
   bool has_pps{};
+  bool has_mastering_display_sei{};
+  bool has_content_light_level_sei{};
+};
+
+using EncodedH264AccessUnit = EncodedVideoAccessUnit;
+
+struct HevcAccessUnitDescription {
+  bool has_start_code{};
+  bool idr{};
+  bool has_vps{};
+  bool has_sps{};
+  bool has_pps{};
+  bool has_mastering_display_sei{};
+  bool has_content_light_level_sei{};
+};
+
+struct NvencHevcMain10NativeContract {
+  std::uint32_t buffer_format{};
+  std::uint32_t input_bit_depth{};
+  std::uint32_t output_bit_depth{};
+  bool repeat_vps_sps_pps{};
+  std::uint32_t colour_primaries{};
+  std::uint32_t transfer_characteristics{};
+  std::uint32_t colour_matrix{};
 };
 
 class INvencH264Api {
@@ -176,6 +217,7 @@ class NvencH264Encoder final : public IVideoBitrateControl {
   [[nodiscard]] std::uint32_t
   configured_bitrate_bps() const noexcept override;
   [[nodiscard]] NvencH264Failure failure() const noexcept;
+  [[nodiscard]] bool close() noexcept;
 
  private:
   [[nodiscard]] bool valid_plan() const noexcept;
@@ -201,11 +243,22 @@ class NvencH264Encoder final : public IVideoBitrateControl {
   bool session_open_{};
   bool session_poisoned_{};
   bool first_frame_{true};
+  bool closed_{};
   NvencH264Failure failure_{NvencH264Failure::none};
 };
 
+using INvencVideoApi = INvencH264Api;
+using NvencVideoEncoder = NvencH264Encoder;
+using NvencVideoPlan = NvencH264Plan;
+
 [[nodiscard]] NvencH264NativeContract
 nvenc_h264_native_contract() noexcept;
+
+[[nodiscard]] NvencHevcMain10NativeContract
+nvenc_hevc_main10_native_contract() noexcept;
+
+[[nodiscard]] HevcAccessUnitDescription inspect_hevc_annex_b(
+    const std::vector<std::uint8_t>& bytes) noexcept;
 
 [[nodiscard]] NvencH264Failure classify_nvenc_runtime_preflight(
     bool runtime_loaded, bool entry_points_available,
@@ -217,7 +270,20 @@ nvenc_h264_native_contract() noexcept;
     const NvencH264ApiCapabilities& capabilities,
     const NvencH264Plan& plan) noexcept;
 
+[[nodiscard]] NvencH264Failure validate_nvenc_hevc_main10_capabilities(
+    const NvencH264ApiCapabilities& capabilities,
+    const NvencH264Plan& plan) noexcept;
+
+[[nodiscard]] NvencH264Failure
+probe_windows_nvenc_hevc_main10_capabilities() noexcept;
+
+[[nodiscard]] NvencH264Failure
+probe_windows_nvenc_h264_capabilities() noexcept;
+
 [[nodiscard]] std::unique_ptr<INvencH264Api>
 create_windows_nvenc_h264_api();
+
+[[nodiscard]] std::unique_ptr<INvencVideoApi>
+create_windows_nvenc_video_api();
 
 }  // namespace beacon::worker::video

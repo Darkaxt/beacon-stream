@@ -16,6 +16,7 @@ using beacon::worker::capture::D3d11Texture;
 using beacon::worker::video::calculate_video_processor_layout;
 using beacon::worker::video::classify_d3d11_video_conversion_query;
 using beacon::worker::video::d3d11_sdr_video_conversion_query;
+using beacon::worker::video::d3d11_hdr10_video_conversion_query;
 using beacon::worker::video::D3d11VideoProcessor;
 using beacon::worker::video::D3d11VideoProcessorConfiguration;
 using beacon::worker::video::D3d11VideoProcessorFailure;
@@ -26,6 +27,7 @@ using beacon::worker::video::ID3d11VideoProcessorPlatform;
 using beacon::worker::video::VideoColorMatrix;
 using beacon::worker::video::VideoPixelFormat;
 using beacon::worker::video::VideoRange;
+using beacon::worker::video::VideoTransferFunction;
 
 class FakeTexture final : public D3d11Texture {
  public:
@@ -91,17 +93,58 @@ class FakePlatform final : public ID3d11VideoProcessorPlatform {
 
 CapturedD3d11Frame frame(std::uint32_t width = 2560,
                          std::uint32_t height = 1600,
-                         std::int64_t timestamp = 42) {
+                         std::int64_t timestamp = 42,
+                         beacon::worker::capture::WgcCapturePixelFormat format =
+                             beacon::worker::capture::WgcCapturePixelFormat::bgra8) {
   return {
       .texture = std::make_shared<FakeTexture>(reinterpret_cast<void*>(0x3000)),
       .width = width,
       .height = height,
       .qpc_timestamp = timestamp,
+      .pixel_format = format,
   };
 }
 
 D3d11VideoProcessorPlan plan(std::uint32_t width = 2560,
-                             std::uint32_t height = 1600) {
+                             std::uint32_t height = 1600);
+
+void exact_hdr10_query_and_fp16_to_p010_contract_are_fixed() {
+  const auto query = d3d11_hdr10_video_conversion_query();
+  BEACON_TEST_REQUIRE(query.input_format ==
+                      static_cast<std::uint32_t>(DXGI_FORMAT_R16G16B16A16_FLOAT));
+  BEACON_TEST_REQUIRE(query.input_color_space ==
+                      static_cast<std::uint32_t>(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709));
+  BEACON_TEST_REQUIRE(query.output_format ==
+                      static_cast<std::uint32_t>(DXGI_FORMAT_P010));
+  BEACON_TEST_REQUIRE(query.output_color_space ==
+                      static_cast<std::uint32_t>(DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_LEFT_P2020));
+
+  auto platform = std::make_unique<FakePlatform>();
+  auto* observed = platform.get();
+  D3d11VideoProcessor processor{std::move(platform)};
+  auto hdr_plan = plan();
+  hdr_plan.dynamic_range = beacon::stream::v1::DYNAMIC_RANGE_HDR10;
+  const auto converted = processor.convert(
+      frame(2560, 1600, 99,
+            beacon::worker::capture::WgcCapturePixelFormat::rgba16_float),
+      hdr_plan);
+
+  BEACON_TEST_REQUIRE(converted.has_value());
+  BEACON_TEST_REQUIRE(observed->configuration.input_format ==
+                      VideoPixelFormat::rgba16_float);
+  BEACON_TEST_REQUIRE(observed->configuration.output_format ==
+                      VideoPixelFormat::p010);
+  BEACON_TEST_REQUIRE(observed->configuration.matrix ==
+                      VideoColorMatrix::bt2020_non_constant_luminance);
+  BEACON_TEST_REQUIRE(observed->configuration.transfer_function ==
+                      VideoTransferFunction::pq);
+  BEACON_TEST_REQUIRE(converted->format == VideoPixelFormat::p010);
+  BEACON_TEST_REQUIRE(converted->transfer_function ==
+                      VideoTransferFunction::pq);
+}
+
+D3d11VideoProcessorPlan plan(std::uint32_t width,
+                             std::uint32_t height) {
   return {
       .output_width = width,
       .output_height = height,
@@ -334,6 +377,7 @@ int main() {
   return beacon::stream::testing::run_tests([] {
     layout_preserves_the_full_source_and_centers_the_destination();
     exact_native_capability_query_and_results_are_fixed();
+    exact_hdr10_query_and_fp16_to_p010_contract_are_fixed();
     invalid_dimensions_fail_before_touching_the_platform();
     first_conversion_requests_the_exact_sdr_nv12_contract();
     released_output_textures_are_reused_without_reconfiguration();

@@ -531,7 +531,7 @@ public final class BeaconActivity extends Activity {
                 serverUrl.getText().toString(),
                 capabilities,
                 benchmarkNetwork),
-            AndroidDeviceBenchmarkRunner.system(this),
+            AndroidDeviceBenchmarkRunner.system(this, videoSurfaceView),
             readGame());
         if (!model.latestError().isEmpty()) return;
         activityEvents.publish(
@@ -668,7 +668,7 @@ public final class BeaconActivity extends Activity {
                 model.cancelBenchmark();
                 BeaconApiClient.BeaconResult result = model.runBenchmarkAndWait(
                     request,
-                    AndroidDeviceBenchmarkRunner.system(this));
+                    AndroidDeviceBenchmarkRunner.system(this, videoSurfaceView));
                 started = result.isSuccess();
                 activityEvents.publish(
                     BeaconActivityEventSource.Kind.BENCHMARK_COMPLETE,
@@ -888,7 +888,8 @@ public final class BeaconActivity extends Activity {
                 videoSurfaceProvider,
                 failureObserver,
                 activityEvents,
-                this::registerVideoObserverSwitch),
+                this::registerVideoObserverSwitch,
+                new AndroidHdrWindowModeController(this)),
             BeaconAudioSession::new);
     }
 

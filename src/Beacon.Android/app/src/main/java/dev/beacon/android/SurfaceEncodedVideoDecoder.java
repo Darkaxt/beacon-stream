@@ -156,6 +156,11 @@ public final class SurfaceEncodedVideoDecoder {
         }
 
         @Override
+        public void onOutputFormatChanged(EncodedVideoOutputFormat format) {
+            if (isCurrentObserver(generation)) observer.onOutputFormatChanged(format);
+        }
+
+        @Override
         public void onError(Throwable failure) {
             if (isCurrentObserver(generation)) observer.onError(failure);
         }

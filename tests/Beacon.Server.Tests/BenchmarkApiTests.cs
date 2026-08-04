@@ -485,6 +485,20 @@ public sealed class BenchmarkApiTests(BeaconServerTestFactory factory) : IClassF
         HttpClient client = factory.CreateClient();
         string clientId = $"policy-rescore-{Guid.NewGuid():N}";
         await RegisterAsync(client, clientId);
+        await client.PostAsJsonAsync($"/clients/{clientId}/capabilities", new
+        {
+            av1 = true,
+            hevc = true,
+            h264 = true,
+            hdr10 = true,
+            virtualDisplayHdrSupported = true,
+            maxFps = 120,
+            currentDisplayMode = new { width = 2560, height = 1600, refreshHz = 120 },
+            supportedDisplayModes = new[]
+            {
+                new { width = 2560, height = 1600, refreshHz = 120 }
+            }
+        });
         (_, Guid runId) = await PrepareAsync(client, clientId, CreateFingerprints());
         HttpResponseMessage complete = await client.PostAsJsonAsync(
             $"/clients/{clientId}/benchmarks/{runId:D}/complete",
@@ -496,8 +510,9 @@ public sealed class BenchmarkApiTests(BeaconServerTestFactory factory) : IClassF
                 },
                 decoderSamples = new[]
                 {
-                    new { codec = "av1", profile = "main", bitDepth = 10, width = 2560, height = 1600, targetFps = 120, configured = true, sustainedFps = 120, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0 },
-                    new { codec = "hevc", profile = "main10", bitDepth = 10, width = 2560, height = 1600, targetFps = 120, configured = true, sustainedFps = 120, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0 }
+                    new { codec = "av1", profile = "main", bitDepth = 10, width = 2560, height = 1600, targetFps = 120, configured = true, sustainedFps = 120, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0, tenBitPresentationVerified = false, hdrPresentationVerified = false },
+                    new { codec = "hevc", profile = "main10", bitDepth = 10, width = 2560, height = 1600, targetFps = 120, configured = true, sustainedFps = 120, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0, tenBitPresentationVerified = true, hdrPresentationVerified = true },
+                    new { codec = "h264", profile = "high", bitDepth = 8, width = 2560, height = 1600, targetFps = 120, configured = true, sustainedFps = 120, p95DecodeLatencyMs = 5, p95PresentationLatencyMs = 9, droppedFrames = 0, outputErrors = 0, tenBitPresentationVerified = false, hdrPresentationVerified = false }
                 },
                 powerSamples = new[]
                 {
@@ -521,7 +536,7 @@ public sealed class BenchmarkApiTests(BeaconServerTestFactory factory) : IClassF
         Assert.Equal(HttpStatusCode.OK, rescoredPlan.StatusCode);
         using JsonDocument initialDocument = await JsonDocument.ParseAsync(await initialPlan.Content.ReadAsStreamAsync());
         using JsonDocument rescoredDocument = await JsonDocument.ParseAsync(await rescoredPlan.Content.ReadAsStreamAsync());
-        Assert.Equal("av1", initialDocument.RootElement.GetProperty("stream").GetProperty("codec").GetString());
+        Assert.Equal("h264", initialDocument.RootElement.GetProperty("stream").GetProperty("codec").GetString());
         Assert.Equal("hevc", rescoredDocument.RootElement.GetProperty("stream").GetProperty("codec").GetString());
         Assert.Equal(runId, rescoredDocument.RootElement.GetProperty("stream").GetProperty("benchmarkRunId").GetGuid());
         Assert.NotEqual(initialDocument.RootElement.GetProperty("stream").GetProperty("benchmarkEvidenceRevision").GetString(),

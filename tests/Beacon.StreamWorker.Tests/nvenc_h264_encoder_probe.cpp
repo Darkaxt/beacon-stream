@@ -15,6 +15,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -26,9 +27,11 @@ using beacon::worker::video::create_windows_d3d11_video_processor_platform;
 using beacon::worker::video::create_windows_nvenc_h264_api;
 using beacon::worker::video::D3d11VideoProcessor;
 using beacon::worker::video::D3d11VideoProcessorPlan;
-using beacon::worker::video::EncodedH264AccessUnit;
+using beacon::worker::video::EncodedVideoAccessUnit;
 using beacon::worker::video::NvencH264Encoder;
 using beacon::worker::video::NvencH264Plan;
+using beacon::worker::video::NvencVideoCodec;
+using beacon::worker::video::probe_windows_nvenc_hevc_main10_capabilities;
 
 constexpr std::uint32_t input_width = 1280;
 constexpr std::uint32_t input_height = 720;
@@ -135,18 +138,55 @@ std::shared_ptr<D3d11Texture> create_color_bars(ID3D11Device& device) {
   return std::make_shared<ProbeTexture>(std::move(texture));
 }
 
+std::shared_ptr<D3d11Texture> create_hdr_source(
+    ID3D11Device& device, ID3D11DeviceContext& context) {
+  D3D11_TEXTURE2D_DESC description{};
+  description.Width = input_width;
+  description.Height = input_height;
+  description.MipLevels = 1;
+  description.ArraySize = 1;
+  description.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+  description.SampleDesc.Count = 1;
+  description.Usage = D3D11_USAGE_DEFAULT;
+  description.BindFlags = D3D11_BIND_RENDER_TARGET;
+  winrt::com_ptr<ID3D11Texture2D> texture;
+  winrt::check_hresult(
+      device.CreateTexture2D(&description, nullptr, texture.put()));
+  winrt::com_ptr<ID3D11RenderTargetView> view;
+  winrt::check_hresult(
+      device.CreateRenderTargetView(texture.get(), nullptr, view.put()));
+  constexpr float scrgb_white[4]{1.0F, 1.0F, 1.0F, 1.0F};
+  context.ClearRenderTargetView(view.get(), scrgb_white);
+  return std::make_shared<ProbeTexture>(std::move(texture));
+}
+
+std::vector<std::uint8_t> hdr_static_info() {
+  std::vector<std::uint8_t> metadata(25);
+  const auto put = [&metadata](std::size_t offset, std::uint16_t value) {
+    metadata[offset] = static_cast<std::uint8_t>(value & 0xffU);
+    metadata[offset + 1U] = static_cast<std::uint8_t>(value >> 8U);
+  };
+  put(1, 35'400); put(3, 14'600);
+  put(5, 8'500); put(7, 39'850);
+  put(9, 6'550); put(11, 2'300);
+  put(13, 15'635); put(15, 16'450);
+  put(17, 1'000); put(19, 1);
+  put(21, 1'000); put(23, 400);
+  return metadata;
+}
+
 void write_access_units(const std::filesystem::path& output,
-                        const std::vector<EncodedH264AccessUnit>& units) {
+                        const std::vector<EncodedVideoAccessUnit>& units) {
   std::ofstream stream(output, std::ios::binary | std::ios::trunc);
   if (!stream) {
-    throw std::runtime_error("Unable to create the H.264 probe output.");
+    throw std::runtime_error("Unable to create the encoder probe output.");
   }
   for (const auto& unit : units) {
     stream.write(reinterpret_cast<const char*>(unit.annex_b.data()),
                  static_cast<std::streamsize>(unit.annex_b.size()));
   }
   if (!stream) {
-    throw std::runtime_error("Unable to write the H.264 probe output.");
+    throw std::runtime_error("Unable to write the encoder probe output.");
   }
 }
 
@@ -154,12 +194,23 @@ void write_access_units(const std::filesystem::path& output,
 
 int wmain(int argc, wchar_t** argv) {
   try {
-    if (argc != 2) {
-      std::wcerr << L"Usage: BeaconStreamWorkerNvencH264EncoderProbe <output.h264>\n";
+    const bool hevc = argc == 3 && std::wstring_view{argv[1]} == L"--hevc-main10";
+    if ((!hevc && argc != 2) || (hevc && argc != 3)) {
+      std::wcerr << L"Usage: BeaconStreamWorkerNvencH264EncoderProbe "
+                    L"[--hevc-main10] <output>\n";
       return 2;
     }
+    if (hevc) {
+      const auto capability = probe_windows_nvenc_hevc_main10_capabilities();
+      if (capability != beacon::worker::video::NvencH264Failure::none) {
+        std::cerr << "HEVC Main10 runtime capability probe failed: "
+                  << static_cast<int>(capability) << '\n';
+        return 3;
+      }
+    }
     auto selected = create_nvidia_device();
-    auto source = create_color_bars(*selected.device);
+    auto source = hevc ? create_hdr_source(*selected.device, *selected.context)
+                       : create_color_bars(*selected.device);
     D3d11VideoProcessor processor{
         create_windows_d3d11_video_processor_platform()};
     NvencH264Encoder encoder{create_windows_nvenc_h264_api(),
@@ -169,21 +220,30 @@ int wmain(int argc, wchar_t** argv) {
                                  .frame_rate_numerator = 120,
                                  .frame_rate_denominator = 1,
                                  .bitrate_bps = initial_bitrate,
+                                 .codec = hevc ? NvencVideoCodec::hevc_main10
+                                               : NvencVideoCodec::h264,
+                                 .hdr_static_info = hevc ? hdr_static_info()
+                                                        : std::vector<std::uint8_t>{},
                              }};
     const D3d11VideoProcessorPlan conversion_plan{
         .output_width = output_width,
         .output_height = output_height,
         .frame_rate_numerator = 120,
         .frame_rate_denominator = 1,
+        .dynamic_range = hevc ? beacon::stream::v1::DYNAMIC_RANGE_HDR10
+                              : beacon::stream::v1::DYNAMIC_RANGE_SDR,
     };
 
-    std::vector<EncodedH264AccessUnit> units;
+    std::vector<EncodedVideoAccessUnit> units;
     for (std::int64_t frame_index = 0; frame_index < 4; ++frame_index) {
       const CapturedD3d11Frame captured{
           .texture = source,
           .width = input_width,
           .height = input_height,
           .qpc_timestamp = 1000 + frame_index,
+          .pixel_format =
+              hevc ? beacon::worker::capture::WgcCapturePixelFormat::rgba16_float
+                   : beacon::worker::capture::WgcCapturePixelFormat::bgra8,
       };
       auto converted = processor.convert(captured, conversion_plan);
       if (!converted) {
@@ -206,18 +266,21 @@ int wmain(int argc, wchar_t** argv) {
       units.push_back(std::move(*encoded));
     }
 
-    if (units.size() != 4 || !units[0].idr || !units[0].has_sps ||
+    if (units.size() != 4 || !units[0].idr ||
+        (hevc && !units[0].has_vps) || !units[0].has_sps ||
         !units[0].has_pps || units[1].idr || !units[2].idr ||
         !units[2].has_sps || !units[2].has_pps || units[3].idr) {
       std::cerr << "NVENC access-unit sequence was invalid.\n";
       return 6;
     }
-    write_access_units(std::filesystem::path{argv[1]}, units);
+    write_access_units(std::filesystem::path{argv[hevc ? 2 : 1]}, units);
     std::size_t bytes{};
     for (const auto& unit : units) {
       bytes += unit.annex_b.size();
     }
-    std::wcout << L"BEACON_NVENC_H264_OK adapter=\"" << selected.adapter_name
+    std::wcout << (hevc ? L"BEACON_NVENC_HEVC_MAIN10_OK adapter=\""
+                        : L"BEACON_NVENC_H264_OK adapter=\"")
+               << selected.adapter_name
                << L"\" input=" << input_width << L"x" << input_height
                << L" output=" << output_width << L"x" << output_height
                << L" frames=" << units.size() << L" bytes=" << bytes

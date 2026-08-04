@@ -34,6 +34,18 @@ using namespace winrt::Windows::Graphics::Capture;
 using namespace winrt::Windows::Graphics::DirectX;
 using namespace winrt::Windows::Graphics::DirectX::Direct3D11;
 
+DirectXPixelFormat directx_pixel_format(WgcCapturePixelFormat format) {
+  return format == WgcCapturePixelFormat::rgba16_float
+             ? DirectXPixelFormat::R16G16B16A16Float
+             : DirectXPixelFormat::B8G8R8A8UIntNormalized;
+}
+
+DXGI_FORMAT dxgi_pixel_format(WgcCapturePixelFormat format) {
+  return format == WgcCapturePixelFormat::rgba16_float
+             ? DXGI_FORMAT_R16G16B16A16_FLOAT
+             : DXGI_FORMAT_B8G8R8A8_UNORM;
+}
+
 class ThreadWinrtApartment final {
  public:
   ThreadWinrtApartment() {
@@ -246,6 +258,7 @@ class WindowsWgcCapturePlatform final : public IWgcCapturePlatform {
   [[nodiscard]] bool start_capture(
       const WgcDisplayTargetSnapshot& target,
       const WgcAdapterSnapshot& adapter,
+      WgcCapturePixelFormat pixel_format,
       FrameCallback callback,
       FailureCallback failure_callback) override {
     clear_failure();
@@ -322,7 +335,7 @@ class WindowsWgcCapturePlatform final : public IWgcCapturePlatform {
       }
       stage = WgcCapturePlatformStage::frame_pool_creation;
       auto pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
-          winrt_device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
+          winrt_device, directx_pixel_format(pixel_format), 2, size);
       stage = WgcCapturePlatformStage::capture_session_creation;
       auto session = pool.CreateCaptureSession(item);
 
@@ -336,6 +349,7 @@ class WindowsWgcCapturePlatform final : public IWgcCapturePlatform {
         }
         callback_ = std::move(callback);
         failure_callback_ = std::move(failure_callback);
+        pixel_format_ = pixel_format;
         d3d_device_ = std::move(d3d_device);
         d3d_context_ = std::move(d3d_context);
         winrt_device_ = std::move(winrt_device);
@@ -377,7 +391,8 @@ class WindowsWgcCapturePlatform final : public IWgcCapturePlatform {
   }
 
   [[nodiscard]] bool recreate_frame_pool(std::uint32_t width,
-                                         std::uint32_t height) override {
+                                         std::uint32_t height,
+                                         WgcCapturePixelFormat pixel_format) override {
     if (width == 0 || height == 0) {
       return false;
     }
@@ -388,7 +403,7 @@ class WindowsWgcCapturePlatform final : public IWgcCapturePlatform {
         return false;
       }
       frame_pool_.Recreate(
-          winrt_device_, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2,
+          winrt_device_, directx_pixel_format(pixel_format), 2,
           {static_cast<std::int32_t>(width),
            static_cast<std::int32_t>(height)});
       return true;
@@ -518,6 +533,11 @@ class WindowsWgcCapturePlatform final : public IWgcCapturePlatform {
         winrt::check_hresult(
             access->GetInterface(IID_PPV_ARGS(texture.put())));
         stage = WgcCapturePlatformStage::frame_metadata;
+        D3D11_TEXTURE2D_DESC description{};
+        texture->GetDesc(&description);
+        if (description.Format != dxgi_pixel_format(pixel_format_)) {
+          winrt::throw_hresult(E_INVALIDARG);
+        }
         const auto size = frame.ContentSize();
         const auto timestamp = frame.SystemRelativeTime().count();
         frame.Close();
@@ -527,6 +547,7 @@ class WindowsWgcCapturePlatform final : public IWgcCapturePlatform {
             .width = static_cast<std::uint32_t>(std::max(size.Width, 0)),
             .height = static_cast<std::uint32_t>(std::max(size.Height, 0)),
             .qpc_timestamp = timestamp,
+            .pixel_format = pixel_format_,
         });
       }
     } catch (const winrt::hresult_error& failure) {
@@ -570,6 +591,7 @@ class WindowsWgcCapturePlatform final : public IWgcCapturePlatform {
   winrt::event_token frame_token_{};
   std::size_t active_callbacks_{};
   bool running_{};
+  WgcCapturePixelFormat pixel_format_{WgcCapturePixelFormat::bgra8};
   WgcCapturePlatformFailure failure_{};
 };
 

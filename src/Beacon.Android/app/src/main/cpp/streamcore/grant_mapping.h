@@ -4,6 +4,7 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace beacon::android::streamcore {
 
@@ -22,7 +23,11 @@ namespace beacon::android::streamcore {
 [[nodiscard]] bool map_selected_video_grant(
     std::string_view codec, std::uint32_t width, std::uint32_t height,
     std::uint32_t fps_numerator, std::uint32_t fps_denominator,
-    std::string_view dynamic_range, SelectedVideo &mapped);
+    std::string_view dynamic_range, std::string_view profile,
+    std::uint32_t bit_depth, std::string_view color_primaries,
+    std::string_view transfer_function, std::string_view matrix_coefficients,
+    std::string_view color_range, const std::vector<std::byte> &hdr_static_info,
+    bool hdr_static_info_in_bitstream, SelectedVideo &mapped);
 [[nodiscard]] bool map_selected_audio_grant(
     std::string_view codec, std::uint32_t sample_rate_hz,
     std::uint32_t channel_count, std::uint32_t frame_duration_us,

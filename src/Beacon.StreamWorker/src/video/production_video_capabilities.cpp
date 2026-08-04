@@ -40,10 +40,17 @@ probe_windows_production_video_capabilities() noexcept {
         adapters, [](const capture::WgcAdapterSnapshot& adapter) {
           return adapter.vendor_id == nvidia_vendor_id && !adapter.software;
         });
-    return classify_production_video_capabilities(
+    auto capabilities = classify_production_video_capabilities(
         nvidia_adapter_available,
-        nvidia_adapter_available ? probe_windows_nvenc_runtime()
+        nvidia_adapter_available ? probe_windows_nvenc_h264_capabilities()
                                  : NvencH264Failure::none);
+    capabilities.hevc_main10_hdr10_available =
+        capabilities.available &&
+        probe_windows_d3d11_hdr10_video_conversion() ==
+            D3d11VideoProcessorFailure::none &&
+        probe_windows_nvenc_hevc_main10_capabilities() ==
+            NvencH264Failure::none;
+    return capabilities;
   } catch (...) {
     return {
         .available = false,

@@ -7,36 +7,42 @@
 namespace beacon::worker::video {
 
 bool valid_worker_video_plan(const WorkerVideoPlan &plan) noexcept {
-  return !plan.session_id.empty() && !plan.display_device_name.empty() &&
-         plan.width != 0 && plan.height != 0 &&
-         plan.frame_rate_numerator != 0 && plan.frame_rate_denominator != 0 &&
-         plan.minimum_bitrate_bps != 0 &&
-         plan.minimum_bitrate_bps <= plan.initial_bitrate_bps &&
-         plan.initial_bitrate_bps <= plan.maximum_bitrate_bps;
+  if (plan.session_id.empty() || plan.display_device_name.empty() ||
+      plan.width == 0 || plan.height == 0 ||
+      plan.frame_rate_numerator == 0 || plan.frame_rate_denominator == 0 ||
+      plan.minimum_bitrate_bps == 0 ||
+      plan.minimum_bitrate_bps > plan.initial_bitrate_bps ||
+      plan.initial_bitrate_bps > plan.maximum_bitrate_bps) {
+    return false;
+  }
+  return stream::valid_selected_video_mode(selected_video_from_plan(plan));
 }
 
 bool selected_video_matches_plan(
     const stream::v1::SelectedVideoMode &selected_video,
     const WorkerVideoPlan &plan) noexcept {
-  return selected_video.codec() == stream::v1::VIDEO_CODEC_H264 &&
-         selected_video.width() == plan.width &&
-         selected_video.height() == plan.height &&
-         selected_video.frames_per_second_numerator() ==
-             plan.frame_rate_numerator &&
-         selected_video.frames_per_second_denominator() ==
-             plan.frame_rate_denominator &&
-         selected_video.dynamic_range() == stream::v1::DYNAMIC_RANGE_SDR;
+  return selected_video.SerializeAsString() ==
+         selected_video_from_plan(plan).SerializeAsString();
 }
 
 stream::v1::SelectedVideoMode
 selected_video_from_plan(const WorkerVideoPlan &plan) {
   stream::v1::SelectedVideoMode selected_video;
-  selected_video.set_codec(stream::v1::VIDEO_CODEC_H264);
+  selected_video.set_codec(plan.codec);
   selected_video.set_width(plan.width);
   selected_video.set_height(plan.height);
   selected_video.set_frames_per_second_numerator(plan.frame_rate_numerator);
   selected_video.set_frames_per_second_denominator(plan.frame_rate_denominator);
-  selected_video.set_dynamic_range(stream::v1::DYNAMIC_RANGE_SDR);
+  selected_video.set_dynamic_range(plan.dynamic_range);
+  selected_video.set_profile(plan.profile);
+  selected_video.set_bit_depth(plan.bit_depth);
+  selected_video.set_color_primaries(plan.color_primaries);
+  selected_video.set_transfer_function(plan.transfer_function);
+  selected_video.set_matrix_coefficients(plan.matrix_coefficients);
+  selected_video.set_color_range(plan.color_range);
+  selected_video.set_hdr_static_info(plan.hdr_static_info);
+  selected_video.set_hdr_static_info_in_bitstream(
+      plan.hdr_static_info_in_bitstream);
   return selected_video;
 }
 

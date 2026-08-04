@@ -11,6 +11,8 @@ final class AndroidAssetBenchmarkVectorRepository implements BenchmarkVectorRepo
         "beacon-h264-high-8-1280x720-60-v1";
     private static final String H264_360P30_VECTOR =
         "beacon-h264-high-8-640x360-30-v1";
+    private static final String HEVC_MAIN10_HDR10_VECTOR =
+        "beacon-hevc-main10-hdr10-320x180-30-v1";
     private final Context context;
 
     AndroidAssetBenchmarkVectorRepository(Context context) {
@@ -24,7 +26,9 @@ final class AndroidAssetBenchmarkVectorRepository implements BenchmarkVectorRepo
     @Override
     public byte[] load(String vectorId) {
         String fileName;
-        if (H264_720P60_VECTOR.equals(vectorId) || H264_360P30_VECTOR.equals(vectorId)) {
+        if (H264_720P60_VECTOR.equals(vectorId) ||
+            H264_360P30_VECTOR.equals(vectorId) ||
+            HEVC_MAIN10_HDR10_VECTOR.equals(vectorId)) {
             fileName = vectorId + ".bau";
         } else {
             throw new IllegalArgumentException(

@@ -78,6 +78,7 @@ if(WIN32)
     PUBLIC Beacon::StreamWorkerPortableCore
     PRIVATE
       d3d11
+      d3dcompiler
       dwmapi
       dxgi
       ole32

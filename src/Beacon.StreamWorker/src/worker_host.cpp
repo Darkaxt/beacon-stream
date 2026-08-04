@@ -38,6 +38,17 @@ worker_video_plan_from(const v1::WorkerIpcEnvelope &request) {
       *initial > *maximum) {
     return std::nullopt;
   }
+  const auto codec = source.video_codec() == v1::WORKER_VIDEO_CODEC_H264
+                         ? stream::v1::VIDEO_CODEC_H264
+                         : source.video_codec() == v1::WORKER_VIDEO_CODEC_HEVC
+                               ? stream::v1::VIDEO_CODEC_HEVC
+                               : stream::v1::VIDEO_CODEC_UNSPECIFIED;
+  const auto dynamic_range =
+      source.dynamic_range() == v1::WORKER_DYNAMIC_RANGE_SDR
+          ? stream::v1::DYNAMIC_RANGE_SDR
+          : source.dynamic_range() == v1::WORKER_DYNAMIC_RANGE_HDR10
+                ? stream::v1::DYNAMIC_RANGE_HDR10
+                : stream::v1::DYNAMIC_RANGE_UNSPECIFIED;
   video::WorkerVideoPlan plan{
       .session_id = request.session_id(),
       .display_device_name = std::wstring(source.display_device_name().begin(),
@@ -49,6 +60,16 @@ worker_video_plan_from(const v1::WorkerIpcEnvelope &request) {
       .minimum_bitrate_bps = *minimum,
       .initial_bitrate_bps = *initial,
       .maximum_bitrate_bps = *maximum,
+      .codec = codec,
+      .dynamic_range = dynamic_range,
+      .profile = source.video_profile(),
+      .bit_depth = source.video_bit_depth(),
+      .color_primaries = source.color_primaries(),
+      .transfer_function = source.transfer_function(),
+      .matrix_coefficients = source.matrix_coefficients(),
+      .color_range = source.color_range(),
+      .hdr_static_info = source.hdr_static_info(),
+      .hdr_static_info_in_bitstream = source.hdr_static_info_in_bitstream(),
   };
   return video::valid_worker_video_plan(plan) ? std::optional{std::move(plan)}
                                               : std::nullopt;
@@ -102,13 +123,16 @@ v1::WorkerIpcEnvelope WorkerHost::capabilities() const {
   auto *message = envelope.mutable_worker_capabilities();
   message->set_worker_instance_id(bytes_to_string(worker_instance_id_));
   message->add_video_codecs(v1::WORKER_VIDEO_CODEC_H264);
+  if (video_capabilities_.hevc_main10_hdr10_available) {
+    message->add_video_codecs(v1::WORKER_VIDEO_CODEC_HEVC);
+  }
   message->add_video_encoders(v1::WORKER_VIDEO_ENCODER_NVENC);
   message->add_capture_methods(
       v1::WORKER_CAPTURE_METHOD_WINDOWS_GRAPHICS_CAPTURE);
   message->set_quic_datagrams(true);
   message->set_maximum_sessions(1);
   message->set_maximum_frames_per_second(120);
-  message->set_hdr10(false);
+  message->set_hdr10(video_capabilities_.hevc_main10_hdr10_available);
   message->set_video_available(video_capabilities_.available);
   message->add_audio_codecs(v1::WORKER_AUDIO_CODEC_OPUS);
   message->add_audio_capture_methods(
@@ -215,9 +239,7 @@ WorkerHost::prepare(const v1::WorkerIpcEnvelope &request) {
   if (request.session_id().empty() || plan.display_target().empty() ||
       plan.display_device_name().empty() || plan.width() == 0 ||
       plan.height() == 0 || plan.frames_per_second_numerator() == 0 ||
-      plan.frames_per_second_denominator() == 0 ||
-      plan.video_codec() != v1::WORKER_VIDEO_CODEC_H264 ||
-      plan.dynamic_range() != v1::WORKER_DYNAMIC_RANGE_SDR) {
+      plan.frames_per_second_denominator() == 0) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);
   }
   if (streaming_) {
@@ -230,6 +252,10 @@ WorkerHost::prepare(const v1::WorkerIpcEnvelope &request) {
   auto audio_plan = worker_audio_plan_from(request);
   if (!video_plan || !audio_plan) {
     return reject(request, v1::WORKER_ERROR_CODE_INVALID_REQUEST);
+  }
+  if (video_plan->codec == stream::v1::VIDEO_CODEC_HEVC &&
+      !video_capabilities_.hevc_main10_hdr10_available) {
+    return reject(request, v1::WORKER_ERROR_CODE_CAPABILITY_UNAVAILABLE);
   }
   try {
     if (!video_pipeline_.prepare(*video_plan)) {

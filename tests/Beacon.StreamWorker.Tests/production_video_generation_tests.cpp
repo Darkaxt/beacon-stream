@@ -35,6 +35,8 @@ struct CaptureTrace {
   std::size_t stops{};
   std::wstring device_name;
   bool start_result{true};
+  capture::WgcCapturePixelFormat pixel_format{
+      capture::WgcCapturePixelFormat::bgra8};
   capture::WgcCapturePlatformFailure start_failure{};
 };
 
@@ -64,10 +66,12 @@ public:
   [[nodiscard]] bool start_capture(
       const capture::WgcDisplayTargetSnapshot &target,
       const capture::WgcAdapterSnapshot &,
+      capture::WgcCapturePixelFormat pixel_format,
       FrameCallback callback,
       FailureCallback failure) override {
     ++trace_->starts;
     trace_->device_name = target.device_name;
+    trace_->pixel_format = pixel_format;
     callback_ = std::move(callback);
     failure_callback_ = std::move(failure);
     return trace_->start_result;
@@ -79,7 +83,8 @@ public:
   }
 
   [[nodiscard]] bool recreate_frame_pool(std::uint32_t,
-                                         std::uint32_t) override {
+                                         std::uint32_t,
+                                         capture::WgcCapturePixelFormat) override {
     return true;
   }
 
@@ -98,6 +103,7 @@ public:
         .width = 2560,
         .height = 1600,
         .qpc_timestamp = timestamp,
+        .pixel_format = trace_->pixel_format,
     });
   }
 
@@ -115,6 +121,7 @@ private:
 
 struct ProcessorTrace {
   std::size_t blits{};
+  video::D3d11VideoProcessorConfiguration configuration{};
   video::D3d11VideoProcessorFailure blit_result{
       video::D3d11VideoProcessorFailure::none};
 };
@@ -131,7 +138,8 @@ public:
 
   [[nodiscard]] video::D3d11VideoProcessorFailure configure(
       const capture::D3d11Texture &,
-      const video::D3d11VideoProcessorConfiguration &) noexcept override {
+      const video::D3d11VideoProcessorConfiguration &configuration) noexcept override {
+    trace_->configuration = configuration;
     return video::D3d11VideoProcessorFailure::none;
   }
 
@@ -155,6 +163,7 @@ private:
 };
 
 struct EncoderTrace {
+  video::NvencH264Configuration configuration{};
   std::vector<video::NvencH264Submit> submits;
   std::vector<std::uint32_t> bitrates;
   std::size_t destroy_sessions{};
@@ -173,7 +182,8 @@ public:
 
   [[nodiscard]] video::NvencH264Failure open(
       const capture::D3d11Texture &,
-      const video::NvencH264Configuration &) noexcept override {
+      const video::NvencH264Configuration &configuration) noexcept override {
+    trace_->configuration = configuration;
     return video::NvencH264Failure::none;
   }
 
@@ -203,8 +213,19 @@ public:
   lock_bitstream(std::uintptr_t) noexcept override {
     const auto &submit = trace_->submits.back();
     if (submit.force_idr) {
-      bytes_ = {0, 0, 0, 1, 0x67, 0x64, 0, 0, 0, 1,
-                0x68, 0xee, 0, 0, 1, 0x65, 0xaa};
+      if (trace_->configuration.codec == video::NvencVideoCodec::hevc_main10) {
+        bytes_ = {0, 0, 1, static_cast<std::uint8_t>(32U << 1U), 1,
+                  0, 0, 1, static_cast<std::uint8_t>(33U << 1U), 1,
+                  0, 0, 1, static_cast<std::uint8_t>(34U << 1U), 1,
+                  0, 0, 1, static_cast<std::uint8_t>(39U << 1U), 1,
+                  137, 1, 0, 0x80,
+                  0, 0, 1, static_cast<std::uint8_t>(39U << 1U), 1,
+                  144, 1, 0, 0x80,
+                  0, 0, 1, static_cast<std::uint8_t>(19U << 1U), 1};
+      } else {
+        bytes_ = {0, 0, 0, 1, 0x67, 0x64, 0, 0, 0, 1,
+                  0x68, 0xee, 0, 0, 1, 0x65, 0xaa};
+      }
     } else {
       bytes_ = {0, 0, 1, 0x61, 0xbb};
     }
@@ -315,6 +336,27 @@ video::WorkerVideoPlan plan() {
   };
 }
 
+video::WorkerVideoPlan hdr_plan() {
+  auto result = plan();
+  result.codec = beacon::stream::v1::VIDEO_CODEC_HEVC;
+  result.dynamic_range = beacon::stream::v1::DYNAMIC_RANGE_HDR10;
+  result.profile = beacon::stream::v1::VIDEO_PROFILE_HEVC_MAIN10;
+  result.bit_depth = 10;
+  result.color_primaries = beacon::stream::v1::COLOR_PRIMARIES_BT2020;
+  result.transfer_function = beacon::stream::v1::TRANSFER_FUNCTION_PQ;
+  result.matrix_coefficients =
+      beacon::stream::v1::MATRIX_COEFFICIENTS_BT2020_NON_CONSTANT_LUMINANCE;
+  result.hdr_static_info.assign(25, '\0');
+  result.hdr_static_info[17] = static_cast<char>(0xe8);
+  result.hdr_static_info[18] = static_cast<char>(0x03);
+  result.hdr_static_info[21] = static_cast<char>(0xe8);
+  result.hdr_static_info[22] = static_cast<char>(0x03);
+  result.hdr_static_info[23] = static_cast<char>(0x90);
+  result.hdr_static_info[24] = static_cast<char>(0x01);
+  result.hdr_static_info_in_bitstream = true;
+  return result;
+}
+
 struct Fixture {
   RecordingTransport transport;
   std::shared_ptr<CaptureTrace> capture_trace =
@@ -329,11 +371,11 @@ struct Fixture {
   FakeCapturePlatform *capture_platform{};
   std::shared_ptr<video::ProductionVideoGeneration> generation;
 
-  Fixture() {
+  explicit Fixture(video::WorkerVideoPlan video_plan = plan()) {
     auto capture = std::make_unique<FakeCapturePlatform>(capture_trace);
     capture_platform = capture.get();
     generation = std::make_shared<video::ProductionVideoGeneration>(
-        plan(), transport, std::move(capture),
+        std::move(video_plan), transport, std::move(capture),
         std::make_unique<FakeProcessorPlatform>(processor_trace),
         std::make_unique<FakeNvencApi>(encoder_trace),
         [this](video::VideoPipelineFailureEvent failure) {
@@ -350,6 +392,27 @@ struct Fixture {
     failure_changed.wait(lock, [this] { return !failures.empty(); });
   }
 };
+
+void hdr_plan_routes_fp16_through_p010_main10() {
+  Fixture fixture{hdr_plan()};
+  BEACON_TEST_REQUIRE(fixture.generation->start(12, 1232));
+  fixture.capture_platform->emit(1'000'000);
+  fixture.transport.wait_for_packets(1);
+
+  BEACON_TEST_REQUIRE(fixture.capture_trace->pixel_format ==
+                      capture::WgcCapturePixelFormat::rgba16_float);
+  BEACON_TEST_REQUIRE(fixture.processor_trace->configuration.input_format ==
+                      video::VideoPixelFormat::rgba16_float);
+  BEACON_TEST_REQUIRE(fixture.processor_trace->configuration.output_format ==
+                      video::VideoPixelFormat::p010);
+  BEACON_TEST_REQUIRE(fixture.encoder_trace->configuration.codec ==
+                      video::NvencVideoCodec::hevc_main10);
+  BEACON_TEST_REQUIRE(fixture.encoder_trace->configuration.input_format ==
+                      video::VideoPixelFormat::p010);
+  BEACON_TEST_REQUIRE(fixture.encoder_trace->submits.size() == 1);
+  BEACON_TEST_REQUIRE(fixture.encoder_trace->submits[0].force_idr);
+  fixture.generation->stop();
+}
 
 void one_captured_frame_reaches_the_generation_bound_transport() {
   Fixture fixture;
@@ -505,6 +568,7 @@ void production_capability_failures_are_boundary_specific() {
 int main() {
   return beacon::stream::testing::run_tests([] {
     one_captured_frame_reaches_the_generation_bound_transport();
+    hdr_plan_routes_fp16_through_p010_main10();
     feedback_applies_server_bounded_bitrate_and_forces_the_next_idr();
     conversion_failure_is_typed_and_disconnects_only_the_active_client();
     capture_start_failure_preserves_platform_stage_and_hresult();

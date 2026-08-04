@@ -59,8 +59,8 @@ video::MediaRatePlan rate_plan() {
   };
 }
 
-video::EncodedH264AccessUnit access_unit(std::size_t bytes, bool idr = false) {
-  video::EncodedH264AccessUnit result;
+video::EncodedVideoAccessUnit access_unit(std::size_t bytes, bool idr = false) {
+  video::EncodedVideoAccessUnit result;
   result.annex_b.resize(bytes);
   for (std::size_t index = 0; index < bytes; ++index) {
     result.annex_b[index] = static_cast<std::uint8_t>(index % 239U);
@@ -69,6 +69,39 @@ video::EncodedH264AccessUnit access_unit(std::size_t bytes, bool idr = false) {
   result.has_sps = idr;
   result.has_pps = idr;
   return result;
+}
+
+bool has_codec_configuration(const stream::TransportPacket &packet) {
+  const auto parsed = stream::parse_media_datagram(packet.payload);
+  BEACON_TEST_REQUIRE(parsed.error == stream::MediaDatagramError::none);
+  return (static_cast<std::uint16_t>(parsed.header.flags) &
+          static_cast<std::uint16_t>(
+              stream::MediaDatagramFlags::codec_configuration)) != 0;
+}
+
+void codec_configuration_requires_the_complete_selected_parameter_set() {
+  RecordingTransport transport;
+  RecordingBitrateControl bitrate;
+  video::VideoMediaSession session(transport, bitrate, rate_plan());
+  BEACON_TEST_REQUIRE(session.begin_transport_generation(1, 1232));
+
+  auto h264 = access_unit(32, true);
+  h264.has_pps = false;
+  BEACON_TEST_REQUIRE(session.send_access_unit(1, h264, 1).failure ==
+                      video::VideoMediaSessionFailure::none);
+  BEACON_TEST_REQUIRE(!has_codec_configuration(transport.packets.back()));
+
+  auto hevc = access_unit(32, true);
+  hevc.codec = video::NvencVideoCodec::hevc_main10;
+  hevc.has_vps = false;
+  BEACON_TEST_REQUIRE(session.send_access_unit(1, hevc, 2).failure ==
+                      video::VideoMediaSessionFailure::none);
+  BEACON_TEST_REQUIRE(!has_codec_configuration(transport.packets.back()));
+
+  hevc.has_vps = true;
+  BEACON_TEST_REQUIRE(session.send_access_unit(1, hevc, 3).failure ==
+                      video::VideoMediaSessionFailure::none);
+  BEACON_TEST_REQUIRE(has_codec_configuration(transport.packets.back()));
 }
 
 void access_units_are_packetized_and_sent_once() {
@@ -160,7 +193,7 @@ void packetization_failure_requires_a_fresh_idr() {
       video::VideoMediaSessionFailure::none);
   BEACON_TEST_REQUIRE(!session.apply_pending_encoder_control().force_idr);
   const auto sends_before_failure = transport.send_calls;
-  const video::EncodedH264AccessUnit empty;
+  const video::EncodedVideoAccessUnit empty;
 
   const auto failed = session.send_access_unit(1, empty, 10);
 
@@ -306,6 +339,7 @@ void failed_bitrate_reconfiguration_fails_the_media_control_boundary() {
 int main() {
   return beacon::stream::testing::run_tests([] {
     access_units_are_packetized_and_sent_once();
+    codec_configuration_requires_the_complete_selected_parameter_set();
     loss_arms_idr_and_bitrate_without_retransmitting_media();
     reliable_idr_request_never_replays_an_access_unit();
     packetization_failure_requires_a_fresh_idr();

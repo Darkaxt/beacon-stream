@@ -49,6 +49,15 @@ target_include_directories(
 )
 add_test(NAME BeaconStreamWorker.NvencH264Encoder COMMAND BeaconStreamWorkerNvencH264EncoderTests)
 
+add_executable(BeaconStreamWorkerNvencHevcMain10EncoderTests nvenc_hevc_main10_encoder_tests.cpp)
+target_link_libraries(BeaconStreamWorkerNvencHevcMain10EncoderTests PRIVATE Beacon::StreamWorkerCore)
+target_include_directories(
+  BeaconStreamWorkerNvencHevcMain10EncoderTests
+  SYSTEM PRIVATE
+    "${CMAKE_SOURCE_DIR}/vendor/nv-codec-headers/include"
+)
+add_test(NAME BeaconStreamWorker.NvencHevcMain10Encoder COMMAND BeaconStreamWorkerNvencHevcMain10EncoderTests)
+
 add_executable(BeaconStreamWorkerNvencH264EncoderProbe nvenc_h264_encoder_probe.cpp)
 target_link_libraries(
   BeaconStreamWorkerNvencH264EncoderProbe

@@ -46,6 +46,12 @@ public static class SessionPlanner
             return new SessionPlanResult(false, null, $"Benchmark evidence is invalid: {error.Message}");
         }
 
+        string? productionTupleError = GetProductionTupleError(measured);
+        if (productionTupleError is not null)
+        {
+            return new SessionPlanResult(false, null, productionTupleError);
+        }
+
         if (!SupportsCodec(measured.Codec, capabilities))
         {
             return new SessionPlanResult(
@@ -129,14 +135,33 @@ public static class SessionPlanner
                 $"R2 audio supports only the server-owned stereo mode; requested mode was '{profile.Audio.Mode}'.");
         }
 
-        string? hdrBlocker = GetHdrBlocker(capabilities, selection);
-
-        if (profile.Display.HdrPreference == HdrPreference.Require && hdrBlocker is not null)
+        bool hevcHdr10 = selection.Codec.Equals("hevc", StringComparison.OrdinalIgnoreCase);
+        if (!hevcHdr10 && profile.Display.HdrPreference == HdrPreference.Require)
         {
-            return new SessionPlanResult(false, null, $"HDR required but {hdrBlocker}.");
+            return new SessionPlanResult(
+                false,
+                null,
+                "HDR10 requires the exact HEVC Main10 10-bit production tuple.");
         }
 
-        bool hdrEnabled = profile.Display.HdrPreference != HdrPreference.Off && hdrBlocker is null;
+        if (hevcHdr10 && profile.Display.HdrPreference == HdrPreference.Off)
+        {
+            return new SessionPlanResult(
+                false,
+                null,
+                "HEVC Main10 production requires HDR10, but HDR is disabled by the client profile.");
+        }
+
+        string? hdrBlocker = hevcHdr10 ? GetHdrBlocker(capabilities, selection) : null;
+        if (hevcHdr10 && hdrBlocker is not null)
+        {
+            return new SessionPlanResult(
+                false,
+                null,
+                $"HEVC Main10 production requires HDR10, but {hdrBlocker}.");
+        }
+
+        bool hdrEnabled = hevcHdr10;
         string hdrReason = CreateHdrReason(profile.Display.HdrPreference, hdrEnabled, hdrBlocker);
         string displayReason =
             $"{CreateDisplayModeReason(profile.Display.Mode)} " +
@@ -170,6 +195,12 @@ public static class SessionPlanner
         {
             CodecProfile = selection.CodecProfile,
             BitDepth = selection.BitDepth,
+            ColorPrimaries = hevcHdr10 ? "bt2020" : "bt709",
+            TransferFunction = hevcHdr10 ? "pq" : "bt709",
+            MatrixCoefficients = hevcHdr10 ? "bt2020-ncl" : "bt709",
+            ColorRange = "limited",
+            HdrStaticInfo = hevcHdr10 ? Hdr10StaticMetadata.CreateCta8613Descriptor() : [],
+            HdrStaticInfoInBitstream = hevcHdr10,
             TenBitPresentationVerified = selection.TenBitPresentationVerified,
             HdrPresentationVerified = selection.HdrPresentationVerified
         };
@@ -218,11 +249,27 @@ public static class SessionPlanner
         return null;
     }
 
+    private static string? GetProductionTupleError(SelectedBenchmarkResult measured)
+    {
+        string codec = measured.Codec.Trim().ToLowerInvariant();
+        string profile = measured.Profile.Trim().ToLowerInvariant();
+        return codec switch
+        {
+            "h264" when profile == "high" && measured.BitDepth == 8 => null,
+            "h264" => "Production H.264 requires the exact High 8-bit BT709 SDR tuple.",
+            "hevc" when profile == "main10" && measured.BitDepth == 10 => null,
+            "hevc" => "Production HEVC requires the exact Main10 10-bit BT2020/PQ limited HDR10 tuple.",
+            "av1" => "AV1 is not supported by the production streaming path.",
+            _ => $"{DisplayCodec(measured.Codec)} is not supported by the production streaming path."
+        };
+    }
+
     private static string CreateHdrReason(HdrPreference preference, bool hdrEnabled, string? hdrBlocker) =>
         preference switch
         {
             HdrPreference.Off => "HDR disabled by client profile.",
             HdrPreference.Prefer when hdrEnabled => "HDR enabled because the full advertised chain reports support.",
+            HdrPreference.Prefer when hdrBlocker is null => "HDR disabled because the H.264 production path is SDR.",
             HdrPreference.Prefer => $"HDR disabled because {hdrBlocker}.",
             HdrPreference.Require => "HDR required and available.",
             _ => "HDR mode resolved."
@@ -290,6 +337,13 @@ public static class SessionPlanner
             writer.Write(stream.BenchmarkEvidenceRevision);
             writer.Write(stream.CodecProfile);
             writer.Write(stream.BitDepth);
+            writer.Write(stream.ColorPrimaries);
+            writer.Write(stream.TransferFunction);
+            writer.Write(stream.MatrixCoefficients);
+            writer.Write(stream.ColorRange);
+            writer.Write(stream.HdrStaticInfo.Length);
+            writer.Write(stream.HdrStaticInfo);
+            writer.Write(stream.HdrStaticInfoInBitstream);
             writer.Write(stream.TenBitPresentationVerified);
             writer.Write(stream.HdrPresentationVerified);
             writer.Write(audio.Codec);

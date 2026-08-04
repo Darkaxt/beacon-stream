@@ -1024,13 +1024,39 @@ public static class ClientEndpoints
                 Height: plan.Stream.Height,
                 FramesPerSecondNumerator: plan.Stream.Fps,
                 FramesPerSecondDenominator: 1,
-                DynamicRange: plan.Display.HdrMode),
+                DynamicRange: plan.Display.HdrMode,
+                Profile: SelectedVideoProfileWireName(plan.Stream.Codec, plan.Stream.CodecProfile),
+                BitDepth: plan.Stream.BitDepth,
+                ColorPrimaries: plan.Stream.ColorPrimaries,
+                TransferFunction: plan.Stream.TransferFunction,
+                MatrixCoefficients: MatrixCoefficientsWireName(plan.Stream.MatrixCoefficients),
+                ColorRange: plan.Stream.ColorRange,
+                HdrStaticInfo: plan.Stream.HdrStaticInfo,
+                HdrStaticInfoInBitstream: plan.Stream.HdrStaticInfoInBitstream),
             SelectedAudio: new SelectedAudioGrant(
                 Codec: plan.Audio.Codec,
                 SampleRateHz: plan.Audio.SampleRateHz,
                 ChannelCount: plan.Audio.ChannelCount,
                 FrameDurationUs: plan.Audio.FrameDurationUs,
                 BitrateBps: plan.Audio.BitrateBps));
+
+    private static string SelectedVideoProfileWireName(string codec, string profile) =>
+        (codec.Trim().ToLowerInvariant(), profile.Trim().ToLowerInvariant()) switch
+        {
+            ("h264", "high") => "h264High",
+            ("hevc", "main10") => "hevcMain10",
+            _ => throw new InvalidOperationException(
+                $"Unsupported selected video profile tuple '{codec}/{profile}'.")
+        };
+
+    private static string MatrixCoefficientsWireName(string value) =>
+        value.Trim().ToLowerInvariant() switch
+        {
+            "bt709" => "bt709",
+            "bt2020-ncl" => "bt2020NonConstantLuminance",
+            _ => throw new InvalidOperationException(
+                $"Unsupported selected video matrix coefficients '{value}'.")
+        };
 
     private static bool IsActiveRuntime(StreamingSessionState? session) =>
         session is not null
@@ -1056,7 +1082,15 @@ public static class ClientEndpoints
         int Height,
         int FramesPerSecondNumerator,
         int FramesPerSecondDenominator,
-        string DynamicRange);
+        string DynamicRange,
+        string Profile,
+        int BitDepth,
+        string ColorPrimaries,
+        string TransferFunction,
+        string MatrixCoefficients,
+        string ColorRange,
+        byte[] HdrStaticInfo,
+        bool HdrStaticInfoInBitstream);
 
     private sealed record SelectedAudioGrant(
         string Codec,
@@ -1086,6 +1120,7 @@ public static class ClientEndpoints
             return new PlanResolutionFailure(gameResolution.Error);
         }
 
+        EndpointCapabilities capabilities = clients.GetCapabilities(clientId);
         BenchmarkPlanEvidence? benchmark;
         try
         {
@@ -1094,6 +1129,16 @@ public static class ClientEndpoints
                 DateTimeOffset.UtcNow,
                 MaximumBenchmarkEvidenceAge,
                 profile.Stream.CodecPreference);
+            if (benchmark is not null
+                && profile.Stream.CodecPreference.Trim().ToLowerInvariant() is "" or "auto"
+                && !IsProductionBenchmarkTuple(benchmark.SelectedResult, capabilities))
+            {
+                benchmark = GetConservativeProductionFallback(
+                    clients,
+                    clientId,
+                    capabilities,
+                    benchmark);
+            }
         }
         catch (Exception error) when (error is InvalidOperationException or ArgumentException)
         {
@@ -1111,7 +1156,7 @@ public static class ClientEndpoints
 
         SessionPlanResult planResult = SessionPlanner.CreatePlan(
             profile,
-            clients.GetCapabilities(clientId),
+            capabilities,
             benchmark,
             gameResolution.Game!);
         if (!planResult.Success || planResult.Plan is null)
@@ -1121,6 +1166,54 @@ public static class ClientEndpoints
 
         return new ResolvedPlan(profile, gameResolution.Game!, planResult.Plan);
     }
+
+    private static BenchmarkPlanEvidence GetConservativeProductionFallback(
+        InMemoryClientStore clients,
+        string clientId,
+        EndpointCapabilities capabilities,
+        BenchmarkPlanEvidence original)
+    {
+        string[] candidates = capabilities.H264
+            ? ["h264"]
+            : capabilities.Hevc && capabilities.Hdr10 && capabilities.VirtualDisplayHdrSupported
+                ? ["hevc"]
+                : [];
+        foreach (string codec in candidates)
+        {
+            try
+            {
+                BenchmarkPlanEvidence? fallback = clients.GetLatestBenchmarkPlanEvidence(
+                    clientId,
+                    DateTimeOffset.UtcNow,
+                    MaximumBenchmarkEvidenceAge,
+                    codec);
+                if (fallback is not null && IsProductionBenchmarkTuple(fallback.SelectedResult, capabilities))
+                {
+                    return fallback;
+                }
+            }
+            catch (Exception error) when (error is InvalidOperationException or ArgumentException)
+            {
+            }
+        }
+        return original;
+    }
+
+    private static bool IsProductionBenchmarkTuple(
+        SelectedBenchmarkResult selected,
+        EndpointCapabilities capabilities) =>
+        selected.Codec.Equals("h264", StringComparison.OrdinalIgnoreCase)
+            && selected.Profile.Equals("high", StringComparison.OrdinalIgnoreCase)
+            && selected.BitDepth == 8
+            && capabilities.H264
+        || selected.Codec.Equals("hevc", StringComparison.OrdinalIgnoreCase)
+            && selected.Profile.Equals("main10", StringComparison.OrdinalIgnoreCase)
+            && selected.BitDepth == 10
+            && selected.TenBitPresentationVerified
+            && selected.HdrPresentationVerified
+            && capabilities.Hevc
+            && capabilities.Hdr10
+            && capabilities.VirtualDisplayHdrSupported;
 
     private static async Task<GameResolution> ResolveRequestedGameAsync(
         PlanRequest request,

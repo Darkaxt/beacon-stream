@@ -570,6 +570,16 @@ bool StreamCore::send_start() {
   video->set_frames_per_second_numerator(grant_.video.fps_numerator);
   video->set_frames_per_second_denominator(grant_.video.fps_denominator);
   video->set_dynamic_range(grant_.video.dynamic_range);
+  video->set_profile(grant_.video.profile);
+  video->set_bit_depth(grant_.video.bit_depth);
+  video->set_color_primaries(grant_.video.color_primaries);
+  video->set_transfer_function(grant_.video.transfer_function);
+  video->set_matrix_coefficients(grant_.video.matrix_coefficients);
+  video->set_color_range(grant_.video.color_range);
+  video->set_hdr_static_info(grant_.video.hdr_static_info.data(),
+                             grant_.video.hdr_static_info.size());
+  video->set_hdr_static_info_in_bitstream(
+      grant_.video.hdr_static_info_in_bitstream);
   auto *audio = envelope.mutable_start_session()->mutable_selected_audio();
   audio->set_codec(grant_.audio.codec);
   audio->set_sample_rate_hz(grant_.audio.sample_rate_hz);

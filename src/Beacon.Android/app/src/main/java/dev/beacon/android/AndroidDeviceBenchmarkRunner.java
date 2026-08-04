@@ -1,6 +1,8 @@
 package dev.beacon.android;
 
 import android.content.Context;
+import android.app.Activity;
+import android.view.SurfaceView;
 
 public final class AndroidDeviceBenchmarkRunner implements BeaconDeviceBenchmarkRunner {
     private final BeaconDeviceBenchmarkRunner delegate;
@@ -10,12 +12,32 @@ public final class AndroidDeviceBenchmarkRunner implements BeaconDeviceBenchmark
     }
 
     public static AndroidDeviceBenchmarkRunner system(Context context) {
+        return system(context, new AndroidImageReaderPresentationSurfaceFactory());
+    }
+
+    public static AndroidDeviceBenchmarkRunner system(
+        Context context,
+        SurfaceView surfaceView) {
+        HdrWindowModeController windowMode = context instanceof Activity activity
+            ? new AndroidHdrWindowModeController(activity)
+            : HdrWindowModeController.noOp();
+        return system(
+            context,
+            new AndroidDisplayBenchmarkPresentationSurfaceFactory(
+                surfaceView,
+                new AndroidImageReaderPresentationSurfaceFactory(),
+                windowMode));
+    }
+
+    private static AndroidDeviceBenchmarkRunner system(
+        Context context,
+        BenchmarkPresentationSurfaceFactory surfaces) {
         AndroidSystemTelemetrySource telemetry = new AndroidSystemTelemetrySource(context);
         return new AndroidDeviceBenchmarkRunner(new SequentialDeviceBenchmarkRunner(
             new MediaCodecDeviceBenchmarkRoundExecutor(
                 new AndroidMediaCodecFactory(),
                 new AndroidAssetBenchmarkVectorRepository(context),
-                new AndroidImageReaderPresentationSurfaceFactory()),
+                surfaces),
             new AndroidBenchmarkPowerSampler(telemetry)));
     }
 

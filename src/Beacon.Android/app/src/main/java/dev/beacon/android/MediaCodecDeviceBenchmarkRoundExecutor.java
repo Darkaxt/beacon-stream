@@ -76,27 +76,22 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
 
         EncodedVideoSampleProvider samples =
             new PacedEncodedVideoSampleProvider(vectorSamples);
+        EncodedVideoDecodeRequest request = BenchmarkEncodedVideoRequestFactory.create(
+            round, samples);
         RoundState state = new RoundState(
             round,
             vectorSamples.expectedFrameCount(),
+            request,
             observer,
             finalizer,
             cleanupFailureReporter);
         try {
-            BenchmarkPresentationSurface surface = surfaces.create(
-                round.width(),
-                round.height(),
-                state);
+            BenchmarkPresentationSurface surface = surfaces.create(request, state);
             state.attachSurface(surface);
             EncodedVideoCodec codec = codecFactory.create(round.codec());
             state.attachCodec(codec);
             codec.configure(
-                new EncodedVideoDecodeRequest(
-                    round.codec(),
-                    round.width(),
-                    round.height(),
-                    round.targetFps(),
-                    samples),
+                request,
                 surface.surface(),
                 samples,
                 state);
@@ -126,6 +121,7 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
         RoundState(
             BeaconBenchmarkHardwarePlan.DecoderRound round,
             int expectedFrames,
+            EncodedVideoDecodeRequest request,
             Observer observer,
             Executor finalizer,
             BiConsumer<String, RuntimeException> cleanupFailureReporter) {
@@ -133,7 +129,8 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
             this.observer = observer;
             this.finalizer = finalizer;
             this.cleanupFailureReporter = cleanupFailureReporter;
-            this.measurements = new DecoderBenchmarkMeasurements(round, expectedFrames);
+            this.measurements = new DecoderBenchmarkMeasurements(
+                round, expectedFrames, request);
         }
 
         synchronized void attachSurface(BenchmarkPresentationSurface surface) {
@@ -177,7 +174,20 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
         public void onFrameRendered(
             long frameSequence,
             long presentationTimeUs,
-            long renderedAtNs) { }
+            long renderedAtNs) {
+            synchronized (this) {
+                if (finished || surface == null) return;
+                surface.onFrameRendered();
+                if (!surface.physicalDisplaySurface()) return;
+                measurements.recordPresentation(presentationTimeUs, renderedAtNs);
+            }
+        }
+
+        @Override
+        public synchronized void onOutputFormatChanged(EncodedVideoOutputFormat format) {
+            if (finished) return;
+            measurements.recordOutputFormat(format);
+        }
 
         @Override
         public void onFramePresented(long presentationTimeUs, long presentedAtNs) {
@@ -218,12 +228,22 @@ final class MediaCodecDeviceBenchmarkRoundExecutor implements DeviceBenchmarkRou
         }
 
         private void finish(boolean configured) {
+            boolean physicalDisplaySurface;
+            boolean hdr10PresentationVerified;
+            synchronized (this) {
+                physicalDisplaySurface = surface != null && surface.physicalDisplaySurface();
+                hdr10PresentationVerified = surface != null &&
+                    surface.hdr10PresentationVerified();
+            }
             cleanup();
             BeaconBenchmarkCompletionRequest.DecoderSample sample;
             synchronized (this) {
                 if (finished) return;
                 finished = true;
-                sample = measurements.toSample(configured);
+                sample = measurements.toSample(
+                    configured,
+                    physicalDisplaySurface,
+                    hdr10PresentationVerified);
             }
             observer.onCompleted(sample);
         }
