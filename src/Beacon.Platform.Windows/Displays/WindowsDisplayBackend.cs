@@ -165,8 +165,10 @@ public sealed class WindowsDisplayBackend : IDisplayBackend
             return fail;
         }
 
-        DisplayHdrCapability hdrCapability = await api.QueryHdrCapabilityAsync(displayId, cancellationToken);
-        DisplayEnsureResult result = NegotiateHdr(hdrPreference, hdrCapability);
+        DisplayEnsureResult result = await NegotiateHdrAsync(
+            displayId,
+            hdrPreference,
+            cancellationToken).ConfigureAwait(false);
         if (!result.Success && createdDisplay)
         {
             result = await FailAfterCreateAsync(
@@ -306,8 +308,10 @@ public sealed class WindowsDisplayBackend : IDisplayBackend
             }
         }
 
-        DisplayHdrCapability hdrCapability = await api.QueryHdrCapabilityAsync(displayId, cancellationToken);
-        DisplayEnsureResult result = NegotiateHdr(hdrPreference, hdrCapability);
+        DisplayEnsureResult result = await NegotiateHdrAsync(
+            displayId,
+            hdrPreference,
+            cancellationToken).ConfigureAwait(false);
         if (!result.Success && createdDisplay)
         {
             result = await FailAfterCreateAsync(
@@ -394,6 +398,36 @@ public sealed class WindowsDisplayBackend : IDisplayBackend
         }
 
         return DisplayEnsureResult.Ok(hdrReason: capability.Reason);
+    }
+
+    private async Task<DisplayEnsureResult> NegotiateHdrAsync(
+        string displayId,
+        HdrPreference preference,
+        CancellationToken cancellationToken)
+    {
+        DisplayHdrCapability capability = await api.QueryHdrCapabilityAsync(
+            displayId,
+            cancellationToken).ConfigureAwait(false);
+        if (preference == HdrPreference.Off || !capability.Supported || capability.Enabled)
+        {
+            return NegotiateHdr(preference, capability);
+        }
+
+        DisplayApiResult setResult = await api.SetHdrStateAsync(
+            displayId,
+            enabled: true,
+            cancellationToken).ConfigureAwait(false);
+        if (!setResult.Success)
+        {
+            string reason = setResult.Error ?? "Windows rejected the HDR state change.";
+            return preference == HdrPreference.Require
+                ? DisplayEnsureResult.Fail($"HDR required but could not be enabled: {reason}")
+                : DisplayEnsureResult.Ok(hdrReason: reason);
+        }
+
+        capability = await api.QueryHdrCapabilityAsync(displayId, cancellationToken)
+            .ConfigureAwait(false);
+        return NegotiateHdr(preference, capability);
     }
 
     private async Task<DisplayEnsureResult> FailAfterCreateAsync(

@@ -17,7 +17,8 @@ public enum HostAgentOperation
     InstallStagedSudoVdaPackage,
     QuerySudoVdaUpdate,
     InstallStagedHostAgentPackage,
-    QueryHostAgentUpdate
+    QueryHostAgentUpdate,
+    SetHdrState
 }
 
 public sealed record HostAgentRequest(

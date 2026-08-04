@@ -22,6 +22,10 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi, IWindowsDispla
     public DisplayHdrCapability HdrCapability { get; set; } =
         new(Supported: false, Enabled: false, Reason: "Windows Advanced Color reports SDR only.");
 
+    public DisplayHdrCapability? HdrCapabilityAfterSet { get; set; }
+
+    public DisplayApiResult HdrStateResult { get; set; } = DisplayApiResult.Ok();
+
     public DisplayApiResult PrimaryResult { get; set; } = DisplayApiResult.Ok();
 
     public DisplayApiResult CreateResult { get; set; } = DisplayApiResult.Ok();
@@ -33,6 +37,8 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi, IWindowsDispla
     public List<string> RestoreRequests { get; } = [];
 
     public List<string> RemovedDisplays { get; } = [];
+
+    public List<(string DisplayId, bool Enabled)> HdrStateRequests { get; } = [];
 
     public int TopologyQueryCount { get; private set; }
 
@@ -138,6 +144,20 @@ internal sealed class FakeWindowsDisplayApi : IWindowsDisplayApi, IWindowsDispla
 
     public Task<DisplayHdrCapability> QueryHdrCapabilityAsync(string displayId, CancellationToken cancellationToken) =>
         Task.FromResult(HdrCapability);
+
+    public Task<DisplayApiResult> SetHdrStateAsync(
+        string displayId,
+        bool enabled,
+        CancellationToken cancellationToken)
+    {
+        HdrStateRequests.Add((displayId, enabled));
+        if (HdrStateResult.Success && HdrCapabilityAfterSet is not null)
+        {
+            HdrCapability = HdrCapabilityAfterSet;
+        }
+
+        return Task.FromResult(HdrStateResult);
+    }
 
     public Task<SudoVdaDriverLeaseHoldResult> HoldAsync(
         string displayId,

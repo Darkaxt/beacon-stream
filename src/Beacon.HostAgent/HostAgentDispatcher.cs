@@ -47,6 +47,8 @@ internal sealed class HostAgentDispatcher(
                     .ConfigureAwait(false),
                 HostAgentOperation.QueryHdrCapability => await QueryHdrAsync(request, cancellationToken)
                     .ConfigureAwait(false),
+                HostAgentOperation.SetHdrState => await SetHdrStateAsync(request, cancellationToken)
+                    .ConfigureAwait(false),
                 HostAgentOperation.InstallStagedSudoVdaPackage => StartDriverUpdate(request),
                 HostAgentOperation.QuerySudoVdaUpdate => QueryDriverUpdate(request),
                 HostAgentOperation.InstallStagedHostAgentPackage => await StartHostAgentUpdateAsync(
@@ -235,6 +237,18 @@ internal sealed class HostAgentDispatcher(
         return Success(
             request,
             new DisplayHdrCapabilityPayload(result.Supported, result.Enabled, result.Reason));
+    }
+
+    private async Task<HostAgentResponse> SetHdrStateAsync(
+        HostAgentRequest request,
+        CancellationToken cancellationToken)
+    {
+        SetHdrStatePayload payload = HostAgentProtocol.ReadPayload<SetHdrStatePayload>(request.Payload);
+        DisplayApiResult result = await displays.SetHdrStateAsync(
+            RequireDisplayId(payload.DisplayId),
+            payload.Enabled,
+            cancellationToken).ConfigureAwait(false);
+        return result.Success ? Success(request) : DisplayFailure(request, result);
     }
 
     private HostAgentResponse StartDriverUpdate(HostAgentRequest request)

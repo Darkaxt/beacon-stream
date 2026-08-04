@@ -284,6 +284,12 @@ public sealed class DisplayProbeAppTests
         public Task<DisplayHdrCapability> QueryHdrCapabilityAsync(string displayId, CancellationToken cancellationToken) =>
             Task.FromResult(new DisplayHdrCapability(false, false, "SDR only."));
 
+        public Task<DisplayApiResult> SetHdrStateAsync(
+            string displayId,
+            bool enabled,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(DisplayApiResult.Ok());
+
         public Task<SudoVdaDriverLeaseHoldResult> HoldAsync(
             string displayId,
             CancellationToken cancellationToken)

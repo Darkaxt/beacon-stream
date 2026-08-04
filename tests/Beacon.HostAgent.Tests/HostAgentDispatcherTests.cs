@@ -159,6 +159,22 @@ public sealed class HostAgentDispatcherTests
     }
 
     [Fact]
+    public async Task SetHdrStateRoutesTypedPayload()
+    {
+        var executor = new FakeDisplayExecutor();
+        var dispatcher = new HostAgentDispatcher(executor);
+
+        HostAgentResponse response = await dispatcher.DispatchAsync(
+            Request(
+                HostAgentOperation.SetHdrState,
+                new SetHdrStatePayload("client-z-fold-7", Enabled: true)),
+            CancellationToken.None);
+
+        Assert.True(response.Success);
+        Assert.Equal(new[] { "hdr-state:client-z-fold-7:True" }, executor.Calls);
+    }
+
+    [Fact]
     public async Task RestoreRoutesOnlyPhysicalPrimaryPrimitive()
     {
         var executor = new FakeDisplayExecutor();
@@ -440,6 +456,15 @@ public sealed class HostAgentDispatcherTests
         {
             Calls.Add($"hdr:{displayId}");
             return Task.FromResult(new DisplayHdrCapability(false, false, "SDR"));
+        }
+
+        public Task<DisplayApiResult> SetHdrStateAsync(
+            string displayId,
+            bool enabled,
+            CancellationToken cancellationToken)
+        {
+            Calls.Add($"hdr-state:{displayId}:{enabled}");
+            return Task.FromResult(DisplayApiResult.Ok());
         }
 
         public bool TryResolveDisplayName(string displayId, out string? displayName)

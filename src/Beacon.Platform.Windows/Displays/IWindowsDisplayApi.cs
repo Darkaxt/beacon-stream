@@ -20,6 +20,11 @@ public interface IWindowsDisplayApi
     Task<DisplayApiResult> RemoveVirtualDisplayAsync(string displayId, CancellationToken cancellationToken);
 
     Task<DisplayHdrCapability> QueryHdrCapabilityAsync(string displayId, CancellationToken cancellationToken);
+
+    Task<DisplayApiResult> SetHdrStateAsync(
+        string displayId,
+        bool enabled,
+        CancellationToken cancellationToken);
 }
 
 public sealed record DisplayDriverStatus(

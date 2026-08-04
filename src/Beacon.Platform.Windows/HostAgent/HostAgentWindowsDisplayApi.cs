@@ -170,6 +170,15 @@ public sealed class HostAgentWindowsDisplayApi :
         return new DisplayHdrCapability(result.Supported, result.Enabled, result.Reason);
     }
 
+    public Task<DisplayApiResult> SetHdrStateAsync(
+        string displayId,
+        bool enabled,
+        CancellationToken cancellationToken) =>
+        SendDisplayCommandAsync(
+            HostAgentOperation.SetHdrState,
+            new SetHdrStatePayload(displayId, enabled),
+            cancellationToken);
+
     public bool TryResolveDisplayName(string displayId, out string? displayName)
     {
         lock (gate)

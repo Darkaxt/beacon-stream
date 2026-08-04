@@ -51,3 +51,5 @@ public sealed record DisplayHdrCapabilityPayload(
     bool Supported,
     bool Enabled,
     string Reason);
+
+public sealed record SetHdrStatePayload(string DisplayId, bool Enabled);

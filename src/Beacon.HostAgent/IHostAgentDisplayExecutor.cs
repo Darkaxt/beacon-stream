@@ -35,5 +35,10 @@ internal interface IHostAgentDisplayExecutor
         string displayId,
         CancellationToken cancellationToken);
 
+    Task<DisplayApiResult> SetHdrStateAsync(
+        string displayId,
+        bool enabled,
+        CancellationToken cancellationToken);
+
     bool TryResolveDisplayName(string displayId, out string? displayName);
 }

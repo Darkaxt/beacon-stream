@@ -50,6 +50,12 @@ internal sealed class WindowsHostAgentDisplayExecutor(
         CancellationToken cancellationToken) =>
         api.QueryHdrCapabilityAsync(displayId, cancellationToken);
 
+    public Task<DisplayApiResult> SetHdrStateAsync(
+        string displayId,
+        bool enabled,
+        CancellationToken cancellationToken) =>
+        api.SetHdrStateAsync(displayId, enabled, cancellationToken);
+
     public bool TryResolveDisplayName(string displayId, out string? displayName) =>
         displayNames.TryResolveDisplayName(displayId, out displayName);
 }

@@ -165,6 +165,26 @@ public sealed class HostAgentWindowsDisplayApiTests
         Assert.Equal("Supported but disabled.", result.Reason);
     }
 
+    [Fact]
+    public async Task SetHdrStateUsesTypedRequest()
+    {
+        var connection = ReadyConnection();
+        connection.Enqueue(Success(new EmptyHostAgentPayload()));
+        var api = new HostAgentWindowsDisplayApi(connection);
+
+        DisplayApiResult result = await api.SetHdrStateAsync(
+            "display-z-fold",
+            enabled: true,
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        HostAgentCall call = Assert.Single(connection.Calls);
+        Assert.Equal(HostAgentOperation.SetHdrState, call.Operation);
+        Assert.Equal(
+            new SetHdrStatePayload("display-z-fold", Enabled: true),
+            Assert.IsType<SetHdrStatePayload>(call.Payload));
+    }
+
     private static FakeHostAgentConnection ReadyConnection() =>
         new(
             new HostAgentConnectionState(

@@ -27,6 +27,7 @@ public sealed class WindowsDisplayApi :
     private const uint FileAttributeNormal = 0x00000080;
     private const uint ErrorSuccess = 0;
     private const uint ErrorNotSupported = 50;
+    private const uint ErrorInvalidParameter = 87;
     private const uint QdcAllPaths = 0x00000001;
     private const uint QdcOnlyActivePaths = 0x00000002;
     private const uint QdcVirtualModeAware = 0x00000010;
@@ -40,7 +41,9 @@ public sealed class WindowsDisplayApi :
     private const uint SdcVirtualModeAware = 0x00008000;
     private const uint DisplayConfigDeviceInfoGetSourceName = 1;
     private const uint DisplayConfigDeviceInfoGetAdvancedColorInfo = 9;
+    private const uint DisplayConfigDeviceInfoSetAdvancedColorState = 10;
     private const uint DisplayConfigDeviceInfoGetAdvancedColorInfo2 = 15;
+    private const uint DisplayConfigDeviceInfoSetHdrState = 16;
     private const uint DisplayConfigPathActive = 0x00000001;
     private const uint DisplayConfigPathModeIdxInvalid = 0xFFFFFFFF;
     private const uint DisplayConfigPathSourceModeIdxInvalid = 0xFFFF;
@@ -567,6 +570,54 @@ public sealed class WindowsDisplayApi :
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(inputDesktop.Invoke(() => QueryHdrCapabilityOnInputDesktop(displayId)));
+    }
+
+    public Task<DisplayApiResult> SetHdrStateAsync(
+        string displayId,
+        bool enabled,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(inputDesktop.Invoke(() => SetHdrStateOnInputDesktop(displayId, enabled)));
+    }
+
+    private DisplayApiResult SetHdrStateOnInputDesktop(string displayId, bool enabled)
+    {
+        if (!TryResolveDisplayName(displayId, out string? displayName) || displayName is null)
+        {
+            return DisplayApiResult.Fail(
+                $"Unable to resolve Windows display name for HDR state change on {displayId}.");
+        }
+
+        if (!TryFindActiveDisplayConfigPath(
+                displayName,
+                out DisplayConfigPathInfo path,
+                out string pathDiagnostic))
+        {
+            return DisplayApiResult.Fail(pathDiagnostic);
+        }
+
+        var hdrState = DisplayConfigSetColorState.Create(
+            DisplayConfigDeviceInfoSetHdrState,
+            path.TargetInfo.AdapterId,
+            path.TargetInfo.Id,
+            enabled);
+        uint status = NativeMethods.DisplayConfigSetColorState(ref hdrState);
+        if (status is ErrorNotSupported or ErrorInvalidParameter)
+        {
+            var advancedColorState = DisplayConfigSetColorState.Create(
+                DisplayConfigDeviceInfoSetAdvancedColorState,
+                path.TargetInfo.AdapterId,
+                path.TargetInfo.Id,
+                enabled);
+            status = NativeMethods.DisplayConfigSetColorState(ref advancedColorState);
+        }
+
+        return status == ErrorSuccess
+            ? DisplayApiResult.Ok()
+            : DisplayApiResult.Fail(
+                $"Windows rejected the HDR state change for {displayName}. " +
+                $"DisplayConfigSetDeviceInfo returned {status}.");
     }
 
     private DisplayHdrCapability QueryHdrCapabilityOnInputDesktop(string displayId)
@@ -2117,6 +2168,9 @@ public sealed class WindowsDisplayApi :
         [DllImport("user32.dll", EntryPoint = "DisplayConfigGetDeviceInfo")]
         public static extern uint DisplayConfigGetAdvancedColorInfo2(ref DisplayConfigGetAdvancedColorInfo2 requestPacket);
 
+        [DllImport("user32.dll", EntryPoint = "DisplayConfigSetDeviceInfo")]
+        public static extern uint DisplayConfigSetColorState(ref DisplayConfigSetColorState requestPacket);
+
         [DllImport("user32.dll")]
         public static extern uint SetDisplayConfig(
             uint numPathArrayElements,
@@ -2477,6 +2531,30 @@ public sealed class WindowsDisplayApi :
                 }
             };
         }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DisplayConfigSetColorState
+    {
+        public DisplayConfigDeviceInfoHeader Header;
+        public uint Enabled;
+
+        public static DisplayConfigSetColorState Create(
+            uint type,
+            Luid adapterId,
+            uint targetId,
+            bool enabled) =>
+            new()
+            {
+                Header = new DisplayConfigDeviceInfoHeader
+                {
+                    Type = type,
+                    Size = checked((uint)Marshal.SizeOf<DisplayConfigSetColorState>()),
+                    AdapterId = adapterId,
+                    Id = targetId
+                },
+                Enabled = enabled ? 1u : 0u
+            };
     }
 
     [StructLayout(LayoutKind.Sequential)]

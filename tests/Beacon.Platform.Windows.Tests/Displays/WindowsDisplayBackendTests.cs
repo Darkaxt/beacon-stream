@@ -533,6 +533,60 @@ public sealed class WindowsDisplayBackendTests
     }
 
     [Fact]
+    public async Task EnsureVirtualDisplayAsync_WhenHdrSupportedButDisabled_EnablesAndRequeriesHdr()
+    {
+        var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
+        api.HdrCapability = new DisplayHdrCapability(
+            Supported: true,
+            Enabled: false,
+            Reason: "Windows Advanced Color reports HDR supported but not user-enabled.");
+        api.HdrCapabilityAfterSet = new DisplayHdrCapability(
+            Supported: true,
+            Enabled: true,
+            Reason: "Windows Advanced Color reports HDR active. BitsPerChannel=10.");
+        var backend = new WindowsDisplayBackend(api);
+
+        DisplayEnsureResult result = await backend.EnsureVirtualDisplayAsync(
+            "client-z-fold-7",
+            2560,
+            1600,
+            120,
+            HdrPreference.Require,
+            CancellationToken.None);
+
+        Assert.True(result.Success, result.Error);
+        Assert.True(result.HdrEnabled);
+        Assert.Equal(("client-z-fold-7", true), Assert.Single(api.HdrStateRequests));
+        Assert.Equal("Windows Advanced Color reports HDR active. BitsPerChannel=10.", result.HdrReason);
+        Assert.Empty(api.RemovedDisplays);
+    }
+
+    [Fact]
+    public async Task EnsureVirtualDisplayAsync_WhenRequiredHdrEnableFails_RemovesNewDisplay()
+    {
+        var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
+        api.HdrCapability = new DisplayHdrCapability(
+            Supported: true,
+            Enabled: false,
+            Reason: "Windows Advanced Color reports HDR supported but not user-enabled.");
+        api.HdrStateResult = DisplayApiResult.Fail("Windows rejected the HDR state change.");
+        var backend = new WindowsDisplayBackend(api);
+
+        DisplayEnsureResult result = await backend.EnsureVirtualDisplayAsync(
+            "client-z-fold-7",
+            2560,
+            1600,
+            120,
+            HdrPreference.Require,
+            CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Contains("HDR required but could not be enabled", result.Error ?? string.Empty);
+        Assert.Equal(("client-z-fold-7", true), Assert.Single(api.HdrStateRequests));
+        Assert.Equal("client-z-fold-7", Assert.Single(api.RemovedDisplays));
+    }
+
+    [Fact]
     public async Task RestorePhysicalPrimaryAsync_WhenAlreadyVerified_DoesNotReapplyTopology()
     {
         var api = FakeWindowsDisplayApi.ReadyWithGoodTopology();
@@ -708,5 +762,10 @@ internal sealed class DriverlessWindowsDisplayApi : IWindowsDisplayApi
 
     public Task<DisplayHdrCapability> QueryHdrCapabilityAsync(
         string displayId,
+        CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    public Task<DisplayApiResult> SetHdrStateAsync(
+        string displayId,
+        bool enabled,
         CancellationToken cancellationToken) => throw new NotSupportedException();
 }
