@@ -1,5 +1,6 @@
 #include "hosted_emulator_endpoint_server.h"
 
+#include "beacon/stream/selected_video_mode.h"
 #include "test_failure.h"
 
 #include <cstddef>
@@ -41,6 +42,8 @@ void exact_test_identity_receives_the_fixed_video_plan_once() {
       accepted.selected_video->frames_per_second_denominator() == 1);
   BEACON_TEST_REQUIRE(accepted.selected_video->dynamic_range() ==
                       beacon::stream::v1::DYNAMIC_RANGE_SDR);
+  BEACON_TEST_REQUIRE(
+      beacon::stream::valid_selected_video_mode(*accepted.selected_video));
   BEACON_TEST_REQUIRE(replayed.result ==
                       StreamTicketAuthorizationResult::replayed);
 }

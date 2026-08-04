@@ -51,6 +51,14 @@ v1::SelectedVideoMode fixed_video_mode() {
   mode.set_frames_per_second_numerator(30);
   mode.set_frames_per_second_denominator(1);
   mode.set_dynamic_range(v1::DYNAMIC_RANGE_SDR);
+  mode.set_profile(v1::VIDEO_PROFILE_H264_HIGH);
+  mode.set_bit_depth(8);
+  mode.set_color_primaries(v1::COLOR_PRIMARIES_BT709);
+  mode.set_transfer_function(v1::TRANSFER_FUNCTION_BT709);
+  mode.set_matrix_coefficients(v1::MATRIX_COEFFICIENTS_BT709);
+  mode.set_color_range(v1::COLOR_RANGE_LIMITED);
+  mode.clear_hdr_static_info();
+  mode.set_hdr_static_info_in_bitstream(false);
   return mode;
 }
 

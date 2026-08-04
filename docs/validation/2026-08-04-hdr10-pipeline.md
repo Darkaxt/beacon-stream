@@ -33,6 +33,8 @@ H.264 High 8-bit BT.709 limited-range SDR remains the independent fallback path.
 - Android emulator instrumentation: eight executions across `emulator-5554` and `emulator-5560`;
   six passed and two were correctly skipped because neither emulator exposes an exact HEVC Main10
   HDR10 decoder.
+- The hosted H.264 SDR regression transaction authenticated through the strict full video tuple,
+  sent 30 access units, received 30 rendered-frame acknowledgements, and observed 30 pixel variants.
 - Independent Android build with an isolated Gradle home and Temurin 21 completed all 85 tasks.
 
 ## Certification Boundary

@@ -145,6 +145,7 @@ if ! IFS= read -r readiness <&"${endpoint_output_fd}"; then
   echo "Hosted endpoint exited before reporting readiness." >&2
   exit 1
 fi
+readiness="${readiness%$'\r'}"
 if [[ ! "${readiness}" =~ ^BEACON_HOSTED_ENDPOINT_READY[[:space:]]+([0-9]+)$ ]]; then
   echo "Unexpected hosted endpoint readiness output: ${readiness}" >&2
   exit 1
